@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/*
+!.streamlit/config.toml
+.DS_Store
+uploads/
+*.xlsx
+!data/sample_shopee_orders.csv
