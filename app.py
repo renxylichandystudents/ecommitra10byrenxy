@@ -140,6 +140,63 @@ st.markdown(
         line-height: 1.55;
         color: #1e293b;
     }
+    .slide-note {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 0.9rem 1rem 1rem;
+        min-height: 8.5rem;
+        line-height: 1.5;
+        color: #1e293b;
+    }
+    .slide-note.action {
+        background: #f0fdf4;
+        border-color: #bbf7d0;
+    }
+    .slide-note-label {
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #1d4ed8;
+        margin-bottom: 0.35rem;
+    }
+    .slide-note.action .slide-note-label {
+        color: #047857;
+    }
+    .swot-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.7rem;
+        margin: 0.4rem 0 0.8rem;
+    }
+    .swot-card {
+        border-radius: 12px;
+        padding: 0.75rem 0.9rem;
+        line-height: 1.45;
+        color: #1e293b;
+        min-height: 6.2rem;
+    }
+    .swot-card b { display: block; margin-bottom: 0.25rem; }
+    .swot-s { background: #ecfdf5; }
+    .swot-w { background: #fef2f2; }
+    .swot-o { background: #eff6ff; }
+    .swot-t { background: #fff7ed; }
+    .bone-result {
+        background: #f8fafc;
+        border-left: 4px solid #0f172a;
+        border-radius: 10px;
+        padding: 0.85rem 1rem;
+        line-height: 1.5;
+        margin-bottom: 0.8rem;
+    }
+    div[data-testid="stElementContainer"]:has(.slide-nav) + div [data-testid="stHorizontalBlock"] {
+        align-items: center;
+    }
+    div[data-testid="stElementContainer"]:has(.slide-nav) + div [data-testid="stHorizontalBlock"] button {
+        height: 2.55rem;
+        margin: 0;
+    }
     .app-menu-label {
         font-size: 0.95rem;
         font-weight: 700;
@@ -1097,6 +1154,165 @@ def _slide_head(kicker: str, title: str) -> None:
     )
 
 
+def _slide_advice(analysis: str, action: str) -> None:
+    """Dua kotak di bawah data: analisa, lalu tindakan yang bisa dijalankan."""
+    note, recommendation = st.columns(2, vertical_alignment="top")
+    note.markdown(
+        "<div class='slide-note'>"
+        "<div class='slide-note-label'>Analisa</div>"
+        f"{html.escape(analysis)}</div>",
+        unsafe_allow_html=True,
+    )
+    recommendation.markdown(
+        "<div class='slide-note action'>"
+        "<div class='slide-note-label'>Rekomendasi</div>"
+        f"{html.escape(action)}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _slide_strategy(
+    *,
+    scope_label: str,
+    net_sales: float,
+    net_orders: int,
+    net_qty: float,
+    cancel_share: float,
+    cancel_nominal: float,
+    return_qty: float,
+    return_nominal: float,
+    top_share: float,
+    stock_sum: float,
+    pred_qty_sum: float,
+    safety_sum: float,
+    top_cancel_reason: str,
+    top_cancel_invoices: float,
+    top_cancel_nominal: float,
+    has_items: bool,
+) -> None:
+    """SWOT, akar masalah, dan rencana kerja yang memakai angka periode ini."""
+    leak_is_cancel = cancel_nominal > return_nominal * 3 if return_nominal else cancel_nominal > 0
+    reason_bit = (
+        f"Alasan terbesar: {top_cancel_reason}, {format_number(top_cancel_invoices)} invoice, {format_idr(top_cancel_nominal)}."
+        if top_cancel_reason
+        else "Belum ada satu alasan batal yang menonjol pada tanggal ini."
+    )
+    strength = (
+        f"Penjualan bersih {format_idr(net_sales)} dari {format_number(net_orders)} pesanan dan {format_qty(net_qty)} unit. "
+        f"Top 50 menopang {format_number(top_share, 1)}% sales bersih, jadi iklan tidak perlu disebar ke seluruh katalog."
+    )
+    weakness = (
+        f"Batal {format_number(cancel_share, 1)}% pesanan, senilai {format_idr(cancel_nominal)}. "
+        f"Retur {format_qty(return_qty)} unit senilai {format_idr(return_nominal)}. {reason_bit}"
+    )
+    opportunity = (
+        "Iklan Pencarian Shopee dengan kata kunci exact pada SKU yang bersih, "
+        "chat kejar bayar sebelum pembatalan otomatis, dan voucher ongkir kecil hanya untuk order yang masih menunggu bayar."
+    )
+    threat = (
+        "GMV iklan yang masih berisi batal membuat ROAS terlihat sehat padahal uangnya tidak masuk. "
+        "Jendela bayar Shopee singkat, dan alasan ubah alamat atau ubah pesanan muncul karena listing belum jelas sebelum checkout."
+    )
+    if leak_is_cancel:
+        root = (
+            "Akar masalahnya ada di sebelum bayar, bukan di mutu barang. "
+            f"Nominal batal {format_idr(cancel_nominal)} jauh di atas nominal retur {format_idr(return_nominal)}. "
+            "Iklan yang menambah klik tanpa memastikan pembayaran hanya memperbesar tulang batal."
+        )
+    else:
+        root = (
+            "Retur cukup besar dibanding batal, jadi akarnya ada di janji produk: foto, varian, atau kualitas yang tidak sesuai yang diterima pembeli."
+        )
+    bones = [
+        ("Pembeli", reason_bit),
+        (
+            "Iklan",
+            "Budget yang mengejar klik atau GMV kotor menarik order yang tidak dibayar. Ukur iklan dari sales bersih.",
+        ),
+        (
+            "Listing",
+            "Ubah alamat dan ubah pesanan berarti ongkir, varian, atau ukuran baru ketahuan setelah checkout.",
+        ),
+        (
+            "Operasi",
+            "Belum ada shift yang mengingatkan bayar sebelum Shopee membatalkan otomatis.",
+        ),
+        (
+            "Produk",
+            "SKU dengan retur berulang jangan diisi ulang penuh dan jangan masuk Iklan Produk Serupa.",
+        ),
+    ]
+    if has_items:
+        plan = [
+            f"Gudang: buat PO Top 50 sebesar {format_qty(stock_sum)} unit, yaitu prediksi QTY {format_qty(pred_qty_sum)} ditambah safety stock {format_qty(safety_sum)}. Jangan memesan dari QTY batal.",
+            "Iklan: 70% budget Iklan Pencarian, kata kunci exact nama produk Top 50 yang batal dan retur-nya rendah. 20% Iklan Produk Serupa hanya untuk SKU itu. 10% uji satu kampanye. Matikan maximize clicks.",
+            "Kejar bayar: dua jam sebelum batas batal otomatis, chat cara bayar. Voucher ongkir kecil hanya untuk order menunggu bayar, bukan voucher toko yang terbuka untuk semua.",
+            "Listing: untuk alasan ubah alamat dan ubah pesanan, taruh ongkir, varian, dan ukuran di gambar pertama. Ukur ulang seminggu kemudian apakah invoice alasan itu turun.",
+            "Rapat 20 menit tiap minggu pada slide ini: jika kontribusi alasan terbesar tidak turun, budget iklan minggu itu tidak dinaikkan.",
+        ]
+    else:
+        plan = [
+            "Perlebar tanggal sampai ada penjualan sebelum mengatur iklan dan pembelian.",
+            "Selama rentang kosong, jangan menaikkan budget Iklan Pencarian.",
+        ]
+    cards = (
+        ("swot-s", "Strength", strength),
+        ("swot-w", "Weakness", weakness),
+        ("swot-o", "Opportunity", opportunity),
+        ("swot-t", "Threat", threat),
+    )
+    swot_html = "".join(
+        f"<div class='swot-card {css}'><b>{html.escape(title)}</b>{html.escape(body)}</div>"
+        for css, title, body in cards
+    )
+    bone_html = "".join(
+        f"<div><b>{html.escape(name)}.</b> {html.escape(text)}</div>" for name, text in bones
+    )
+    plan_html = "".join(f"<div>{index}. {html.escape(step)}</div>" for index, step in enumerate(plan, start=1))
+    st.markdown(
+        f"<div class='report-kicker'>{html.escape(scope_label)}</div>"
+        "<div class='report-title'>Strategi dan rencana minggu ini</div>"
+        "<div class='swot-grid'>"
+        f"{swot_html}"
+        "</div>"
+        "<div class='bone-result'>"
+        "<div class='slide-note-label'>Akar masalah</div>"
+        f"<div>{html.escape(root)}</div>"
+        f"{bone_html}"
+        "</div>"
+        "<div class='slide-note action'>"
+        "<div class='slide-note-label'>Rencana untuk tim</div>"
+        f"{plan_html}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _display_report_numbers(frame: pd.DataFrame) -> pd.DataFrame:
+    """Pisah ribuan dengan titik. Kolom SKU tetap utuh."""
+    if frame is None or frame.empty:
+        return frame
+    shown = frame.copy()
+    for column in shown.columns:
+        key = str(column).strip().casefold()
+        if "sku" in key or key in {"no", "tanggal pembelian"}:
+            continue
+        numeric = pd.to_numeric(shown[column], errors="coerce")
+        if numeric.notna().mean() < 0.6:
+            continue
+        money = any(token in key for token in ("nominal", "sales", "omzet"))
+        labels = []
+        for value in numeric:
+            if pd.isna(value):
+                labels.append("")
+            elif money:
+                labels.append(format_idr(value))
+            else:
+                labels.append(format_number(value, 0))
+        shown[column] = labels
+    return shown
+
+
 def _month_rows(ledger: pd.DataFrame) -> pd.DataFrame:
     """Ringkas transaksi per bulan pada rentang laporan."""
     columns = ["Bulan", "No. Pesanan", "QTY bersih", "Sales bersih", "Sales batal", "Nominal retur"]
@@ -1147,13 +1363,14 @@ def show_report_menu(
         "Retur dan batal",
         "Belum bayar",
         "Data tersimpan",
-        "Insight",
+        "Rekomendasi",
     ]
     st.subheader("Laporan")
     st.caption(
-        "Slide ini merangkum analisa di aplikasi, kecuali Evaluasi model. "
-        "Tahun, bulan, dan tanggal di bawah membaca data yang sudah diunggah. "
-        "Prediksi tetap hasil analisis terakhir."
+        "Satu slide satu bahasan, seperti presentasi. "
+        "Di bawah data ada analisa dan rekomendasi tindakan. "
+        "Evaluasi model tidak masuk deck ini. "
+        "Tahun, bulan, dan tanggal membaca data yang sudah diunggah. Prediksi tetap hasil analisis terakhir."
     )
     active_keys = tuple(st.session_state.get("active-library-keys") or ())
     if active_keys:
@@ -1177,16 +1394,22 @@ def show_report_menu(
     if "laporan-slide-name" not in st.session_state or st.session_state["laporan-slide-name"] not in titles:
         st.session_state["laporan-slide-name"] = titles[0]
     position = titles.index(st.session_state["laporan-slide-name"])
-    previous, picker, following = st.columns([1, 2.6, 1])
+    st.caption(f"Slide {position + 1} dari {len(titles)}")
+    st.markdown("<div class='slide-nav'></div>", unsafe_allow_html=True)
+    previous, picker, following = st.columns([1, 2.6, 1], vertical_alignment="center")
     if previous.button("Sebelumnya", disabled=position == 0, use_container_width=True):
         st.session_state["laporan-slide-name"] = titles[position - 1]
         st.rerun()
     if following.button("Berikutnya", disabled=position >= len(titles) - 1, use_container_width=True):
         st.session_state["laporan-slide-name"] = titles[position + 1]
         st.rerun()
-    picker.selectbox("Slide presentasi", titles, key="laporan-slide-name")
+    picker.selectbox(
+        "Slide presentasi",
+        titles,
+        key="laporan-slide-name",
+        label_visibility="collapsed",
+    )
     slide = str(st.session_state["laporan-slide-name"])
-    st.caption(f"Slide {titles.index(slide) + 1} dari {len(titles)}")
 
     summary, status_table, sku_sheet = activity_report(period_view if period_view is not None else pd.DataFrame())
     net = scope_ledger(period_view, include_cancel=False, include_return=False)
@@ -1208,6 +1431,26 @@ def show_report_menu(
     view = catalog.head(TOP_N).reset_index(drop=True) if not catalog.empty else catalog
     if not view.empty:
         view = view.sort_values(["peringkat", "item_key"], kind="mergesort").reset_index(drop=True)
+    cancel_share = float(summary.get("invoice_cancel", 0)) / gross_orders * 100 if gross_orders else 0.0
+    sales_gap = gross_sales - net_sales
+    top_sales = float(view["sales_total"].sum()) if not view.empty else 0.0
+    top_share = top_sales / net_sales * 100 if net_sales > 0 else 0.0
+    below_forecast = int((view["pred_sales"] + 0.5 < view["sales_total"]).sum()) if not view.empty else 0
+    pred_qty_sum = float(view["pred_qty"].sum()) if not view.empty else 0.0
+    pred_sales_sum = float(view["pred_sales"].sum()) if not view.empty else 0.0
+    safety_sum = float(view["safety_stock"].sum()) if not view.empty else 0.0
+    stock_sum = float(view["stok_disarankan"].sum()) if not view.empty else 0.0
+    average_order = net_sales / net_orders if net_orders else 0.0
+    metric_name = METRIC_LABELS.get(metric, metric)
+    _contribution, contribution_table = cancel_contribution(period_view)
+    top_cancel_reason = ""
+    top_cancel_invoices = 0.0
+    top_cancel_nominal = 0.0
+    if not contribution_table.empty:
+        top_row = contribution_table.iloc[0]
+        top_cancel_reason = str(top_row.get("Alasan pembatalan", "")).strip()
+        top_cancel_invoices = float(top_row.get("Invoice", 0) or 0)
+        top_cancel_nominal = float(top_row.get("Nominal", 0) or 0)
 
     if slide == "Sampul":
         _slide_head("Tinjauan manajer", "Laporan analisa toko")
@@ -1227,6 +1470,18 @@ def show_report_menu(
         show_metric(cards[1], "Sales seluruh status", format_idr(gross_sales))
         show_metric(cards[2], "Sales bersih", format_idr(net_sales), hint="Tanpa batal dan tanpa baris yang habis diretur")
         show_metric(cards[3], "QTY bersih", format_qty(net_qty))
+        _slide_advice(
+            (
+                f"Dari {format_number(gross_orders)} pesanan, yang menjadi penjualan bersih "
+                f"{format_number(net_orders)} pesanan senilai {format_idr(net_sales)}. "
+                f"Selisih {format_idr(sales_gap)} adalah batal dan baris yang habis diretur, "
+                "jadi bukan permintaan yang harus disiapkan stoknya."
+            ),
+            (
+                "Nilai omzet dan pembelian dari sales bersih. "
+                "Jika selisih terhadap sales seluruh status besar, selesaikan dulu batal dan belum bayar sebelum menambah iklan."
+            ),
+        )
     elif slide == "Penjualan":
         _slide_head(scope_label, "Penjualan pada periode ini")
         cards = st.columns(4)
@@ -1241,9 +1496,26 @@ def show_report_menu(
         )
         if net.empty:
             st.write("Tidak ada penjualan bersih pada tanggal ini.")
+            _slide_advice(
+                "Tidak ada penjualan bersih pada tanggal ini.",
+                "Perlebar bulan atau tanggal. Jangan mengambil keputusan stok dari rentang yang kosong.",
+            )
         else:
             st.plotly_chart(daily_actual_chart(net, scope_label, "sales"), use_container_width=True)
             st.caption("Batang adalah sales bersih per tanggal. Angka mengikuti Total Pembayaran sekali tiap No. Pesanan.")
+            peak_text = ""
+            by_day = net.groupby(pd.to_datetime(net["order_time"]).dt.floor("D"))["sales"].sum()
+            if not by_day.empty and float(by_day.sum()) > 0:
+                peak_day = pd.Timestamp(by_day.idxmax())
+                peak_share = float(by_day.max()) / float(by_day.sum()) * 100
+                peak_text = (
+                    f" Puncak grafik jatuh pada {format_id_date(peak_day.date())}, "
+                    f"{format_number(peak_share, 1)}% dari nilai harian di grafik ini."
+                )
+            _slide_advice(
+                f"Rata-rata pembayaran pesanan bersih {format_idr(average_order)} dari {format_qty(net_qty)} unit.{peak_text}",
+                "Siapkan orang dan iklan pada hari puncak. Iklan Pencarian Shopee bid-nya dinaikkan hanya di tanggal itu, lalu diturunkan di hari sepi. Target iklan adalah sales bersih, bukan GMV yang masih berisi batal.",
+            )
     elif slide == "Item terlaris":
         _slide_head(scope_label, f"50 item terlaris menurut {METRIC_LABELS.get(metric, metric)}")
         if view.empty:
@@ -1258,16 +1530,34 @@ def show_report_menu(
             st.caption("Biru adalah QTY pada periode laporan. Oranye adalah prediksi.")
             st.plotly_chart(item_qty_chart(view, "laporan"), use_container_width=True)
         if not view.empty:
-            top_sales = float(view["sales_total"].sum())
-            share = top_sales / net_sales * 100 if net_sales > 0 else 0.0
             st.caption(
                 f"Sales Top 50 pada periode ini {format_idr(top_sales)}, "
-                f"{format_number(share, 1)}% dari sales bersih."
+                f"{format_number(top_share, 1)}% dari sales bersih."
             )
+        _slide_advice(
+            (
+                f"Top 50 menyumbang {format_number(top_share, 1)}% sales bersih. "
+                f"{format_number(below_forecast)} SKU prediksi sales-nya di bawah sales periode ini, "
+                "karena prediksi mengikuti 28 hari terakhir, bukan lonjakan satu periode."
+                if not view.empty
+                else "Tidak ada item pada tanggal ini, jadi belum ada konsentrasi penjualan yang bisa diurutkan."
+            ),
+            (
+                "Beli lebih dulu SKU di Top 50, sebesar stok prediksi. "
+                "Iklan: 70% budget Iklan Pencarian memakai kata kunci exact nama produk yang batal dan retur-nya rendah. "
+                "SKU yang sering diretur dikeluarkan dari Iklan Produk Serupa."
+                if not view.empty
+                else "Perlebar tanggal sampai ada penjualan, lalu ulang slide ini."
+            ),
+        )
     elif slide == "Prediksi dan stok":
         _slide_head(period_text, "Prediksi permintaan dan stok yang disiapkan")
         if view.empty:
             st.write("Prediksi belum punya item pada tanggal ini.")
+            _slide_advice(
+                "Belum ada SKU pada tanggal ini, jadi stok prediksi belum bisa diurutkan.",
+                "Perlebar tanggal penjualan, lalu jalankan analisis bila data inputnya berubah.",
+            )
         else:
             pred_qty = float(view["pred_qty"].sum())
             pred_sales = float(view["pred_sales"].sum())
@@ -1280,12 +1570,31 @@ def show_report_menu(
             show_metric(cards[3], "Stok prediksi", format_qty(stock_units), hint="Prediksi QTY ditambah safety stock")
             display = leaderboard_frame(view.head(10), period)
             st.caption("Sepuluh peringkat teratas. Daftar lengkap ada di menu Prediksi & stok.")
-            st.dataframe(display, hide_index=True, height=44 * (len(display) + 1) + 36, column_config=table_column_config(display, roomy=True))
+            st.dataframe(
+                _display_report_numbers(display),
+                hide_index=True,
+                height=44 * (len(display) + 1) + 36,
+                column_config=table_column_config(display, roomy=True),
+            )
+            _slide_advice(
+                (
+                    f"Prediksi QTY Top 50 {format_qty(pred_qty_sum)} unit, safety stock {format_qty(safety_sum)} unit, "
+                    f"stok yang disiapkan {format_qty(stock_sum)} unit, senilai prediksi sales {format_idr(pred_sales_sum)}. "
+                    f"Parameter {metric_name} hanya mengubah urutan 50 SKU. "
+                    "Prediksi satu SKU tetap dari QTY 28 hari terakhir, lalu sales-nya QTY itu kali harga jual. "
+                    "Total Top 50 berubah saat parameter diganti karena daftar SKU-nya berbeda. Angka SKU yang sama tidak berubah."
+                ),
+                "Purchase order memakai stok prediksi dalam unit. Sebelum flash sale, cocokkan kuota iklan dengan stok itu. SKU yang stok prediksinya tipis dihentikan dari GMV Max supaya iklan tidak menjual barang yang tidak ada.",
+            )
     elif slide == "Status transaksi":
         _slide_head(scope_label, "Status pesanan")
         st.caption("Seluruh status pada tanggal yang dipilih, termasuk batal dan retur.")
         if status_table.empty:
             st.write("Tidak ada status pada tanggal ini.")
+            _slide_advice(
+                "Tidak ada pesanan pada tanggal ini.",
+                "Perlebar filter sebelum menilai apakah operasi pengiriman atau pembatalan yang perlu ditangani.",
+            )
         else:
             status_view = append_total_row(status_table, "Status pesanan", ["No. Pesanan", "Kontribusi"])
             if "Kontribusi" in status_view.columns:
@@ -1293,7 +1602,11 @@ def show_report_menu(
                 status_view["Kontribusi"] = status_view["Kontribusi"].map(
                     lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
                 )
-            st.dataframe(status_view, hide_index=True, height=min(44 * (len(status_view) + 1) + 36, 520))
+            st.dataframe(
+                _display_report_numbers(status_view),
+                hide_index=True,
+                height=min(44 * (len(status_view) + 1) + 36, 520),
+            )
             busiest = status_table.sort_values("No. Pesanan", ascending=False).iloc[0]
             st.markdown(
                 "<div class='report-body'>"
@@ -1302,6 +1615,18 @@ def show_report_menu(
                 "</div>",
                 unsafe_allow_html=True,
             )
+            status_share = float(busiest["Kontribusi"]) if "Kontribusi" in busiest.index else 0.0
+            _slide_advice(
+                (
+                    f"{busiest['Status pesanan']} memegang {format_number(float(busiest['No. Pesanan']))} pesanan"
+                    f" ({format_number(status_share, 1)}%). "
+                    f"Batal mencakup {format_number(cancel_share, 1)}% seluruh pesanan pada tanggal ini."
+                ),
+                (
+                    "Jika batal masuk kelompok besar, tahan kenaikan budget Iklan Toko dan Iklan Pencarian sampai alasan terbesar turun. "
+                    "Status berhasil yang dominan artinya pesanan sampai. Anggaran iklan berikutnya diarahkan ke SKU yang menopang status itu."
+                ),
+            )
     elif slide == "Retur dan batal":
         _slide_head(scope_label, "Retur dan pembatalan")
         cards = st.columns(4)
@@ -1309,7 +1634,6 @@ def show_report_menu(
         show_metric(cards[1], "Nominal batal", format_idr(summary.get("nominal_cancel", 0)))
         show_metric(cards[2], "QTY retur", format_qty(summary.get("sales_return", 0)))
         show_metric(cards[3], "Nominal retur", format_idr(summary.get("nominal_return", 0)))
-        _contribution, contribution_table = cancel_contribution(period_view)
         if contribution_table.empty:
             st.write("Tidak ada pesanan batal pada tanggal ini.")
         else:
@@ -1320,13 +1644,37 @@ def show_report_menu(
                         lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
                     )
             st.caption("Delapan alasan batal dengan invoice terbanyak.")
-            st.dataframe(preview, hide_index=True, height=min(44 * (len(preview) + 1) + 36, 420))
+            st.dataframe(
+                _display_report_numbers(preview),
+                hide_index=True,
+                height=min(44 * (len(preview) + 1) + 36, 420),
+            )
         if sku_sheet.empty:
             st.write("Tidak ada SKU retur atau batal pada tanggal ini.")
         else:
             issue = sku_sheet.head(8)
             st.caption("Delapan SKU dengan retur atau batal terbesar. Daftar lengkap ada di menu Data.")
-            st.dataframe(issue, hide_index=True, height=min(44 * (len(issue) + 1) + 36, 420))
+            st.dataframe(
+                _display_report_numbers(issue),
+                hide_index=True,
+                height=min(44 * (len(issue) + 1) + 36, 420),
+            )
+        reason_text = ""
+        if not contribution_table.empty and "Alasan pembatalan" in contribution_table.columns:
+            top_reason = contribution_table.iloc[0]
+            reason_text = (
+                f" Alasan dengan invoice terbanyak: {top_reason['Alasan pembatalan']} "
+                f"({format_number(float(top_reason['Invoice']))} invoice)."
+            )
+        _slide_advice(
+            (
+                f"Batal {format_number(summary.get('invoice_cancel', 0))} invoice senilai {format_idr(summary.get('nominal_cancel', 0))}, "
+                f"{format_number(cancel_share, 1)}% dari jumlah pesanan. "
+                f"Retur {format_qty(summary.get('sales_return', 0))} unit senilai {format_idr(summary.get('nominal_return', 0))}."
+                f"{reason_text}"
+            ),
+            "Tim iklan menghentikan perluasan kata kunci untuk SKU di tabel retur. Tim listing menaruh ongkir, varian, dan ukuran di gambar pertama untuk alasan ubah alamat dan ubah pesanan. Tim gudang mengisi ulang SKU retur hanya setelah alasannya dicek.",
+        )
     elif slide == "Belum bayar":
         _slide_head(scope_label, "Batal karena pembeli belum bayar")
         months = list(st.session_state.get("laporan_months") or [])
@@ -1341,6 +1689,10 @@ def show_report_menu(
             )
         if unpaid.empty:
             st.write("Tidak ada pembeli yang batal karena belum bayar pada tanggal ini.")
+            _slide_advice(
+                "Pada tanggal ini tidak ada akun yang batal hanya karena belum bayar.",
+                "Pembatalan yang tersisa datang dari alasan lain. Gunakan slide retur dan batal untuk alasan yang masih menghasilkan invoice.",
+            )
         else:
             buyer_count = int(unpaid.loc[unpaid["No"].astype(str).str.strip().ne(""), "No"].nunique()) if "No" in unpaid.columns else 0
             order_count = int(unpaid["No. Pesanan"].replace("", pd.NA).nunique()) if "No. Pesanan" in unpaid.columns else 0
@@ -1360,6 +1712,14 @@ def show_report_menu(
                 "</div>",
                 unsafe_allow_html=True,
             )
+            _slide_advice(
+                (
+                    f"{format_number(buyer_count)} akun membatalkan karena belum bayar, "
+                    f"{format_number(order_count)} pesanan, {format_qty(qty_missed)} unit, senilai {format_idr(sales_missed)}. "
+                    f"Porsi ini {format_number(share_cancel, 1)}% dari nominal batal, dan bukan permintaan yang sudah dibayar."
+                ),
+                "Dua jam sebelum Shopee membatalkan otomatis, chat cara bayar. Voucher ongkir kecil hanya untuk order yang masih menunggu, bukan voucher terbuka. Matikan maximize clicks pada produk yang banyak menghasilkan order belum bayar. QTY ini tidak masuk pembelian stok.",
+            )
     elif slide == "Data tersimpan":
         _slide_head(scope_label, "Data yang diunggah pada periode ini")
         month_table = _month_rows(period_view)
@@ -1370,46 +1730,44 @@ def show_report_menu(
         )
         if month_table.empty:
             st.write("Tidak ada bulan pada tanggal ini.")
+            _slide_advice(
+                "Filter ini tidak memotong bulan yang tersimpan.",
+                "Centang bulan yang sudah diunggah sebelum membandingkan tren.",
+            )
         else:
-            st.dataframe(month_table, hide_index=True, height=min(44 * (len(month_table) + 1) + 36, 480))
-            st.markdown(
-                "<div class='report-body'>"
-                "Sales bersih sama dengan Folder data: Total Pembayaran tanpa pesanan batal, sekali tiap No. Pesanan, "
-                "dan tanpa baris yang habis diretur."
-                "</div>",
-                unsafe_allow_html=True,
+            st.dataframe(
+                _display_report_numbers(month_table),
+                hide_index=True,
+                height=min(44 * (len(month_table) + 1) + 36, 480),
+            )
+            strongest = month_table.loc[month_table["Sales bersih"].idxmax()]
+            weakest = month_table.loc[month_table["Sales bersih"].idxmin()]
+            _slide_advice(
+                (
+                    f"Sales bersih tertinggi {strongest['Bulan']} sebesar {format_idr(float(strongest['Sales bersih']))}. "
+                    f"Terendah {weakest['Bulan']} sebesar {format_idr(float(weakest['Sales bersih']))}. "
+                    "Angka ini sama dengan Folder data: tanpa batal dan tanpa baris yang habis diretur."
+                ),
+                "Latih prediksi dari bulan yang lengkap. Bulan yang baru separuh jangan dijadikan satu-satunya patokan di luar level 28 hari terakhir.",
             )
     else:
-        _slide_head(scope_label, "Insight untuk ditinjau")
-        lines = []
-        if gross_orders <= 0:
-            lines.append("Pada tanggal ini belum ada transaksi yang bisa ditinjau.")
-        else:
-            cancel_share = float(summary.get("invoice_cancel", 0)) / gross_orders * 100 if gross_orders else 0.0
-            lines.append(
-                f"Dari {format_number(gross_orders)} pesanan, {format_number(cancel_share, 1)}% berstatus batal. "
-                f"Nominal batal {format_idr(summary.get('nominal_cancel', 0))}."
-            )
-            lines.append(
-                f"Penjualan bersih {format_idr(net_sales)} dari {format_qty(net_qty)} unit, "
-                f"{format_number(net_orders)} pesanan."
-            )
-            if float(summary.get("nominal_return", 0)) > 0:
-                lines.append(
-                    f"Retur pada periode ini {format_qty(summary.get('sales_return', 0))} unit, "
-                    f"senilai {format_idr(summary.get('nominal_return', 0))}."
-                )
-            if not view.empty:
-                gap = float(view["pred_sales"].sum() - view["sales_total"].sum())
-                direction = "di atas" if gap >= 0 else "di bawah"
-                lines.append(
-                    f"Prediksi sales Top 50 berada {direction} sales periode ini sebesar {format_idr(abs(gap))}. "
-                    f"Stok yang disiapkan untuk Top 50 adalah {format_qty(float(view['stok_disarankan'].sum()))} unit."
-                )
-            lines.append("Evaluasi model tidak masuk presentasi ini. Detail algoritma tetap di menu itu.")
-        st.markdown(
-            "<div class='report-body'>" + "<br><br>".join(html.escape(line) for line in lines) + "</div>",
-            unsafe_allow_html=True,
+        _slide_strategy(
+            scope_label=scope_label,
+            net_sales=net_sales,
+            net_orders=net_orders,
+            net_qty=net_qty,
+            cancel_share=cancel_share,
+            cancel_nominal=float(summary.get("nominal_cancel", 0)),
+            return_qty=float(summary.get("sales_return", 0)),
+            return_nominal=float(summary.get("nominal_return", 0)),
+            top_share=top_share,
+            stock_sum=stock_sum,
+            pred_qty_sum=pred_qty_sum,
+            safety_sum=safety_sum,
+            top_cancel_reason=top_cancel_reason,
+            top_cancel_invoices=top_cancel_invoices,
+            top_cancel_nominal=top_cancel_nominal,
+            has_items=not view.empty and gross_orders > 0,
         )
 
 
@@ -2060,6 +2418,53 @@ def _stock_sales(view: pd.DataFrame) -> pd.Series:
     return view["stok_disarankan"].astype(float) * price.fillna(0)
 
 
+def _place_combo_labels(
+    fig: go.Figure,
+    labels,
+    sales,
+    sales_texts,
+    qty,
+    qty_texts,
+) -> None:
+    """Sales naik dari dasar batang. QTY berada di atas garis, supaya dua angka tidak bertumpuk."""
+    count = len(list(labels))
+    wide = count <= 8
+    sales_peak = float(max(sales) or 1)
+    show_qty = 0 < count <= 16
+    for label, amount, sales_text, qty_value, qty_text in zip(labels, sales, sales_texts, qty, qty_texts):
+        if sales_text and float(amount) > 0:
+            fig.add_annotation(
+                x=label,
+                y=0,
+                yref="y",
+                text=sales_text,
+                textangle=0 if wide else -90,
+                showarrow=False,
+                xanchor="center",
+                yanchor="bottom",
+                yshift=12 if wide else 8,
+                font=dict(size=13 if wide else 11, color="#1f2937"),
+                bgcolor="rgba(255,255,255,0.92)",
+                borderpad=2,
+            )
+        if show_qty and qty_text:
+            short_bar = float(amount) < sales_peak * 0.28
+            fig.add_annotation(
+                x=label,
+                y=float(qty_value),
+                yref="y2",
+                text=qty_text,
+                textangle=0,
+                showarrow=False,
+                xanchor="center",
+                yanchor="bottom",
+                yshift=22 if short_bar else 14,
+                font=dict(size=13, color="#1e3a8a"),
+                bgcolor="rgba(255,255,255,0.94)",
+                borderpad=2,
+            )
+
+
 def sales_qty_chart(
     labels: list[str],
     sales: np.ndarray,
@@ -2085,26 +2490,21 @@ def sales_qty_chart(
             hovertemplate="%{x}<br>Sales: %{customdata}<extra></extra>",
         )
     )
-    show_qty_text = 0 < len(labels) <= 16
     fig.add_trace(
         go.Scatter(
             name="QTY",
             x=list(labels),
             y=qty_series,
-            mode="lines+markers+text" if show_qty_text else "lines+markers",
+            mode="lines+markers",
             yaxis="y2",
-            text=qty_hover if show_qty_text else None,
-            textposition="top center",
-            textfont=dict(size=13, color="#1e3a8a"),
             marker=dict(size=11, color="#4C78A8", line=dict(width=1, color="#ffffff")),
             line=dict(color="#4C78A8", width=3),
             customdata=qty_hover,
             hovertemplate="%{x}<br>QTY: %{customdata}<extra></extra>",
-            cliponaxis=False,
         )
     )
-    if any(_sales_text):
-        _place_sales_labels(fig, labels, sales_series, _sales_text)
+    if any(_sales_text) or any(qty_hover):
+        _place_combo_labels(fig, labels, sales_series, _sales_text, qty_series, qty_hover)
     sales_peak = float(np.max(sales_series) if len(sales_series) else 1) or 1
     qty_peak = float(np.max(qty_series) if len(qty_series) else 1) or 1
     if qty_peak <= 12:
@@ -2118,7 +2518,7 @@ def sales_qty_chart(
         cursor += qty_step
     if not qty_ticks or qty_ticks[-1] < qty_peak:
         qty_ticks.append(float(np.ceil(qty_peak)))
-    qty_upper = max(qty_peak * 1.35, qty_ticks[-1] if qty_ticks else qty_peak)
+    qty_upper = max(qty_peak * 1.48, (qty_ticks[-1] * 1.2) if qty_ticks else qty_peak)
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
         yaxis_title="Sales volume (Rp)",
@@ -2139,8 +2539,8 @@ def sales_qty_chart(
         legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0),
     )
     apply_straight_dates(fig, labels)
-    apply_integer_axis(fig, "y", sales_peak, pad=1.22)
-    return polish_chart(fig, height=520, margin_top=108, margin_bottom=78, margin_right=72)
+    apply_integer_axis(fig, "y", sales_peak, pad=1.28)
+    return polish_chart(fig, height=540, margin_top=118, margin_bottom=78, margin_right=72)
 
 
 def sales_drop_note(
