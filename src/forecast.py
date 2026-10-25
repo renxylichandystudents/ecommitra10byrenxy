@@ -388,7 +388,9 @@ def _report_window_days(history: pd.DataFrame) -> int:
 
 PHI = 0.985
 ROBUST_MIN_DAYS = 28
+RECENT_LEVEL_DAYS = 28
 ROBUST_SHIFT = 0.15
+MODEL_NAME = "Level terkini"
 
 
 def _dense_incomplete_tail(series: np.ndarray) -> bool:
@@ -444,18 +446,29 @@ def _limit_damped_slope(level: float, slope: float, horizon: int) -> float:
 
 
 def _robust_state(series: np.ndarray, horizon: int) -> tuple[float, float]:
-    """Level tahan lonjakan dan kemiringan yang hanya hidup bila riwayatnya cukup."""
+    """Level dari 28 hari terakhir. Bulan lama tidak menarik prediksi ke bawah.
+
+    Lonjakan satu hari dipotong. Kemiringan membandingkan 28 hari terakhir
+    dengan 28 hari sebelumnya, lalu ditahan supaya ujung horizon bergeser
+    paling banyak 15% level.
+    """
     raw = np.asarray(series, dtype=float)
     if len(raw) == 0:
         return 0.0, 0.0
     used = raw[:-1] if _dense_incomplete_tail(raw) else raw
-    clean = _cap_positive_spikes(used)
-    if len(clean) == 0 or float(clean.sum()) <= 0:
+    if len(used) == 0 or float(np.nansum(used)) <= 0:
         return 0.0, 0.0
-    level = float(clean.mean())
-    if len(clean) < ROBUST_MIN_DAYS or level <= 0:
-        return level, 0.0
-    slope = _theil_sen_slope(clean) * min(1.0, len(clean) / 56.0)
+    recent = used[-RECENT_LEVEL_DAYS:]
+    clean = _cap_positive_spikes(recent)
+    level = float(clean.mean()) if len(clean) else 0.0
+    if level <= 0 or len(used) < ROBUST_MIN_DAYS:
+        return max(level, 0.0), 0.0
+    if len(used) >= RECENT_LEVEL_DAYS * 2:
+        prior = used[-2 * RECENT_LEVEL_DAYS : -RECENT_LEVEL_DAYS]
+        prior_level = float(_cap_positive_spikes(prior).mean())
+        slope = (level - prior_level) / float(RECENT_LEVEL_DAYS)
+    else:
+        slope = 0.0
     return level, _limit_damped_slope(level, slope, horizon)
 
 
@@ -541,18 +554,19 @@ def residual_sigma(
     if len(series) < 2 or float(series.sum()) <= 0:
         return 0.0
     used = series[:-1] if _dense_incomplete_tail(series) else series
-    if len(used) < 2:
+    recent = used[-RECENT_LEVEL_DAYS:]
+    if len(recent) < 2:
         return 0.0
-    level, slope = _robust_state(series, max(int(horizon or len(used)), 1))
-    origin = pd.Timestamp(start).normalize()
-    center = (len(used) - 1) / 2.0
-    fitted = np.empty(len(used), dtype=float)
-    for index in range(len(used)):
+    level, _slope = _robust_state(series, max(int(horizon or len(recent)), 1))
+    if level <= 0:
+        return float(np.std(recent, ddof=1))
+    origin = pd.Timestamp(start).normalize() + pd.Timedelta(days=len(used) - len(recent))
+    fitted = np.empty(len(recent), dtype=float)
+    for index in range(len(recent)):
         day = origin + pd.Timedelta(days=index)
-        growth = slope * (index - center)
         factor = float(weekday[int(day.dayofweek)])
-        fitted[index] = max(0.0, (level + growth) * factor)
-    return float(np.std(used - fitted, ddof=1))
+        fitted[index] = max(0.0, level * factor)
+    return float(np.std(recent - fitted, ddof=1))
 
 
 def _trend_forecast(
@@ -673,7 +687,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
     robust_total = _robust_forecast(train, train_start, hold, weekday, forecast_start=forecast_start)
     rows.append(
         {
-            "Algoritma": "Tren robust",
+            "Algoritma": MODEL_NAME,
             "Perkiraan ujian": round(robust_total, 1),
             "Actual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(robust_total), 1),
@@ -782,7 +796,7 @@ def forecast_items(
                     item_key=item_key,
                     item_label=str(item_hist["item_label"].iloc[0]),
                     metric=metric,
-                    best_model="Tren robust",
+                    best_model=MODEL_NAME,
                     forecast=forecast_value,
                     mae=0.0,
                     rmse=0.0,
@@ -791,13 +805,13 @@ def forecast_items(
                     next_period=next_label,
                     candidates=[
                         ModelResult(
-                            "Tren robust",
+                            MODEL_NAME,
                             forecast_value,
                             0.0,
                             0.0,
                             0.0,
                             True,
-                            "level tahan lonjakan, kemiringan hanya bila riwayat cukup",
+                            "level 28 hari terakhir, kemiringan ditahan 15%",
                         )
                     ],
                 )

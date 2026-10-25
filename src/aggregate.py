@@ -99,8 +99,13 @@ def aggregate_item_periods(df: pd.DataFrame, period: str) -> pd.DataFrame:
     work = df.copy()
     work["period_start"] = period_start(work["order_time"], period)
     grouped = (
-        work.groupby(["item_key", "item_label", "period_start"], as_index=False)
-        .agg(qty=("qty", "sum"), sales=("sales", "sum"), orders=("order_id", "nunique"))
+        work.groupby(["item_key", "period_start"], as_index=False)
+        .agg(
+            item_label=("item_label", "first"),
+            qty=("qty", "sum"),
+            sales=("sales", "sum"),
+            orders=("order_id", "nunique"),
+        )
         .sort_values(["item_key", "period_start"])
     )
     grouped["period_label"] = grouped["period_start"].map(lambda ts: period_label(ts, period))
@@ -110,8 +115,20 @@ def aggregate_item_periods(df: pd.DataFrame, period: str) -> pd.DataFrame:
 def dense_item_series(item_history: pd.DataFrame, period: str) -> pd.DataFrame:
     if item_history.empty:
         return item_history
-    start = item_history["period_start"].min()
-    end = item_history["period_start"].max()
+    stamps = pd.to_datetime(item_history["period_start"], errors="coerce")
+    if getattr(stamps.dt, "tz", None) is not None:
+        stamps = stamps.dt.tz_localize(None)
+    work = item_history.loc[stamps.notna()].copy()
+    if work.empty:
+        return item_history.iloc[0:0].copy()
+    work["period_start"] = stamps.loc[stamps.notna()].dt.normalize()
+    base = work.groupby("period_start", as_index=True).agg(
+        qty=("qty", "sum"),
+        sales=("sales", "sum"),
+        orders=("orders", "sum"),
+    )
+    start = base.index.min()
+    end = base.index.max()
     if period == "hari":
         idx = pd.date_range(start, end, freq="D")
     elif period == "bulan":
@@ -119,20 +136,20 @@ def dense_item_series(item_history: pd.DataFrame, period: str) -> pd.DataFrame:
     elif period == "kuartal":
         idx = pd.date_range(start, end, freq="QS")
     elif period == "semester":
-        stamps = []
+        stamps_out = []
         cursor = pd.Timestamp(start)
         end_ts = pd.Timestamp(end)
         while cursor <= end_ts:
-            stamps.append(cursor)
+            stamps_out.append(cursor)
             cursor = cursor + pd.DateOffset(months=6)
-        idx = pd.DatetimeIndex(stamps)
+        idx = pd.DatetimeIndex(stamps_out)
     else:
         idx = pd.date_range(start, end, freq="YS")
+    idx = pd.DatetimeIndex(pd.to_datetime(idx)).unique().sort_values()
 
-    base = item_history.set_index("period_start")
     filled = base.reindex(idx)
-    filled["item_key"] = item_history["item_key"].iloc[0]
-    filled["item_label"] = item_history["item_label"].iloc[0]
+    filled["item_key"] = work["item_key"].iloc[0]
+    filled["item_label"] = work["item_label"].iloc[0]
     filled["qty"] = filled["qty"].fillna(0.0)
     filled["sales"] = filled["sales"].fillna(0.0)
     filled["orders"] = filled["orders"].fillna(0)

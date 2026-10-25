@@ -84,6 +84,24 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "total pembayaran",
         "total payment",
     ),
+    "cancel_reason": (
+        "alasan pembatalan",
+        "cancellation reason",
+        "cancel reason",
+    ),
+    "return_reason": (
+        "status pembatalan/ pengembalian",
+        "status pembatalan/pengembalian",
+        "status pengembalian",
+        "return status",
+    ),
+    "buyer": (
+        "username (pembeli)",
+        "username pembeli",
+        "nama akun pembeli",
+        "akun pembeli",
+        "buyer username",
+    ),
 }
 
 VALID_STATUS_HINTS = (
@@ -109,6 +127,13 @@ CANCEL_HINTS = (
     "canceled",
     "unpaid",
     "belum bayar",
+)
+
+SUCCESS_STATUSES = (
+    "pesanan diterima",
+    "sedang dikirim",
+    "selesai",
+    "telah dikirim",
 )
 
 
@@ -277,32 +302,44 @@ def load_shopee_report(
         raw = _read_csv_bytes(data)
 
     raw.columns = [str(c).strip() for c in raw.columns]
-    mapping = map_columns(raw)
+    frame = clean_order_frame(raw)
+    imported = raw.copy()
+    return frame.reset_index(drop=True), imported.reset_index(drop=True)
+
+
+def clean_order_frame(raw: pd.DataFrame) -> pd.DataFrame:
+    """Satu baris pesanan. Qty bersih dikurangi retur; qty kotor tetap disimpan."""
+    table = raw.drop(columns=["Nama file"], errors="ignore").copy()
+    table.columns = [str(column).strip() for column in table.columns]
+    mapping = map_columns(table)
     frame = pd.DataFrame()
-    frame["order_time"] = _parse_datetime(raw[mapping["order_time"]])
-    frame["product_name"] = raw[mapping["product_name"]].map(_clean_token)
-    frame["qty"] = _parse_number(raw[mapping["qty"]])
+    frame["order_time"] = _parse_datetime(table[mapping["order_time"]])
+    frame["product_name"] = clean_text_series(table[mapping["product_name"]])
+    frame["gross_qty"] = _parse_number(table[mapping["qty"]]).fillna(0).clip(lower=0)
+    frame["returned_qty"] = 0.0
     if "returned_qty" in mapping:
-        returned = _parse_number(raw[mapping["returned_qty"]]).fillna(0).clip(lower=0)
-        frame["qty"] = (frame["qty"] - returned).clip(lower=0)
+        frame["returned_qty"] = _parse_number(table[mapping["returned_qty"]]).fillna(0).clip(lower=0)
+    frame["qty"] = (frame["gross_qty"] - frame["returned_qty"]).clip(lower=0)
 
     if "variation" in mapping:
-        frame["variation"] = raw[mapping["variation"]].map(_clean_token)
+        frame["variation"] = clean_text_series(table[mapping["variation"]])
     else:
         frame["variation"] = ""
 
     if "sku" in mapping:
-        frame["sku"] = raw[mapping["sku"]].map(_clean_token)
+        frame["sku"] = clean_sku_series(table[mapping["sku"]])
     elif "parent_sku" in mapping:
-        frame["sku"] = raw[mapping["parent_sku"]].map(_clean_token)
+        frame["sku"] = clean_sku_series(table[mapping["parent_sku"]])
     else:
         frame["sku"] = ""
 
     if "unit_price" in mapping:
-        unit = _parse_number(raw[mapping["unit_price"]])
+        unit = _parse_number(table[mapping["unit_price"]]).fillna(0).clip(lower=0)
+        frame["gross_sales"] = unit * frame["gross_qty"]
         frame["sales"] = unit * frame["qty"]
     elif "sales" in mapping:
-        frame["sales"] = _parse_number(raw[mapping["sales"]])
+        frame["sales"] = _parse_number(table[mapping["sales"]])
+        frame["gross_sales"] = frame["sales"]
     else:
         raise ValueError(
             "Tidak ada kolom omzet/harga. Pastikan laporan berisi 'Total Harga' "
@@ -310,32 +347,26 @@ def load_shopee_report(
         )
 
     if "status" in mapping:
-        frame["status"] = raw[mapping["status"]].map(_normalize_status)
+        frame["status"] = normalize_status_series(table[mapping["status"]])
     else:
         frame["status"] = "Selesai"
 
     if "order_id" in mapping:
-        frame["order_id"] = raw[mapping["order_id"]].astype(str)
+        frame["order_id"] = table[mapping["order_id"]].astype(str)
     else:
         frame["order_id"] = ""
 
     if "order_amount" in mapping:
-        frame["order_amount"] = _parse_number(raw[mapping["order_amount"]])
+        frame["order_amount"] = _parse_number(table[mapping["order_amount"]])
     else:
         frame["order_amount"] = frame["sales"]
 
     frame = frame.dropna(subset=["order_time", "product_name", "qty", "sales"])
-    frame = frame[frame["qty"] > 0]
-    frame = frame[frame["sales"] >= 0]
-    frame["item_key"] = frame.apply(_item_key, axis=1)
-    frame["item_label"] = frame.apply(_item_label, axis=1)
-    key_count = frame.groupby("item_label")["item_key"].transform("nunique")
-    collision = key_count > 1
-    if collision.any():
-        suffix = frame.loc[collision, "sku"].where(frame.loc[collision, "sku"].ne(""), frame.loc[collision, "item_key"])
-        frame.loc[collision, "item_label"] = frame.loc[collision, "item_label"] + " (" + suffix + ")"
-    imported = raw.copy()
-    return frame.reset_index(drop=True), imported.reset_index(drop=True)
+    frame = frame[(frame["qty"] > 0) | (frame["gross_qty"] > 0)]
+    frame = frame[frame["gross_sales"].fillna(frame["sales"]).fillna(0) >= 0]
+    frame["item_key"] = item_key_series(frame)
+    frame = apply_latest_identity(frame)
+    return frame.reset_index(drop=True)
 
 
 def _clean_status(series: pd.Series) -> pd.Series:
@@ -345,6 +376,11 @@ def _clean_status(series: pd.Series) -> pd.Series:
 def _is_cancelled_status(value: str) -> bool:
     text = str(value).strip().lower()
     return any(hint in text for hint in CANCEL_HINTS)
+
+
+def _is_success_status(value: str) -> bool:
+    """Pesanan diterima, sedang dikirim, selesai, dan telah dikirim."""
+    return str(value).strip().lower() in SUCCESS_STATUSES
 
 
 def available_statuses(df: pd.DataFrame) -> list[str]:
@@ -414,12 +450,125 @@ def _clean_token(value: object) -> str:
     return text
 
 
+def _clean_sku(value: object) -> str:
+    """Nomor referensi SKU tanpa ekor .0 dari sel angka Excel."""
+    if isinstance(value, str):
+        text = _clean_token(value)
+        if re.fullmatch(r"\d+\.0+", text):
+            return text.split(".", 1)[0]
+        return text
+    if value is None or isinstance(value, bool):
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return _clean_token(value)
+    if pd.isna(number):
+        return ""
+    if number.is_integer():
+        return str(int(number))
+    return _clean_token(value)
+
+
+def order_month_keys(source: pd.DataFrame) -> pd.Series:
+    """Kunci YYYY-MM dari waktu pesanan pada tabel mentah."""
+    if source is None or source.empty:
+        return pd.Series(dtype="object")
+    table = source.drop(columns=["Nama file"], errors="ignore")
+    mapping = map_columns(table)
+    if "order_time" not in mapping:
+        return pd.Series("tanpa-bulan", index=source.index)
+    times = _parse_datetime(source[mapping["order_time"]])
+    keys = times.dt.to_period("M").astype(str)
+    return keys.where(times.notna(), "tanpa-bulan")
+
+
+def clean_sku_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rapikan kolom referensi SKU pada tabel mentah yang masih bertipe angka."""
+    if frame is None or frame.empty:
+        return frame
+    work = frame.copy()
+    for column in work.columns:
+        label = str(column).strip().lower()
+        if label in {"sku", "seller sku", "sku reference", "parent sku", "sku induk"} or "referensi sku" in label:
+            work[column] = clean_sku_series(work[column])
+    return work
+
+
+_EMPTY_TOKENS = {"", "nan", "none", "-", "—", "tidak ada"}
+
+
+def clean_text_series(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.strip()
+    return text.mask(text.str.lower().isin(_EMPTY_TOKENS), "")
+
+
+def clean_sku_series(series: pd.Series) -> pd.Series:
+    """Sama dengan _clean_sku, untuk satu kolom sekaligus."""
+    if pd.api.types.is_bool_dtype(series):
+        return pd.Series("", index=series.index, dtype=object)
+    if pd.api.types.is_numeric_dtype(series):
+        numbers = pd.to_numeric(series, errors="coerce")
+        text = pd.Series("", index=series.index, dtype=object)
+        valid = numbers.notna()
+        whole = valid & (numbers % 1 == 0)
+        if bool(whole.any()):
+            text.loc[whole] = numbers.loc[whole].round().astype("int64").astype(str)
+        fractional = valid & ~whole
+        if bool(fractional.any()):
+            text.loc[fractional] = numbers.loc[fractional].map(_clean_token)
+        return text
+    text = clean_text_series(series)
+    return text.str.replace(r"^(\d+)\.0+$", r"\1", regex=True)
+
+
+def item_key_series(frame: pd.DataFrame) -> pd.Series:
+    index = frame.index
+    sku = clean_text_series(frame["sku"]) if "sku" in frame.columns else pd.Series("", index=index)
+    name = clean_text_series(frame["product_name"]) if "product_name" in frame.columns else pd.Series("", index=index)
+    variation = clean_text_series(frame["variation"]) if "variation" in frame.columns else pd.Series("", index=index)
+    base = name.where(name.ne(""), "Produk")
+    fallback = base.where(variation.eq(""), base.str.cat(variation, sep="||"))
+    return sku.where(sku.ne(""), fallback)
+
+
+def item_label_series(frame: pd.DataFrame) -> pd.Series:
+    index = frame.index
+    name = clean_text_series(frame["product_name"]) if "product_name" in frame.columns else pd.Series("", index=index)
+    sku = clean_text_series(frame["sku"]) if "sku" in frame.columns else pd.Series("", index=index)
+    variation = clean_text_series(frame["variation"]) if "variation" in frame.columns else pd.Series("", index=index)
+    base = name.where(name.ne(""), sku.where(sku.ne(""), "Produk"))
+    return base.where(variation.eq(""), base.str.cat(variation, sep=" — "))
+
+
+def normalize_status_series(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.strip()
+    text = text.mask(text.str.lower().isin({"", "nan", "none"}), "")
+    text = text.str.replace(_RETURN_WINDOW, "", regex=True).str.strip(" .")
+    lower = text.str.lower()
+    return text.mask(lower.isin({"pesanan diterima", "diterima"}), "Pesanan Diterima")
+
+
+def cancelled_status_mask(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.strip().str.lower()
+    mask = pd.Series(False, index=series.index)
+    for hint in CANCEL_HINTS:
+        mask = mask | text.str.contains(hint, regex=False)
+    return mask
+
+
+def success_status_mask(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip().str.lower().isin(SUCCESS_STATUSES)
+
+
 def _item_key(row: pd.Series) -> str:
-    """Produk diklasifikasi Nomor Referensi SKU. Varian dipisah Nama Variasi."""
+    """Acuan produk adalah Nomor Referensi SKU. Nama hanya dipakai bila SKU kosong."""
     sku = _clean_token(row.get("sku"))
+    if sku:
+        return sku
     name = _clean_token(row.get("product_name"))
     variation = _clean_token(row.get("variation"))
-    identity = sku or name
+    identity = name or "Produk"
     if variation:
         return f"{identity}||{variation}"
     return identity
@@ -431,3 +580,30 @@ def _item_label(row: pd.Series) -> str:
     if variation:
         return f"{name} — {variation}"
     return name
+
+
+def _last_text(series: pd.Series) -> str:
+    for value in reversed(series.tolist()):
+        text = _clean_token(value)
+        if text:
+            return text
+    return ""
+
+
+def apply_latest_identity(frame: pd.DataFrame) -> pd.DataFrame:
+    """Satu SKU memakai nama dan variasi pada pesanan terakhir."""
+    if frame.empty or "item_key" not in frame.columns or "order_time" not in frame.columns:
+        return frame
+    ordered = frame.sort_values(["item_key", "order_time"], kind="mergesort")
+    if "product_name" not in ordered.columns:
+        ordered["product_name"] = ""
+    if "variation" not in ordered.columns:
+        ordered["variation"] = ""
+    latest = ordered.groupby("item_key", as_index=False).agg(
+        product_name=("product_name", _last_text),
+        variation=("variation", _last_text),
+    )
+    work = frame.drop(columns=["product_name", "variation"], errors="ignore")
+    work = work.merge(latest, on="item_key", how="left")
+    work["item_label"] = item_label_series(work)
+    return work

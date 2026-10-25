@@ -15,6 +15,19 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.activity import (
+    ACTIVITY_GRAINS,
+    activity_period_label,
+    activity_report,
+    append_total_row,
+    cancel_contribution,
+    focus_summary,
+    ledger_from_raw,
+    period_options,
+    scope_ledger,
+    slice_period,
+    unpaid_buyer_table,
+)
 from src.aggregate import (
     HORIZON_DAYS,
     PERIOD_OPTIONS,
@@ -31,11 +44,22 @@ from src.forecast import (
     forecast_items,
     forecast_revenue,
 )
+from src.library import (
+    bundle_stamp,
+    folder_frame,
+    history_frame,
+    list_months,
+    load_months,
+    month_label,
+    store_upload,
+    year_of,
+)
 from src.ingest import (
-    available_statuses,
-    default_statuses,
-    filter_by_statuses,
+    _is_cancelled_status,
+    clean_order_frame,
+    clean_sku_columns,
     load_shopee_report,
+    order_month_keys,
     order_revenue,
 )
 from src.ranking import combine_forecasts, model_leaderboard, rank_from_orders
@@ -96,6 +120,69 @@ st.markdown(
         line-height: 1.35;
         color: #334155;
         margin-top: 0.12rem;
+    }
+    .report-kicker {
+        font-size: 0.82rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #64748b;
+        margin: 0;
+    }
+    .report-title {
+        font-size: 1.7rem;
+        font-weight: 700;
+        line-height: 1.25;
+        color: #0f172a;
+        margin: 0.15rem 0 0.45rem 0;
+    }
+    .report-body {
+        font-size: 1.05rem;
+        line-height: 1.55;
+        color: #1e293b;
+    }
+    .app-menu-label {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: #0f172a;
+        margin: 0.15rem 0 0.15rem 0;
+    }
+    .app-menu-hint {
+        font-size: 0.82rem;
+        line-height: 1.35;
+        color: #64748b;
+        margin: 0 0 0.45rem 0;
+    }
+    div[data-testid="stElementContainer"]:has(.app-menu-label) + div[data-testid="stElementContainer"] [data-testid="stHorizontalBlock"] {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 0.4rem;
+        gap: 0.4rem;
+    }
+    div[data-testid="stElementContainer"]:has(.app-menu-label) + div[data-testid="stElementContainer"] button {
+        border-radius: 10px;
+        font-weight: 600;
+        min-height: 2.6rem;
+        white-space: normal;
+    }
+    .side-section {
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #64748b;
+        margin: 0.9rem 0 0.35rem 0;
+    }
+    section[data-testid="stSidebar"] [data-testid="stButton"] button {
+        border-radius: 10px;
+        font-weight: 650;
+        min-height: 2.7rem;
+    }
+    section[data-testid="stSidebar"] [data-testid="stCheckbox"] {
+        margin-bottom: -0.15rem;
+    }
+    section[data-testid="stSidebar"] [data-testid="stCheckbox"] label p {
+        font-size: 0.92rem;
     }
     .side-note {
         font-size: 0.82rem;
@@ -355,14 +442,47 @@ def apply_integer_axis(fig: go.Figure, axis: str, peak: float, *, pad: float = 1
     if axis == "x":
         fig.update_xaxes(**spec)
     elif axis == "y2":
-        fig.update_layout(yaxis2={**spec, "overlaying": "y", "side": "right", "title": "Sales volume (Rp)"})
+        fig.update_layout(yaxis2={**spec, "overlaying": "y", "side": "right", "title": "QTY"})
     else:
-        fig.update_yaxes(**spec)
+        fig.update_layout(yaxis=spec)
 
 
 @st.cache_data(show_spinner=False)
 def parse_upload(file_bytes: bytes, filename: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     return load_shopee_report(file_bytes, filename=filename)
+
+
+@st.cache_data(show_spinner=False)
+def cached_library_frames(
+    keys: tuple[str, ...], stamp: tuple[float, ...]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Baca bulan tersimpan sekali. Stempel file membuat cache batal saat impor baru."""
+    del stamp
+    source, _stored = load_months(list(keys))
+    if source is None or source.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    return source, clean_order_frame(source)
+
+
+@st.cache_data(show_spinner=False)
+def cached_ledger(keys: tuple[str, ...], stamp: tuple[float, ...]) -> pd.DataFrame:
+    del stamp
+    source, _orders = load_months(list(keys))
+    return ledger_from_raw(source)
+
+
+@st.cache_data(show_spinner=False)
+def cached_merged(keys: tuple[str, ...], stamp: tuple[float, ...]) -> tuple[pd.DataFrame, pd.Series]:
+    del stamp
+    source, _orders = load_months(list(keys))
+    base = source.drop(columns=["Nama file"], errors="ignore").drop_duplicates().reset_index(drop=True)
+    return base, order_month_keys(base)
+
+
+@st.cache_data(show_spinner=False)
+def cached_folder(stamp: tuple[float, ...]) -> pd.DataFrame:
+    del stamp
+    return folder_frame()
 
 
 MAX_FILES = 50
@@ -386,6 +506,62 @@ def load_orders(uploaded_files) -> tuple[pd.DataFrame, pd.DataFrame]:
     orders = pd.concat(frames, ignore_index=True).drop_duplicates().reset_index(drop=True)
     imported = pd.concat(sources, ignore_index=True)
     return orders, imported
+
+
+def prepare_analysis_orders(
+    orders_raw: pd.DataFrame,
+    *,
+    exclude_return_cancel: bool,
+) -> pd.DataFrame:
+    """Semua status masuk analisis. Centang exclude mengeluarkan batal dan unit retur."""
+    if orders_raw is None or orders_raw.empty:
+        return orders_raw
+    work = orders_raw.copy()
+    if exclude_return_cancel:
+        if "status" in work.columns:
+            work = work.loc[~work["status"].map(_is_cancelled_status)].copy()
+        if "qty" in work.columns:
+            work = work.loc[work["qty"] > 0].copy()
+        return work.reset_index(drop=True)
+    if "gross_qty" in work.columns:
+        work["qty"] = work["gross_qty"]
+    if "gross_sales" in work.columns:
+        work["sales"] = work["gross_sales"]
+    if "qty" in work.columns:
+        work = work.loc[work["qty"] > 0]
+    return work.reset_index(drop=True)
+
+
+APP_SHEETS = (
+    "Ringkasan",
+    "Prediksi & stok",
+    "Evaluasi model",
+    "Data",
+    "Folder data",
+    "Laporan",
+)
+SUMMARY_SHEETS = {"Ringkasan", "Prediksi & stok", "Data"}
+
+
+def show_app_menu() -> str:
+    """Menu fitur. Tombol yang sedang terbuka memakai warna utama."""
+    current = st.session_state.get("active-sheet", "Ringkasan")
+    st.markdown(
+        "<div class='app-menu-label'>Menu</div>"
+        "<div class='app-menu-hint'>Pilih fitur yang ingin dibuka.</div>",
+        unsafe_allow_html=True,
+    )
+    columns = st.columns(len(APP_SHEETS))
+    for column, name in zip(columns, APP_SHEETS):
+        if column.button(
+            name,
+            key=f"menu-{name}",
+            type="primary" if current == name else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state["active-sheet"] = name
+            st.session_state["_menu_rerun"] = True
+    return str(st.session_state.get("active-sheet", "Ringkasan"))
 
 
 def wrap_label(text: str, width: int = 42, max_lines: int = 8) -> str:
@@ -455,6 +631,822 @@ def show_section_title(text: str) -> None:
     st.markdown(f"<div class='chart-heading'>{text}</div>", unsafe_allow_html=True)
 
 
+def show_data_menu(source_raw: pd.DataFrame) -> None:
+    """Gabungan semua file, dengan ringkasan periode dan satu daftar SKU retur serta batal."""
+    file_count = 1
+    if "Nama file" in source_raw.columns:
+        file_count = int(source_raw["Nama file"].nunique())
+    active_keys = tuple(st.session_state.get("active-library-keys") or ())
+    if active_keys:
+        ledger = cached_ledger(active_keys, bundle_stamp(list(active_keys)))
+    else:
+        ledger = ledger_from_raw(source_raw)
+    st.subheader("Ringkasan data gabungan")
+    st.caption(
+        f"{format_number(file_count)} file digabung menjadi satu, {format_number(len(ledger))} baris produk. "
+        "Baris yang sama pada lebih dari satu file dihitung sekali. "
+        "Tahun, bulan, tanggal, dan status di bawah mengubah angka pada lembar Data."
+    )
+    if ledger.empty:
+        st.write("Laporan belum bisa diringkas. Pastikan file berisi waktu pesanan, produk, dan jumlah.")
+        return
+    period_view, range_text = filter_resume_orders(
+        ledger,
+        show_controls=True,
+        prefix="data",
+        caption=(
+            "Tahun, bulan, dan tanggal memotong seluruh angka pada lembar Data. "
+            "Filter status di bawah tetap berlaku pada rentang ini."
+        ),
+    )
+    selected_label = range_text or "kosong"
+    status_names = sorted(
+        {status for status in period_view["status"].tolist() if str(status).strip()},
+        key=str.casefold,
+    )
+    choice_names = [*status_names, "Return"]
+    st.markdown("**Status pesanan**")
+    all_key = f"data-status-all-{selected_label}"
+
+    def status_widget_key(status: str) -> str:
+        return f"data-status-{selected_label}-{status}"
+
+    if all_key not in st.session_state:
+        st.session_state[all_key] = True
+    for status in choice_names:
+        key = status_widget_key(status)
+        if key not in st.session_state:
+            st.session_state[key] = True
+
+    def toggle_all() -> None:
+        chosen = bool(st.session_state[all_key])
+        for status in choice_names:
+            st.session_state[status_widget_key(status)] = chosen
+
+    def toggle_one() -> None:
+        st.session_state[all_key] = all(
+            bool(st.session_state.get(status_widget_key(status), False)) for status in choice_names
+        )
+
+    box_count = min(4, max(len(choice_names) + 1, 1))
+    status_boxes = st.columns(box_count)
+    with status_boxes[0]:
+        st.checkbox("All", key=all_key, on_change=toggle_all)
+    picked = []
+    for index, status in enumerate(choice_names):
+        with status_boxes[(index + 1) % box_count]:
+            if st.checkbox(status, key=status_widget_key(status), on_change=toggle_one):
+                picked.append(status)
+    select_all = bool(st.session_state.get(all_key, False)) or set(picked) == set(choice_names)
+    status_picked = [name for name in picked if name != "Return"]
+    include_return = select_all or "Return" in picked
+    include_cancel = select_all or any(_is_cancelled_status(name) for name in status_picked)
+    return_only = (not select_all) and picked == ["Return"]
+    cancel_only = (
+        not select_all
+        and not include_return
+        and bool(status_picked)
+        and all(_is_cancelled_status(name) for name in status_picked)
+    )
+    if select_all:
+        filtered = period_view
+        sales_hint = (
+            "Total Pembayaran seluruh transaksi pada rentang ini, termasuk retur dan batal, "
+            "sekali tiap No. Pesanan"
+        )
+        order_hint = "Unik, semua status"
+        sku_hint = "Selain pesanan batal"
+    elif not picked:
+        filtered = period_view.iloc[0:0]
+        sales_hint = "Centang minimal satu status pesanan"
+        order_hint = "Tidak ada status yang dicentang"
+        sku_hint = "Tidak ada status yang dicentang"
+    elif return_only:
+        filtered = period_view.loc[period_view["returned_qty"] > 0].copy()
+        sales_hint = "Nilai barang yang diretur: Returned quantity × Harga Setelah Diskon"
+        order_hint = "No. Pesanan yang ada retur"
+        sku_hint = "SKU yang ada unit retur"
+    elif cancel_only:
+        filtered = period_view.loc[period_view["status"].isin(status_picked)].copy()
+        sales_hint = "Total Pembayaran pesanan batal, sekali tiap No. Pesanan"
+        order_hint = "No. Pesanan berstatus batal"
+        sku_hint = "SKU pada pesanan batal"
+    else:
+        mask = period_view["status"].isin(status_picked) if status_picked else pd.Series(False, index=period_view.index)
+        if include_return:
+            mask = mask | period_view["returned_qty"].gt(0)
+        filtered = scope_ledger(
+            period_view.loc[mask].copy(),
+            include_cancel=include_cancel,
+            include_return=include_return,
+        )
+        if not include_return and not include_cancel:
+            sales_hint = "Sama dengan Ringkasan saat Exclude return dan batal. Total Pembayaran tanpa batal, sekali tiap No. Pesanan. Baris yang habis diretur tidak dihitung"
+            order_hint = "Tanpa batal dan tanpa pesanan yang habis diretur"
+            sku_hint = "SKU yang masih punya QTY setelah retur dikurangi"
+        else:
+            sales_hint = "Total Pembayaran untuk status yang dicentang, sekali tiap No. Pesanan"
+            order_hint = "Unik, status yang dicentang"
+            sku_hint = "SKU pada status yang dicentang"
+    report_frame = filtered
+    if return_only and not filtered.empty:
+        report_frame = filtered.copy()
+        report_frame["status"] = "Return"
+    summary, status_table, sku_sheet = activity_report(report_frame)
+    summary = focus_summary(
+        summary,
+        include_return=include_return,
+        include_cancel=include_cancel,
+        return_only=return_only,
+        cancel_only=cancel_only,
+    )
+    if not sku_sheet.empty and not include_return:
+        sku_sheet = sku_sheet.loc[pd.to_numeric(sku_sheet["Qty batal"], errors="coerce").fillna(0) > 0].copy()
+    if not sku_sheet.empty and not include_cancel:
+        sku_sheet = sku_sheet.loc[pd.to_numeric(sku_sheet["Qty retur"], errors="coerce").fillna(0) > 0].copy()
+        if not sku_sheet.empty:
+            sku_sheet["Qty batal"] = 0
+            sku_sheet["Invoice batal"] = 0
+            sku_sheet["Nominal batal"] = 0
+            sku_sheet["Alasan batal"] = ""
+    if not sku_sheet.empty and not include_return:
+        sku_sheet["Qty retur"] = 0
+        sku_sheet["Nominal retur"] = 0
+        sku_sheet["Alasan retur"] = ""
+    if not include_return and not include_cancel:
+        sku_sheet = sku_sheet.iloc[0:0]
+    if include_cancel:
+        _contribution, contribution_table = cancel_contribution(period_view)
+    else:
+        _contribution, contribution_table = cancel_contribution(period_view.iloc[0:0])
+    st.markdown(f"**{range_text or 'tidak ada tanggal yang dipilih'}**")
+    qty_shown = float(filtered["qty"].sum()) if not filtered.empty and "qty" in filtered.columns else 0.0
+    sku_shown = int(filtered["item_key"].nunique()) if not filtered.empty and "item_key" in filtered.columns else 0
+    resume_row = st.columns(4)
+    show_metric(resume_row[0], "Jumlah pesanan", format_number(summary["orders"]), hint=order_hint)
+    show_metric(resume_row[1], "Produk / varian", format_number(sku_shown), hint=sku_hint)
+    show_metric(resume_row[2], "Sales volume", format_idr(summary["sales_volume"]), hint=sales_hint)
+    show_metric(
+        resume_row[3],
+        "QTY terjual",
+        format_qty(qty_shown),
+        hint="Tanpa centang Return, QTY = Jumlah − unit retur. Baris yang habis diretur tidak dihitung",
+    )
+    row_one = st.columns(4)
+    show_metric(
+        row_one[0],
+        "No. Pesanan",
+        format_number(summary["orders"]),
+        hint=order_hint,
+    )
+    show_metric(row_one[1], "SKU terjual", format_number(summary["sku_sold"]), hint=sku_hint)
+    show_metric(row_one[2], "SKU pada filter", format_number(summary["sku_all"]), hint="SKU pada baris yang sedang ditampilkan")
+    show_metric(
+        row_one[3],
+        "Sales volume",
+        format_idr(summary["sales_volume"]),
+        hint=sales_hint,
+    )
+    row_two = st.columns(4)
+    show_metric(
+        row_two[0],
+        "Invoice cancel",
+        format_number(summary["invoice_cancel"]),
+        hint="Hanya saat status batal atau All dicentang",
+    )
+    show_metric(
+        row_two[1],
+        "Nominal cancel",
+        format_idr(summary["nominal_cancel"]),
+        hint="Pembayaran pesanan batal. Nol pada status selain batal",
+    )
+    show_metric(
+        row_two[2],
+        "Sales return",
+        format_qty(summary["sales_return"]),
+        hint="Hanya saat Return atau All dicentang",
+    )
+    show_metric(
+        row_two[3],
+        "Nominal return",
+        format_idr(summary["nominal_return"]),
+        hint="Returned quantity × Harga Setelah Diskon. Nol pada status selain Return",
+    )
+    st.subheader("Status pesanan")
+    st.caption("Jumlah No. Pesanan pada status yang dicentang. Baris Total menjumlahkan tabel ini.")
+    status_view = append_total_row(status_table, "Status pesanan", ["No. Pesanan", "Kontribusi"])
+    if "Kontribusi" in status_view.columns:
+        status_view["Kontribusi"] = status_view["Kontribusi"].map(
+            lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
+        )
+    st.dataframe(
+        status_view,
+        height=min(44 * (len(status_view) + 1) + 36, 480),
+        hide_index=True,
+        column_config=table_column_config(status_view),
+    )
+    st.subheader("Kontribusi invoice batal")
+    if not include_cancel:
+        st.write("Nominal batal tidak dihitung karena status batal tidak dicentang.")
+    elif contribution_table.empty:
+        st.write("Tidak ada pesanan batal pada rentang ini.")
+    else:
+        st.caption(
+            "Tiap baris adalah satu alasan pembatalan. "
+            "Persentase dihitung terhadap seluruh invoice pada rentang, termasuk status yang tidak sedang dicentang. "
+            "Baris Total menjumlahkan invoice, nominal, dan kontribusi pada tabel ini."
+        )
+        contribution_view = append_total_row(
+            contribution_table,
+            "Alasan pembatalan",
+            ["Invoice", "Nominal", "Kontribusi invoice", "Kontribusi nominal"],
+        )
+        for column in ("Kontribusi invoice", "Kontribusi nominal"):
+            contribution_view[column] = contribution_view[column].map(
+                lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
+            )
+        st.dataframe(
+            contribution_view,
+            height=min(44 * (len(contribution_view) + 1) + 36, 560),
+            hide_index=True,
+            column_config=table_column_config(contribution_view, roomy=True),
+        )
+    st.subheader("Pembeli batal karena belum bayar")
+    st.caption(
+        "Nama akun pembeli ditulis sekali. Tiap No. Pesanan tetap baris sendiri, dengan tanggal, SKU, nama produk, QTY, dan sales volume. "
+        "Pembeli yang batal karena belum dibayar lalu punya pesanan lain untuk SKU yang sama tidak masuk tabel ini."
+    )
+    unpaid_months = list(st.session_state.get("data_months") or [])
+    if not unpaid_months:
+        unpaid = unpaid_buyer_table(source_raw.iloc[0:0])
+    else:
+        unpaid = unpaid_buyer_table(
+            source_raw,
+            months=unpaid_months,
+            start=st.session_state.get("data_start"),
+            end=st.session_state.get("data_end"),
+        )
+    if unpaid.empty:
+        st.write("Tidak ada pembeli yang batal karena belum bayar pada periode ini.")
+    else:
+        st.dataframe(
+            unpaid,
+            height=min(44 * (len(unpaid) + 1) + 36, 560),
+            hide_index=True,
+            column_config=table_column_config(unpaid, roomy=True),
+        )
+        st.download_button(
+            "Unduh pembeli belum bayar (CSV)",
+            unpaid.to_csv(index=False).encode("utf-8-sig"),
+            file_name="pembeli_belum_bayar.csv",
+            mime="text/csv",
+        )
+    st.subheader("SKU dengan retur dan batal")
+    issue_kind = st.selectbox(
+        "Tampilkan",
+        options=["All", "Retur", "Batal"],
+        index=0,
+        key="data-issue-kind",
+    )
+    if issue_kind == "Retur":
+        kind_sheet = sku_sheet.loc[sku_sheet["Qty retur"] > 0] if not sku_sheet.empty else sku_sheet
+        reason_column = "Alasan retur"
+        reason_names = sorted({value for value in kind_sheet[reason_column].tolist() if str(value).strip()})
+    elif issue_kind == "Batal":
+        kind_sheet = sku_sheet.loc[sku_sheet["Qty batal"] > 0] if not sku_sheet.empty else sku_sheet
+        reason_column = "Alasan batal"
+        reason_names = sorted({value for value in kind_sheet[reason_column].tolist() if str(value).strip()})
+    else:
+        kind_sheet = sku_sheet
+        reason_column = ""
+        reason_names = sorted(
+            {
+                value
+                for column in ("Alasan retur", "Alasan batal")
+                for value in (sku_sheet[column].tolist() if column in sku_sheet.columns else [])
+                if str(value).strip()
+            }
+        )
+    st.markdown("**Alasan**")
+    selected_reasons: list[str] = []
+    if not reason_names:
+        st.caption("Tidak ada alasan pada tampilan ini.")
+    else:
+        reason_all_key = f"data-reason-all-{issue_kind}"
+
+        def reason_widget_key(reason: str) -> str:
+            return f"data-reason-{issue_kind}-{reason}"
+
+        if reason_all_key not in st.session_state:
+            st.session_state[reason_all_key] = True
+        for reason in reason_names:
+            widget = reason_widget_key(reason)
+            if widget not in st.session_state:
+                st.session_state[widget] = True
+
+        def toggle_reason_all() -> None:
+            chosen = bool(st.session_state[reason_all_key])
+            for reason in reason_names:
+                st.session_state[reason_widget_key(reason)] = chosen
+
+        def toggle_reason_one() -> None:
+            st.session_state[reason_all_key] = all(
+                bool(st.session_state.get(reason_widget_key(reason), False)) for reason in reason_names
+            )
+
+        st.checkbox("All", key=reason_all_key, on_change=toggle_reason_all)
+        reason_boxes = st.columns(2)
+        for index, reason in enumerate(reason_names):
+            with reason_boxes[index % 2]:
+                if st.checkbox(reason, key=reason_widget_key(reason), on_change=toggle_reason_one):
+                    selected_reasons.append(reason)
+        if not selected_reasons:
+            st.warning("Centang minimal satu alasan.")
+    if kind_sheet.empty or not reason_names:
+        shown_sheet = kind_sheet
+    elif not selected_reasons:
+        shown_sheet = kind_sheet.iloc[0:0]
+    elif reason_column:
+        shown_sheet = kind_sheet.loc[kind_sheet[reason_column].isin(selected_reasons)]
+    else:
+        shown_sheet = kind_sheet.loc[
+            kind_sheet["Alasan retur"].isin(selected_reasons) | kind_sheet["Alasan batal"].isin(selected_reasons)
+        ]
+    if issue_kind == "Retur":
+        keep_columns = [
+            "Peringkat",
+            "Referensi SKU",
+            "Variasi",
+            "Produk",
+            "Qty retur",
+            "Nominal retur",
+            "Alasan retur",
+        ]
+        sheet_title = "Hanya kolom retur. Diurutkan dari qty retur terbesar."
+    elif issue_kind == "Batal":
+        keep_columns = [
+            "Peringkat",
+            "Referensi SKU",
+            "Variasi",
+            "Produk",
+            "Qty batal",
+            "Invoice batal",
+            "Nominal batal",
+            "Alasan batal",
+        ]
+        sheet_title = "Hanya kolom batal. Diurutkan dari qty batal terbesar."
+    else:
+        keep_columns = list(shown_sheet.columns)
+        sheet_title = "Kolom retur dan batal. Diurutkan dari retur terbanyak, lalu batal terbanyak."
+    if not shown_sheet.empty:
+        shown_sheet = shown_sheet.loc[:, [column for column in keep_columns if column in shown_sheet.columns]].copy()
+    sheet_count = len(shown_sheet)
+    sum_columns = [
+        column
+        for column in ("Qty retur", "Nominal retur", "Qty batal", "Invoice batal", "Nominal batal")
+        if column in shown_sheet.columns
+    ]
+    if not shown_sheet.empty:
+        shown_sheet = shown_sheet.copy()
+        shown_sheet["Peringkat"] = [str(number) for number in range(1, len(shown_sheet) + 1)]
+        shown_sheet = append_total_row(shown_sheet, "Referensi SKU", sum_columns)
+    st.caption(
+        f"{format_number(sheet_count)} baris. {sheet_title} "
+        "Alasan retur dari Status Pembatalan/Pengembalian. "
+        "Alasan batal dari Alasan Pembatalan. "
+        "Nominal retur = Returned quantity × Harga Setelah Diskon. "
+        "Nominal batal = Harga Setelah Diskon × Jumlah pada baris batal."
+    )
+    if shown_sheet.empty:
+        st.write("Tidak ada SKU dengan retur atau batal pada filter ini.")
+    else:
+        st.dataframe(
+            shown_sheet,
+            height=680,
+            row_height=44,
+            hide_index=True,
+            column_config=table_column_config(shown_sheet, roomy=True),
+        )
+        st.download_button(
+            "Unduh lembar SKU retur dan batal (CSV)",
+            shown_sheet.to_csv(index=False).encode("utf-8-sig"),
+            file_name="sku_retur_batal.csv",
+            mime="text/csv",
+        )
+    st.subheader("Tabel gabungan dari semua file")
+    active_keys = tuple(st.session_state.get("active-library-keys") or ())
+    if active_keys:
+        merged_base, month_keys = cached_merged(active_keys, bundle_stamp(list(active_keys)))
+    else:
+        merged_base = source_raw.drop(columns=["Nama file"], errors="ignore").drop_duplicates().reset_index(drop=True)
+        month_keys = order_month_keys(merged_base)
+    month_values = sorted({key for key in month_keys.tolist() if key and key != "tanpa-bulan"})
+    years = sorted({key[:4] for key in month_values})
+    st.markdown("**Filter tabel**")
+    selected_months: list[str] = []
+    if not years:
+        st.caption("Tidak ada bulan pada lampiran.")
+    else:
+        saved_year = str(st.session_state.get("merged_year") or years[-1])
+        if saved_year not in years:
+            saved_year = years[-1]
+        if st.session_state.get("merged-year") not in years:
+            st.session_state["merged-year"] = saved_year
+        merged_year = st.selectbox("Tahun", years, index=years.index(saved_year), key="merged-year")
+        year_months = [key for key in month_values if key.startswith(str(merged_year))]
+        known_months = st.session_state.get("merged_months")
+        saved_months = [key for key in known_months if key in year_months] if isinstance(known_months, list) else []
+        fresh_year = year_months and all(f"merged-month-{key}" not in st.session_state for key in year_months)
+        if not saved_months and fresh_year:
+            saved_months = [year_months[-1]]
+        st.markdown("**Bulan**")
+        for start in range(0, len(year_months), 4):
+            box_columns = st.columns(4)
+            for offset, key in enumerate(year_months[start : start + 4]):
+                widget = f"merged-month-{key}"
+                if widget not in st.session_state:
+                    st.session_state[widget] = key in saved_months
+                with box_columns[offset]:
+                    if st.checkbox(month_label(key), key=widget):
+                        selected_months.append(key)
+        st.session_state["merged_year"] = str(merged_year)
+        st.session_state["merged_months"] = selected_months
+        if not selected_months:
+            st.warning("Centang minimal satu bulan.")
+    if selected_months:
+        merged = merged_base.loc[month_keys.isin(selected_months)].reset_index(drop=True)
+    else:
+        merged = merged_base.iloc[0:0].copy()
+    merged = clean_sku_columns(merged)
+    scope_text = ", ".join(month_label(key) for key in selected_months) or "tidak ada bulan"
+    st.caption(f"{format_number(len(merged))} baris, {scope_text}. Kolom mengikuti lampiran.")
+    show_merged = st.session_state.setdefault("show-merged-table", True)
+    toggle_label = "Sembunyikan tabel" if show_merged else "Tampilkan tabel"
+    if st.button(toggle_label, key="toggle-merged-table"):
+        st.session_state["show-merged-table"] = not show_merged
+        st.rerun()
+    if st.session_state["show-merged-table"]:
+        st.dataframe(merged, height=680, hide_index=True)
+
+
+def _slide_head(kicker: str, title: str) -> None:
+    st.markdown(
+        f"<p class='report-kicker'>{html.escape(kicker)}</p>"
+        f"<div class='report-title'>{html.escape(title)}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _month_rows(ledger: pd.DataFrame) -> pd.DataFrame:
+    """Ringkas transaksi per bulan pada rentang laporan."""
+    columns = ["Bulan", "No. Pesanan", "QTY bersih", "Sales bersih", "Sales batal", "Nominal retur"]
+    if ledger is None or ledger.empty or "order_time" not in ledger.columns:
+        return pd.DataFrame(columns=columns)
+    work = ledger.copy()
+    work["_bulan"] = pd.to_datetime(work["order_time"], errors="coerce").dt.to_period("M").astype(str)
+    rows = []
+    for key, group in work.groupby("_bulan", sort=True):
+        net = scope_ledger(group, include_cancel=False, include_return=False)
+        cancel = group.loc[group["is_cancel"]] if "is_cancel" in group.columns else group.iloc[0:0]
+        rows.append(
+            {
+                "Bulan": month_label(str(key)),
+                "No. Pesanan": count_orders(group),
+                "QTY bersih": int(round(float(net["qty"].sum()))) if not net.empty and "qty" in net.columns else 0,
+                "Sales bersih": int(round(order_revenue(net))),
+                "Sales batal": int(round(order_revenue(cancel))),
+                "Nominal retur": int(round(float(group["return_value"].sum()))) if "return_value" in group.columns else 0,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def show_report_menu(
+    source_raw: pd.DataFrame,
+    orders: pd.DataFrame,
+    combined: pd.DataFrame,
+    stock: pd.DataFrame,
+    history: pd.DataFrame,
+    metric: str,
+    period: str,
+    period_text: str,
+    last_period,
+    *,
+    window_start,
+    window_end,
+    service: int,
+    exclude_return_cancel: bool,
+) -> None:
+    """Slide presentasi dari Ringkasan, Prediksi & stok, Data, dan Folder data."""
+    titles = [
+        "Sampul",
+        "Penjualan",
+        "Item terlaris",
+        "Prediksi dan stok",
+        "Status transaksi",
+        "Retur dan batal",
+        "Belum bayar",
+        "Data tersimpan",
+        "Insight",
+    ]
+    st.subheader("Laporan")
+    st.caption(
+        "Slide ini merangkum analisa di aplikasi, kecuali Evaluasi model. "
+        "Tahun, bulan, dan tanggal di bawah membaca data yang sudah diunggah. "
+        "Prediksi tetap hasil analisis terakhir."
+    )
+    active_keys = tuple(st.session_state.get("active-library-keys") or ())
+    if active_keys:
+        ledger = cached_ledger(active_keys, bundle_stamp(list(active_keys)))
+    elif source_raw is not None and not source_raw.empty:
+        ledger = ledger_from_raw(source_raw)
+    else:
+        ledger = pd.DataFrame()
+    period_view, range_text = filter_resume_orders(
+        ledger,
+        show_controls=True,
+        prefix="laporan",
+        caption="Tahun, bulan, dan tanggal ini memotong seluruh slide laporan.",
+    )
+    forecast_orders, _forecast_label = filter_resume_orders(
+        orders,
+        show_controls=False,
+        prefix="laporan",
+    )
+    scope_label = range_text or "tidak ada tanggal yang dipilih"
+    if "laporan-slide-name" not in st.session_state or st.session_state["laporan-slide-name"] not in titles:
+        st.session_state["laporan-slide-name"] = titles[0]
+    position = titles.index(st.session_state["laporan-slide-name"])
+    previous, picker, following = st.columns([1, 2.6, 1])
+    if previous.button("Sebelumnya", disabled=position == 0, use_container_width=True):
+        st.session_state["laporan-slide-name"] = titles[position - 1]
+        st.rerun()
+    if following.button("Berikutnya", disabled=position >= len(titles) - 1, use_container_width=True):
+        st.session_state["laporan-slide-name"] = titles[position + 1]
+        st.rerun()
+    picker.selectbox("Slide presentasi", titles, key="laporan-slide-name")
+    slide = str(st.session_state["laporan-slide-name"])
+    st.caption(f"Slide {titles.index(slide) + 1} dari {len(titles)}")
+
+    summary, status_table, sku_sheet = activity_report(period_view if period_view is not None else pd.DataFrame())
+    net = scope_ledger(period_view, include_cancel=False, include_return=False)
+    net_orders = count_orders(net)
+    net_qty = float(net["qty"].sum()) if not net.empty and "qty" in net.columns else 0.0
+    net_sales = order_revenue(net)
+    gross_orders = int(summary.get("orders", 0))
+    gross_sales = float(summary.get("sales_volume", 0))
+    catalog = top_bestsellers(
+        forecast_orders if forecast_orders is not None else pd.DataFrame(),
+        combined,
+        stock,
+        history,
+        metric,
+        last_period,
+        period,
+        top_n=None,
+    )
+    view = catalog.head(TOP_N).reset_index(drop=True) if not catalog.empty else catalog
+    if not view.empty:
+        view = view.sort_values(["peringkat", "item_key"], kind="mergesort").reset_index(drop=True)
+
+    if slide == "Sampul":
+        _slide_head("Tinjauan manajer", "Laporan analisa toko")
+        st.markdown(
+            "<div class='report-body'>"
+            f"Periode data pada slide ini: <b>{html.escape(scope_label)}</b>. "
+            f"Parameter peringkat: <b>{html.escape(METRIC_LABELS.get(metric, metric))}</b>. "
+            f"Prediksi {html.escape(period_text)}, {html.escape(format_id_date(window_start))} – {html.escape(format_id_date(window_end))}. "
+            f"Safety stock pada analisis terakhir {html.escape(format_number(service))}%. "
+            f"Exclude return dan batal {'sedang menyala' if exclude_return_cancel else 'sedang mati'} "
+            "pada angka prediksi, karena angka itu mengikuti hasil Jalankan analisis."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        cards = st.columns(4)
+        show_metric(cards[0], "Pesanan pada periode", format_number(gross_orders))
+        show_metric(cards[1], "Sales seluruh status", format_idr(gross_sales))
+        show_metric(cards[2], "Sales bersih", format_idr(net_sales), hint="Tanpa batal dan tanpa baris yang habis diretur")
+        show_metric(cards[3], "QTY bersih", format_qty(net_qty))
+    elif slide == "Penjualan":
+        _slide_head(scope_label, "Penjualan pada periode ini")
+        cards = st.columns(4)
+        show_metric(cards[0], "No. Pesanan bersih", format_number(net_orders))
+        show_metric(cards[1], "Sales bersih", format_idr(net_sales))
+        show_metric(cards[2], "QTY bersih", format_qty(net_qty))
+        show_metric(
+            cards[3],
+            "Selisih sales kotor",
+            format_idr(gross_sales - net_sales),
+            hint="Sales seluruh status dikurangi sales bersih",
+        )
+        if net.empty:
+            st.write("Tidak ada penjualan bersih pada tanggal ini.")
+        else:
+            st.plotly_chart(daily_actual_chart(net, scope_label, "sales"), use_container_width=True)
+            st.caption("Batang adalah sales bersih per tanggal. Angka mengikuti Total Pembayaran sekali tiap No. Pesanan.")
+    elif slide == "Item terlaris":
+        _slide_head(scope_label, f"50 item terlaris menurut {METRIC_LABELS.get(metric, metric)}")
+        if view.empty:
+            st.write("Tidak ada item pada tanggal ini.")
+        elif metric == "sales":
+            st.caption(
+                "Biru dan oranye adalah sales. Hijau adalah stok prediksi dalam unit. "
+                "Tiap produk punya skala sendiri."
+            )
+            st.plotly_chart(item_sales_chart(view, "laporan"), use_container_width=True)
+        else:
+            st.caption("Biru adalah QTY pada periode laporan. Oranye adalah prediksi.")
+            st.plotly_chart(item_qty_chart(view, "laporan"), use_container_width=True)
+        if not view.empty:
+            top_sales = float(view["sales_total"].sum())
+            share = top_sales / net_sales * 100 if net_sales > 0 else 0.0
+            st.caption(
+                f"Sales Top 50 pada periode ini {format_idr(top_sales)}, "
+                f"{format_number(share, 1)}% dari sales bersih."
+            )
+    elif slide == "Prediksi dan stok":
+        _slide_head(period_text, "Prediksi permintaan dan stok yang disiapkan")
+        if view.empty:
+            st.write("Prediksi belum punya item pada tanggal ini.")
+        else:
+            pred_qty = float(view["pred_qty"].sum())
+            pred_sales = float(view["pred_sales"].sum())
+            safety_units = float(view["safety_stock"].sum())
+            stock_units = float(view["stok_disarankan"].sum())
+            cards = st.columns(4)
+            show_metric(cards[0], "Prediksi QTY Top 50", format_qty(pred_qty))
+            show_metric(cards[1], "Prediksi sales Top 50", format_idr(pred_sales))
+            show_metric(cards[2], "Safety stock", format_qty(safety_units), hint="Cadangan, dalam unit")
+            show_metric(cards[3], "Stok prediksi", format_qty(stock_units), hint="Prediksi QTY ditambah safety stock")
+            display = leaderboard_frame(view.head(10), period)
+            st.caption("Sepuluh peringkat teratas. Daftar lengkap ada di menu Prediksi & stok.")
+            st.dataframe(display, hide_index=True, height=44 * (len(display) + 1) + 36, column_config=table_column_config(display, roomy=True))
+    elif slide == "Status transaksi":
+        _slide_head(scope_label, "Status pesanan")
+        st.caption("Seluruh status pada tanggal yang dipilih, termasuk batal dan retur.")
+        if status_table.empty:
+            st.write("Tidak ada status pada tanggal ini.")
+        else:
+            status_view = append_total_row(status_table, "Status pesanan", ["No. Pesanan", "Kontribusi"])
+            if "Kontribusi" in status_view.columns:
+                status_view = status_view.copy()
+                status_view["Kontribusi"] = status_view["Kontribusi"].map(
+                    lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
+                )
+            st.dataframe(status_view, hide_index=True, height=min(44 * (len(status_view) + 1) + 36, 520))
+            busiest = status_table.sort_values("No. Pesanan", ascending=False).iloc[0]
+            st.markdown(
+                "<div class='report-body'>"
+                f"Status dengan pesanan terbanyak: <b>{html.escape(str(busiest['Status pesanan']))}</b>, "
+                f"{html.escape(format_number(float(busiest['No. Pesanan'])))} pesanan."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+    elif slide == "Retur dan batal":
+        _slide_head(scope_label, "Retur dan pembatalan")
+        cards = st.columns(4)
+        show_metric(cards[0], "Invoice batal", format_number(summary.get("invoice_cancel", 0)))
+        show_metric(cards[1], "Nominal batal", format_idr(summary.get("nominal_cancel", 0)))
+        show_metric(cards[2], "QTY retur", format_qty(summary.get("sales_return", 0)))
+        show_metric(cards[3], "Nominal retur", format_idr(summary.get("nominal_return", 0)))
+        _contribution, contribution_table = cancel_contribution(period_view)
+        if contribution_table.empty:
+            st.write("Tidak ada pesanan batal pada tanggal ini.")
+        else:
+            preview = contribution_table.head(8).copy()
+            for column in ("Kontribusi invoice", "Kontribusi nominal"):
+                if column in preview.columns:
+                    preview[column] = preview[column].map(
+                        lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
+                    )
+            st.caption("Delapan alasan batal dengan invoice terbanyak.")
+            st.dataframe(preview, hide_index=True, height=min(44 * (len(preview) + 1) + 36, 420))
+        if sku_sheet.empty:
+            st.write("Tidak ada SKU retur atau batal pada tanggal ini.")
+        else:
+            issue = sku_sheet.head(8)
+            st.caption("Delapan SKU dengan retur atau batal terbesar. Daftar lengkap ada di menu Data.")
+            st.dataframe(issue, hide_index=True, height=min(44 * (len(issue) + 1) + 36, 420))
+    elif slide == "Belum bayar":
+        _slide_head(scope_label, "Batal karena pembeli belum bayar")
+        months = list(st.session_state.get("laporan_months") or [])
+        if not months or source_raw is None or source_raw.empty:
+            unpaid = pd.DataFrame()
+        else:
+            unpaid = unpaid_buyer_table(
+                source_raw,
+                months=months,
+                start=st.session_state.get("laporan_start"),
+                end=st.session_state.get("laporan_end"),
+            )
+        if unpaid.empty:
+            st.write("Tidak ada pembeli yang batal karena belum bayar pada tanggal ini.")
+        else:
+            buyer_count = int(unpaid.loc[unpaid["No"].astype(str).str.strip().ne(""), "No"].nunique()) if "No" in unpaid.columns else 0
+            order_count = int(unpaid["No. Pesanan"].replace("", pd.NA).nunique()) if "No. Pesanan" in unpaid.columns else 0
+            qty_missed = float(pd.to_numeric(unpaid["QTY"], errors="coerce").fillna(0).sum()) if "QTY" in unpaid.columns else 0.0
+            sales_missed = float(pd.to_numeric(unpaid["Sales volume"], errors="coerce").fillna(0).sum()) if "Sales volume" in unpaid.columns else 0.0
+            cards = st.columns(4)
+            show_metric(cards[0], "Akun pembeli", format_number(buyer_count))
+            show_metric(cards[1], "No. Pesanan", format_number(order_count))
+            show_metric(cards[2], "QTY", format_qty(qty_missed))
+            show_metric(cards[3], "Sales yang tidak masuk", format_idr(sales_missed), hint="Harga setelah diskon kali jumlah")
+            share_cancel = sales_missed / float(summary.get("nominal_cancel", 0) or 0) * 100 if float(summary.get("nominal_cancel", 0) or 0) > 0 else 0.0
+            st.markdown(
+                "<div class='report-body'>"
+                "Ini pembeli yang batal karena belum bayar, dan tidak punya pesanan lain untuk SKU yang sama. "
+                f"Nilainya {html.escape(format_number(share_cancel, 1))}% dari nominal batal pada periode ini. "
+                "Nama akun dan nomor pesanan ada di menu Data."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+    elif slide == "Data tersimpan":
+        _slide_head(scope_label, "Data yang diunggah pada periode ini")
+        month_table = _month_rows(period_view)
+        saved = list_months()
+        st.caption(
+            f"{format_number(len(saved))} bulan tersimpan di Folder data. "
+            "Tabel di bawah hanya bulan yang masuk filter laporan."
+        )
+        if month_table.empty:
+            st.write("Tidak ada bulan pada tanggal ini.")
+        else:
+            st.dataframe(month_table, hide_index=True, height=min(44 * (len(month_table) + 1) + 36, 480))
+            st.markdown(
+                "<div class='report-body'>"
+                "Sales bersih sama dengan Folder data: Total Pembayaran tanpa pesanan batal, sekali tiap No. Pesanan, "
+                "dan tanpa baris yang habis diretur."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        _slide_head(scope_label, "Insight untuk ditinjau")
+        lines = []
+        if gross_orders <= 0:
+            lines.append("Pada tanggal ini belum ada transaksi yang bisa ditinjau.")
+        else:
+            cancel_share = float(summary.get("invoice_cancel", 0)) / gross_orders * 100 if gross_orders else 0.0
+            lines.append(
+                f"Dari {format_number(gross_orders)} pesanan, {format_number(cancel_share, 1)}% berstatus batal. "
+                f"Nominal batal {format_idr(summary.get('nominal_cancel', 0))}."
+            )
+            lines.append(
+                f"Penjualan bersih {format_idr(net_sales)} dari {format_qty(net_qty)} unit, "
+                f"{format_number(net_orders)} pesanan."
+            )
+            if float(summary.get("nominal_return", 0)) > 0:
+                lines.append(
+                    f"Retur pada periode ini {format_qty(summary.get('sales_return', 0))} unit, "
+                    f"senilai {format_idr(summary.get('nominal_return', 0))}."
+                )
+            if not view.empty:
+                gap = float(view["pred_sales"].sum() - view["sales_total"].sum())
+                direction = "di atas" if gap >= 0 else "di bawah"
+                lines.append(
+                    f"Prediksi sales Top 50 berada {direction} sales periode ini sebesar {format_idr(abs(gap))}. "
+                    f"Stok yang disiapkan untuk Top 50 adalah {format_qty(float(view['stok_disarankan'].sum()))} unit."
+                )
+            lines.append("Evaluasi model tidak masuk presentasi ini. Detail algoritma tetap di menu itu.")
+        st.markdown(
+            "<div class='report-body'>" + "<br><br>".join(html.escape(line) for line in lines) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def show_folder_menu() -> None:
+    """Daftar data tersimpan menurut bulan dan tahun, plus riwayat impor."""
+    saved = list_months()
+    st.subheader("Folder data")
+    st.caption(
+        "Data yang sudah diimpor tersimpan di sini. "
+        "Pilih tahun dan bulan pada menu samping untuk memakai data itu tanpa mengunggah ulang. "
+        "Mengunggah file baru mengganti bulan yang sama dengan isi file baru."
+    )
+    if not saved:
+        st.write("Belum ada data tersimpan.")
+    else:
+        folder = cached_folder(bundle_stamp([item["key"] for item in saved]))
+        st.caption(
+            "QTY terjual dan Sales sama dengan Ringkasan saat Exclude return dan batal dicentang: "
+            "Total Pembayaran tanpa pesanan batal, sekali tiap No. Pesanan, dan tanpa baris yang habis diretur. "
+            "QTY return berdampingan dengan Sales return. QTY batal berdampingan dengan Sales batal. "
+            "Return dan Batal adalah jumlah No. Pesanan. "
+            "Berhasil menggabungkan Pesanan Diterima, Sedang Dikirim, Selesai, dan Telah Dikirim."
+        )
+        st.dataframe(
+            folder,
+            height=min(44 * (len(folder) + 1) + 36, 480),
+            hide_index=True,
+            column_config=table_column_config(folder),
+        )
+    st.subheader("Riwayat perubahan data")
+    changes = history_frame()
+    if changes.empty:
+        st.write("Belum ada perubahan impor.")
+    else:
+        st.dataframe(changes, height=min(44 * (len(changes) + 1) + 36, 480), hide_index=True)
+
+
 def show_metric(column, label: str, value: str, *, compact: bool = False, hint: str | None = None) -> None:
     value_class = "readable-metric-value compact" if compact else "readable-metric-value"
     hint_html = f"<div class='metric-hint'>{hint}</div>" if hint else ""
@@ -498,6 +1490,7 @@ def safety_analysis(
     impact: dict | None,
     synced: bool,
     has_result: bool = False,
+    metric: str = "qty",
 ) -> tuple[str, str]:
     """Analisa singkat safety stock untuk periode yang sedang dipilih."""
     suggested = SUGGESTED_SERVICE[period]
@@ -526,6 +1519,20 @@ def safety_analysis(
         else:
             pending = "Angka item terlaris belum tersedia untuk persentase ini."
         return css, f"{headline}<br>{pending}"
+    if metric == "sales":
+        figures = (
+            f"Pada {impact['items']} item terlaris menurut sales volume: "
+            f"prediksi sales volume {format_idr(impact['pred_sales'])} "
+            f"({format_number(impact['pred_qty'])} unit), "
+            f"stok prediksi {format_idr(impact['stok_sales'])} "
+            f"({format_number(impact['stok'])} unit)."
+        )
+        if level != suggested:
+            figures += (
+                f" Selisih dari saran {suggested}%: "
+                f"stok prediksi {_signed_money(impact['stok_sales'] - impact['base_stok_sales'])}."
+            )
+        return css, f"{headline}<br>{figures}"
     figures = (
         f"Pada {impact['items']} item terlaris: "
         f"prediksi QTY {format_number(impact['pred_qty'])} unit, "
@@ -686,12 +1693,30 @@ def _stock_for(analysis: dict, percent: int) -> pd.DataFrame:
     )
 
 
+def _money_from_units(shown: pd.DataFrame) -> tuple[int, int]:
+    """Nilai cadangan dan stok disarankan dalam rupiah, dari harga yang membentuk prediksi sales."""
+    pred_qty = shown["pred_qty"].astype(float)
+    pred_sales = shown["pred_sales"].astype(float)
+    price = pd.Series(0.0, index=shown.index)
+    positive = pred_qty > 0
+    price.loc[positive] = pred_sales.loc[positive] / pred_qty.loc[positive]
+    if (~positive).any() and "sales_total" in shown.columns and "qty_total" in shown.columns:
+        qty_total = shown["qty_total"].astype(float).replace(0, np.nan)
+        price.loc[~positive] = (
+            shown.loc[~positive, "sales_total"].astype(float) / qty_total.loc[~positive]
+        ).fillna(0)
+    buffer_sales = int(round(float((shown["safety_stock"].astype(float) * price.fillna(0)).sum())))
+    stok_sales = int(round(float(pred_sales.sum()))) + buffer_sales
+    return buffer_sales, stok_sales
+
+
 def _impact_from(shown: pd.DataFrame, stock: pd.DataFrame) -> dict[str, int | float]:
     indexed = stock.set_index("item_key")
     raw = indexed.reindex(shown["item_key"])["safety_stock"].fillna(0).astype(float)
     pred_qty = int(shown["pred_qty"].sum())
     buffer = int(shown["safety_stock"].sum())
     stok = int(shown["stok_disarankan"].sum())
+    buffer_sales, stok_sales = _money_from_units(shown)
     return {
         "items": int(len(shown)),
         "demand_qty": pred_qty,
@@ -700,6 +1725,8 @@ def _impact_from(shown: pd.DataFrame, stock: pd.DataFrame) -> dict[str, int | fl
         "pred_qty": pred_qty,
         "pred_sales": int(shown["pred_sales"].sum()),
         "stok": stok,
+        "buffer_sales": buffer_sales,
+        "stok_sales": stok_sales,
     }
 
 
@@ -735,6 +1762,8 @@ def safety_view(analysis: dict, percent: int, metric: str) -> tuple[pd.DataFrame
     current["base_qty"] = baseline["pred_qty"]
     current["base_sales"] = baseline["pred_sales"]
     current["base_stok"] = baseline["stok"]
+    current["base_buffer_sales"] = baseline["buffer_sales"]
+    current["base_stok_sales"] = baseline["stok_sales"]
     return stock, current
 
 
@@ -845,7 +1874,7 @@ def _axis_label_margin(labels: list[str]) -> int:
 
 
 def item_qty_chart(view: pd.DataFrame, scope_label: str) -> go.Figure:
-    plot = view.sort_values(["qty_histori", "pred_qty"], ascending=[True, True])
+    plot = view.sort_values(["qty_total", "pred_qty"], ascending=[True, True])
     full_labels = [
         product_identity(rank, sku, name, variation)
         for rank, sku, name, variation in zip(
@@ -858,7 +1887,7 @@ def item_qty_chart(view: pd.DataFrame, scope_label: str) -> go.Figure:
             plot["peringkat"], plot["sku"], plot["product_name"], plot["variasi_tampil"]
         )
     ]
-    actual = plot["qty_histori"].astype(float)
+    actual = plot["qty_total"].astype(float)
     predicted = plot["pred_qty"].astype(float)
     placement = _label_placement(len(plot), money=False, orientation="h")
     actual_text, _actual_hover = _bar_texts(actual, money=False)
@@ -909,6 +1938,239 @@ def item_qty_chart(view: pd.DataFrame, scope_label: str) -> go.Figure:
         margin_left=_axis_label_margin(labels),
         margin_bottom=48,
     )
+
+
+def item_sales_chart(view: pd.DataFrame, scope_label: str) -> go.Figure:
+    """Sales dalam rupiah dan stok prediksi dalam unit. Tiap produk punya skala sendiri."""
+    plot = view.sort_values(["sales_total", "pred_sales"], ascending=[True, True])
+    full_labels = [
+        product_identity(rank, sku, name, variation)
+        for rank, sku, name, variation in zip(
+            plot["peringkat"], plot["sku"], plot["product_name"], plot["variasi_tampil"]
+        )
+    ]
+    labels = [
+        chart_axis_label(rank, sku, name, variation, width=52, max_lines=6)
+        for rank, sku, name, variation in zip(
+            plot["peringkat"], plot["sku"], plot["product_name"], plot["variasi_tampil"]
+        )
+    ]
+    actual = plot["sales_total"].astype(float)
+    predicted = plot["pred_sales"].astype(float)
+    stock_qty = plot["stok_disarankan"].astype(float)
+    sales_peak = pd.concat([actual, predicted], axis=1).max(axis=1).replace(0, np.nan)
+    qty_peak = pd.concat(
+        [plot["qty_total"].astype(float), plot["pred_qty"].astype(float), stock_qty],
+        axis=1,
+    ).max(axis=1).replace(0, np.nan)
+    actual_x = (actual / sales_peak).fillna(0.0)
+    pred_x = (predicted / sales_peak).fillna(0.0)
+    stock_x = (stock_qty / qty_peak).fillna(0.0)
+    actual_text, _actual_hover = _bar_texts(actual, money=True)
+    pred_text, _pred_hover = _bar_texts(predicted, money=True)
+    stock_text = [f"{format_number(value, 0)} unit" for value in stock_qty]
+    size = _bar_text_size(len(plot))
+    placement = dict(
+        textposition="outside",
+        textfont=dict(size=size, color="#1f2937"),
+        textangle=0,
+        cliponaxis=False,
+        constraintext="none",
+    )
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            name="Sales actual",
+            x=actual_x,
+            y=labels,
+            orientation="h",
+            text=actual_text,
+            marker_color="#4C78A8",
+            customdata=np.column_stack([full_labels, _actual_hover]),
+            hovertemplate="%{customdata[0]}<br>Sales actual: %{customdata[1]}<extra></extra>",
+            **placement,
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            name="Prediksi sales",
+            x=pred_x,
+            y=labels,
+            orientation="h",
+            text=pred_text,
+            marker_color="#F58518",
+            customdata=np.column_stack([full_labels, _pred_hover]),
+            hovertemplate="%{customdata[0]}<br>Prediksi sales: %{customdata[1]}<extra></extra>",
+            **placement,
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            name="Stok prediksi (unit)",
+            x=stock_x,
+            y=labels,
+            orientation="h",
+            text=stock_text,
+            marker_color="#059669",
+            customdata=np.column_stack([full_labels, stock_text]),
+            hovertemplate="%{customdata[0]}<br>Stok prediksi: %{customdata[1]}<extra></extra>",
+            **placement,
+        )
+    )
+    line_count = sum(label.count("<br>") + 1 for label in labels)
+    fig.update_layout(
+        barmode="group",
+        bargap=0.22,
+        bargroupgap=0.05,
+        title=dict(
+            text=f"Sales dan stok prediksi, skala per produk ({scope_label})",
+            font=dict(size=16),
+        ),
+        xaxis_title="Skala per produk. Angka pada batang adalah nilai asli.",
+        yaxis_title="",
+    )
+    fig.update_yaxes(automargin=True, tickfont=dict(size=12, color="#1f2937"))
+    fig.update_xaxes(
+        range=[0, 2.35],
+        showticklabels=False,
+        showgrid=False,
+        title_font=dict(size=13, color="#334155"),
+    )
+    return polish_chart(
+        fig,
+        height=max(720, 38 * line_count + 46 * len(labels)),
+        margin_left=_axis_label_margin(labels),
+        margin_right=150,
+        margin_bottom=48,
+    )
+
+
+def _stock_sales(view: pd.DataFrame) -> pd.Series:
+    """Nilai stok disarankan dalam rupiah, dari harga yang membentuk prediksi sales."""
+    pred_qty = view["pred_qty"].astype(float)
+    pred_sales = view["pred_sales"].astype(float)
+    price = pd.Series(0.0, index=view.index, dtype=float)
+    positive = pred_qty > 0
+    price.loc[positive] = pred_sales.loc[positive] / pred_qty.loc[positive]
+    if bool((~positive).any()) and "sales_total" in view.columns and "qty_total" in view.columns:
+        qty_total = view["qty_total"].astype(float).replace(0, np.nan)
+        price.loc[~positive] = (
+            view.loc[~positive, "sales_total"].astype(float) / qty_total.loc[~positive]
+        ).fillna(0)
+    return view["stok_disarankan"].astype(float) * price.fillna(0)
+
+
+def sales_qty_chart(
+    labels: list[str],
+    sales: np.ndarray,
+    qty: np.ndarray,
+    title: str,
+) -> go.Figure:
+    """Batang sales volume dan garis QTY pada sumbu kanan."""
+    sales_series = np.asarray(sales, dtype=float)
+    qty_series = np.asarray(qty, dtype=float)
+    fig = go.Figure()
+    if len(labels) == 0:
+        fig.update_layout(title=title)
+        return polish_chart(fig, height=420)
+    _sales_text, sales_hover = _bar_texts(pd.Series(sales_series), money=True)
+    qty_hover = [format_number(value, 0) for value in qty_series]
+    fig.add_trace(
+        go.Bar(
+            name="Sales volume",
+            x=list(labels),
+            y=sales_series,
+            marker_color="#F58518",
+            customdata=sales_hover,
+            hovertemplate="%{x}<br>Sales: %{customdata}<extra></extra>",
+        )
+    )
+    show_qty_text = 0 < len(labels) <= 16
+    fig.add_trace(
+        go.Scatter(
+            name="QTY",
+            x=list(labels),
+            y=qty_series,
+            mode="lines+markers+text" if show_qty_text else "lines+markers",
+            yaxis="y2",
+            text=qty_hover if show_qty_text else None,
+            textposition="top center",
+            textfont=dict(size=13, color="#1e3a8a"),
+            marker=dict(size=11, color="#4C78A8", line=dict(width=1, color="#ffffff")),
+            line=dict(color="#4C78A8", width=3),
+            customdata=qty_hover,
+            hovertemplate="%{x}<br>QTY: %{customdata}<extra></extra>",
+            cliponaxis=False,
+        )
+    )
+    if any(_sales_text):
+        _place_sales_labels(fig, labels, sales_series, _sales_text)
+    sales_peak = float(np.max(sales_series) if len(sales_series) else 1) or 1
+    qty_peak = float(np.max(qty_series) if len(qty_series) else 1) or 1
+    if qty_peak <= 12:
+        qty_step = 1.0
+    else:
+        qty_step = _tick_step(qty_peak, 4)
+    qty_ticks: list[float] = []
+    cursor = 0.0
+    while cursor <= qty_peak + 1e-6 and len(qty_ticks) < 7:
+        qty_ticks.append(cursor)
+        cursor += qty_step
+    if not qty_ticks or qty_ticks[-1] < qty_peak:
+        qty_ticks.append(float(np.ceil(qty_peak)))
+    qty_upper = max(qty_peak * 1.35, qty_ticks[-1] if qty_ticks else qty_peak)
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        yaxis_title="Sales volume (Rp)",
+        yaxis2=dict(
+            title=dict(text="QTY", font=dict(size=14, color="#1e3a8a")),
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            range=[0, qty_upper],
+            tickmode="array",
+            tickvals=qty_ticks,
+            ticktext=[format_number(value, 0) for value in qty_ticks],
+            tickfont=dict(size=14, color="#1e3a8a"),
+            automargin=True,
+        ),
+        xaxis_title="Tanggal",
+        bargap=0.28,
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0),
+    )
+    apply_straight_dates(fig, labels)
+    apply_integer_axis(fig, "y", sales_peak, pad=1.22)
+    return polish_chart(fig, height=520, margin_top=108, margin_bottom=78, margin_right=72)
+
+
+def sales_drop_note(
+    actual_sales: float,
+    pred_sales: float,
+    actual_qty: float,
+    pred_qty: float,
+    *,
+    scope: str,
+) -> str:
+    """Analisa singkat bila prediksi sales berada di bawah sales yang sudah terjadi."""
+    if actual_sales <= 0 or pred_sales + 0.5 >= actual_sales:
+        return ""
+    gap = actual_sales - pred_sales
+    percent = gap / actual_sales * 100
+    sentences = [
+        f"Prediksi sales {scope} lebih rendah {format_idr(gap)} ({format_number(percent, 1)}%) dari sales actual.",
+        "Sales prediksi = prediksi QTY × harga jual. Penurunan sales mengikuti qty dan harga, bukan model omzet terpisah.",
+    ]
+    if actual_qty > 0 and pred_qty + 0.5 < actual_qty:
+        sentences.append(
+            f"Prediksi QTY {format_qty(pred_qty)} berada di bawah QTY actual {format_qty(actual_qty)}. "
+            "Level 28 hari terakhir lebih sepi daripada periode yang ditampilkan."
+        )
+    elif actual_qty > 0:
+        sentences.append(
+            "Prediksi QTY tidak lebih rendah dari QTY actual. Penurunan sales datang dari harga jual pada campuran qty itu."
+        )
+    sentences.append("Stok yang disiapkan tetap prediksi QTY ditambah safety stock, pada tabel.")
+    return " ".join(sentences)
 
 
 def daily_actual_chart(scope_orders: pd.DataFrame, scope_label: str, value: str) -> go.Figure:
@@ -1234,6 +2496,20 @@ def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
         "Variasi": 320 if roomy else 260,
         "Referensi SKU": 260 if roomy else 220,
         "Item": 780 if roomy else 640,
+        "Alasan batal": 460,
+        "Alasan retur": 280,
+        "Alasan pembatalan": 520,
+        "Status batal": 180,
+        "Status pesanan": 220,
+        "Nama akun pembeli": 240,
+        "Nama produk": 420,
+        "No. Pesanan": 220,
+        "SKU": 180,
+        "Tanggal pembelian": 160,
+        "Kontribusi": 140,
+        "File terakhir": 360,
+        "Perubahan": 520,
+        "Tanggal perubahan": 180,
     }
     for column, width in widths.items():
         if column in frame.columns:
@@ -1241,38 +2517,167 @@ def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
     return config
 
 
+def _as_date(value: object) -> date | None:
+    if value is None:
+        return None
+    try:
+        stamp = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(stamp):
+        return None
+    return stamp.date()
+
+
+def filter_resume_orders(
+    orders: pd.DataFrame,
+    *,
+    show_controls: bool,
+    prefix: str = "resume",
+    caption: str | None = None,
+) -> tuple[pd.DataFrame, str]:
+    """Potong angka penjualan menurut tahun, bulan, dan tanggal."""
+    if orders is None or orders.empty or "order_time" not in orders.columns:
+        return orders, ""
+    times = pd.to_datetime(orders["order_time"], errors="coerce")
+    work = orders.loc[times.notna()].copy()
+    if work.empty:
+        return orders.iloc[0:0].copy(), ""
+    work["_month"] = times.loc[times.notna()].dt.to_period("M").astype(str)
+    months = sorted(work["_month"].unique())
+    years = sorted({key[:4] for key in months})
+    year_state = f"{prefix}_year"
+    months_state = f"{prefix}_months"
+    start_state = f"{prefix}_start"
+    end_state = f"{prefix}_end"
+    year_widget = f"{prefix}-year"
+    start_widget = f"{prefix}-start"
+    end_widget = f"{prefix}-end"
+    saved_year = str(st.session_state.get(year_state) or "")
+    if saved_year not in years:
+        saved_year = years[-1]
+    year_months = [key for key in months if key.startswith(saved_year)]
+    saved_months = [key for key in (st.session_state.get(months_state) or []) if key in year_months]
+    if not saved_months and year_months:
+        saved_months = [year_months[-1]]
+
+    if show_controls:
+        st.markdown("**Periode penjualan**")
+        st.caption(
+            caption
+            or (
+                "Tahun, bulan, dan tanggal ini hanya memotong angka penjualan di ringkasan. "
+                "Prediksi tetap dihitung dari bulan yang dicentang di input dan dari periode prediksi. "
+                "Perubahan di input dihitung lagi lewat Jalankan analisis."
+            )
+        )
+        if st.session_state.get(year_widget) not in years:
+            st.session_state[year_widget] = saved_year
+        year = st.selectbox(
+            "Tahun penjualan",
+            years,
+            index=years.index(saved_year),
+            key=year_widget,
+        )
+        year_months = [key for key in months if key.startswith(str(year))]
+        saved_months = [key for key in (st.session_state.get(months_state) or saved_months) if key in year_months]
+        if not saved_months and year_months:
+            saved_months = [year_months[-1]]
+        st.markdown("**Bulan penjualan**")
+        selected: list[str] = []
+        for start in range(0, len(year_months), 4):
+            box_columns = st.columns(4)
+            for offset, key in enumerate(year_months[start : start + 4]):
+                widget = f"{prefix}-month-{key}"
+                if widget not in st.session_state:
+                    st.session_state[widget] = key in saved_months
+                with box_columns[offset]:
+                    if st.checkbox(month_label(key), key=widget):
+                        selected.append(key)
+        if not selected:
+            st.warning("Centang minimal satu bulan penjualan.")
+        span = work.loc[work["_month"].isin(selected), "order_time"] if selected else work.iloc[0:0]
+        if span.empty:
+            span_min = _as_date(work["order_time"].min()) or date.today()
+            span_max = _as_date(work["order_time"].max()) or span_min
+        else:
+            span_min = _as_date(span.min()) or date.today()
+            span_max = _as_date(span.max()) or span_min
+        if span_max < span_min:
+            span_min, span_max = span_max, span_min
+        for widget, fallback in ((start_widget, span_min), (end_widget, span_max)):
+            current = _as_date(st.session_state.get(widget))
+            if current is None or current < span_min or current > span_max:
+                if widget in st.session_state:
+                    st.session_state[widget] = fallback
+        date_col, date_col_end = st.columns(2)
+        start_kwargs = {"min_value": span_min, "max_value": span_max, "key": start_widget}
+        end_kwargs = {"min_value": span_min, "max_value": span_max, "key": end_widget}
+        if start_widget not in st.session_state:
+            start_kwargs["value"] = span_min
+        if end_widget not in st.session_state:
+            end_kwargs["value"] = span_max
+        start = _as_date(date_col.date_input("Tanggal mulai", **start_kwargs)) or span_min
+        end = _as_date(date_col_end.date_input("Tanggal selesai", **end_kwargs)) or span_max
+        if start > end:
+            start, end = end, start
+        st.session_state[year_state] = str(year)
+        st.session_state[months_state] = selected
+        st.session_state[start_state] = start
+        st.session_state[end_state] = end
+    else:
+        selected = saved_months
+        span = work.loc[work["_month"].isin(selected), "order_time"] if selected else work.iloc[0:0]
+        span_min = _as_date(span.min()) if not span.empty else None
+        span_max = _as_date(span.max()) if not span.empty else None
+        start = _as_date(st.session_state.get(start_state)) or span_min
+        end = _as_date(st.session_state.get(end_state)) or span_max
+        if start is None or end is None:
+            start, end = span_min, span_max
+        elif span_min and span_max:
+            start = min(max(start, span_min), span_max)
+            end = min(max(end, span_min), span_max)
+        if start and end and start > end:
+            start, end = end, start
+
+    if not selected or start is None or end is None:
+        label = "tidak ada tanggal yang dipilih"
+        return work.iloc[0:0].drop(columns=["_month"]), label
+    days = pd.to_datetime(work["order_time"]).dt.normalize()
+    mask = work["_month"].isin(selected) & days.ge(pd.Timestamp(start)) & days.le(pd.Timestamp(end))
+    filtered = work.loc[mask].drop(columns=["_month"]).reset_index(drop=True)
+    names = [month_label(key) for key in selected]
+    full_span = not span.empty and start == span_min and end == span_max
+    if full_span and len(names) == 1:
+        label = names[0]
+    elif full_span:
+        label = ", ".join(names)
+    else:
+        label = f"{format_id_date(start)} – {format_id_date(end)}"
+    return filtered, label
+
+
 st.title("Prediksi Stok & Item Terlaris Shopee")
 st.caption(
-    "Unggah laporan transaksi Shopee, pilih dasar peringkat (QTY terjual atau sales volume), periode, "
-    "dan status pesanan. Aplikasi menampilkan 50 item terlaris beserta stok yang harus disiapkan."
+    "Unggah laporan transaksi Shopee, pilih data input dan periode prediksi, lalu jalankan analisis. "
+    "Angka penjualan di ringkasan mengikuti tahun, bulan, dan tanggal yang dipilih di sana. "
+    "Retur dan batal diatur dari centang di header ringkasan."
 )
 
 with st.sidebar:
     st.header("Input")
+    st.markdown("<div class='side-section'>Laporan</div>", unsafe_allow_html=True)
     uploaded = st.file_uploader(
         "Laporan Shopee",
         type=["csv", "xlsx", "xls"],
         accept_multiple_files=True,
+        label_visibility="collapsed",
     )
     st.markdown(
-        "<div class='upload-note'>Unggah satu atau beberapa file CSV, XLSX, atau XLS. "
+        "<div class='upload-note'>CSV, XLSX, atau XLS. Beberapa file digabung. "
         "Maksimal 50 lampiran, total 1 GB.</div>",
         unsafe_allow_html=True,
     )
-    metric = st.radio(
-        "Dasar peringkat",
-        options=list(METRIC_LABELS.keys()),
-        format_func=lambda key: METRIC_LABELS[key],
-        index=0,
-        help="Mengurutkan Top 50 dari seluruh laporan. QTY terjual atau sales volume tertinggi di atas. Peringkat selalu unik.",
-    )
-    period = st.selectbox(
-        "Periode prediksi",
-        options=list(PERIOD_OPTIONS),
-        format_func=lambda key: PERIOD_SPECS[key].label,
-        index=0,
-    )
-
     files = list(uploaded or [])
     load_error = None
     if len(files) > MAX_FILES:
@@ -1295,20 +2700,85 @@ with st.sidebar:
         source_key = "empty"
     if load_error:
         st.error(load_error)
-    status_options = available_statuses(orders_raw)
-    st.markdown("**Status pesanan**")
-    if not status_options and not load_error:
-        st.caption("Status pesanan muncul setelah laporan berhasil dibaca.")
-    kept_by_default = set(default_statuses(status_options))
-    selected_statuses = []
-    for status in status_options:
-        checked = st.checkbox(
-            status,
-            value=status in kept_by_default,
-            key=f"status-{source_key}-{status}",
+    imported_keys: list[str] = []
+    if (
+        files
+        and not load_error
+        and isinstance(source_raw, pd.DataFrame)
+        and not source_raw.empty
+        and source_key != st.session_state.get("saved_source_key")
+    ):
+        imported_keys, import_notes = store_upload(
+            source_raw,
+            orders_raw,
+            [getattr(item, "name", "Lampiran") for item in files],
         )
-        if checked:
-            selected_statuses.append(status)
+        st.session_state["saved_source_key"] = source_key
+        st.session_state["last_import_notes"] = import_notes
+    saved_months = list_months()
+    if saved_months:
+        years = []
+        for item in saved_months:
+            year_name = year_of(item["key"])
+            if year_name not in years:
+                years.append(year_name)
+        years = sorted(years)
+        if imported_keys:
+            st.session_state["library-year"] = year_of(imported_keys[0])
+            for key in imported_keys:
+                st.session_state[f"library-month-{key}"] = True
+        if st.session_state.get("library-year") not in years:
+            st.session_state["library-year"] = years[-1]
+        st.markdown("<div class='side-section'>Data tersimpan</div>", unsafe_allow_html=True)
+        library_year = st.selectbox("Tahun", years, key="library-year")
+        month_keys = [item["key"] for item in saved_months if year_of(item["key"]) == library_year]
+        st.markdown("**Bulan**")
+        selected_library = []
+        for key in sorted(month_keys):
+            month_widget = f"library-month-{key}"
+            if month_widget not in st.session_state:
+                st.session_state[month_widget] = True
+            if st.checkbox(month_label(key), key=month_widget):
+                selected_library.append(key)
+        if selected_library:
+            loaded_source, loaded_orders = cached_library_frames(
+                tuple(selected_library), bundle_stamp(selected_library)
+            )
+            st.session_state["active-library-keys"] = tuple(selected_library)
+            if not loaded_source.empty:
+                source_raw = loaded_source
+                orders_raw = loaded_orders
+                source_key = "library:" + ",".join(selected_library)
+        else:
+            st.session_state["active-library-keys"] = tuple()
+            source_raw = pd.DataFrame()
+            orders_raw = pd.DataFrame()
+            source_key = f"library:{library_year}:none"
+            st.warning("Centang minimal satu bulan.")
+    if (
+        isinstance(source_raw, pd.DataFrame)
+        and not source_raw.empty
+        and (not isinstance(orders_raw, pd.DataFrame) or orders_raw.empty)
+    ):
+        rebuilt = clean_order_frame(source_raw)
+        if not rebuilt.empty:
+            orders_raw = rebuilt
+    st.markdown("<div class='side-section'>Prediksi</div>", unsafe_allow_html=True)
+    st.caption("Bulan yang dicentang di atas adalah data latih. Periode di bawah adalah jangka ramalan.")
+    period = st.selectbox(
+        "Periode prediksi",
+        options=list(PERIOD_OPTIONS),
+        format_func=lambda key: PERIOD_SPECS[key].label,
+        index=0,
+    )
+    sidebar_metric = st.radio(
+        "Parameter",
+        options=["qty", "sales"],
+        format_func=lambda key: "Quantity terjual" if key == "qty" else "Sales volume",
+        horizontal=True,
+        key="rank-metric",
+    )
+    st.caption("Parameter ini menentukan peringkat pada periode penjualan di ringkasan. Ubah input, lalu klik Jalankan analisis.")
     suggested_service = SUGGESTED_SERVICE[period]
     service = int(
         st.number_input(
@@ -1325,11 +2795,11 @@ with st.sidebar:
         isinstance(stored_analysis, dict)
             and stored_analysis.get("period") == period
             and stored_analysis.get("source_key") == source_key
-            and set(stored_analysis.get("statuses") or []) == set(selected_statuses)
+            and stored_analysis.get("metric", "qty") == sidebar_metric
     )
     safety_impact = None
     if safety_synced:
-        refreshed_stock, safety_impact = safety_view(stored_analysis, service, metric)
+        refreshed_stock, safety_impact = safety_view(stored_analysis, service, sidebar_metric)
         if refreshed_stock is not None:
             stored_analysis["stock"] = refreshed_stock
             stored_analysis["service"] = service
@@ -1340,6 +2810,7 @@ with st.sidebar:
         safety_impact,
         safety_synced,
         has_result=isinstance(stored_analysis, dict),
+        metric=sidebar_metric,
     )
     st.markdown(
         f"<div class='{safety_class}'><b>Suggest safety stock adalah {suggested_service}%.</b><br>{safety_text}</div>",
@@ -1349,25 +2820,27 @@ with st.sidebar:
 
 today = date.today()
 window_start, window_end, period_text = forecast_window(period, today)
-date_col, period_col = st.columns([1, 2.2])
-show_metric(date_col, "Tanggal hari ini", format_id_date(today))
-period_col.markdown(
-    "<div class='readable-metric-label'>Periode prediksi</div>"
-    f"<div class='period-name'>{PERIOD_SPECS[period].label}</div>"
-    f"<div class='period-dates'>{format_id_date(window_start)} – {format_id_date(window_end)}</div>",
-    unsafe_allow_html=True,
-)
 
 if not run and "analysis" not in st.session_state:
+    date_col, period_col = st.columns([1, 2.2])
+    show_metric(date_col, "Tanggal hari ini", format_id_date(today))
+    period_col.markdown(
+        "<div class='readable-metric-label'>Periode prediksi</div>"
+        f"<div class='period-name'>{PERIOD_SPECS[period].label}</div>"
+        f"<div class='period-dates'>{format_id_date(window_start)} – {format_id_date(window_end)}</div>",
+        unsafe_allow_html=True,
+    )
     st.info("Unggah laporan Shopee (maksimal 50 file, total 1 GB), lalu klik **Jalankan analisis**.")
     st.markdown(
         """
 **Yang bisa dipilih:**
-- Dasar peringkat: QTY terjual atau sales volume
-- Periode: bulan, kuartal, semester, atau tahun
-- Status pesanan yang dicentang
+- Periode prediksi: bulan, kuartal, semester, atau tahun
+- Parameter: Quantity terjual atau Sales volume
+- Centang Exclude return dan batal pada header Ringkasan dan Prediksi & stok, setelah analisis berjalan
+- Tahun dan bulan data input untuk prediksi
+- Menu Laporan: slide presentasi dari Ringkasan, Prediksi & stok, Data, dan Folder data
 
-**Hasil:** 50 item terlaris, lengkap dengan prediksi QTY, sales volume, dan stok yang harus disiapkan. Perhitungan bulan, kuartal, semester, dan tahun dimulai dari tanggal hari ini.
+**Hasil:** 50 item terlaris pada periode penjualan yang dipilih, lengkap dengan prediksi QTY, sales volume, dan stok yang harus disiapkan. Prediksi dihitung dari data input dan dimulai dari tanggal hari ini.
 
 **Kolom yang didukung (otomatis dikenali):**
 - Waktu Pesanan Dibuat / Tanggal
@@ -1376,37 +2849,68 @@ if not run and "analysis" not in st.session_state:
 - Total Harga atau Harga Setelah Diskon
 - Status Pesanan
 
-Produk tanpa variasi diidentifikasi dari Nomor Referensi SKU. Produk dengan varian punya nama yang sama; yang membedakan adalah Nama Variasi, dan tiap varian punya referensi SKU sendiri.
+Acuan produk adalah Nomor Referensi SKU. Bila nama produk berbeda, yang ditampilkan adalah nama pada pesanan terakhir.
 """
     )
     st.stop()
 
+sheet = str(st.session_state.get("active-sheet", "Ringkasan"))
+exclude_return_cancel = bool(st.session_state.get("exclude_applied", False))
+if "analysis" in st.session_state and not run:
+    sheet = show_app_menu()
+    if sheet in SUMMARY_SHEETS:
+        date_col, period_col = st.columns([1, 2.2])
+        show_metric(date_col, "Tanggal hari ini", format_id_date(today))
+        period_col.markdown(
+            "<div class='readable-metric-label'>Periode prediksi</div>"
+            f"<div class='period-name'>{PERIOD_SPECS[period].label}</div>"
+            f"<div class='period-dates'>{format_id_date(window_start)} – {format_id_date(window_end)}</div>",
+            unsafe_allow_html=True,
+        )
+        if sheet != "Data":
+            if "exclude-return-batal" not in st.session_state:
+                st.session_state["exclude-return-batal"] = exclude_return_cancel
+            exclude_return_cancel = bool(st.checkbox("Exclude return dan batal", key="exclude-return-batal"))
+            st.session_state["exclude_applied"] = exclude_return_cancel
+            st.caption(
+                "Centang ini mengurangi pesanan batal dan unit retur pada header, "
+                "Top 50, serta lembar Prediksi & stok. "
+                "Lembar Data memakai centang status sendiri."
+            )
+    if st.session_state.pop("_menu_rerun", False):
+        st.rerun()
+
+exclude_changed = (
+    "analysis" in st.session_state
+    and st.session_state["analysis"].get("exclude_return_cancel", None) != exclude_return_cancel
+)
 filters_changed = (
     "analysis" in st.session_state
     and not run
+    and not exclude_changed
     and (
         st.session_state["analysis"]["period"] != period
         or st.session_state["analysis"].get("source_key") != source_key
-        or set(st.session_state["analysis"]["statuses"]) != set(selected_statuses)
+        or st.session_state["analysis"].get("metric", "qty") != sidebar_metric
     )
 )
 
-if run or "analysis" not in st.session_state:
+if run or "analysis" not in st.session_state or exclude_changed:
     if load_error:
         st.error(load_error)
         st.stop()
     if orders_raw.empty:
         st.warning("Tidak ada data. Unggah laporan Shopee terlebih dahulu.")
         st.stop()
-    if not selected_statuses:
-        st.warning("Pilih minimal satu status pesanan.")
-        st.stop()
 
-    orders = filter_by_statuses(orders_raw, selected_statuses)
+    orders = prepare_analysis_orders(
+        orders_raw,
+        exclude_return_cancel=exclude_return_cancel,
+    )
     history = aggregate_item_periods(orders, period)
 
     if history.empty:
-        st.warning("Tidak ada transaksi untuk status pesanan yang dipilih.")
+        st.warning("Tidak ada transaksi yang bisa dianalisis pada data ini.")
         st.stop()
 
     base_period = "hari"
@@ -1416,10 +2920,10 @@ if run or "analysis" not in st.session_state:
     next_label = period_label(next_period_start(last_bucket, period), period)
 
     with st.spinner("Membaca pola belanja harian untuk prediksi QTY..."):
-        bar = st.progress(0.0, text="Prediksi dari tren robust")
+        bar = st.progress(0.0, text="Prediksi dari level 28 hari terakhir")
 
         def on_qty(pct: float) -> None:
-            bar.progress(min(pct * 0.9, 0.9), text="Prediksi dari tren robust")
+            bar.progress(min(pct * 0.9, 0.9), text="Prediksi dari level 28 hari terakhir")
 
         qty_fc = forecast_items(
             base_history,
@@ -1461,13 +2965,14 @@ if run or "analysis" not in st.session_state:
         "board": board,
         "comparison": comparison,
         "period": period,
-        "statuses": list(selected_statuses),
+        "metric": sidebar_metric,
         "source_key": source_key,
         "service": service,
         "horizon_steps": horizon_steps,
         "base_period": base_period,
         "base_history": base_history,
         "period_text": period_text,
+        "exclude_return_cancel": exclude_return_cancel,
     }
     st.rerun()
 else:
@@ -1479,57 +2984,67 @@ else:
     board = stored["board"]
     comparison = stored.get("comparison", pd.DataFrame())
     period = stored["period"]
+    metric = stored.get("metric", "qty")
     horizon_steps = int(stored.get("horizon_steps", 1))
     base_period = stored.get("base_period", period)
     period_text = stored.get("period_text") or forecast_window(period)[2]
 
 if filters_changed:
     st.warning(
-        "Periode, status pesanan, atau file laporan berubah. "
-        "Klik **Jalankan analisis** untuk memperbarui hasil. "
-        "Perubahan safety stock saja langsung menghitung ulang cadangan dan stok disarankan."
+        "Data input, periode prediksi, atau parameter berubah. "
+        "Klik **Jalankan analisis** untuk menghitung ulang. "
+        "Tahun, bulan, dan tanggal penjualan di ringkasan hanya mengubah angka yang ditampilkan. "
+        "Perubahan safety stock langsung menghitung ulang cadangan dan stok disarankan."
     )
 
+show_resume = sheet in {"Ringkasan", "Prediksi & stok"}
+sales_orders, resume_label = filter_resume_orders(orders, show_controls=show_resume)
+if not resume_label:
+    resume_label = "seluruh data input"
+
 last_period = history["period_start"].max()
-catalog = top_bestsellers(orders, combined, stock, history, metric, last_period, period, top_n=None)
+catalog = top_bestsellers(sales_orders, combined, stock, history, metric, last_period, period, top_n=None)
 shown = catalog.head(TOP_N).reset_index(drop=True)
-sort_name = "QTY terjual tertinggi" if metric == "qty" else "sales volume tertinggi"
+sort_name = "Quantity terjual tertinggi" if metric == "qty" else "sales volume tertinggi"
+
 grain_note = (
     "Pada riwayat di bawah 28 hari, laju harian periode panjang mengikuti level yang sama. "
     "Bulan yang terpotong di ujung kalender lebih kecil karena harinya lebih sedikit."
 )
 
-k1, k2, k3, k4 = st.columns(4)
-show_metric(
-    k1,
-    "Jumlah pesanan",
-    format_number(count_orders(orders), 0),
-    hint="Sekali tiap No. Pesanan",
-)
-show_metric(
-    k2,
-    "Produk / varian",
-    f"{orders['item_key'].nunique():,}".replace(",", "."),
-    hint="Nomor Referensi SKU",
-)
-show_metric(
-    k3,
-    "Sales volume",
-    format_idr(order_revenue(orders)),
-    hint="Total Pembayaran, sekali tiap No. Pesanan",
-)
-show_metric(
-    k4,
-    "QTY terjual",
-    format_qty(float(orders["qty"].sum()) if "qty" in orders.columns else 0),
-    hint="Jumlah unit pada Nomor Referensi SKU",
-)
+if sheet in SUMMARY_SHEETS and sheet != "Data":
+    if exclude_return_cancel:
+        header_order_hint = f"{resume_label}. Tanpa pesanan batal. Unit retur sudah dikurangi"
+        header_sku_hint = f"{resume_label}. SKU tanpa pesanan batal dan tanpa baris yang hanya berisi retur"
+        header_sales_hint = f"{resume_label}. Total Pembayaran tanpa pesanan batal, sekali tiap No. Pesanan"
+        header_qty_hint = f"{resume_label}. Jumlah dikurangi Returned quantity, tanpa pesanan batal"
+    else:
+        header_order_hint = f"{resume_label}. Termasuk batal dan retur"
+        header_sku_hint = f"{resume_label}. Termasuk SKU pada pesanan batal dan retur"
+        header_sales_hint = f"{resume_label}. Total Pembayaran termasuk batal dan retur, sekali tiap No. Pesanan"
+        header_qty_hint = f"{resume_label}. Jumlah termasuk unit retur dan pesanan batal"
+    if sheet == "Data":
+        st.caption(
+            f"Angka header memakai periode penjualan {resume_label}. "
+            "Tahun, bulan, dan tanggal penjualan diatur di menu Ringkasan."
+        )
+    k1, k2, k3, k4 = st.columns(4)
+    show_metric(k1, "Jumlah pesanan", format_number(count_orders(sales_orders), 0), hint=header_order_hint)
+    show_metric(
+        k2,
+        "Produk / varian",
+        f"{sales_orders['item_key'].nunique():,}".replace(",", ".") if not sales_orders.empty else "0",
+        hint=header_sku_hint,
+    )
+    show_metric(k3, "Sales volume", format_idr(order_revenue(sales_orders)), hint=header_sales_hint)
+    show_metric(
+        k4,
+        "QTY terjual",
+        format_qty(float(sales_orders["qty"].sum()) if "qty" in sales_orders.columns and not sales_orders.empty else 0),
+        hint=header_qty_hint,
+    )
 
-tab_overview, tab_pred, tab_model, tab_data = st.tabs(
-    ["Ringkasan", "Prediksi & stok", "Evaluasi model", "Data"]
-)
-
-with tab_overview:
+if sheet == "Ringkasan":
     chart_slot = st.container()
     table_slot = st.container()
     summary_gen = st.session_state.setdefault("summary_gen", 0)
@@ -1541,12 +3056,13 @@ with tab_overview:
         st.subheader("Top 50 item terlaris")
         view = view.sort_values(["peringkat", "item_key"], kind="mergesort").reset_index(drop=True)
         st.caption(
-            f"Peringkat dihitung dari {sort_name} seluruh laporan dan selalu unik. "
-            f"Prediksi QTY untuk {period_text} adalah permintaan, tanpa safety stock. "
+            f"Peringkat dihitung dari {sort_name} pada {resume_label}, dan selalu unik. "
+            f"Prediksi QTY untuk {period_text} adalah permintaan dari data input, tanpa safety stock. "
             "Prediksi sales volume = prediksi QTY kali harga jual. "
             "Stok disarankan = prediksi QTY + safety stock. "
             f"{grain_note} "
-            "Centang satu baris untuk menampilkan grafik SKU itu."
+            "Centang satu baris untuk menampilkan grafik SKU itu. "
+            "Nilai penjualan mengikuti periode di atas dan centang Exclude return dan batal."
         )
         if view.empty:
             st.write("Tidak ada item untuk ditampilkan.")
@@ -1571,7 +3087,7 @@ with tab_overview:
                 on_select="rerun",
                 selection_mode="single-row",
                 column_config=table_column_config(summary_source, roomy=True),
-                key=f"summary-top50-{summary_gen}-{metric}-{period}-{show_n}",
+                key=f"summary-top50-{summary_gen}-{metric}-{period}-{show_n}-{resume_label}",
             )
             picked_rows = list(getattr(getattr(picked, "selection", None), "rows", []) or [])
             if picked_rows:
@@ -1585,8 +3101,8 @@ with tab_overview:
                 )
 
     with chart_slot:
-        last_qty = float(view["qty_histori"].sum()) if not view.empty else 0.0
-        last_sales = float(view["sales_histori"].sum()) if not view.empty else 0.0
+        last_qty = float(view["qty_total"].sum()) if not view.empty else 0.0
+        last_sales = float(view["sales_total"].sum()) if not view.empty else 0.0
         pred_qty_value = float(view["pred_qty"].sum()) if not view.empty else 0.0
         pred_sales_value = float(view["pred_sales"].sum()) if not view.empty else 0.0
 
@@ -1597,13 +3113,13 @@ with tab_overview:
         show_metric(m3, "Prediksi QTY", format_qty(pred_qty_value))
         show_metric(m4, "Prediksi sales volume", format_idr(pred_sales_value))
         top_sales = float(view["sales_total"].sum()) if not view.empty else 0.0
-        total_sales = float(orders["sales"].sum()) if "sales" in orders.columns else 0.0
+        total_sales = float(sales_orders["sales"].sum()) if "sales" in sales_orders.columns and not sales_orders.empty else 0.0
         share = top_sales / total_sales * 100 if total_sales > 0 else 0.0
         show_metric(
             m5,
             "Kontribusi sales Top 50",
             f"{format_number(share, 1)}%",
-            hint=f"{format_idr(top_sales)} dari {format_idr(total_sales)}, status yang dicentang",
+            hint=f"{format_idr(top_sales)} dari {format_idr(total_sales)} pada {resume_label}",
         )
         if last_qty > 0 and last_sales > 0 and (pred_qty_value - last_qty) * (pred_sales_value - last_sales) < 0:
             st.caption(
@@ -1613,37 +3129,108 @@ with tab_overview:
             )
 
         if not view.empty:
-            st.caption(
-                "Biru adalah QTY actual, oranye adalah prediksi. "
-                "Label diawali peringkat dan Nomor Referensi SKU, lalu nama produk."
-            )
-            st.plotly_chart(item_qty_chart(view, "total Top 50"), use_container_width=True)
+            if metric == "sales":
+                st.caption(
+                    f"Biru adalah sales actual pada {resume_label}. "
+                    f"Oranye adalah prediksi sales {period_text}. "
+                    "Hijau adalah stok prediksi dalam unit, di atas prediksi sales: prediksi QTY ditambah safety stock. "
+                    "Tiap produk punya skala sendiri, jadi nominal kecil tetap terbaca. "
+                    "Angka pada batang adalah nilai asli, bukan panjang yang disamakan dari peringkat 1 sampai 50."
+                )
+                st.plotly_chart(item_sales_chart(view, "total Top 50"), use_container_width=True)
+                down = view.loc[view["pred_sales"] + 0.5 < view["sales_total"]]
+                if not down.empty:
+                    gap = float((down["sales_total"] - down["pred_sales"]).sum())
+                    qty_down = int((down["pred_qty"] + 0.5 < down["qty_total"]).sum())
+                    detail = (
+                        f"{qty_down} di antaranya juga prediksi QTY-nya lebih rendah, "
+                        "karena level 28 hari terakhir lebih sepi daripada periode ini. "
+                        if qty_down
+                        else "Prediksi QTY pada SKU itu tidak lebih rendah; penurunannya datang dari harga jual. "
+                    )
+                    st.info(
+                        f"{len(down)} dari {len(view)} SKU prediksi sales-nya di bawah sales actual pada {resume_label}. "
+                        f"Selisih pada SKU itu {format_idr(gap)}. "
+                        "Prediksi sales mengikuti prediksi QTY kali harga jual. "
+                        f"{detail}"
+                        "Angka hijau pada batang stok prediksi adalah jumlah unit yang disiapkan."
+                    )
+            else:
+                st.caption(
+                    f"Biru adalah QTY pada {resume_label}. Oranye adalah prediksi {period_text}. "
+                    "Label diawali peringkat dan Nomor Referensi SKU, lalu nama produk terakhir."
+                )
+                st.plotly_chart(item_qty_chart(view, "total Top 50"), use_container_width=True)
 
         if selected_key is None:
-            st.info("Centang satu SKU pada tabel Top 50 untuk menampilkan empat grafik di bawah.")
+            if metric == "sales":
+                st.info("Centang satu SKU pada tabel Top 50 untuk menampilkan grafik sales dan garis QTY.")
+            else:
+                st.info("Centang satu SKU pada tabel Top 50 untuk menampilkan empat grafik di bawah.")
         else:
             chosen = view[view["item_key"] == selected_key].iloc[0]
             scope_label = selected_label or "SKU"
             st.subheader(scope_label)
-            scope_orders = orders[orders["item_key"] == selected_key]
+            scope_orders = sales_orders[sales_orders["item_key"] == selected_key]
             st.caption(
-                "Actual per tanggal memakai data yang ada pada laporan. "
-                "Jika riwayat lebih pendek dari periode prediksi, yang tampil adalah tanggal yang tersedia."
+                f"Actual per tanggal memakai {resume_label}. "
+                f"Prediksi di bawahnya tetap {period_text}, dihitung dari data input."
             )
             actual_qty_total = float(scope_orders["qty"].sum()) if not scope_orders.empty else 0.0
             actual_sales_total = float(scope_orders["sales"].sum()) if not scope_orders.empty else 0.0
-            st.plotly_chart(daily_actual_chart(scope_orders, scope_label, "qty"), use_container_width=True)
-            show_metric(st, "Total QTY actual", format_qty(actual_qty_total))
-            st.plotly_chart(daily_actual_chart(scope_orders, scope_label, "sales"), use_container_width=True)
-            show_metric(st, "Total sales volume actual", format_idr(actual_sales_total))
+            if metric == "sales":
+                if scope_orders.empty:
+                    actual_labels: list[str] = []
+                    actual_sales_series = np.zeros(0)
+                    actual_qty_series = np.zeros(0)
+                else:
+                    actual_days = scope_orders["order_time"].dt.floor("D")
+                    actual_grouped = scope_orders.groupby(actual_days).agg(qty=("qty", "sum"), sales=("sales", "sum"))
+                    actual_index = pd.date_range(actual_grouped.index.min(), actual_grouped.index.max(), freq="D")
+                    actual_grouped = actual_grouped.reindex(actual_index, fill_value=0)
+                    actual_labels = [day_tick_label(stamp) for stamp in actual_grouped.index]
+                    actual_sales_series = actual_grouped["sales"].to_numpy(dtype=float)
+                    actual_qty_series = actual_grouped["qty"].to_numpy(dtype=float)
+                st.caption(
+                    "Batang adalah sales volume pada skala rupiah. "
+                    "Garis biru adalah QTY pada skala kanan, mengikuti jumlah unit supaya tetap terbaca."
+                )
+                st.plotly_chart(
+                    sales_qty_chart(
+                        actual_labels,
+                        actual_sales_series,
+                        actual_qty_series,
+                        "Sales actual dan QTY actual",
+                    ),
+                    use_container_width=True,
+                )
+                actual_cols = st.columns(2)
+                show_metric(actual_cols[0], "Total sales volume actual", format_idr(actual_sales_total))
+                show_metric(
+                    actual_cols[1],
+                    "Total QTY actual",
+                    format_qty(actual_qty_total),
+                    hint="QTY pada garis grafik",
+                )
+            else:
+                st.plotly_chart(daily_actual_chart(scope_orders, scope_label, "qty"), use_container_width=True)
+                show_metric(st, "Total QTY actual", format_qty(actual_qty_total))
+                st.plotly_chart(daily_actual_chart(scope_orders, scope_label, "sales"), use_container_width=True)
+                show_metric(st, "Total sales volume actual", format_idr(actual_sales_total))
             grain = "hari"
             interval_options = prediction_interval_options(period)
             if period == "bulan":
-                show_section_title(
-                    f"Prediksi mengikuti tanggal kalender {format_id_date(window_start)} – {format_id_date(window_end)}, "
-                    "sejak tanggal hari ini. Tiap batang adalah satu tanggal. "
-                    "Grafik ini menampilkan permintaan saja. Stok final = prediksi QTY + safety stock, pada tabel."
-                )
+                if metric == "sales":
+                    show_section_title(
+                        f"Prediksi sales {format_id_date(window_start)} – {format_id_date(window_end)}. "
+                        "Batang adalah sales prediksi. Garis adalah prediksi QTY yang membentuk sales itu."
+                    )
+                else:
+                    show_section_title(
+                        f"Prediksi mengikuti tanggal kalender {format_id_date(window_start)} – {format_id_date(window_end)}, "
+                        "sejak tanggal hari ini. Tiap batang adalah satu tanggal. "
+                        "Grafik ini menampilkan permintaan saja. Stok final = prediksi QTY + safety stock, pada tabel."
+                    )
             else:
                 interval_labels = [label for _key, label in interval_options]
                 grain_choice = st.selectbox(
@@ -1660,11 +3247,17 @@ with tab_overview:
                     "bulan": "per bulan",
                 }[grain]
                 show_section_title(
-                    f"Prediksi {interval_name} untuk {PERIOD_SPECS[period].label}, "
+                    f"Prediksi sales {interval_name} untuk {PERIOD_SPECS[period].label}, "
                     f"{format_id_date(window_start)} – {format_id_date(window_end)}. "
-                    f"Rentang ini {horizon_day_count(period, today)} hari kalender sejak tanggal hari ini. "
-                    "Pilihan di atas menyesuaikan lebar grafik. "
-                    "Grafik ini menampilkan permintaan saja. Stok final = prediksi QTY + safety stock, pada tabel."
+                    "Batang adalah sales prediksi. Garis adalah prediksi QTY."
+                    if metric == "sales"
+                    else (
+                        f"Prediksi {interval_name} untuk {PERIOD_SPECS[period].label}, "
+                        f"{format_id_date(window_start)} – {format_id_date(window_end)}. "
+                        f"Rentang ini {horizon_day_count(period, today)} hari kalender sejak tanggal hari ini. "
+                        "Pilihan di atas menyesuaikan lebar grafik. "
+                        "Grafik ini menampilkan permintaan saja. Stok final = prediksi QTY + safety stock, pada tabel."
+                    )
                 )
             stored_analysis = st.session_state.get("analysis", {})
             base_history = stored_analysis.get("base_history", pd.DataFrame())
@@ -1676,45 +3269,86 @@ with tab_overview:
             labels, pred_qty_series, pred_sales_series = bucket_prediction(projected, grain)
             pred_qty_total = float(np.sum(pred_qty_series)) if len(pred_qty_series) else 0.0
             pred_sales_total = float(np.sum(pred_sales_series)) if len(pred_sales_series) else 0.0
-            st.plotly_chart(
-                timeline_chart(labels, pred_qty_series, "Prediksi QTY", "QTY"),
-                use_container_width=True,
-            )
-            show_metric(
-                st,
-                "Total prediksi QTY",
-                format_qty(pred_qty_total),
-                hint=growth_hint(pred_qty_total, actual_qty_total, "QTY terjual"),
-            )
-            st.plotly_chart(
-                timeline_chart(
-                    labels,
-                    pred_sales_series,
-                    "Prediksi sales volume",
-                    "Sales volume (Rp)",
-                    money=True,
-                ),
-                use_container_width=True,
-            )
-            show_metric(
-                st,
-                "Total prediksi sales volume",
-                format_idr(pred_sales_total),
-                hint=growth_hint(pred_sales_total, actual_sales_total, "sales volume"),
-            )
+            if metric == "sales":
+                st.plotly_chart(
+                    sales_qty_chart(
+                        labels,
+                        pred_sales_series,
+                        pred_qty_series,
+                        "Sales prediksi dan QTY prediksi",
+                    ),
+                    use_container_width=True,
+                )
+                pred_cols = st.columns(2)
+                show_metric(
+                    pred_cols[0],
+                    "Total prediksi sales volume",
+                    format_idr(pred_sales_total),
+                    hint=growth_hint(pred_sales_total, actual_sales_total, "sales volume"),
+                )
+                show_metric(
+                    pred_cols[1],
+                    "Total prediksi QTY",
+                    format_qty(pred_qty_total),
+                    hint="QTY pada garis grafik, dikalikan harga jual menjadi sales prediksi",
+                )
+                chosen_stock = float(_stock_sales(pd.DataFrame([chosen])).sum())
+                show_metric(
+                    st,
+                    "Stok prediksi",
+                    format_idr(chosen_stock),
+                    hint=f"{format_qty(float(chosen['stok_disarankan']))} unit. Prediksi sales ditambah safety stock",
+                )
+                drop_text = sales_drop_note(
+                    actual_sales_total,
+                    pred_sales_total,
+                    actual_qty_total,
+                    pred_qty_total,
+                    scope="SKU ini",
+                )
+                if drop_text:
+                    st.info(drop_text)
+            else:
+                st.plotly_chart(
+                    timeline_chart(labels, pred_qty_series, "Prediksi QTY", "QTY"),
+                    use_container_width=True,
+                )
+                show_metric(
+                    st,
+                    "Total prediksi QTY",
+                    format_qty(pred_qty_total),
+                    hint=growth_hint(pred_qty_total, actual_qty_total, "QTY terjual"),
+                )
+                st.plotly_chart(
+                    timeline_chart(
+                        labels,
+                        pred_sales_series,
+                        "Prediksi sales volume",
+                        "Sales volume (Rp)",
+                        money=True,
+                    ),
+                    use_container_width=True,
+                )
+                show_metric(
+                    st,
+                    "Total prediksi sales volume",
+                    format_idr(pred_sales_total),
+                    hint=growth_hint(pred_sales_total, actual_sales_total, "sales volume"),
+                )
 
-with tab_pred:
+elif sheet == "Prediksi & stok":
     applied_service = int(st.session_state["analysis"].get("service", service))
     st.subheader(
-        f"Seluruh SKU menurut {METRIC_LABELS[metric]} — {period_text}"
+        f"SKU pada {resume_label} menurut {METRIC_LABELS[metric]} — prediksi {period_text}"
     )
     st.caption(
-        f"Menampilkan seluruh {format_number(len(catalog))} SKU pada file, diurutkan {sort_name}. "
-        "Peringkat unik dihitung dari seluruh laporan. "
-        f"Prediksi QTY untuk {period_text} adalah permintaan, belum termasuk safety stock {format_number(applied_service)}%. "
+        f"Menampilkan {format_number(len(catalog))} SKU yang ada penjualan pada {resume_label}, diurutkan {sort_name}. "
+        "Peringkat unik dihitung pada rentang itu, bukan dari seluruh bulan input. "
+        f"Prediksi QTY untuk {period_text} adalah permintaan dari data input, belum termasuk safety stock {format_number(applied_service)}%. "
         "Stok disarankan = prediksi QTY + safety stock. Itulah stok final. "
         "Mengubah persentase di samping mengubah safety stock dan stok disarankan. Prediksi QTY tidak berubah. "
-        "Nama lengkap ada di kolom Produk."
+        "Nama lengkap ada di kolom Produk. "
+        "Isi tabel mengikuti centang Exclude return dan batal di header."
     )
     if catalog.empty:
         st.write("Tidak ada item untuk ditampilkan.")
@@ -1738,28 +3372,9 @@ with tab_pred:
             mime="text/csv",
         )
 
-with tab_model:
-    applied_service = int(st.session_state["analysis"].get("service", service))
-    applied_suggestion = SUGGESTED_SERVICE.get(period, applied_service)
+elif sheet == "Evaluasi model":
     period_name = PERIOD_SPECS[period].label
     period_days = horizon_day_count(period)
-    z_now = service_z(applied_service)
-    z_value = format_number(z_now, 2)
-    factor_now = z_now * float(np.sqrt(period_days))
-    if shown.empty:
-        board_n = 0
-        board_demand = 0
-        board_buffer = 0
-        board_qty = 0
-        board_sales = 0
-        board_stock = 0
-    else:
-        board_n = int(len(shown))
-        board_qty = int(shown["pred_qty"].sum())
-        board_sales = int(shown["pred_sales"].sum())
-        board_buffer = int(shown["safety_stock"].sum())
-        board_stock = int(shown["stok_disarankan"].sum())
-        board_demand = board_qty
     suggestion_lines = []
     for key in PERIOD_OPTIONS:
         pct = SUGGESTED_SERVICE[key]
@@ -1771,68 +3386,89 @@ with tab_model:
             f"pengali cadangan = {format_number(z_key * np.sqrt(days), 2)} × sigma harian."
         )
     suggestion_text = "\n".join(suggestion_lines)
-    st.subheader("Cara aplikasi membaca data")
+    st.subheader("Alur kerja sistem, dari unggah sampai stok")
     st.markdown(
         f"""
-Bagian ini menjelaskan logika program dari file yang diunggah sampai angka prediksi. Perhitungan di bawah memakai hasil analisis yang sedang tampil: periode **{period_name}**, {period_days} hari, {period_text}, safety stock **{applied_service}%**.
+Halaman ini menjelaskan cara sistem mengambil data, menghitung, dan menguji algoritma. Periode yang sedang dipilih adalah **{period_name}** ({period_days} hari, {period_text}). Angka toko ada di menu Ringkasan dan Prediksi & stok.
 
-Langkah pengambilan data:
+**A. Mengunggah dan menyimpan**
 
-1. File CSV atau Excel dibaca menjadi tabel. Sheet **Data** menyimpan tabel itu apa adanya, termasuk baris yang nanti tidak masuk prediksi.
-2. Nama kolom dikenali dari judul laporan Shopee. **No. Pesanan** menjadi identitas pesanan. **Nomor Referensi SKU** dan **Nama Variasi** menjadi identitas produk. Variasi kosong tetap satu produk. Variasi terisi dipisah dengan kunci `SKU||nama variasi`, sehingga varian tidak digabung.
-3. **Jumlah** menjadi QTY. Nilai jual satu baris adalah **Harga Setelah Diskon × Jumlah**. Sales volume pesanan mengambil **Total Pembayaran** satu kali tiap No. Pesanan. Kalau pembayaran kosong atau nol, sales volume pesanan dijumlah dari nilai baris pesanan itu.
-4. Hanya **Status Pesanan** yang dicentang yang masuk agregasi dan prediksi.
-5. Waktu pesanan dipotong per hari. Program menyusun kalender dari hari pertama sampai hari terakhir, lalu mengisi hari tanpa order dengan nol. Nol itu sengaja disimpan supaya rata-rata tidak hanya dihitung pada hari yang ada penjualan.
-6. Prediksi periode berjalan di atas deret harian itu. Panjang periode dihitung dari tanggal hari ini sampai satu bulan, tiga bulan, enam bulan, atau dua belas bulan kalender, lalu dikurangi satu hari.
+1. File CSV, XLSX, atau XLS dibaca. Beberapa file digabung. Baris yang sama dihitung sekali.
+2. Data disimpan per bulan. Mengunggah bulan yang sama mengganti isi bulan itu bila ada perubahan. Bila isinya sama, catatannya **Tidak ada perubahan data**.
+3. Tahun dan bulan yang dicentang di input adalah data latih prediksi. Makin banyak bulan yang dicentang, riwayat yang dipelajari makin panjang. Periode prediksi di bawahnya adalah jangka ramalan. Keduanya baru dihitung setelah **Jalankan analisis**.
+4. Setelah analisis jalan, Ringkasan punya filter tahun, bulan, dan tanggal penjualan. Filter itu hanya memotong angka penjualan yang ditampilkan. Prediksi tidak dihitung ulang.
+
+**B. Kolom yang dipakai**
+
+1. **No. Pesanan** adalah identitas pesanan. Sales volume mengambil **Total Pembayaran** satu kali tiap nomor. Bila pembayaran kosong atau nol, sistem menjumlah nilai baris pesanan itu.
+2. **Nomor Referensi SKU** adalah acuan produk. Bila satu SKU punya beberapa nama, yang dipakai adalah nama pada pesanan terakhir. Nama Variasi ikut nama terakhir itu dan tetap ditampilkan, tetapi tidak memecah SKU.
+3. **Jumlah** adalah QTY kotor. **Returned quantity** adalah unit retur. QTY bersih = Jumlah − Returned quantity, dan tidak boleh di bawah nol.
+4. Nilai satu baris = **Harga Setelah Diskon × Jumlah**. Nominal retur = Returned quantity × Harga Setelah Diskon.
+5. Kota, pembayaran, pengiriman, voucher, dan identitas pembeli tidak masuk prediksi.
+
+**C. Exclude return dan batal**
+
+1. Centang ini ada di header Ringkasan dan Prediksi & stok. Lembar Data memakai centang status sendiri. Semua status pesanan masuk analisis. Tidak ada filter status di input.
+2. Centang kosong: pesanan batal ikut dihitung, dan QTY memakai Jumlah kotor, termasuk unit yang diretur.
+3. Centang terisi: baris berstatus batal dikeluarkan, dan QTY memakai Jumlah bersih. Baris yang jumlah bersihnya nol ikut keluar.
+4. Header, Top 50, dan Prediksi & stok memakai set data yang sama dengan centang itu.
+
+**D. Menu Data**
+
+1. Tahun, bulan, dan tanggal memotong laporan pada lembar Data, sama seperti periode penjualan di Ringkasan.
+2. Centang status, termasuk Return dan Batal, hanya mengubah angka di menu Data.
+3. Nominal retur muncul bila Return atau All dicentang. Nominal batal muncul bila status batal atau All dicentang.
+4. Tabel status, kontribusi invoice batal, dan SKU punya baris Total.
+5. Filter SKU Retur hanya menampilkan kolom retur. Filter Batal hanya menampilkan kolom batal. Alasan pada tabel itu berbentuk centang, dan baris mengikuti alasan yang dicentang.
+6. Tabel gabungan memakai filter tahun dan bulan. Bulan berbentuk centang. Baris yang tampil mengikuti bulan yang dicentang.
+
+**E. Peringkat**
+
+1. Parameter dipilih di input: **Quantity terjual** atau **Sales volume**. Pilihan baru dipakai setelah **Jalankan analisis**.
+2. Angka yang diperingkat adalah penjualan pada tahun, bulan, dan tanggal di Ringkasan. Bulan input yang lain tidak ikut dijumlah, supaya Top 50 tidak menumpuk.
+3. Peringkat 1 adalah nilai terbesar pada rentang itu. Peringkat selalu unik.
+4. Top 50 adalah 50 peringkat pertama. Prediksi pada baris itu tetap ramalan untuk periode prediksi, dihitung dari seluruh bulan input yang dicentang.
 """
     )
-    st.subheader("Algoritma yang dipakai: Tren robust")
+    st.subheader("F. Prediksi: Level terkini")
     st.markdown(
         f"""
-**Konsep.** Tren robust memperkirakan permintaan harian dari level penjualan, pola hari dalam seminggu, dan kemiringan yang hanya dipakai bila buktinya cukup. Level menjawab “berapa unit yang biasa terjual sehari”. Pola hari menaikkan atau menurunkan hari yang memang ramai. Kemiringan menjawab “apakah penjualan benar-benar naik atau turun”, dan pada riwayat di bawah 28 hari kemiringannya nol.
+**Konsep.** Prediksi QTY adalah permintaan, belum termasuk cadangan. Level memakai 28 hari terakhir, bukan rata-rata sejak bulan pertama. Karena itu prediksi mengikuti bulan yang sedang berjalan. Bulan yang lebih sepi di awal tahun tidak menarik angka ke bawah.
 
-**Alasan dipilih.** Laporan yang pendek, hari promo, dan hari terakhir yang terpotong mudah membuat periode panjang terlihat turun bulan demi bulan. Tren harian membaca selisih paruh awal dan paruh akhir, lalu mengalikannya dengan redaman yang membesar seiring hari ke depan. Pada lampiran sekitar tiga minggu, paruh akhir sering lebih sepi daripada hari promo di paruh awal, sehingga bulan kedua dan ketiga pada kuartal ikut jatuh. Tren robust menahan itu. Lonjakan dipotong di kuantil 90% hari yang ada penjualan. Hari terakhir yang jauh di bawah median, pada deret yang hampir setiap hari ada transaksi, tidak masuk garis. Kemiringan Theil-Sen baru hidup setelah 28 hari, dan pada hari terjauh pergeserannya ditahan di 15% level.
+**Mengapa rumus ini.** Rata-rata sepanjang Januari–Oktober membuat hampir semua SKU diprediksi di bawah bulan ini, sebab bulan awal lebih sepi. Level 28 hari terakhir mengikuti laju yang baru terjadi. Lonjakan satu hari dipotong di kuantil 90%. Kemiringan hanya selisih 28 hari terakhir terhadap 28 hari sebelumnya, dan ujung horizon ditahan di 15% level supaya kuartal tidak jatuh atau melonjak.
 
-**Atribut yang dipakai.** Tanggal pesanan, hari dalam seminggu, Nomor Referensi SKU, Nama Variasi, Jumlah bersih setelah Returned quantity, Harga Setelah Diskon untuk sales volume, dan Status Pesanan yang dicentang. Kota, pembayaran, pengiriman, voucher, dan identitas pembeli tidak menggeser prediksi.
+**Cara hitung, untuk satu SKU**
 
-**Cara hitung**, untuk satu SKU:
+1. Susun kalender harian dari hari pertama sampai hari terakhir. Hari tanpa pesanan diisi nol.
+2. Bila hampir setiap hari ada penjualan dan hari terakhir di bawah 30% median hari sebelumnya, hari terakhir dikeluarkan.
+3. Ambil 28 hari terakhir. Nilai di atas kuantil 90% hari yang ada penjualan dipotong. `level = rata-rata jendela itu`.
+4. Bila riwayat kurang dari 28 hari, kemiringan = 0. Bila cukup, kemiringan = (level 28 hari terakhir − level 28 hari sebelumnya) / 28.
+5. Perkiraan hari ke-t, φ = 0,985: `max(0, (level + kemiringan × (1 − φ^t) / (1 − φ)) × profil hari)`.
+6. Jumlahkan {period_days} hari sejak tanggal hari ini. Hasil dijepit pada 0,6 sampai 1,6 kali `level × jumlah hari`.
+7. Prediksi sales volume = prediksi QTY × harga rata-rata yang terbeli. Harga tidak diramal sendiri.
 
-1. Kalender diisi dari hari pertama sampai hari terakhir. Hari tanpa order bernilai nol.
-2. Bila deretnya padat dan hari terakhir di bawah 30% median hari sebelumnya, hari itu dikeluarkan. Ini menutup ekspor yang terputus, bukan hari nol pada SKU yang jarang laku.
-3. Nilai di atas kuantil 90% dari hari yang ada penjualan dipotong, lalu `level = rata-rata hari yang sudah dipotong`.
-4. Bila hari yang dipakai kurang dari 28, kemiringan = 0. Bila cukup, kemiringan = median kemiringan semua pasangan hari (Theil-Sen), dikecilkan bila riwayat masih di bawah 8 minggu.
-5. Perkiraan hari ke-t, dengan redaman φ = 0,985: `max(0, (level + kemiringan × (1 − φ^t) / (1 − φ)) × profil hari)`. Sebelum dipakai, kemiringan diturunkan supaya hari terjauh tidak bergeser lebih dari 15% level.
-6. Jumlah harian itu dijumlahkan sepanjang {period_days} hari sejak tanggal hari ini, lalu dijepit pada 0,6 kali sampai 1,6 kali `level × jumlah hari`.
-7. Prediksi sales volume = prediksi QTY × harga rata-rata yang terbeli. Harga tidak diramal terpisah.
-
-Pada lampiran yang lebih pendek dari 28 hari, prediksi kuartal, semester, dan tahun mengikuti level harian yang sama. Total bulan berbeda hanya karena jumlah hari dan pola Senin–Minggu, bukan karena garisnya terus menurun.
+Periode yang lebih panjang mengulang laju 28 hari terakhir, dengan geseran kemiringan paling banyak 15% di hari terakhir.
 """
     )
-    st.subheader("Safety stock dan stok final")
+    st.subheader("G. Safety stock dan stok final")
     st.markdown(
         f"""
-**Konsep.** Prediksi QTY adalah permintaan. Safety stock adalah cadangan. Stok disarankan = prediksi QTY + safety stock, dan angka itulah stok final. Tiga kolom itu tidak disamakan. Persentase yang diisi mengubah safety stock dan stok disarankan. Prediksi QTY tetap.
+**Konsep.** Prediksi QTY adalah permintaan. Safety stock adalah cadangan. Stok disarankan = prediksi QTY + safety stock. Itulah stok final. Mengubah persen safety stock mengubah cadangan dan stok disarankan. Prediksi QTY tidak dihitung ulang.
 
-**Alasan rumus ini.** Sigma diukur dari residual, yaitu penjualan harian dikurangi garis tren robust pada hari yang sama. Lonjakan tetap tinggal di residual, sehingga ketidakpastiannya masuk ke cadangan, bukan ke permintaan. Akar jumlah hari membesarkan cadangan pada periode yang lebih panjang, tanpa menggandakan permintaan per hari.
+**Cara hitung**
 
-**Cara hitung.**
-
-1. Garis in-sample pada hari i: `max(0, (level + kemiringan × (i − titik tengah)) × profil hari)`.
-2. `sigma = simpangan baku (QTY harian − garis)`, dengan pembagi n − 1. Hari terakhir yang terpotong tidak masuk sigma.
-3. Faktor z dari persentase. Untuk 1–99%, z = invers distribusi normal `Φ⁻¹(persen / 100)`. Untuk 0%, z = 0. Untuk 100% ke atas, z = `Φ⁻¹(0,999) × persen / 100`.
+1. Garis pada 28 hari terakhir: `level × profil hari`. Level adalah laju harian terkini, bukan rata-rata sejak bulan pertama.
+2. `sigma = simpangan baku (QTY harian − garis)`, pembagi n − 1. Hari terakhir yang terputus tidak masuk sigma. Lonjakan tetap di residual, jadi ketidakpastian masuk ke cadangan.
+3. Untuk 1–99%, z = `Φ⁻¹(persen / 100)`. Untuk 0%, z = 0. Untuk 100% ke atas, z = `Φ⁻¹(0,999) × persen / 100`.
 4. `cadangan = z × sigma × √hari`.
-5. Safety stock = pembulatan cadangan. Prediksi QTY = pembulatan permintaan. Prediksi sales volume = prediksi QTY × harga yang terbeli. Stok disarankan = prediksi QTY + safety stock.
+5. Safety stock dan prediksi QTY dibulatkan. Stok disarankan adalah jumlah keduanya.
 
-**Saran per periode.** Persen saran diturunkan pada periode panjang karena √hari sudah membesarkan cadangan. Pengali di bawah adalah z × √hari pada saran masing-masing:
+Persen saran diturunkan pada periode panjang karena √hari sudah membesarkan cadangan:
 
 {suggestion_text}
-
-**Hasil pada analisis ini.** Safety stock yang dipakai {applied_service}% (saran {period_name} {applied_suggestion}%). z = {z_value}. Pengali = {format_number(factor_now, 2)} × sigma. Pada {board_n} item terlaris: prediksi QTY {format_number(board_qty)} unit, safety stock {format_number(board_buffer)} unit, stok disarankan {format_number(board_stock)} unit, prediksi sales volume {format_idr(board_sales)}.
-
-Mengubah angka safety stock menghitung ulang cadangan dan stok disarankan. Tren robust tidak dilatih ulang.
 """
     )
-    st.subheader("Algoritma pembanding")
+    st.subheader("H. Hasil pengujian algoritma")
     st.markdown(
         """
 Pembanding diuji pada **satu deret**: jumlah QTY seluruh toko per hari, hari kosong diisi nol. Beberapa hari terakhir disembunyikan sebagai ujian. Model dilatih hanya pada hari sebelum ujian. Profil hari pada ujian juga dihitung dari hari latih saja.
@@ -1846,7 +3482,7 @@ Tiap pembanding:
 - **Tren harian.** Konsep: level rata-rata seluruh hari, kemiringan paruh akhir terhadap paruh awal, dan redaman φ = 0,985 yang membesar bersama nomor hari. Dipakai sebagai pembanding karena rumusnya mengikuti arah jangka pendek. Pada laporan pendek yang paruh akhirnya lebih sepi, redaman itu menurunkan bulan-bulan belakang pada kuartal, semester, dan tahun. Hasilnya dijepit 0,25–4 kali laju harian.
 - **Naive.** Konsep: hari depan sama dengan hari terakhir. Cara hitung pada ujian: QTY hari terakhir data latih × jumlah hari ujian. Dipakai sebagai pembanding karena rumusnya transparan. Pada laporan Shopee, satu hari ramai yang kebetulan berada di ujung data akan terbawa ke seluruh periode.
 - **Moving Average.** Konsep: hari depan sama dengan rata-rata jendela terakhir. Cara hitung pada ujian: rata-rata sampai 7 hari terakhir data latih × jumlah hari ujian. Jendela ini meredam satu hari ekstrem, dan kemiringan naik atau turun di luar jendela tidak ikut.
-- **Holt Linear / Holt-Winters** (statsmodels `ExponentialSmoothing`). Konsep: pemulusan eksponensial dengan level dan tren. Bila data latih cukup untuk dua musim 7 hari, versi musiman aditif dan multiplikatif ikut dilatih, lalu yang lebih rapat pada ujian internal yang disimpan. Pada file pendek hasilnya Holt Linear, yaitu tren aditif tanpa musim. Perkiraan ujian adalah jumlah ramalan harian sepanjang jendela ujian. Model ini kuat pada deret panjang dan rapat. Pada banyak SKU yang jarang laku, parameternya mudah tidak stabil. Holt diuji pada total toko. Prediksi tiap Nomor Referensi SKU memakai Tren robust.
+- **Holt Linear / Holt-Winters** (statsmodels `ExponentialSmoothing`). Konsep: pemulusan eksponensial dengan level dan tren. Bila data latih cukup untuk dua musim 7 hari, versi musiman aditif dan multiplikatif ikut dilatih, lalu yang lebih rapat pada ujian internal yang disimpan. Pada file pendek hasilnya Holt Linear, yaitu tren aditif tanpa musim. Perkiraan ujian adalah jumlah ramalan harian sepanjang jendela ujian. Model ini kuat pada deret panjang dan rapat. Pada banyak SKU yang jarang laku, parameternya mudah tidak stabil. Holt diuji pada total toko. Prediksi tiap Nomor Referensi SKU memakai Level terkini.
 - **ARIMA / SARIMA** (statsmodels `SARIMAX`). Konsep: kombinasi autoregresi, selisih untuk membuat deret lebih stabil, dan rata-rata bergerak. Ordo yang dicoba (1,1,1), (0,1,1), dan (1,0,1). Musiman 7 hari ditambahkan bila data latih memuat minimal dua musim. Dipakai sebagai pembanding klasik peramalan. Dilatih hanya bila panjang data latih 12–90 hari: file belasan hari masih kebagian, file yang sangat panjang tidak menahan tombol analisis.
 - **XGBoost** (`XGBRegressor`). Konsep: pohon gradient boosting yang belajar dari lag hari sebelumnya. Lag = min(6, max(3, panjang ÷ 4)), 120 pohon, kedalaman 3, learning rate 0,08, objective squared error. Ramalan periode disusun langkah demi langkah: prediksi satu hari dimasukkan kembali sebagai lag hari berikutnya, lalu dijumlahkan. Gerbang panjang datanya sama dengan ARIMA, 12–90 hari latih. Pada deret pendek, pohon mudah mengikuti noise satu per satu SKU, sehingga XGBoost diuji pada total toko.
 """
@@ -1887,7 +3523,7 @@ Hasil ujian total toko, diurutkan dari selisih paling kecil:
 
 {chr(10).join(result_lines)}
 
-Selisih paling kecil pada total toko: **{closest['Algoritma']}** ({format_number(float(closest['Selisih (%)']), 1)}%). Prediksi per produk memakai **Tren robust**, bukan otomatis pemenang selisih pada total toko. Total toko lebih halus daripada satu SKU. Tren robust menjaga level harian saat riwayat belum cukup untuk kemiringan jangka panjang. Safety stock menambah cadangan di kolom terpisah, dan stok disarankan adalah jumlah keduanya.
+Selisih paling kecil pada total toko: **{closest['Algoritma']}** ({format_number(float(closest['Selisih (%)']), 1)}%). Prediksi per produk memakai **Level terkini**, bukan otomatis pemenang selisih pada total toko. Total toko lebih halus daripada satu SKU. Level terkini mengikuti 28 hari terakhir supaya prediksi tidak tertarik ke bulan yang lebih sepi. Croston, SBA, dan TSB dirancang untuk SKU yang jarang laku; pada SKU terlaris metode itu justru lebih rendah dari penjualan bulan ujian daripada Level terkini, jadi tidak dipakai sebagai prediksi utama. Safety stock memakai `z × sigma × √hari`, sama dengan rumus cadangan saat lead time pemasok tidak ada di laporan. Stok disarankan adalah prediksi QTY ditambah cadangan itu.
 """
         )
         st.dataframe(
@@ -1903,12 +3539,28 @@ Selisih paling kecil pada total toko: **{closest['Algoritma']}** ({format_number
             hide_index=True,
         )
 
-with tab_data:
-    st.caption(
-        f"Isi file yang diunggah, {format_number(len(source_raw), 0)} baris. "
-        "Kolom dan nilainya mengikuti lampiran, tidak diubah menjadi tabel prediksi."
-    )
+elif sheet == "Data":
     if source_raw.empty:
-        st.write("Belum ada file yang terbaca.")
+        st.write("Belum ada file yang terbaca. Pilih bulan pada Folder data bila data sudah pernah diimpor.")
     else:
-        st.dataframe(source_raw, height=680, hide_index=True)
+        show_data_menu(source_raw)
+
+elif sheet == "Folder data":
+    show_folder_menu()
+
+elif sheet == "Laporan":
+    show_report_menu(
+        source_raw,
+        orders,
+        combined,
+        stock,
+        history,
+        metric,
+        period,
+        period_text,
+        last_period,
+        window_start=window_start,
+        window_end=window_end,
+        service=int(st.session_state["analysis"].get("service", service)),
+        exclude_return_cancel=exclude_return_cancel,
+    )
