@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif; }
+  .box {
+    overflow: auto;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    scrollbar-color: #334155 #e2e8f0;
+  }
+  .box::-webkit-scrollbar { width: 14px; height: 14px; }
+  .box::-webkit-scrollbar-thumb { background: #334155; border-radius: 8px; }
+  .box::-webkit-scrollbar-track { background: #e2e8f0; }
+  table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 13px; color: #1f2937; }
+  th, td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    white-space: nowrap;
+    text-align: left;
+    background: #ffffff;
+    box-sizing: border-box;
+    vertical-align: top;
+  }
+  thead th { position: sticky; z-index: 4; background: #f1f5f9; font-weight: 700; }
+  thead th.group { text-align: center; background: #e2e8f0; border-left: 1px solid #cbd5e1; }
+  thead th.leaf.first, td.first { border-left: 1px solid #cbd5e1; }
+  thead tr.total th { background: #f8fafc; font-weight: 800; }
+  th.num, td.num { text-align: right; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { background: #e2e8f0; }
+  .arrow { color: #94a3b8; font-size: 10px; margin-left: 4px; }
+  th.sorted .arrow { color: #0f172a; }
+  .pin { position: sticky; }
+  thead .pin { z-index: 6; }
+  thead tr.total .pin { z-index: 7; }
+  tbody .pin { z-index: 2; }
+  .pin-last { box-shadow: 1px 0 0 #e2e8f0, 6px 0 10px rgba(15, 23, 42, 0.06); }
+  td.name, th.name { white-space: normal; }
+  tbody tr:hover td { background: #f8fafc; }
+  tbody tr.picked td { background: #eff6ff; }
+  .main { font-weight: 700; }
+  .move { font-size: 11px; font-weight: 700; margin-top: 2px; }
+  .move.up { color: #1d4ed8; }
+  .move.down { color: #dc2626; }
+  .move.flat { color: #94a3b8; font-weight: 500; }
+  .sub { font-size: 11px; color: #64748b; margin-top: 2px; font-weight: 500; }
+  .kicker { display: block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; margin-bottom: 2px; }
+  input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #ee4d2d; margin: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  const state = { sortId: null, sortDir: 1, selected: "", args: null };
+
+  function post(type, extra) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, extra || {}), "*");
+  }
+
+  function setValue(value) {
+    post("streamlit:setComponentValue", { value: value, dataType: "json" });
+  }
+
+  function esc(text) {
+    return String(text == null ? "" : text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function cellHtml(cell) {
+    if (!cell) return "";
+    let out = `<div class="main">${esc(cell.t)}</div>`;
+    if (cell.d) out += `<div class="move ${esc(cell.dc || "flat")}">${esc(cell.d)}</div>`;
+    if (cell.s) out += `<div class="sub">${esc(cell.s)}</div>`;
+    return out;
+  }
+
+  function sortedRows(args) {
+    const rows = args.rows.slice();
+    if (!state.sortId) return rows;
+    const id = state.sortId;
+    rows.sort((a, b) => {
+      const x = a.cells[id] ? a.cells[id].v : null;
+      const y = b.cells[id] ? b.cells[id].v : null;
+      if (x === y) return (a.cells.rank.v - b.cells.rank.v);
+      if (x === null || x === undefined) return 1;
+      if (y === null || y === undefined) return -1;
+      if (typeof x === "number" && typeof y === "number") return (x - y) * state.sortDir;
+      return String(x).localeCompare(String(y), "id") * state.sortDir;
+    });
+    return rows;
+  }
+
+  function render() {
+    const args = state.args;
+    if (!args) return;
+    const cols = args.columns;
+    const pinned = cols.filter((c) => c.pin);
+    let left = 0;
+    const lefts = {};
+    pinned.forEach((c) => { lefts[c.id] = left; left += c.width; });
+    const lastPin = pinned.length ? pinned[pinned.length - 1].id : null;
+
+    function cls(c, extra) {
+      const parts = [];
+      if (c.kind === "num") parts.push("num");
+      if (c.kind === "name") parts.push("name");
+      if (c.pin) parts.push("pin");
+      if (c.id === lastPin) parts.push("pin-last");
+      if (c.first) parts.push("first");
+      if (extra) parts.push(extra);
+      return parts.join(" ");
+    }
+    function style(c) {
+      let s = "";
+      if (c.width) s += `width:${c.width}px;min-width:${c.width}px;max-width:${c.width}px;`;
+      if (c.pin) s += `left:${lefts[c.id]}px;`;
+      return s;
+    }
+    function arrow(c) {
+      if (!c.sort) return "";
+      const on = state.sortId === c.id;
+      return `<span class="arrow">${on ? (state.sortDir > 0 ? "▲" : "▼") : "↕"}</span>`;
+    }
+
+    let row1 = "";
+    let row2 = "";
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i];
+      if (!c.group) {
+        const sortCls = c.sort ? "sortable" + (state.sortId === c.id ? " sorted" : "") : "";
+        const kicker = c.kicker ? `<span class="kicker">${esc(c.kicker)}</span>` : "";
+        row1 += `<th rowspan="2" data-sort="${c.sort ? c.id : ""}" class="${cls(c, sortCls)} r1" style="${style(c)}">${kicker}${esc(c.label)}${arrow(c)}</th>`;
+        continue;
+      }
+      let span = 1;
+      while (i + span < cols.length && cols[i + span].group === c.group) span++;
+      row1 += `<th colspan="${span}" class="group r1">${esc(c.group)}</th>`;
+      for (let j = i; j < i + span; j++) {
+        const leaf = cols[j];
+        leaf.first = j === i;
+        const sortCls = leaf.sort ? "sortable" + (state.sortId === leaf.id ? " sorted" : "") : "";
+        row2 += `<th data-sort="${leaf.sort ? leaf.id : ""}" class="leaf ${cls(leaf, sortCls)} r2" style="${style(leaf)}">${esc(leaf.label)}${arrow(leaf)}</th>`;
+      }
+      i += span - 1;
+    }
+    let row3 = "";
+    cols.forEach((c) => {
+      if (c.id === "pick") { row3 += `<th class="${cls(c)} r3" style="${style(c)}"></th>`; return; }
+      row3 += `<th class="${cls(c)} r3" style="${style(c)}">${cellHtml(args.total[c.id])}</th>`;
+    });
+
+    const body = sortedRows(args).map((r) => {
+      const picked = r.key === state.selected;
+      const tds = cols.map((c) => {
+        if (c.id === "pick") {
+          return `<td class="${cls(c)}" style="${style(c)}"><input type="checkbox" data-key="${esc(r.key)}" ${picked ? "checked" : ""} /></td>`;
+        }
+        return `<td class="${cls(c)}" style="${style(c)}">${cellHtml(r.cells[c.id])}</td>`;
+      }).join("");
+      return `<tr class="${picked ? "picked" : ""}">${tds}</tr>`;
+    }).join("");
+
+    const root = document.getElementById("root");
+    const box = root.querySelector(".box");
+    const keepTop = box ? box.scrollTop : 0;
+    const keepLeft = box ? box.scrollLeft : 0;
+    root.innerHTML =
+      `<div class="box" style="max-height:${args.height}px"><table><thead>` +
+      `<tr class="h1">${row1}</tr><tr class="h2">${row2}</tr><tr class="total">${row3}</tr>` +
+      `</thead><tbody>${body}</tbody></table></div>`;
+
+    const table = root.querySelector("table");
+    const h1 = table.querySelector("tr.h1").getBoundingClientRect().height;
+    const h2 = table.querySelector("tr.h2").getBoundingClientRect().height;
+    table.querySelectorAll("th.r1").forEach((th) => { th.style.top = "0px"; });
+    table.querySelectorAll("th.r2").forEach((th) => { th.style.top = h1 + "px"; });
+    table.querySelectorAll("th.r3").forEach((th) => { th.style.top = h1 + h2 + "px"; });
+
+    root.querySelectorAll("th[data-sort]").forEach((th) => {
+      const id = th.getAttribute("data-sort");
+      if (!id) return;
+      th.addEventListener("click", () => {
+        if (state.sortId === id) state.sortDir = -state.sortDir;
+        else { state.sortId = id; state.sortDir = args.columns.find((c) => c.id === id).kind === "num" && id !== "rank" ? -1 : 1; }
+        render();
+      });
+    });
+    root.querySelectorAll("input[type=checkbox]").forEach((box) => {
+      box.addEventListener("change", () => {
+        const key = box.getAttribute("data-key");
+        state.selected = box.checked ? key : "";
+        render();
+        setValue(state.selected);
+      });
+    });
+
+    const newBox = root.querySelector(".box");
+    newBox.scrollTop = keepTop;
+    newBox.scrollLeft = keepLeft;
+    post("streamlit:setFrameHeight", { height: Math.ceil(newBox.getBoundingClientRect().height) + 4 });
+  }
+
+  window.addEventListener("message", (event) => {
+    const data = event.data || {};
+    if (data.type !== "streamlit:render") return;
+    const args = data.args || {};
+    const first = state.args === null;
+    state.args = args;
+    if (first) state.selected = args.selected || "";
+    if (first && args.sort) state.sortId = args.sort;
+    render();
+  });
+
+  post("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

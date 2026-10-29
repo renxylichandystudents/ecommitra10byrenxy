@@ -1,0 +1,17 @@
+---
+description: Konteks pengguna dan tujuan ganda aplikasi tesis Mitra10
+alwaysApply: true
+---
+
+# Mitra10 dan tesis
+
+Pengguna adalah manajer e-commerce dan digital marketing di Mitra10, supermarket bahan bangunan, sekaligus mahasiswa Magister Teknik Informatika. Aplikasi ini dipakai untuk dua hal sekaligus:
+
+- Tesis: metode peramalan yang bisa dipertanggungjawabkan (perbandingan model, hold-out, MAPE/RMSE, pilihan model per SKU).
+- Kerja harian: keputusan stok, iklan Shopee, kejar bayar, retur, dan batal pada katalog bahan bangunan.
+
+Domainnya ritel bahan bangunan di Shopee: permintaan sering mengikuti proyek renovasi, SKU berat atau bulky, harga setelah diskon, dan pembatalan sebelum bayar. Jangan mengarahkan analisa ke produk di luar konteks itu.
+
+Bahasa antarmuka tetap Indonesia dan bisa dibaca manajer, bukan hanya pembaca akademik. Saat menjelaskan hasil, hubungkan angka ke keputusan (beli stok, budget iklan, listing, chat bayar) dan sebut bukti modelnya bila relevan untuk tesis.
+
+Jangan mengubah rumus prediksi, safety stock, atau data yang sudah dikunci kecuali pengguna meminta perubahan itu secara eksplisit.

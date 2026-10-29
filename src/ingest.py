@@ -266,6 +266,69 @@ def map_columns(df: pd.DataFrame) -> dict[str, str]:
     return mapping
 
 
+LINE_PROMO_COLUMNS: dict[str, tuple[str, ...]] = {
+    "list_price": ("harga awal",),
+    "net_price": ("harga setelah diskon",),
+    "seller_discount": ("diskon dari penjual",),
+    "shopee_discount": ("diskon dari shopee",),
+}
+
+ORDER_PROMO_COLUMNS: dict[str, tuple[str, ...]] = {
+    "seller_voucher": ("voucher ditanggung penjual",),
+    "coin_cashback": ("cashback koin",),
+    "shopee_voucher": ("voucher ditanggung shopee",),
+    "coin_deduction": ("potongan koin shopee",),
+    "card_discount": ("diskon kartu kredit",),
+    "buyer_shipping": ("ongkos kirim dibayar oleh pembeli", "ongkos kirim dibayar pembeli"),
+    "shipping_rebate": ("estimasi potongan biaya pengiriman",),
+}
+
+ORDER_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
+    "shipping_option": ("opsi pengiriman",),
+    "payment_method": ("metode pembayaran",),
+}
+
+
+def _exact_column(table: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
+    """Hanya nama kolom yang persis sama, supaya tidak tertukar dengan kolom harga atau qty."""
+    normalized = {_normalize_header(col): col for col in table.columns}
+    for alias in aliases:
+        if alias in normalized:
+            return normalized[alias]
+    return None
+
+
+def _attach_promo_columns(frame: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
+    """Harga, diskon, voucher, koin, ongkir, opsi kirim, dan metode bayar.
+
+    Kolom baris dibaca apa adanya. Kolom pesanan (voucher, koin, kartu kredit, ongkir)
+    diulang Shopee di setiap baris pesanan, jadi dibagi ke baris menurut porsi subtotal.
+    QTY dan sales tidak disentuh.
+    """
+    for name, aliases in LINE_PROMO_COLUMNS.items():
+        column = _exact_column(table, aliases)
+        frame[name] = (
+            _parse_number(table.loc[frame.index, column]).fillna(0).clip(lower=0) if column else float("nan")
+        )
+    for name, aliases in ORDER_TEXT_COLUMNS.items():
+        column = _exact_column(table, aliases)
+        frame[name] = clean_text_series(table.loc[frame.index, column]) if column else ""
+    base = frame["net_price"].where(frame["net_price"] > 0, frame["list_price"]).fillna(0) * frame["gross_qty"]
+    if "order_id" in frame.columns and frame["order_id"].astype(str).str.strip().ne("").any():
+        order_total = base.groupby(frame["order_id"]).transform("sum")
+        lines = frame.groupby("order_id")["order_id"].transform("size").astype(float)
+        share = (base / order_total.where(order_total > 0)).fillna(1.0 / lines)
+    else:
+        share = pd.Series(1.0, index=frame.index)
+    for name, aliases in ORDER_PROMO_COLUMNS.items():
+        column = _exact_column(table, aliases)
+        if column:
+            frame[name] = _parse_number(table.loc[frame.index, column]).fillna(0).clip(lower=0) * share
+        else:
+            frame[name] = float("nan")
+    return frame
+
+
 def _read_csv_bytes(data: bytes) -> pd.DataFrame:
     encodings = ("utf-8-sig", "utf-8", "utf-16", "cp1252", "latin-1")
     last_error: Exception | None = None
@@ -361,6 +424,7 @@ def clean_order_frame(raw: pd.DataFrame) -> pd.DataFrame:
     else:
         frame["order_amount"] = frame["sales"]
 
+    frame = _attach_promo_columns(frame, table)
     frame = frame.dropna(subset=["order_time", "product_name", "qty", "sales"])
     frame = frame[(frame["qty"] > 0) | (frame["gross_qty"] > 0)]
     frame = frame[frame["gross_sales"].fillna(frame["sales"]).fillna(0) >= 0]

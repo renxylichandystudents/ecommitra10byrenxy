@@ -1,6 +1,8 @@
-# Prediksi Stok Shopee
+# Mitra10 · Keputusan Stok & Penjualan Shopee
 
-Aplikasi untuk menganalisis laporan transaksi Shopee dan memprediksi **hingga 50 item terlaris** serta **stok yang harus disiapkan** pada periode berikutnya.
+Aplikasi keputusan untuk toko bahan bangunan Mitra10 di Shopee. Dipakai sehari-hari oleh manajer e-commerce dan digital marketing untuk stok, iklan, retur, dan batal, sekaligus sebagai artefak tesis Magister Teknik Informatika.
+
+Aplikasi menganalisis laporan transaksi Shopee dan memprediksi **hingga 50 item terlaris** serta **stok yang harus disiapkan** pada periode berikutnya.
 
 User memilih:
 
@@ -48,6 +50,13 @@ Produk tanpa variasi dikunci oleh Nomor Referensi SKU. Produk dengan varian memi
 
 Laporan Excel Seller Center (`Order.all....xlsx`) dikenali dari isi filenya, bukan hanya dari ekstensi. Harga berformat Indonesia seperti `1.226.842` atau `49.000` dibaca sebagai omzet satuan. Status “Pesanan diterima … hingga tanggal” digabung menjadi **Pesanan Diterima** supaya bisa dipilih sebagai satu status.
 
-## Catatan skripsi
+## Catatan tesis
 
-Hasil “algoritma terbaik” bersifat empiris: lihat tab **Evaluasi model** setelah file dianalisis. Laporkan MAPE/RMSE rata-rata per model, lalu jelaskan model mana yang paling sering menang pada dataset toko Anda.
+Konteks penelitian adalah pengambilan keputusan e-commerce Mitra10, supermarket bahan bangunan, bukan toko umum. Hasil “algoritma terbaik” bersifat empiris: lihat menu **Evaluasi model** setelah file dianalisis. Laporkan MAPE/RMSE rata-rata per model, lalu jelaskan model mana yang paling sering menang pada dataset toko.
+
+Pemisahan pemakaian:
+
+- Menu Ringkasan, Prediksi & stok, Data, dan Laporan untuk keputusan harian dan rapat.
+- Menu Evaluasi model untuk bab metode dan hasil: perbandingan model pada hold-out, bukan untuk purchase order.
+
+Bagian **Uji model pada salinan data** menambah bukti terpisah. Permintaan harian diuji dengan regresi linear, K-NN, decision tree, random forest, dan gradient boosting, plus baseline naive dan moving average. Metriknya RMSE, MAE, dan R², beserta latensi dan memori. Risiko pesanan batal diuji dengan regresi logistik, naive Bayes, dan model pohon yang sama. Metriknya accuracy, precision, recall, F1, dan ROC-AUC pada kelas batal. Noise dipotong dengan IQR, Z-score, atau Isolation Forest hanya pada salinan uji. Pemenang uji tidak mengganti Level terkini pada prediksi stok.
