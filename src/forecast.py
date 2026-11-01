@@ -354,30 +354,63 @@ def forecast_revenue(
     next_label: str | None = None,
 ) -> pd.DataFrame:
     """Omzet periode depan = prediksi qty × harga jual rata-rata SKU itu."""
-    hist_map = {key: grp for key, grp in history.groupby("item_key")}
     horizon = max(int(steps), 1)
     label = next_label or (qty_fc["next_period"].iloc[0] if not qty_fc.empty else "")
+    daily_prices = _daily_unit_prices(history) if period == "hari" else None
+    hist_map = None if daily_prices is not None else {key: grp for key, grp in history.groupby("item_key")}
+    points = qty_fc["history_points"] if "history_points" in qty_fc.columns else pd.Series(0, index=qty_fc.index)
     records = []
-    for _, item in qty_fc.iterrows():
-        price, method = _expected_unit_price(hist_map.get(item["item_key"]), period, horizon)
-        pred_qty = float(item["forecast"])
+    for key, item_label, forecast, history_points in zip(qty_fc["item_key"], qty_fc["item_label"], qty_fc["forecast"], points):
+        if daily_prices is not None:
+            price = daily_prices.get(key, 0.0)
+            method = "Harga rata-rata" if price > 0 else "Tanpa harga"
+        else:
+            price, method = _expected_unit_price(hist_map.get(key), period, horizon)
+        pred_qty = float(forecast)
         pred_sales = float(max(int(np.floor(pred_qty * price + 0.5)), 0))
         records.append(
             {
-                "item_key": item["item_key"],
-                "item_label": item["item_label"],
+                "item_key": key,
+                "item_label": item_label,
                 "metric": "sales",
                 "best_model": method,
                 "forecast": pred_sales,
                 "mae": 0.0,
                 "rmse": 0.0,
                 "mape": 0.0,
-                "history_points": int(item.get("history_points", 0)),
+                "history_points": int(history_points or 0),
                 "next_period": label,
                 "horizon_steps": horizon,
             }
         )
     return pd.DataFrame.from_records(records)
+
+
+def _daily_unit_prices(history: pd.DataFrame) -> dict:
+    """Sama dengan _expected_unit_price untuk periode hari, dihitung sekaligus untuk semua SKU."""
+    if history is None or history.empty:
+        return {}
+    stamps = pd.to_datetime(history["period_start"], errors="coerce")
+    if getattr(stamps.dt, "tz", None) is not None:
+        stamps = stamps.dt.tz_localize(None)
+    work = pd.DataFrame(
+        {
+            "item_key": history["item_key"],
+            "day": stamps.dt.normalize(),
+            "qty": pd.to_numeric(history["qty"], errors="coerce").fillna(0.0).astype(float),
+            "sales": pd.to_numeric(history["sales"], errors="coerce").fillna(0.0).astype(float),
+        }
+    ).dropna(subset=["day"])
+    days = work.groupby(["item_key", "day"], sort=True)[["qty", "sales"]].sum().reset_index()
+    sold = days.loc[days["qty"] > 0]
+    if sold.empty:
+        return {}
+    recent = sold.groupby("item_key", sort=False).tail(7).groupby("item_key")[["qty", "sales"]].sum()
+    last = sold.groupby("item_key", sort=False).tail(1).set_index("item_key")
+    recent_price = recent["sales"] / recent["qty"]
+    latest_price = (last["sales"] / last["qty"]).reindex(recent_price.index)
+    price = recent_price.where(recent_price > 0, latest_price)
+    return {key: float(value) for key, value in price.items()}
 
 
 def _report_window_days(history: pd.DataFrame) -> int:
@@ -875,6 +908,4 @@ def forecast_items(
                 "error_sigma": float(error_sigma.get(row.item_key, 0.0)),
             }
         )
-    result = pd.DataFrame.from_records(records)
-    result.attrs["details"] = {row.item_key: row for row in rows}
-    return result
+    return pd.DataFrame.from_records(records)

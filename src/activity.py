@@ -491,18 +491,15 @@ def unpaid_buyer_table(
     frame["buyer_key"] = frame["buyer"].str.casefold()
     blank_buyer = frame["buyer_key"].eq("")
     frame.loc[blank_buyer, "buyer_key"] = "order:" + frame.loc[blank_buyer, "order_id"]
+    keys = [frame["buyer_key"], frame["item_key"]]
+    paid_any = (~cancelled_status_mask(frame["status"]) & in_period).groupby(keys).transform("any")
+    unpaid_any = frame["unpaid"].groupby(keys).transform("any")
+    frame["_group"] = frame.groupby(keys, sort=False).ngroup()
+    candidates = frame.loc[unpaid_any & ~paid_any & frame["unpaid"] & in_period]
     rows = []
-    for (_buyer_key, _item_key), group in frame.groupby(["buyer_key", "item_key"], sort=False):
-        if not bool(group["unpaid"].any()):
-            continue
-        paid = ~cancelled_status_mask(group["status"]) & in_period.reindex(group.index).fillna(False)
-        if bool(paid.any()):
-            continue
-        missed = group.loc[group["unpaid"] & in_period.reindex(group.index).fillna(False)]
-        if missed.empty:
-            continue
+    if not candidates.empty:
         orders = (
-            missed.groupby("order_id", as_index=False)
+            candidates.groupby(["_group", "buyer_key", "item_key", "order_id"], as_index=False, sort=True)
             .agg(
                 order_time=("order_time", "max"),
                 sku=("sku", "last"),
@@ -512,14 +509,14 @@ def unpaid_buyer_table(
                 line_sales=("line_sales", "sum"),
                 buyer=("buyer", "last"),
             )
-            .sort_values("order_time", kind="mergesort")
+            .sort_values(["_group", "order_time"], kind="mergesort")
         )
         for record in orders.itertuples(index=False):
             product = str(record.product_name).strip() or "Tanpa nama"
             variation = str(record.variation).strip() or "Tanpa variasi"
             rows.append(
                 {
-                    "_buyer": str(_buyer_key),
+                    "_buyer": str(record.buyer_key),
                     "_name": str(record.buyer).strip() or "Tanpa akun",
                     "_time": pd.Timestamp(record.order_time),
                     "Tanggal pembelian": pd.Timestamp(record.order_time).strftime("%d-%m-%Y"),

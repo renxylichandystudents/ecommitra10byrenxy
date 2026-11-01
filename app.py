@@ -3105,8 +3105,24 @@ def show_qty_forecast_board(
         else {}
     )
     work = view.sort_values(["peringkat", "item_key"], kind="mergesort").reset_index(drop=True)
-    briefs = {}
-    for _, row in work.iterrows():
+    brief_key = "|".join(
+        str(part)
+        for part in (
+            int(pd.util.hash_pandas_object(work.astype(str), index=False).sum()),
+            len(orders) if isinstance(orders, pd.DataFrame) else 0,
+            len(history) if isinstance(history, pd.DataFrame) else 0,
+            resume_label,
+            period_text,
+            horizon_days,
+            exclude_cancel,
+            as_of,
+            yesterday_pred_map is None,
+            month_ago_pred_map is None,
+        )
+    )
+    brief_cache = st.session_state.get("_qty-briefs")
+    briefs = brief_cache[1] if isinstance(brief_cache, tuple) and brief_cache[0] == brief_key else {}
+    for _, row in work.iterrows() if not briefs else ():
         key = str(row["item_key"])
         today_qty = (
             int(round(float(row["pred_qty_hari"])))
@@ -3129,6 +3145,7 @@ def show_qty_forecast_board(
             month_ago_pred=None if month_ago_pred_map is None else month_ago_pred_map.get(key, 0),
             data_end=data_end,
         )
+    st.session_state["_qty-briefs"] = (brief_key, briefs)
     counts = {"naik": 0, "turun": 0, "tetap": 0}
     for brief in briefs.values():
         counts[brief["direction"]] += 1
