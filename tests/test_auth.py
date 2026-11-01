@@ -161,7 +161,9 @@ class RepositoryTests(unittest.TestCase):
 
 class DatabaseUrlTests(unittest.TestCase):
     def test_postgres_url_normalised_and_sqlite_default(self):
-        self.assertEqual(database_url({"DATABASE_URL": "postgres://u:p@h/db"}), "postgresql://u:p@h/db")
+        self.assertEqual(database_url({"DATABASE_URL": "postgres://u:p@h/db"}), "postgresql+psycopg2://u:p@h/db")
+        self.assertEqual(database_url({"DATABASE_URL": "postgresql+psycopg://u:p@h/db"}), "postgresql+psycopg2://u:p@h/db")
+        self.assertEqual(database_url({"DATABASE_URL": " postgresql://u:p@h/db?sslmode=require "}), "postgresql+psycopg2://u:p@h/db?sslmode=require")
         self.assertTrue(database_url({}).startswith("sqlite:///"))
 
 

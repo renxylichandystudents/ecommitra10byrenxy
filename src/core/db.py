@@ -23,8 +23,11 @@ def database_url(secrets: object | None = None) -> str:
         except Exception:
             url = ""
     url = url or os.getenv("DATABASE_URL", "")
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://") :]
+    url = url.strip()
+    scheme, sep, rest = url.partition("://")
+    if sep and scheme.split("+")[0] in {"postgres", "postgresql"}:
+        # Driver yang terpasang hanya psycopg2-binary (lihat requirements.txt).
+        url = "postgresql+psycopg2://" + rest
     if not url:
         DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         url = f"sqlite:///{DEFAULT_DB_PATH}"
