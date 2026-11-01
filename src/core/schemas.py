@@ -27,7 +27,7 @@ class SourceSpec:
 
 def normalize_header(value: object) -> str:
     text = str(value).strip().lower().replace("_", " ")
-    text = text.replace("/", " / ")
+    text = text.replace("/", " / ").replace(":", " : ")
     return " ".join(text.split())
 
 
@@ -91,7 +91,7 @@ PERFORMANCE_ALIASES = {
 }
 
 AD_PRODUCT_ALIASES = {
-    "product_name": _alias("Nama Produk", "Product Name"),
+    "product_name": _alias("Nama Produk", "Product Name", "Nama Iklan/Produk", "Nama Iklan"),
     "product_code": _alias("Kode Produk", "Product Code", "Kode produk"),
     "cart_adds": _alias("Tambah ke Keranjang"),
     "views": _alias("Dilihat", "Impressions"),
@@ -103,14 +103,22 @@ AD_PRODUCT_ALIASES = {
     "direct_sold": _alias("Terjual Langsung"),
     "ad_sales": _alias("Omzet Penjualan", "Sales from Ads"),
     "cost": _alias("Biaya", "Cost"),
-    "roas": _alias("Efektivitas Iklan", "ROAS"),
-    "acos": _alias("Persentase Biaya terhadap Penjualan", "ACOS"),
+    "roas": _alias("Efektivitas Iklan", "Efektifitas Iklan", "ROAS"),
+    "acos": _alias(
+        "Persentase Biaya terhadap Penjualan",
+        "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)",
+        "ACOS",
+    ),
     "voucher_amount": _alias("Voucher Amount"),
     "voucher_sales": _alias("Voucher Sales"),
     "period": _alias("Periode Laporan", "Periode", "Tanggal"),
 }
 
 AD_SEARCH_ALIASES = {
+    "product_name": _alias("Nama Iklan", "Nama Produk", "Product Name"),
+    "product_code": _alias("Kode Produk", "Product Code"),
+    "keyword": _alias("Kata Pencarian/Penempatan", "Kata Pencarian", "Keyword"),
+    "placement": _alias("Penempatan Iklan", "Placement"),
     "views": _alias("Dilihat", "Impressions"),
     "clicks": _alias("Jumlah Klik", "Klik", "Clicks"),
     "ctr": _alias("Persentase Klik", "CTR"),
@@ -118,7 +126,7 @@ AD_SEARCH_ALIASES = {
     "products_sold": _alias("Produk Terjual"),
     "ad_sales": _alias("Omzet Penjualan", "Sales from Ads"),
     "cost": _alias("Biaya", "Cost"),
-    "roas": _alias("Efektivitas Iklan", "ROAS"),
+    "roas": _alias("Efektivitas Iklan", "Efektifitas Iklan", "ROAS"),
     "period": _alias("Periode Laporan", "Periode", "Tanggal"),
 }
 
@@ -127,20 +135,24 @@ STOCK_ALIASES = {
     "product_code": _alias("Kode Produk", "Product Code", "Kode Variasi", "Variation Code"),
     "variation_code": _alias("Kode Variasi", "Variation Code"),
     "variation": _alias("Nama Variasi", "Variation Name"),
-    "sku": _alias("SKU Induk", "SKU", "Nomor Referensi SKU", "Seller SKU"),
+    "sku": _alias("SKU", "Nomor Referensi SKU", "Seller SKU", "SKU Induk"),
     "price": _alias("Harga", "Price"),
     "stock_dc_cikupa": _alias("Stok: DC Cikupa", "Stok DC Cikupa", "DC Cikupa"),
 }
 
 DESCRIPTION_ALIASES = {
+    "product_code": _alias("Kode Produk", "Product Code"),
     "sku": _alias("SKU", "Nomor Referensi SKU", "Seller SKU", "SKU Induk"),
     "product_name": _alias("Nama Produk", "Product Name", "Judul Produk", "Nama Barang"),
     "description": _alias("Deskripsi", "Deskripsi Produk", "Product Description", "Description"),
 }
 
 COMPETITOR_ALIASES = {
+    "rank": _alias("Ranking", "Peringkat"),
+    "rank_change": _alias("Change of Rank", "Perubahan Peringkat"),
+    "own_shop": _alias("Toko sendiri"),
     "shop_name": _alias("Nama Toko", "Toko", "Shop Name", "Seller"),
-    "product_name": _alias("Nama Produk", "Product Name", "Judul Produk"),
+    "product_name": _alias("Nama Produk", "Product Name", "Products Name", "Judul Produk"),
     "description": _alias("Deskripsi", "Deskripsi Produk", "Description"),
     "price": _alias("Harga", "Price"),
     "sold": _alias("Terjual", "Sold", "Jumlah Terjual"),
@@ -172,7 +184,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data iklan produk otomatis",
         required=("product_code",),
         aliases=AD_PRODUCT_ALIASES,
-        dedup_keys=("period", "product_code"),
+        dedup_keys=("period", "product_code", "product_name"),
         date_fields=("period",),
         utility="Fitur iklan otomatis: dilihat, klik, konversi, biaya, ROAS, dan omzet iklan.",
     ),
@@ -181,7 +193,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data iklan produk grup",
         required=("product_code",),
         aliases=AD_PRODUCT_ALIASES,
-        dedup_keys=("period", "product_code"),
+        dedup_keys=("period", "product_code", "product_name"),
         date_fields=("period",),
         utility="Dasar rekomendasi iklan grup dan bundling produk.",
     ),
@@ -190,7 +202,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data keseluruhan iklan",
         required=("product_code",),
         aliases=AD_PRODUCT_ALIASES,
-        dedup_keys=("period", "product_code"),
+        dedup_keys=("period", "product_code", "product_name"),
         date_fields=("period",),
         utility="Kontrol total biaya iklan dan efektivitas iklan toko.",
     ),
@@ -199,7 +211,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data iklan pencarian",
         required=("views", "clicks"),
         aliases=AD_SEARCH_ALIASES,
-        dedup_keys=("period",),
+        dedup_keys=("period", "product_name", "product_code", "keyword", "placement"),
         date_fields=("period",),
         utility="Fitur iklan pencarian dan pola permintaan dari exposure keyword.",
     ),
@@ -217,7 +229,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data produk deskripsi",
         required=("product_name", "description"),
         aliases=DESCRIPTION_ALIASES,
-        dedup_keys=("sku",),
+        dedup_keys=("product_code", "sku"),
         sku_fields=("sku",),
         utility="SEO, rekomendasi nama/deskripsi, dan copywriting produk.",
     ),
@@ -280,11 +292,46 @@ def validation_report(frame: pd.DataFrame | None, spec: SourceSpec) -> dict[str,
     }
 
 
+CODE_FIELDS = ("order_id", "sku", "product_code", "variation_code")
+
+
+def _blank(series: pd.Series) -> pd.Series:
+    return series.isna() | series.astype(str).str.strip().isin({"", "nan", "None", "-"})
+
+
+def clean_code(series: pd.Series) -> pd.Series:
+    """Kode/SKU sebagai teks tanpa akhiran .0 dari Excel."""
+    def one(value: object) -> object:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return None
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        text = str(value).strip()
+        if text in {"", "nan", "None"}:
+            return None
+        if text.endswith(".0") and text[:-2].isdigit():
+            text = text[:-2]
+        return (text.lstrip("0") or "0") if text.isdigit() else text
+
+    return series.map(one).astype(object)
+
+
 def canonicalize_frame(frame: pd.DataFrame, spec: SourceSpec) -> tuple[pd.DataFrame, dict[str, str]]:
     mapping = find_columns(frame.columns, spec)
     out = frame.copy()
+    normalized = {normalize_header(column): str(column) for column in out.columns}
     for canonical, original in mapping.items():
-        if canonical not in out.columns:
-            out[canonical] = out[original]
+        if canonical in out.columns:
+            continue
+        values = out[original].copy()
+        for alias in spec.aliases.get(canonical, ()):
+            other = normalized.get(alias)
+            if other is None or other == original:
+                continue
+            gaps = _blank(values)
+            if not gaps.any():
+                break
+            values = values.where(~gaps, out[other])
+        out[canonical] = clean_code(values) if canonical in CODE_FIELDS else values
     return out, mapping
 

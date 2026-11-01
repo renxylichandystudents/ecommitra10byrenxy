@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import csv
 import json
+import re
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import BinaryIO
 
 import pandas as pd
 
-from src.core.schemas import SOURCE_SPECS, SourceSpec, canonicalize_frame, validation_report
+from src.core.schemas import (
+    SOURCE_SPECS,
+    SourceSpec,
+    canonicalize_frame,
+    find_columns,
+    normalize_header,
+    validation_report,
+)
 
 
 DEFAULT_DATA_DIR = Path.home() / ".prediksi_shopee"
@@ -33,15 +43,67 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _read_csv_bytes(data: bytes) -> pd.DataFrame:
-    encodings = ("utf-8-sig", "utf-8", "utf-16", "cp1252", "latin-1")
-    last_error: Exception | None = None
-    for encoding in encodings:
+HEADER_SCAN_ROWS = 30
+IDENTITY_FIELDS = ("order_id", "sku", "product_code", "product_name", "shop_name", "date", "views")
+
+
+def _decode_text(data: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-16", "cp1252"):
         try:
-            return pd.read_csv(BytesIO(data), encoding=encoding)
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-    raise ValueError(f"CSV tidak bisa dibaca. Error terakhir: {last_error}")
+            text = data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if "\x00" not in text:
+            return text
+    return data.decode("latin-1")
+
+
+def _header_score(values: list[object], spec: SourceSpec | None) -> int:
+    cells = [str(value).strip() for value in values if str(value).strip() not in {"", "nan", "None"}]
+    if spec is None:
+        return len(cells)
+    return len(find_columns(cells, spec))
+
+
+def _pick_header(rows: list[list[object]], spec: SourceSpec | None) -> int:
+    """Baris header = baris dengan kolom sumber paling banyak dikenali (preamble Shopee dilewati)."""
+    best_index, best_score = 0, -1
+    for index, row in enumerate(rows[:HEADER_SCAN_ROWS]):
+        score = _header_score(row, spec)
+        if score > best_score:
+            best_index, best_score = index, score
+    if spec is not None and best_score <= 0:
+        return _pick_header(rows, None)
+    return best_index
+
+
+def _report_period(preamble: list[list[str]]) -> str | None:
+    for row in preamble:
+        if len(row) >= 2 and normalize_header(row[0]) in {"periode", "periode laporan"} and str(row[1]).strip():
+            return str(row[1]).strip()
+    return None
+
+
+def _period_start(text: str) -> str:
+    first = str(text).split(" - ")[0].strip()
+    parsed = pd.to_datetime(first, dayfirst=True, errors="coerce")
+    return parsed.date().isoformat() if pd.notna(parsed) else text
+
+
+def _read_csv_bytes(data: bytes, spec: SourceSpec | None = None) -> pd.DataFrame:
+    text = _decode_text(data)
+    lines = text.splitlines()
+    rows = list(csv.reader(lines[:HEADER_SCAN_ROWS]))
+    header = _pick_header(rows, spec)
+    try:
+        frame = pd.read_csv(StringIO("\n".join(lines[header:])), dtype=str, keep_default_na=True)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"CSV tidak bisa dibaca. Error terakhir: {exc}") from exc
+    period = _report_period(rows[:header])
+    if period and spec is not None and "period" in spec.aliases and "period" not in find_columns(frame.columns, spec):
+        frame.insert(0, "Periode Laporan", _period_start(period))
+        frame.insert(1, "Periode laporan (teks)", period)
+    return frame
 
 
 def _looks_like_excel(data: bytes, filename: str) -> bool:
@@ -49,20 +111,131 @@ def _looks_like_excel(data: bytes, filename: str) -> bool:
     return lower.endswith((".xlsx", ".xlsm", ".xls")) or data.startswith(b"PK\x03\x04")
 
 
-def read_upload_file(source: BinaryIO | bytes, filename: str) -> pd.DataFrame:
+_PANE_VALUE = re.compile(rb'((?:activePane|pane)=")(top|bottom)_(left|right)(")')
+
+
+def _fix_excel_panes(data: bytes) -> bytes:
+    """Ekspor Shopee menulis activePane="bottom_left"; openpyxl hanya menerima bottomLeft."""
+    if not data.startswith(b"PK\x03\x04"):
+        return data
+    try:
+        source = zipfile.ZipFile(BytesIO(data))
+    except zipfile.BadZipFile:
+        return data
+    out = BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            content = source.read(info.filename)
+            if info.filename.startswith("xl/worksheets/") and info.filename.endswith(".xml"):
+                content = _PANE_VALUE.sub(lambda m: m.group(1) + m.group(2) + m.group(3).capitalize() + m.group(4), content)
+            target.writestr(info, content)
+    return out.getvalue()
+
+
+def _unique_columns(values: list[object]) -> list[str]:
+    seen: dict[str, int] = {}
+    names: list[str] = []
+    for index, value in enumerate(values):
+        name = str(value).strip()
+        if name in {"", "nan", "None"}:
+            name = f"Kolom {index + 1}"
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        names.append(name if count == 0 else f"{name} ({count + 1})")
+    return names
+
+
+def _read_excel_bytes(data: bytes, spec: SourceSpec | None = None) -> pd.DataFrame:
+    sheets = pd.read_excel(BytesIO(_fix_excel_panes(data)), sheet_name=None, header=None, dtype=object)
+    best: pd.DataFrame | None = None
+    best_score = -1
+    for raw in sheets.values():
+        raw = raw.dropna(how="all")
+        if raw.empty:
+            continue
+        rows = raw.head(HEADER_SCAN_ROWS).values.tolist()
+        header = _pick_header(rows, spec)
+        score = _header_score(rows[header], spec)
+        if score > best_score:
+            frame = raw.iloc[header + 1 :].copy()
+            frame.columns = _unique_columns(rows[header])
+            best, best_score = frame.reset_index(drop=True), score
+    return best if best is not None else pd.DataFrame()
+
+
+def _drop_template_rows(frame: pd.DataFrame, spec: SourceSpec | None) -> pd.DataFrame:
+    """Buang baris petunjuk template ("Wajib", "Masukkan stok ...") yang tidak punya identitas data."""
+    if spec is None or frame.empty:
+        return frame
+    mapping = find_columns(frame.columns, spec)
+    identity = [mapping[field] for field in IDENTITY_FIELDS if field in mapping]
+    if not identity:
+        return frame
+    filled = frame[identity].apply(lambda col: col.notna() & col.astype(str).str.strip().ne("")).any(axis=1)
+    return frame.loc[filled].reset_index(drop=True)
+
+
+def _collapse_ranked_listing(frame: pd.DataFrame) -> pd.DataFrame:
+    """Ekspor peringkat kompetitor Shopee: satu produk = 2 baris (peringkat + toko, lalu nama produk)."""
+    columns = {normalize_header(column): column for column in frame.columns}
+    rank_col, change_col = columns.get("ranking"), columns.get("change of rank")
+    name_col, shop_col = columns.get("products name"), columns.get("shop name")
+    if not (rank_col and name_col and shop_col):
+        return frame
+    records: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    block, own_section, position = 0, False, 0
+    for _, row in frame.iterrows():
+        rank = row[rank_col]
+        rank_text = "" if pd.isna(rank) else str(rank).strip()
+        if normalize_header(rank_text) == "ranking":
+            block += 1
+            own_section, position = False, 0
+            continue
+        if rank_text and not rank_text.replace(".0", "").isdigit():
+            own_section = True
+            continue
+        shop = row[shop_col]
+        name = row[name_col]
+        change = row[change_col] if change_col else None
+        if pd.notna(shop) and str(shop).strip():
+            if not own_section:
+                position += 1
+            current = {
+                "Daftar": block or 1,
+                "Ranking": rank_text.replace(".0", "") or (None if own_section else str(position)),
+                "Change of Rank": None if change is None or pd.isna(change) else str(change).strip(),
+                "Shop Name": str(shop).strip(),
+                "Products Name": None,
+                "Toko sendiri": own_section or str(change).strip().lower() == "my shop",
+            }
+            records.append(current)
+        if pd.notna(name) and str(name).strip() and current is not None and not current["Products Name"]:
+            current["Products Name"] = str(name).strip()
+    out = pd.DataFrame(records)
+    if out.empty:
+        return frame
+    return out.dropna(subset=["Products Name"]).reset_index(drop=True)
+
+
+def read_upload_file(source: BinaryIO | bytes, filename: str, spec: SourceSpec | None = None) -> pd.DataFrame:
     data = source if isinstance(source, bytes) else source.read()
     if isinstance(data, str):
         data = data.encode("utf-8")
     if _looks_like_excel(data, filename):
-        return pd.read_excel(BytesIO(data))
-    return _read_csv_bytes(data)
+        frame = _read_excel_bytes(data, spec)
+    else:
+        frame = _read_csv_bytes(data, spec)
+    if spec is not None and spec.key == "competitors":
+        frame = _collapse_ranked_listing(frame)
+    return _drop_template_rows(frame, spec)
 
 
-def read_many_uploads(files: list[BinaryIO]) -> pd.DataFrame:
+def read_many_uploads(files: list[BinaryIO], spec: SourceSpec | None = None) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     for uploaded in files:
         name = str(getattr(uploaded, "name", "Lampiran"))
-        frame = read_upload_file(uploaded, name)
+        frame = read_upload_file(uploaded, name, spec)
         frame.insert(0, "Nama file", name)
         frames.append(frame)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()

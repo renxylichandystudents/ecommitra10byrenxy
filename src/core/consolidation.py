@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from src.core.inventory import snapshot_time
 from src.core.schemas import SOURCE_SPECS, find_columns, validation_report
 from src.core.storage import LocalDataStore
 
@@ -113,7 +114,7 @@ def stock_zero_streaks(store: LocalDataStore) -> pd.DataFrame:
     if stock.empty or not {"sku", "stock_dc_cikupa", "_submitted_at"} <= set(stock.columns):
         return pd.DataFrame(columns=["sku", "zero_since", "snapshots_zero"])
     work = stock.copy()
-    work["_submitted_at"] = pd.to_datetime(work["_submitted_at"], errors="coerce")
+    work["_submitted_at"] = snapshot_time(work["_submitted_at"])
     work["sku"] = _clean_key(work["sku"])
     work["stock_dc_cikupa"] = pd.to_numeric(work["stock_dc_cikupa"], errors="coerce").fillna(0)
     work = work.dropna(subset=["_submitted_at"]).sort_values(["sku", "_submitted_at"])

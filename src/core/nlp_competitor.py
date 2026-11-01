@@ -62,9 +62,18 @@ def _stemmer():
     try:
         from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 
-        return StemmerFactory().create_stemmer()
+        return fast_dictionary(StemmerFactory().create_stemmer())
     except Exception:
         return None
+
+
+def fast_dictionary(stemmer):
+    """Kamus Sastrawi 1.0.1 berupa list (lookup O(n), ±200 detik untuk 300 judul); ubah ke set."""
+    inner = getattr(stemmer, "delegatedStemmer", stemmer)
+    dictionary = getattr(inner, "dictionary", None)
+    if dictionary is not None and isinstance(getattr(dictionary, "words", None), list):
+        dictionary.words = set(dictionary.words)
+    return stemmer
 
 
 @lru_cache(maxsize=50_000)
@@ -475,8 +484,16 @@ def build_name_recommendations(
             if name_key:
                 desc_map.setdefault(name_key, str(row.get("description", "")))
     comp = competitors if competitors is not None else pd.DataFrame()
+    if not comp.empty and "own_shop" in comp.columns:
+        comp = comp.loc[~comp["own_shop"].astype(str).str.lower().isin({"true", "1"})].reset_index(drop=True)
     matches, _scores, vec_note = match_competitors(own, comp)
-    comp_sold = comp["sold"].map(_sold_number).tolist() if not comp.empty and "sold" in comp.columns else [1.0] * len(comp)
+    if not comp.empty and "sold" in comp.columns:
+        comp_sold = comp["sold"].map(_sold_number).tolist()
+    elif not comp.empty and "rank" in comp.columns:
+        ranks = pd.to_numeric(comp["rank"], errors="coerce").fillna(20.0)
+        comp_sold = (21.0 - ranks.clip(1, 20)).tolist()
+    else:
+        comp_sold = [1.0] * len(comp)
     rows = []
     for _, item in own.iterrows():
         key = str(item["item_key"])

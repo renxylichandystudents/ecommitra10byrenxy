@@ -69,7 +69,7 @@ from src.ui.decision_view import (
 )
 from src.ui.settings import show_business_settings
 from src.core.inventory import stock_zero_duration
-from src.core.schemas import SOURCE_SPECS, source_menu, validation_report
+from src.core.schemas import SOURCE_SPECS, find_columns, source_menu, validation_report
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.userspace import deploy_mode, resolve_browser_uid, user_root
 from src.library import configure_root as configure_library_root
@@ -1373,10 +1373,12 @@ def _source_status_map(store: LocalDataStore) -> dict[str, str]:
 
 def _file_period_text(frame: pd.DataFrame, source_key: str) -> str:
     spec = SOURCE_SPECS[source_key]
+    mapping = find_columns(frame.columns, spec)
     for field in spec.date_fields:
-        if field not in frame.columns:
+        column = field if field in frame.columns else mapping.get(field)
+        if column is None:
             continue
-        dates = pd.to_datetime(frame[field], errors="coerce")
+        dates = pd.to_datetime(frame[column], errors="coerce", dayfirst=True)
         if dates.notna().any():
             return f"{dates.min().date()} - {dates.max().date()}"
     return "-"
@@ -1386,7 +1388,7 @@ def _read_generic_uploads(files, source_key: str) -> pd.DataFrame:
     frames = []
     several = len(files) > 1
     for item in files:
-        frame = read_upload_file(item.getvalue(), item.name)
+        frame = read_upload_file(item.getvalue(), item.name, SOURCE_SPECS[source_key])
         if several:
             frame.insert(0, "Nama file", item.name)
         frames.append(frame)

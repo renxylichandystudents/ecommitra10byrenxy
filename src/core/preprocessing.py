@@ -221,9 +221,11 @@ def normalize_product_text(text: object, *, stem: bool = True) -> str:
 
 def _stem_tokens(tokens: list[str]) -> list[str]:
     try:
-        from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+        from src.core.nlp_competitor import _stemmer
 
-        stemmer = StemmerFactory().create_stemmer()
+        stemmer = _stemmer()
+        if stemmer is None:
+            raise ImportError("Sastrawi tidak tersedia")
         return [stemmer.stem(token) for token in tokens]
     except Exception:
         suffixes = ("nya", "lah", "kah", "pun", "kan", "an", "i")

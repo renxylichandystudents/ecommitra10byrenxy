@@ -177,11 +177,17 @@ def predict_sales_from_qty(forecast_qty: pd.DataFrame, price_4w: pd.DataFrame, *
     return out
 
 
+def snapshot_time(values: pd.Series) -> pd.Series:
+    """Waktu submit snapshot (ISO dengan zona waktu) sebagai jam lokal WIB tanpa zona."""
+    parsed = pd.to_datetime(values, errors="coerce", utc=True)
+    return parsed.dt.tz_convert("Asia/Jakarta").dt.tz_localize(None)
+
+
 def stock_zero_duration(stock_snapshots: pd.DataFrame, *, sku_col: str = "sku", stock_col: str = "stock_dc_cikupa", today: date | None = None) -> pd.DataFrame:
     if stock_snapshots is None or stock_snapshots.empty or "_submitted_at" not in stock_snapshots.columns:
         return pd.DataFrame(columns=[sku_col, "zero_since", "lama_kosong_hari"])
     work = stock_snapshots.copy()
-    work["_submitted_at"] = pd.to_datetime(work["_submitted_at"], errors="coerce")
+    work["_submitted_at"] = snapshot_time(work["_submitted_at"])
     work[stock_col] = pd.to_numeric(work[stock_col], errors="coerce").fillna(0.0)
     work = work.dropna(subset=["_submitted_at"]).sort_values([sku_col, "_submitted_at"])
     ref = pd.Timestamp(today or date.today()).normalize()
