@@ -97,6 +97,26 @@ def table_height(rows: int, max_height: int = 600) -> int:
     return int(min(max_height, (max(int(rows), 0) + 1) * ROW_PX + 3))
 
 
+BLANK_CELLS = {"", "-", "–", "—", "nan", "none", "nat", "<na>"}
+
+
+def drop_blank_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Buang baris yang semua selnya kosong (NaN/None/""/"-")."""
+    if frame is None or frame.empty or not len(frame.columns):
+        return frame
+    candidate = pd.Series(True, index=range(len(frame)))
+    for i in range(len(frame.columns)):
+        rows = candidate.to_numpy().nonzero()[0]
+        if not len(rows):
+            return frame
+        column = frame.iloc[rows, i]
+        blank = column.isna().to_numpy()
+        if column.dtype == object or pd.api.types.is_string_dtype(column):
+            blank |= column.astype(str).str.strip().str.lower().isin(BLANK_CELLS).to_numpy()
+        candidate.iloc[rows] = blank
+    return frame.iloc[~candidate.to_numpy()]
+
+
 def style_frame(
     frame: pd.DataFrame,
     *,
@@ -148,15 +168,27 @@ def show_table(
     styled: bool = True,
     **kwargs,
 ):
-    """st.dataframe dengan tinggi pas isi (tanpa baris kosong) dan format angka Indonesia."""
+    """st.dataframe dengan tinggi pas isi (tanpa baris kosong) dan format angka Indonesia.
+
+    Baris yang seluruh selnya kosong (NaN, "", "-") dibuang. Tabel kosong → "Belum ada data".
+    Tinggi baris dikunci ROW_PX agar rumus tinggi tetap pas walau ukuran font browser berbeda.
+    """
     import streamlit as st
 
+    if frame is None:
+        frame = pd.DataFrame()
+    if "on_select" not in kwargs:
+        frame = drop_blank_rows(frame)
+    if frame.empty or not len(frame.columns):
+        st.info("Belum ada data")
+        return None
     config = dict(column_config or {})
     preformatted = [name for name, cfg in config.items() if _has_own_format(cfg)]
-    data = style_frame(frame, kinds=kinds, skip=preformatted, bold_label=bold_label) if styled and not frame.empty else frame
+    data = style_frame(frame, kinds=kinds, skip=preformatted, bold_label=bold_label) if styled else frame
     return st.dataframe(
         data,
         height=table_height(len(frame), max_height),
+        row_height=ROW_PX,
         hide_index=kwargs.pop("hide_index", True),
         use_container_width=kwargs.pop("use_container_width", True),
         column_config=config or None,

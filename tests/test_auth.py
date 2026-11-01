@@ -128,6 +128,36 @@ class RepositoryTests(unittest.TestCase):
         with self.assertRaises(AuthError):
             self.repo.authenticate("ec1", "ecom12345")
 
+    def test_session_token_restore_and_expiry(self):
+        user = self.repo.create("ec1", "ecom12345", ECOMMERCE_SPECIALIST, must_change=False)
+        now = datetime(2026, 11, 1, 9, 0, 0)
+        token = self.repo.create_session(user, now=now)
+        self.assertGreaterEqual(len(token), 32)
+        with self.repo.engine.connect() as conn:
+            stored = [row[0] for row in conn.exec_driver_sql("SELECT token_hash FROM sessions")]
+        self.assertNotIn(token, stored)
+        self.assertEqual(self.repo.user_for_token(token, now=now + timedelta(hours=7)).username, "ec1")
+        self.assertIsNone(self.repo.user_for_token(token, now=now + timedelta(hours=8, seconds=1)))
+        self.assertIsNone(self.repo.user_for_token("palsu", now=now))
+        self.assertIsNone(self.repo.user_for_token(None, now=now))
+
+    def test_logout_deletes_only_that_token(self):
+        user = self.repo.create("ec1", "ecom12345", ECOMMERCE_SPECIALIST, must_change=False)
+        first, second = self.repo.create_session(user), self.repo.create_session(user)
+        self.repo.delete_session(first)
+        self.assertIsNone(self.repo.user_for_token(first))
+        self.assertIsNotNone(self.repo.user_for_token(second))
+
+    def test_deactivate_and_reset_revoke_all_sessions(self):
+        self.repo.create("admin", "admin12345", SUPER_USER, must_change=False)
+        user = self.repo.create("ec1", "ecom12345", ECOMMERCE_SPECIALIST, must_change=False)
+        tokens = [self.repo.create_session(user) for _ in range(2)]
+        self.repo.reset_password("ec1", "reset12345")
+        self.assertTrue(all(self.repo.user_for_token(t) is None for t in tokens))
+        token = self.repo.create_session(self.repo.get("ec1"))
+        self.repo.set_active("ec1", False)
+        self.assertIsNone(self.repo.user_for_token(token))
+
 
 class DatabaseUrlTests(unittest.TestCase):
     def test_postgres_url_normalised_and_sqlite_default(self):

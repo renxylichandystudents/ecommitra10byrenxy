@@ -7,13 +7,19 @@ import os
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from auth.permissions import ROLES, SUPER_USER, can, role_label
 from auth.repository import AuthError, User, UserRepository
 from src.core.db import database_url, make_engine
+from src.utils.format import show_table
 
 SESSION_KEY = "auth-user"
 PAGE_KEY = "auth-page"
+TOKEN_KEY = "auth-token"
+LOGGED_OUT_KEY = "_auth-logged-out"
+FLASH_KEY = "_users-flash"
+COOKIE_NAME = "mitra10_session"
 
 
 def _secret(name: str) -> str:
@@ -86,10 +92,14 @@ def _login_page(repo: UserRepository) -> None:
             submitted = st.form_submit_button("Masuk", type="primary", use_container_width=True)
         if submitted:
             try:
-                st.session_state[SESSION_KEY] = repo.authenticate(username, password)
-                st.rerun()
+                user = repo.authenticate(username, password)
             except AuthError as exc:
                 st.error(str(exc))
+            else:
+                token = repo.create_session(user)
+                st.session_state[SESSION_KEY] = user
+                st.session_state[TOKEN_KEY] = token
+                st.rerun()
         st.caption("Akun dibuat oleh super user. Lupa password? Minta super user mereset password Anda.")
 
 
@@ -116,20 +126,91 @@ def _password_form(repo: UserRepository, user: User, *, forced: bool) -> None:
             st.error(str(exc))
 
 
+def _cookie_token() -> str | None:
+    """Token dari cookie browser (dibaca server saat sesi Streamlit dibuat)."""
+    try:
+        value = st.context.cookies.get(COOKIE_NAME)
+    except Exception:
+        value = None
+    return str(value) if value else None
+
+
+def _cookie_script(op: tuple[str, str | None]) -> str:
+    action, token = op
+    if action == "set":
+        value, age = token or "", 8 * 3600
+    else:
+        value, age = "", 0
+    return (
+        "<script>(function(){const d=window.parent.document;"
+        "const secure=window.parent.location.protocol==='https:'?'; Secure':'';"
+        f"d.cookie='{COOKIE_NAME}={value}; Max-Age={age}; Path=/; SameSite=Lax'+secure;"
+        "})();</script>"
+    )
+
+
+def _sync_cookie(slot, token: str | None) -> None:
+    """Samakan cookie browser dengan token sesi, lewat slot yang posisinya tetap (elemen lain tidak bergeser).
+
+    st.context.cookies hanya berisi cookie saat sesi dibuat, jadi skrip ditulis ulang tiap run selama
+    berbeda; isi yang sama tidak memuat ulang iframe.
+    """
+    cookie = _cookie_token()
+    if token and cookie != token:
+        op = ("set", token)
+    elif not token and cookie:
+        op = ("delete", None)
+    else:
+        slot.empty()
+        return
+    with slot:
+        components.html(_cookie_script(op), height=0, width=0)
+
+
+def _restore_from_cookie(repo: UserRepository) -> User | None:
+    token = _cookie_token()
+    user = repo.user_for_token(token)
+    if user is not None:
+        st.session_state[SESSION_KEY] = user
+        st.session_state[TOKEN_KEY] = token
+    return user
+
+
+def logout() -> None:
+    repo = get_repo()
+    repo.delete_session(st.session_state.get(TOKEN_KEY) or _cookie_token())
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.session_state[LOGGED_OUT_KEY] = True
+    st.query_params.clear()
+    st.rerun()
+
+
 def login_gate() -> User:
-    """Panggil di awal app. Mengembalikan user yang sudah login; selain itu halaman berhenti."""
+    """Panggil di awal app. Mengembalikan user yang sudah login; selain itu halaman berhenti.
+
+    Login dipulihkan dari cookie token (back/refresh membuat sesi Streamlit baru), sampai Logout
+    atau token dicabut (nonaktif / reset password) atau kedaluwarsa 8 jam.
+    """
+    slot = st.empty()
     repo = get_repo()
     user = current_user()
     if user is not None:
-        fresh = repo.get(user.username)
+        token = st.session_state.get(TOKEN_KEY)
+        fresh = repo.user_for_token(token) if token else repo.get(user.username)
         if fresh is None or not fresh.is_active:
-            st.session_state.pop(SESSION_KEY, None)
+            for key in (SESSION_KEY, TOKEN_KEY):
+                st.session_state.pop(key, None)
             user = None
         else:
             st.session_state[SESSION_KEY] = user = fresh
+    if user is None and not st.session_state.get(LOGGED_OUT_KEY):
+        user = _restore_from_cookie(repo)
+    _sync_cookie(slot, st.session_state.get(TOKEN_KEY) if user is not None else None)
     if user is None:
         _login_page(repo)
         st.stop()
+    st.session_state.pop(LOGGED_OUT_KEY, None)
     if user.must_change_password:
         _hide_chrome()
         _password_form(repo, user, forced=True)
@@ -150,14 +231,15 @@ def user_bar(user: User) -> None:
         st.session_state[PAGE_KEY] = "users"
         st.rerun()
     if out.button("Logout", key="auth-logout", use_container_width=True):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+        logout()
 
 
 def _users_page(repo: UserRepository, user: User) -> None:
     require_role("kelola_user")
     st.markdown("### Kelola user")
+    flash = st.session_state.pop(FLASH_KEY, None)
+    if flash:
+        st.success(flash)
     users = repo.list_users()
     frame = pd.DataFrame(
         [
@@ -173,8 +255,6 @@ def _users_page(repo: UserRepository, user: User) -> None:
             for u in users
         ]
     )
-    from src.utils.format import show_table
-
     show_table(frame)
     add, edit = st.columns(2)
     with add.container(border=True):
@@ -186,7 +266,7 @@ def _users_page(repo: UserRepository, user: User) -> None:
             if st.form_submit_button("Tambah", type="primary"):
                 try:
                     repo.create(name, temp, role, created_by=user.username, must_change=True)
-                    st.success(f"User {name} dibuat. Ia wajib mengganti password saat login pertama.")
+                    st.session_state[FLASH_KEY] = f"User {name} dibuat. Ia wajib mengganti password saat login pertama."
                     st.rerun()
                 except AuthError as exc:
                     st.error(str(exc))
@@ -201,7 +281,7 @@ def _users_page(repo: UserRepository, user: User) -> None:
         if c1.button("Simpan role", key=f"user-save-role-{target}", use_container_width=True):
             try:
                 repo.set_role(target, new_role)
-                st.success("Role diperbarui.")
+                st.session_state[FLASH_KEY] = f"Role {target} diperbarui menjadi {role_label(new_role)}."
                 st.rerun()
             except AuthError as exc:
                 st.error(str(exc))
@@ -209,7 +289,9 @@ def _users_page(repo: UserRepository, user: User) -> None:
         if c2.button(toggle, key=f"user-toggle-{target}", use_container_width=True):
             try:
                 repo.set_active(target, not chosen.is_active)
-                st.success(f"User {target} {'dinonaktifkan' if chosen.is_active else 'diaktifkan'}.")
+                st.session_state[FLASH_KEY] = (
+                    f"User {target} dinonaktifkan; semua sesi login-nya dihapus." if chosen.is_active else f"User {target} diaktifkan."
+                )
                 st.rerun()
             except AuthError as exc:
                 st.error(str(exc))
@@ -217,7 +299,8 @@ def _users_page(repo: UserRepository, user: User) -> None:
         if st.button("Reset password", key=f"user-reset-btn-{target}"):
             try:
                 repo.reset_password(target, temp)
-                st.success(f"Password {target} direset. Ia wajib menggantinya saat login berikutnya.")
+                st.session_state[FLASH_KEY] = f"Password {target} direset; semua sesi login-nya dihapus. Ia wajib menggantinya saat login berikutnya."
+                st.rerun()
             except AuthError as exc:
                 st.error(str(exc))
     if not any(u.role == SUPER_USER and u.is_active for u in users):
@@ -229,9 +312,6 @@ def show_auth_page(user: User) -> bool:
     page = st.session_state.get(PAGE_KEY)
     if page not in {"password", "users"}:
         return False
-    if st.button("← Kembali", key="auth-back"):
-        st.session_state.pop(PAGE_KEY, None)
-        st.rerun()
     repo = get_repo()
     if page == "password":
         require_role("ubah_password")

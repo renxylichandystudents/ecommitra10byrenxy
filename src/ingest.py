@@ -358,7 +358,10 @@ def load_shopee_report(
 
     if _looks_like_excel(data, name):
         try:
-            raw = pd.read_excel(BytesIO(data))
+            try:
+                raw = pd.read_excel(BytesIO(data), engine="calamine")
+            except Exception:  # calamine belum terpasang / file tidak cocok: pakai openpyxl
+                raw = pd.read_excel(BytesIO(data))
         except Exception as exc:  # noqa: BLE001 - surface a readable upload error
             raise ValueError(f"File Excel tidak bisa dibaca. Error terakhir: {exc}") from exc
     else:

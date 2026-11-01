@@ -68,6 +68,8 @@ Repository GitHub: `renxylichandystudents/ecommitra10byrenxy`, branch `main`.
 - Semua halaman berada di balik login. Password di-hash bcrypt, minimal 8 karakter. 5× salah password → tunggu 5 menit.
 - User baru dan user yang di-reset wajib ganti password saat login berikutnya.
 - Hak akses ada di satu tempat: `auth/permissions.py` (Super user, E-commerce specialist, IC, Gudang).
+- Sesi login bertahan 8 jam: refresh, tab baru, dan tombol back browser tidak meminta login lagi. Cookie `mitra10_session` hanya berisi token acak; di database hanya disimpan hash token-nya (tabel `sessions`). Logout, nonaktifkan user, atau reset password menghapus sesi tersebut.
+- Alamat halaman ada di URL (`?page=beranda`, `?page=data-latih`, `?page=analisa&tab=prediksi`, `?page=kelola-user`), jadi back/forward browser berpindah antarhalaman aplikasi.
 
 ### Perilaku data di server
 

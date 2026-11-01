@@ -12,6 +12,7 @@ from src.core.preprocessing import preprocess_sales_frame
 from src.core.segmentation import abc_xyz_segments, cluster_products, label_productivity, product_feature_table
 from src.intelligence.benchmark import benchmark_cancel_risk, benchmark_daily_demand
 from src.intelligence.preprocess import clean_frame
+from src.utils.format import show_table
 
 METHOD_LABELS = {
     "IQR": "iqr",
@@ -90,7 +91,7 @@ def _chart_and_table(table: pd.DataFrame, column: str, title: str, filename: str
             paper_bgcolor="rgba(0,0,0,0)",
         )
         st.plotly_chart(figure, use_container_width=True)
-    st.dataframe(table, hide_index=True, use_container_width=True)
+    show_table(table, styled=False)
     buffer = io.BytesIO()
     table.to_excel(buffer, index=False, engine="openpyxl")
     st.download_button(
@@ -141,11 +142,11 @@ def _show_phase2_segments(orders: pd.DataFrame, history: pd.DataFrame) -> None:
             st.write("ABC/XYZ belum terbentuk.")
         else:
             summary = segments.groupby(["abc", "xyz"], as_index=False).agg(jumlah_sku=("item_key", "nunique"))
-            st.dataframe(summary, hide_index=True, use_container_width=True)
+            show_table(summary, styled=False)
     with right:
         st.markdown("<div class='section-title'>Label produktivitas</div>", unsafe_allow_html=True)
         if labeled.empty or "productivity_label" not in labeled.columns:
             st.write("Label produktivitas belum terbentuk.")
         else:
             summary = labeled.groupby("productivity_label", as_index=False).agg(jumlah_sku=("item_key", "nunique"))
-            st.dataframe(summary, hide_index=True, use_container_width=True)
+            show_table(summary, styled=False)

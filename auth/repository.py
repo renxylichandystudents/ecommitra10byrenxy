@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -14,6 +16,7 @@ from src.core.db import id_column
 
 MAX_FAILED = 5
 LOCK_MINUTES = 5
+SESSION_HOURS = 8
 
 
 class AuthError(ValueError):
@@ -72,6 +75,20 @@ class UserRepository:
                     """
                 )
             )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        token_hash VARCHAR(64) PRIMARY KEY,
+                        username VARCHAR(80) NOT NULL,
+                        role VARCHAR(40) NOT NULL,
+                        created_at VARCHAR(32) NOT NULL,
+                        expires_at VARCHAR(32) NOT NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS sessions_username ON sessions (lower(username))"))
 
     @staticmethod
     def _user(row) -> User | None:
@@ -161,11 +178,60 @@ class UserRepository:
             self._guard_last_super(target)
         with self.engine.begin() as conn:
             conn.execute(text("UPDATE users SET is_active = :a WHERE id = :i"), {"a": bool(active), "i": target.id})
+        if not active:
+            self.delete_user_sessions(target.username)
 
     def reset_password(self, username: str, new_password: str) -> None:
         """Oleh super user: password sementara, user wajib menggantinya saat login berikutnya."""
         self._store_password(username, new_password, must_change=True)
         self.clear_failures(username)
+        self.delete_user_sessions(username)
+
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+    def create_session(self, user: User, *, hours: int = SESSION_HOURS, now: datetime | None = None) -> str:
+        """Token acak untuk cookie browser. Yang disimpan di server hanya hash-nya."""
+        now = now or _now()
+        token = secrets.token_urlsafe(32)
+        with self.engine.begin() as conn:
+            conn.execute(text("DELETE FROM sessions WHERE expires_at < :n"), {"n": now.isoformat(sep=" ")})
+            conn.execute(
+                text("INSERT INTO sessions (token_hash, username, role, created_at, expires_at) VALUES (:h, :u, :r, :c, :e)"),
+                {
+                    "h": self._token_hash(token),
+                    "u": user.username,
+                    "r": user.role,
+                    "c": now.isoformat(sep=" "),
+                    "e": (now + timedelta(hours=hours)).isoformat(sep=" "),
+                },
+            )
+        return token
+
+    def user_for_token(self, token: str | None, *, now: datetime | None = None) -> User | None:
+        """User aktif pemilik token yang belum kedaluwarsa; selain itu None."""
+        if not token:
+            return None
+        now = now or _now()
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT username, expires_at FROM sessions WHERE token_hash = :h"), {"h": self._token_hash(token)}
+            ).first()
+        if row is None or str(row[1]) <= now.isoformat(sep=" "):
+            return None
+        user = self.get(str(row[0]))
+        return user if user is not None and user.is_active else None
+
+    def delete_session(self, token: str | None) -> None:
+        if not token:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(text("DELETE FROM sessions WHERE token_hash = :h"), {"h": self._token_hash(token)})
+
+    def delete_user_sessions(self, username: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(text("DELETE FROM sessions WHERE lower(username) = lower(:u)"), {"u": username.strip()})
 
     def change_password(self, username: str, old_password: str, new_password: str) -> None:
         hashed = self._hash_of(username)
