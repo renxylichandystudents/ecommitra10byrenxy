@@ -16,6 +16,7 @@ from src.ingest import (
     apply_latest_identity,
     map_columns,
     order_revenue,
+    attach_order_line_totals,
 )
 
 ACTIVITY_GRAINS = ("minggu", "bulan", "kuartal", "semester")
@@ -144,6 +145,7 @@ def ledger_from_raw(raw: pd.DataFrame) -> pd.DataFrame:
         ]
     )
     frame = apply_latest_identity(frame)
+    frame = attach_order_line_totals(frame, gross_col="line_value")
     return frame.reset_index(drop=True)
 
 
@@ -204,6 +206,9 @@ def scope_ledger(
     if not include_return and "returned_qty" in work.columns:
         work = work.copy()
         work["qty"] = (work["qty"] - work["returned_qty"]).clip(lower=0)
+        if "unit_price" in work.columns:
+            # Nilai baris bersih: order_revenue memakai porsi ini untuk mengurangi retur sebagian.
+            work["sales"] = work["unit_price"] * work["qty"]
         work = work.loc[work["qty"] > 0]
     elif "qty" in work.columns:
         work = work.loc[work["qty"] > 0]

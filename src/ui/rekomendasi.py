@@ -94,7 +94,7 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
         else:
             st.caption("Pilih satu baris untuk melihat nama rekomendasi, kata kunci, dan deskripsi lengkap.")
     left, right = st.columns(2)
-    if len(view) > shown_n and left.button("Load more", key="name-load-more"):
+    if len(view) > shown_n and left.button("Tampilkan lebih banyak", key="name-load-more"):
         st.session_state["name-more"] = shown_n + size
         st.rerun()
     with right:

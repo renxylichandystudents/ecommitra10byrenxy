@@ -76,6 +76,12 @@ def _hide_chrome() -> None:
 
 def _login_page(repo: UserRepository) -> None:
     _hide_chrome()
+    # Audit S10: garis fokus kolom memakai biru netral; merah hanya untuk pesan error.
+    st.markdown(
+        "<style>[data-baseweb='input']:focus-within,[data-baseweb='base-input']:focus-within"
+        "{border-color:#1b3da6!important;box-shadow:0 0 0 1px #1b3da6!important}</style>",
+        unsafe_allow_html=True,
+    )
     _left, mid, _right = st.columns([1, 1.2, 1])
     with mid:
         st.markdown("### Masuk")

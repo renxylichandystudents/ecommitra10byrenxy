@@ -15,6 +15,7 @@ from src.core.expert_system import FISHBONE_CATEGORIES, evaluate_rules, fishbone
 from src.core.optimization import monte_carlo_stock_scenarios
 from src.core.preprocessing import promo_flag
 from src.ui.analysis_dialog import store_performance
+from src.core import metrics
 from src.core.ads import ad_validation, attribute_ads
 from src.utils.format import input_rupiah, show_table
 from src.ui.common import card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, period_filter, status_key
@@ -118,8 +119,14 @@ def show_report(
         + _chip("Exclude batal & return: aktif" if exclude else "Exclude batal & return: nonaktif"),
         unsafe_allow_html=True,
     )
+    # Audit T2: kunci widget mengikuti rentang data analisa ini, sehingga membuka ulang hasil yang
+    # sama menampilkan periode yang sama; default = bulan penuh terakhir.
+    span_stamp = ""
+    if isinstance(orders, pd.DataFrame) and not orders.empty and "order_time" in orders.columns:
+        stamps_all = pd.to_datetime(orders["order_time"], errors="coerce")
+        span_stamp = f"{stamps_all.min():%Y%m%d}-{stamps_all.max():%Y%m%d}"
     with st.expander("Periode laporan", expanded=False):
-        report_orders, report_label, _months = period_filter(orders, prefix="report", compact=True)
+        report_orders, report_label, _months = period_filter(orders, prefix=f"report-{span_stamp}", compact=True, prefer_full_month=True)
     if report_orders is None or report_orders.empty:
         st.write("Tidak ada transaksi pada periode laporan.")
         return
@@ -133,25 +140,27 @@ def show_report(
     target_default = float(params.get("target", {}).get("sales_bulanan_rp", 0) or 0)
     target = float(input_rupiah("Target sales bulanan", target_default, key="report-target-rp"))
     month_pred = float(table["m_sales"].sum()) if table is not None and not table.empty and "m_sales" in table.columns else 0.0
-    target_note = ""
-    if target <= 0:
-        target = month_pred
-        target_note = "Target belum diisi: memakai prediksi sales bulan ini sebagai target."
+    has_target = target > 0
+    target_note = "" if has_target else "Target belum diisi: perbandingan dengan target disembunyikan."
 
     top = table.head(50) if table is not None else pd.DataFrame()
-    sales_now = float(report_orders["sales"].sum())
-    prev = _previous_span(report_orders, orders)
-    sales_prev = float(prev["sales"].sum()) if not prev.empty else np.nan
+    # Audit K2: sales bersih memakai definisi tunggal (Total Pembayaran tanpa batal & retur),
+    # sama dengan Ringkasan dan tab Data; sebelumnya memakai jumlah harga baris.
+    sales_now = metrics.net_sales(report_all)
+    prev = _previous_span(report_all, orders_all) if isinstance(orders_all, pd.DataFrame) else orders.iloc[0:0]
+    sales_prev = metrics.net_sales(prev) if not prev.empty else np.nan
     growth = (sales_now - sales_prev) / sales_prev * 100 if sales_prev and np.isfinite(sales_prev) and sales_prev > 0 else np.nan
     report_lo = pd.to_datetime(report_orders["order_time"]).min().normalize()
     report_hi = pd.to_datetime(report_orders["order_time"]).max().normalize()
-    ad_result = attribute_ads(frames.ads, frames.stock, orders=report_orders, start=report_lo, end=report_hi)
+    # Audit K2: atribusi iklan memakai sales bersih pada rentang laporan (sama dengan tab Data).
+    ad_result = attribute_ads(frames.ads, frames.stock, orders=metrics.net_lines(report_all), start=report_lo, end=report_hi)
     ad_cost, ad_sales = ad_result.cost, ad_result.sales
     roas = ad_sales / ad_cost if ad_cost > 0 else np.nan
     short_top = int(top["m_status"].map(status_key).isin({"Kurang", "Kosong"}).sum()) if not top.empty and "m_status" in top.columns else 0
-    cancel_rate = float(_cancel_mask(report_all).mean() * 100) if isinstance(report_all, pd.DataFrame) and not report_all.empty else 0.0
+    # Audit K2: tingkat batal per pesanan (bukan per baris) dan pesanan belum bayar dengan aturan tab Data.
+    cancel_rate = metrics.cancel_rate_pct(report_all) if isinstance(report_all, pd.DataFrame) else 0.0
     reasons = _cancel_reasons(report_all)
-    unpaid = int(reasons.loc[reasons["reason"].str.lower().str.contains("bayar"), "orders"].sum()) if not reasons.empty else 0
+    unpaid = metrics.unpaid_chase_orders(report_all) if isinstance(report_all, pd.DataFrame) else 0
 
     nav, body = st.columns([1, 4])
     with nav:
@@ -164,21 +173,27 @@ def show_report(
             if section == SECTIONS[0]:
                 cols = st.columns(4)
                 card(cols[0], "Sales bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
-                card(cols[1], "Prediksi sales bulan ini", fmt_idr(month_pred), hint=f"target {fmt_idr(target)}")
+                card(cols[1], "Prediksi sales bulan ini", fmt_idr(month_pred), hint=(f"{fmt_pct(month_pred / target * 100, 1)} dari target {fmt_idr(target)}" if has_target else "target belum diisi"))
                 card(cols[2], "ROAS iklan", fmt_num(roas, 2), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
                 card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint="status Kurang/Kosong bulan ini")
                 if target_note:
                     st.caption(target_note)
                 gap = month_pred - target
-                st.markdown(
+                target_line = (
                     f"- Prediksi bulan ini {fmt_idr(month_pred)} {'di atas' if gap >= 0 else 'di bawah'} target sebesar {fmt_idr(abs(gap))}.\n"
-                    f"- {short_top} SKU Top 50 stoknya belum menutup kebutuhan (prediksi + safety stock): prioritas restock sebelum menambah iklan.\n"
+                    if has_target
+                    else ""
+                )
+                st.markdown(
+                    target_line
+                    + f"- {short_top} SKU Top 50 stoknya belum menutup kebutuhan (prediksi + safety stock): prioritas restock sebelum menambah iklan.\n"
                     f"- Tingkat batal {fmt_pct(cancel_rate)}; {unpaid} pesanan batal karena belum bayar bisa dikejar lewat chat."
                 )
                 adv = _top_advices(table, today, limit=3)
                 if not adv.empty:
+                    # Audit K6: setiap rekomendasi menyebut SKU dan nama produk.
                     st.markdown("**Rekomendasi utama**")
-                    st.markdown("\n".join(f"1. {r}" for r in adv["Rekomendasi"]))
+                    st.markdown("\n".join(f"1. **{r['SKU']} · {r['Produk']}**: {r['Rekomendasi']}" for _, r in adv.iterrows()))
             elif section == SECTIONS[1]:
                 monthly = orders.assign(m=pd.to_datetime(orders["order_time"]).dt.to_period("M").dt.to_timestamp()).groupby("m")["sales"].sum()
                 ma = monthly.rolling(3, min_periods=1).mean()
@@ -269,9 +284,9 @@ def show_report(
                     card(cols[2], "Konversi", fmt_pct(perf["konversi"], 2), hint=f"sebelumnya {fmt_pct(perf['konversi_prev'], 2)}")
                     card(cols[3], "Pembeli baru", fmt_num(perf["pembeli_baru"]))
             elif section == SECTIONS[6]:
-                total = _orders_count(report_all)
-                cancelled = _orders_count(report_all.loc[_cancel_mask(report_all)]) if total else 0
-                returned = float((report_all["gross_qty"] - report_all["qty"]).clip(lower=0).sum()) if {"gross_qty", "qty"} <= set(report_all.columns) else 0.0
+                total = metrics.count_orders(report_all)
+                cancelled = metrics.cancelled_orders(report_all)
+                returned = metrics.returned_units(report_all)
                 cols = st.columns(4)
                 card(cols[0], "Pesanan", fmt_num(total))
                 card(cols[1], "Batal", fmt_num(cancelled), hint=fmt_pct(cancel_rate))
@@ -318,16 +333,17 @@ def show_report(
                     download_excel(adv, "laporan_rekomendasi.xlsx", key="xl-report-adv")
             elif section == SECTIONS[10]:
                 days_in_month = pd.Timestamp(today).days_in_month
+                guide_target = target if has_target else month_pred
                 guide = work_guide(
                     {
-                        "target_sales": target,
-                        "target_text": fmt_idr(target),
-                        "daily_target_text": fmt_idr(target / days_in_month),
+                        "target_sales": guide_target,
+                        "target_text": fmt_idr(guide_target),
+                        "daily_target_text": fmt_idr(guide_target / days_in_month),
                         "target_roas": params.get("iklan", {}).get("target_roas", 8),
                     }
                 )
-                if target_note:
-                    st.caption(target_note)
+                if not has_target:
+                    st.caption("Target belum diisi: panduan kerja memakai prediksi sales bulan ini sebagai acuan.")
                 for name, tasks in guide.items():
                     st.markdown(f"**{name}**")
                     show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))

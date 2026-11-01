@@ -301,7 +301,7 @@ def feature_importance(matrix: DemandMatrix, *, max_rows: int = 30_000) -> tuple
         y_sample = model.predict(sample)
         result = permutation_importance(model, sample, y_sample, n_repeats=3, random_state=7)
         score = np.maximum(result.importances_mean, 0)
-        method = "Permutation importance (SHAP tidak terpasang)"
+        method = "Permutation importance"
     total = float(score.sum()) or 1.0
     frame = pd.DataFrame({"Fitur": list(FEATURE_LABELS), "Kepentingan": score / total * 100})
     return frame.sort_values("Kepentingan", ascending=False).reset_index(drop=True), method
@@ -336,7 +336,7 @@ def forecast_prophet_share(matrix: DemandMatrix, horizon: int) -> tuple[np.ndarr
 def lstm_status(days: int, horizon: int) -> str | None:
     """LSTM/TFT hanya untuk horizon panjang dengan riwayat ≥ 2× horizon dan library tersedia."""
     if horizon <= 31:
-        return "hanya dipakai untuk Quartal/Semester/Tahun"
+        return "hanya dipakai untuk Kuartal/Semester/Tahun"
     if days < 2 * horizon:
         return f"riwayat {days} hari < 2× horizon ({2 * horizon} hari)"
     try:

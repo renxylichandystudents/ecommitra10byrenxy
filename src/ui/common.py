@@ -153,7 +153,7 @@ def month_label(key: str) -> str:
     return f"{ID_MONTHS[int(month) - 1]} {year}"
 
 
-def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -> tuple[pd.DataFrame, str, list[str]]:
+def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False, prefer_full_month: bool = False) -> tuple[pd.DataFrame, str, list[str]]:
     """Filter periode penjualan bersama: checkbox tahun, grid bulan 4 kolom, tanggal mulai/selesai terkunci.
 
     Hanya memotong angka aktual; prediksi tetap dari input awal.
@@ -176,12 +176,17 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
         if year_cols[index].checkbox(year, key=widget):
             checked_years.append(year)
     year_months = [key for key in months if key[:4] in checked_years]
+    default_month = year_months[-1] if year_months else None
+    if prefer_full_month and len(year_months) >= 2:
+        last_day = pd.Timestamp(work.loc[work["_month"] == year_months[-1], "order_time"].max()).normalize()
+        if last_day < (last_day + pd.offsets.MonthEnd(0)).normalize():
+            default_month = year_months[-2]  # bulan terakhir belum lengkap: pakai bulan penuh sebelumnya
     selected: list[str] = []
     grid = st.columns(4 if not compact else 6)
     for index, key in enumerate(year_months):
         widget = f"{prefix}-m-{key}"
         if widget not in st.session_state:
-            st.session_state[widget] = key == year_months[-1]
+            st.session_state[widget] = key == default_month
         if grid[index % len(grid)].checkbox(month_label(key), key=widget):
             selected.append(key)
     if not selected:
@@ -197,8 +202,8 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
         st.session_state[end_key] = hi
         st.session_state[stamp_key] = (lo, hi)
     c1, c2 = st.columns(2)
-    start = c1.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key)
-    end = c2.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key)
+    start = c1.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key, format="DD/MM/YYYY")
+    end = c2.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key, format="DD/MM/YYYY")
     if start > end:
         start, end = end, start
     days = pd.to_datetime(work["order_time"]).dt.normalize()

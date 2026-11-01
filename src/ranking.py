@@ -17,6 +17,29 @@ def unique_rank(frame: pd.DataFrame, primary: str, tie_breaks: list[str]) -> pd.
     return ordered
 
 
+def excluded_item_mask(frame: pd.DataFrame, rules: dict | None = None) -> pd.Series:
+    """True untuk SKU jasa/biaya (config `sku_dikecualikan`) yang bukan produk untuk diprediksi."""
+    if frame is None or frame.empty:
+        return pd.Series(False, index=frame.index if frame is not None else [])
+    if rules is None:
+        try:
+            from src.core.config import default_params
+
+            rules = default_params().get("sku_dikecualikan", {}) or {}
+        except Exception:
+            rules = {}
+    skus = {str(code).strip() for code in rules.get("sku", []) or [] if str(code).strip()}
+    words = [str(word).strip().lower() for word in rules.get("kata_kunci_nama", []) or [] if str(word).strip()]
+    mask = pd.Series(False, index=frame.index)
+    if skus and "sku" in frame.columns:
+        mask |= frame["sku"].fillna("").astype(str).str.strip().isin(skus)
+    if words and "product_name" in frame.columns:
+        names = frame["product_name"].fillna("").astype(str).str.lower()
+        for word in words:
+            mask |= names.str.contains(word, regex=False)
+    return mask
+
+
 def rank_from_orders(orders: pd.DataFrame, metric: str) -> pd.DataFrame:
     """Peringkat terlaris dari seluruh baris laporan, bukan hanya periode terakhir.
 
@@ -35,6 +58,10 @@ def rank_from_orders(orders: pd.DataFrame, metric: str) -> pd.DataFrame:
         n_orders=("order_id", "nunique"),
         last_order=("order_time", "max"),
     )
+    # Audit T3: SKU jasa/biaya (mis. Extra Packing Kayu Tambahan) tidak ikut peringkat.
+    stats = stats.loc[~excluded_item_mask(stats)].reset_index(drop=True)
+    if stats.empty:
+        return pd.DataFrame()
     primary = "qty_total" if metric == "qty" else "sales_total"
     secondary = "sales_total" if metric == "qty" else "qty_total"
     return unique_rank(stats, primary, [secondary, "n_orders", "last_order"])

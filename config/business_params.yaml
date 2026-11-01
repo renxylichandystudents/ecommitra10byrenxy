@@ -20,7 +20,13 @@ margin:
   margin_min_pct: 8              # batas margin minimum flash sale / markdown
 
 target:
-  sales_bulanan_rp: 0            # 0 = memakai prediksi sebagai target
+  sales_bulanan_rp: 0            # 0 = target belum diisi; perbandingan target disembunyikan
+
+# SKU jasa/biaya yang bukan produk: tidak ikut peringkat, Top 50, safety stock, iklan, dan
+# rekomendasi, tetapi tetap dihitung dalam total sales (audit T3).
+sku_dikecualikan:
+  sku: ["40030033"]                                   # Extra Packing Kayu Tambahan
+  kata_kunci_nama: ["extra packing kayu", "packing kayu tambahan", "biaya tambahan", "biaya asuransi"]
 
 iklan:
   target_roas: 8
