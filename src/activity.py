@@ -495,7 +495,8 @@ def unpaid_buyer_table(
     for (_buyer_key, _item_key), group in frame.groupby(["buyer_key", "item_key"], sort=False):
         if not bool(group["unpaid"].any()):
             continue
-        if bool((~group["unpaid"]).any()):
+        paid = ~cancelled_status_mask(group["status"]) & in_period.reindex(group.index).fillna(False)
+        if bool(paid.any()):
             continue
         missed = group.loc[group["unpaid"] & in_period.reindex(group.index).fillna(False)]
         if missed.empty:
@@ -544,12 +545,13 @@ def unpaid_buyer_table(
     names: list[str] = []
     seen: set[str] = set()
     number = 0
+    order_counts = result.groupby("_buyer")["No. Pesanan"].nunique()
     for buyer, name in zip(result["_buyer"], result["_name"]):
         if buyer not in seen:
             number += 1
             seen.add(buyer)
             numbers.append(str(number))
-            names.append(name)
+            names.append(f"{name} ({int(order_counts[buyer])} pesanan)")
         else:
             numbers.append("")
             names.append("")

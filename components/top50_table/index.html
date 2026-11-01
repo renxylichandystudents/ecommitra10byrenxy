@@ -51,6 +51,17 @@
   .sub { font-size: 11px; color: #64748b; margin-top: 2px; font-weight: 500; }
   .kicker { display: block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #64748b; margin-bottom: 2px; }
   input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #ee4d2d; margin: 0; }
+  th.tone-extra, td.tone-extra { background: #eff6ff; }
+  thead th.group.tone-extra { background: #dbeafe; }
+  th.tone-stock, td.tone-stock { background: #fff7ed; }
+  thead th.group.tone-stock { background: #ffedd5; }
+  td.st-ok .main { color: #15803d; }
+  td.st-thin { background: #fefce8 !important; }
+  td.st-thin .main { color: #a16207; }
+  td.st-short, td.st-empty { background: #fef2f2 !important; }
+  td.st-short .main, td.st-empty .main { color: #b91c1c; }
+  .labels { font-size: 11px; color: #475569; margin-top: 3px; white-space: normal; }
+  .chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 0 0; border-radius: 999px; background: #f1f5f9; border: 1px solid #e2e8f0; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -76,6 +87,7 @@
     let out = `<div class="main">${esc(cell.t)}</div>`;
     if (cell.d) out += `<div class="move ${esc(cell.dc || "flat")}">${esc(cell.d)}</div>`;
     if (cell.s) out += `<div class="sub">${esc(cell.s)}</div>`;
+    if (cell.l && cell.l.length) out += `<div class="labels">${cell.l.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div>`;
     return out;
   }
 
@@ -112,6 +124,7 @@
       if (c.pin) parts.push("pin");
       if (c.id === lastPin) parts.push("pin-last");
       if (c.first) parts.push("first");
+      if (c.tone) parts.push("tone-" + c.tone);
       if (extra) parts.push(extra);
       return parts.join(" ");
     }
@@ -139,7 +152,7 @@
       }
       let span = 1;
       while (i + span < cols.length && cols[i + span].group === c.group) span++;
-      row1 += `<th colspan="${span}" class="group r1">${esc(c.group)}</th>`;
+      row1 += `<th colspan="${span}" class="group r1${c.tone ? " tone-" + c.tone : ""}">${esc(c.group)}</th>`;
       for (let j = i; j < i + span; j++) {
         const leaf = cols[j];
         leaf.first = j === i;
@@ -160,7 +173,8 @@
         if (c.id === "pick") {
           return `<td class="${cls(c)}" style="${style(c)}"><input type="checkbox" data-key="${esc(r.key)}" ${picked ? "checked" : ""} /></td>`;
         }
-        return `<td class="${cls(c)}" style="${style(c)}">${cellHtml(r.cells[c.id])}</td>`;
+        const cell = r.cells[c.id];
+        return `<td class="${cls(c, cell && cell.c ? cell.c : "")}" style="${style(c)}">${cellHtml(cell)}</td>`;
       }).join("");
       return `<tr class="${picked ? "picked" : ""}">${tds}</tr>`;
     }).join("");

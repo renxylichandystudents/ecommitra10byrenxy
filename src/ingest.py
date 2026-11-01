@@ -424,6 +424,9 @@ def clean_order_frame(raw: pd.DataFrame) -> pd.DataFrame:
     else:
         frame["order_amount"] = frame["sales"]
 
+    for extra in ("cancel_reason", "buyer"):
+        frame[extra] = clean_text_series(table[mapping[extra]]) if extra in mapping else ""
+
     frame = _attach_promo_columns(frame, table)
     frame = frame.dropna(subset=["order_time", "product_name", "qty", "sales"])
     frame = frame[(frame["qty"] > 0) | (frame["gross_qty"] > 0)]

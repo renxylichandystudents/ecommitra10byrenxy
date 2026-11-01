@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +12,13 @@ from src.ingest import _clean_token, _parse_datetime, map_columns, order_revenue
 
 LIBRARY_DIR = Path(__file__).resolve().parents[1] / "uploads" / "library"
 CATALOG_PATH = LIBRARY_DIR / "catalog.json"
+
+
+def configure_root(root: Path) -> None:
+    """Arahkan penyimpanan bulanan ke folder pengguna (dipakai saat deploy publik)."""
+    global LIBRARY_DIR, CATALOG_PATH
+    LIBRARY_DIR = Path(root) / "library"
+    CATALOG_PATH = LIBRARY_DIR / "catalog.json"
 
 ID_MONTHS = (
     "Januari",
@@ -73,6 +81,8 @@ def bundle_stamp(keys: list[str]) -> tuple[float, ...]:
         stamps.append(CATALOG_PATH.stat().st_mtime)
     except OSError:
         stamps.append(0.0)
+    # Cache Streamlit dipakai bersama semua pengunjung; folder pengguna ikut jadi kunci.
+    stamps.append(float(zlib.crc32(str(LIBRARY_DIR).encode("utf-8"))))
     return tuple(stamps)
 
 

@@ -8,6 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.core.preprocessing import preprocess_sales_frame
+from src.core.segmentation import abc_xyz_segments, cluster_products, label_productivity, product_feature_table
 from src.intelligence.benchmark import benchmark_cancel_risk, benchmark_daily_demand
 from src.intelligence.preprocess import clean_frame
 
@@ -58,6 +60,7 @@ def show_intelligence_dashboard(orders: pd.DataFrame, history: pd.DataFrame) -> 
         st.markdown("<div class='section-title'>Risiko pesanan batal</div>", unsafe_allow_html=True)
         st.caption(cancel_note)
         _chart_and_table(cancel, "F1", "F1 kelas batal", "risiko_batal.xlsx")
+    _show_phase2_segments(orders, history)
 
 
 def _chart_and_table(table: pd.DataFrame, column: str, title: str, filename: str) -> None:
@@ -97,3 +100,52 @@ def _chart_and_table(table: pd.DataFrame, column: str, title: str, filename: str
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"excel-{filename}",
     )
+
+
+def _show_phase2_segments(orders: pd.DataFrame, history: pd.DataFrame) -> None:
+    st.subheader("J. Prapemrosesan dan segmentasi produk")
+    st.caption(
+        "Bagian ini adalah fondasi Fase 2. Hari tanpa transaksi tetap 0, bukan missing value. "
+        "Hasil segmentasi dipakai untuk rekomendasi stok, iklan, bundling, dan laporan pada fase berikutnya."
+    )
+    base = pd.DataFrame()
+    if isinstance(history, pd.DataFrame) and not history.empty:
+        base = history.rename(columns={"period_start": "date"}).copy()
+    elif isinstance(orders, pd.DataFrame) and not orders.empty:
+        base = orders.copy()
+    if base.empty:
+        st.write("Segmentasi belum tersedia karena data harian belum terbentuk.")
+        return
+    try:
+        cleaned, report = preprocess_sales_frame(base.rename(columns={"date": "order_time"}) if "date" in base.columns else base)
+        segment_source = cleaned if not cleaned.empty else base
+        if "date" not in segment_source.columns and "order_time" in segment_source.columns:
+            segment_source = segment_source.copy()
+            segment_source["date"] = pd.to_datetime(segment_source["order_time"], errors="coerce").dt.normalize()
+        segments = abc_xyz_segments(segment_source)
+        features = product_feature_table(segment_source)
+        labeled = label_productivity(cluster_products(features)) if not features.empty else pd.DataFrame()
+    except Exception as exc:  # noqa: BLE001 - evaluation should degrade gracefully
+        st.warning(f"Segmentasi dilewati karena data belum cocok: {exc}")
+        return
+    cards = st.columns(4)
+    cards[0].metric("Baris input", f"{report.rows_in:,}".replace(",", "."))
+    cards[1].metric("Baris harian SKU", f"{report.rows_out:,}".replace(",", "."))
+    cards[2].metric("Outlier ditandai", f"{report.outliers_flagged:,}".replace(",", "."))
+    cards[3].metric("Spike promo dipertahankan", f"{report.promo_spikes_kept:,}".replace(",", "."))
+    st.caption(report.note)
+    left, right = st.columns(2)
+    with left:
+        st.markdown("<div class='section-title'>ABC / XYZ</div>", unsafe_allow_html=True)
+        if segments.empty:
+            st.write("ABC/XYZ belum terbentuk.")
+        else:
+            summary = segments.groupby(["abc", "xyz"], as_index=False).agg(jumlah_sku=("item_key", "nunique"))
+            st.dataframe(summary, hide_index=True, use_container_width=True)
+    with right:
+        st.markdown("<div class='section-title'>Label produktivitas</div>", unsafe_allow_html=True)
+        if labeled.empty or "productivity_label" not in labeled.columns:
+            st.write("Label produktivitas belum terbentuk.")
+        else:
+            summary = labeled.groupby("productivity_label", as_index=False).agg(jumlah_sku=("item_key", "nunique"))
+            st.dataframe(summary, hide_index=True, use_container_width=True)

@@ -1,0 +1,85 @@
+# Aturan sistem pakar (production rules If-Then).
+# Field fakta per SKU: abc, xyz, status_stok, selisih_pct, hari_cukup, lama_kosong,
+# harga_vs_kompetitor_pct, batal_pct, batal_belum_bayar_pct, ctr_pct, konversi_pct,
+# roas, porsi_iklan_pct, tren_pct, label_terlaris, productivity_label.
+# Operator: lt, le, gt, ge, eq, ne, in.
+
+rules:
+  - id: stok_kosong
+    prioritas: 1
+    jika:
+      - [status_stok, in, [Kosong]]
+    maka: "Restock segera {kekurangan} unit dari DC Cikupa; jangan aktifkan iklan atau flash sale sampai stok masuk."
+    aksi: stok
+  - id: stok_kurang_tahan_iklan
+    prioritas: 2
+    jika:
+      - [status_stok, in, [Kurang, Tipis]]
+    maka: "Stok kurang {kekurangan} unit dari kebutuhan. Tunda kenaikan iklan, ajukan restock minimal {kekurangan} unit sebelum {batas_tanggal}."
+    aksi: stok
+  - id: di_bawah_ss
+    prioritas: 2
+    jika:
+      - [di_bawah_ss, eq, true]
+    maka: "Stok di bawah safety stock ({ss} unit). Naikkan stok ke ROP {rop} unit agar tidak kosong saat lead time."
+    aksi: stok
+  - id: kelas_c_mahal
+    prioritas: 3
+    jika:
+      - [abc, eq, C]
+      - [harga_vs_kompetitor_pct, gt, 5]
+    maka: "Harga {harga_vs_kompetitor_pct}% di atas kompetitor untuk produk kelas C. Uji turun harga 5–10% atau bundling dengan produk pendamping."
+    aksi: harga
+  - id: belum_bayar_tinggi
+    prioritas: 3
+    jika:
+      - [batal_belum_bayar_pct, gt, 10]
+    maka: "Pembatalan karena belum bayar {batal_belum_bayar_pct}%. Kirim chat pengingat pembayaran H+1 jam dan H+12 jam setelah pesanan dibuat."
+    aksi: pembayaran
+  - id: batal_tinggi
+    prioritas: 3
+    jika:
+      - [batal_pct, gt, 15]
+    maka: "Tingkat batal {batal_pct}%. Cek alasan batal teratas, perjelas ongkir dan estimasi kirim barang berat di deskripsi."
+    aksi: layanan
+  - id: ctr_rendah
+    prioritas: 4
+    jika:
+      - [ctr_pct, lt, 1]
+      - [dilihat, gt, 1000]
+    maka: "Banyak dilihat tetapi CTR {ctr_pct}%. Ganti foto utama dan perbaiki judul dengan kata kunci utama."
+    aksi: listing
+  - id: konversi_rendah
+    prioritas: 4
+    jika:
+      - [konversi_pct, lt, 2]
+      - [klik, gt, 100]
+    maka: "Klik tinggi tetapi konversi {konversi_pct}%. Lengkapi spesifikasi, cara pasang, dan bandingkan harga dengan kompetitor."
+    aksi: listing
+  - id: iklan_efektif_stok_aman
+    prioritas: 5
+    jika:
+      - [roas, ge, 8]
+      - [status_stok, in, [Aman]]
+    maka: "ROAS {roas} dan stok aman. Naikkan budget iklan bertahap 20% selama stok masih cukup {hari_cukup} hari."
+    aksi: iklan
+  - id: iklan_boros
+    prioritas: 4
+    jika:
+      - [roas, lt, 3]
+      - [biaya_iklan, gt, 0]
+    maka: "ROAS {roas} di bawah 3. Turunkan bid atau hentikan iklan, alihkan budget ke SKU kelas A."
+    aksi: iklan
+  - id: slow_moving
+    prioritas: 5
+    jika:
+      - [productivity_label, in, [Slow-Moving, Dead Stock]]
+      - [stok, gt, 0]
+    maka: "Produk {productivity_label} dengan stok {stok} unit. Jadwalkan markdown bertahap atau masukkan ke flash sale dengan margin minimum."
+    aksi: harga
+  - id: tren_turun
+    prioritas: 5
+    jika:
+      - [tren_pct, lt, -20]
+    maka: "Penjualan turun {tren_pct}% dibanding 28 hari sebelumnya. Cek harga kompetitor dan status iklan."
+    aksi: analisa

@@ -1,0 +1,73 @@
+# Parameter bisnis default. Nilai ini dipakai bila data belum tersedia.
+# Perubahan dari UI disimpan per pengguna, file ini tetap sebagai default.
+
+lead_time:
+  lokal_hari: 7            # Gudang Cipeucang / DC Cikupa ke pembeli
+  lokal_sigma_hari: 0      # 0 = lead time lokal dianggap stabil
+  impor_aktif: false
+  impor_rata_hari: 60
+  impor_maks_hari: 90
+
+gudang:
+  kapasitas_unit: 100000
+  moq_unit: 1
+  biaya_simpan_pct_tahun: 20     # persen dari harga per unit per tahun
+  biaya_pesan_rp: 150000         # biaya sekali pesan untuk EOQ
+  biaya_kehabisan_pct: 30        # persen dari harga jual per unit yang hilang
+
+margin:
+  hpp_pct_harga: 80              # HPP diasumsikan 80% dari harga jual bersih
+  margin_min_pct: 8              # batas margin minimum flash sale / markdown
+
+target:
+  sales_bulanan_rp: 0            # 0 = memakai prediksi sebagai target
+
+iklan:
+  target_roas: 8
+  budget_maks_rp: 5000000
+  porsi_sales_iklan_default_pct: 30
+  roas_default: 6
+
+label:
+  terlaris_top_n: 10
+  populer_top_pct: 10
+  diminati_top_pct: 10
+  perlu_perhatian_batal_pct: 15
+  perlu_perhatian_kali_median: 2
+
+shopee:
+  judul_maks_karakter: 120
+  judul_min_karakter: 25
+  deskripsi_maks_karakter: 3000
+  flash_sale_diskon_pct: [10, 15, 20]
+  flash_sale_kuota_pct_surplus: 50
+  flash_sale_template_kolom:
+    - Tanggal
+    - SKU
+    - Nama Produk
+    - Harga Normal
+    - Harga Flash Sale
+    - Stok Flash Sale
+    - Batas Pembelian
+
+merek:
+  - mitra10
+  - avian
+  - dulux
+  - nippon
+  - jotun
+  - mowilex
+  - no drop
+  - aquaproof
+  - tiga roda
+  - holcim
+  - dynamix
+  - wavin
+  - rucika
+  - toto
+  - american standard
+  - wasser
+  - philips
+  - panasonic
+  - broco
+  - krisbow

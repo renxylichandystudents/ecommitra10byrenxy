@@ -14,6 +14,11 @@ from src.library import month_label
 
 RUNS_DIR = Path(__file__).resolve().parents[1] / "uploads" / "analysis_runs"
 KEEP_RUNS = 40
+
+
+def configure_root(root: Path) -> None:
+    global RUNS_DIR
+    RUNS_DIR = Path(root) / "analysis_runs"
 SNAPSHOT_COLUMNS = (
     "item_key",
     "item_label",
