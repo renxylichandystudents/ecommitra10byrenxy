@@ -110,9 +110,11 @@ def drop_blank_rows(frame: pd.DataFrame) -> pd.DataFrame:
         if not len(rows):
             return frame
         column = frame.iloc[rows, i]
-        blank = column.isna().to_numpy()
-        if column.dtype == object or pd.api.types.is_string_dtype(column):
-            blank |= column.astype(str).str.strip().str.lower().isin(BLANK_CELLS).to_numpy()
+        missing = column.isna().to_numpy(dtype=bool)
+        blank = missing.copy()
+        if not (pd.api.types.is_numeric_dtype(column) or pd.api.types.is_datetime64_any_dtype(column)):
+            text = [str(value).strip().lower() for value in column.astype(object).tolist()]
+            blank |= np.fromiter((value in BLANK_CELLS for value in text), dtype=bool, count=len(text))
         candidate.iloc[rows] = blank
     return frame.iloc[~candidate.to_numpy()]
 

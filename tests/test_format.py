@@ -11,6 +11,7 @@ from src.utils.format import (
     angka,
     column_kind,
     desimal,
+    drop_blank_rows,
     excel_bytes,
     parse_rupiah,
     persen,
@@ -21,6 +22,18 @@ from src.utils.format import (
 
 
 class FormatTest(unittest.TestCase):
+    def test_drop_blank_rows_all_dtypes(self):
+        frame = pd.DataFrame(
+            {
+                "s": pd.array(["x", None, "", "-"], dtype="string"),
+                "i": pd.array([1, None, None, None], dtype="Int64"),
+                "c": pd.Categorical(["k", None, "-", None]),
+                "o": ["y", float("nan"), "nan", None],
+            }
+        )
+        self.assertEqual(drop_blank_rows(frame).index.tolist(), [0])
+        self.assertEqual(drop_blank_rows(pd.DataFrame([["a", ""], ["", "-"]], columns=["A", "A"])).index.tolist(), [0])
+
     def test_numbers(self):
         self.assertEqual(rupiah(1431776359), "Rp 1.431.776.359")
         self.assertEqual(rupiah(-5000), "−Rp 5.000")
