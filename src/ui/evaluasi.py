@@ -24,10 +24,10 @@ METRIC_COLUMNS = ("MAPE agregat (%)", "WAPE (%)", "MAPE SKU (%)", "Bias (%)", "R
 
 def _strategy() -> None:
     steps = (
-        ("Data", "9 menu upload: transaksi, stok DC Cikupa (snapshot), iklan, performance, deskripsi, kompetitor. Duplikat dibuang, snapshot stok disimpan per tanggal unggah."),
+        ("Data", "9 menu upload: transaksi, performance, iklan produk otomatis, iklan produk grup, keseluruhan iklan, iklan pencarian, stok DC Cikupa (snapshot), deskripsi produk, kompetitor. Duplikat dibuang, snapshot stok disimpan per tanggal unggah."),
         ("Prapemrosesan", "Kalender harian per SKU, hari tanpa pesanan = 0, hari stok kosong = tidak teramati (permintaan tersensor), harga bersih 4 minggu, penanda promo (tanggal kembar, gajian, Harbolnas)."),
         ("Segmentasi", "ABC (kontribusi sales), XYZ (variasi permintaan), label produktivitas, association rules untuk kelompok iklan."),
-        ("Forecasting", "Level terkini, Moving Average 28, Exponential Smoothing, model global gradient boosting, Prophet bila tersedia → ensemble berbobot 1/WAPE dari walk-forward."),
+        ("Forecasting", "Level terkini, Moving Average 28, Exponential Smoothing, model global gradient boosting (XGBoost), Prophet bila terpasang → ensemble berbobot 1/WAPE dari walk-forward. Model yang aktif tercantum di tab Pemodelan."),
         ("Safety stock & optimisasi", "SS = Z × σ permintaan × √lead time (lokal); rumus umum bila lead time bervariasi; (Lmaks − Lrata) × D untuk impor. ROP, Monte Carlo, MILP restock (PuLP) dengan fallback heuristik."),
         ("Sistem pakar", "Aturan JIKA–MAKA di config/rules.yaml: stok, iklan, batal, listing, tren; maksimal 3 langkah terukur, iklan tidak dinaikkan bila stok kurang."),
         ("Rekomendasi", "Nama & deskripsi (NLP kompetitor), iklan, flash sale, exposure, laporan & panduan kerja."),
@@ -49,7 +49,7 @@ def _modeling(outcome, period: str) -> None:
         "- **Fitur model global**: lag 1, rata-rata 7/14/28/90 hari, rata-rata 28 hari sebelumnya, variasi 28 hari, porsi hari aktif, "
         "status stok kemarin, porsi hari promo ke depan, bulan, perubahan level.\n"
         "- **Hari stok kosong**: tidak dihitung sebagai permintaan nol (dikeluarkan dari latih & evaluasi), karena penjualan 0 saat stok 0 bukan berarti tidak ada permintaan.\n"
-        "- **Agregasi**: laju harian × jumlah hari; Bulan ini = realisasi tanggal 1 s.d. kemarin + prediksi sisa bulan (tidak pernah di bawah realisasi)."
+        "- **Agregasi**: laju harian × jumlah hari; Bulan ini = realisasi tanggal 1 s.d. kemarin + prediksi sisa bulan (aturan perhitungan, sehingga tidak pernah di bawah realisasi)."
     )
     if outcome is None:
         st.info("Model tambahan belum dijalankan: prediksi memakai Level terkini saja.")
@@ -73,9 +73,18 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date) -> dict:
         frame = model_comparison_frame(outcome)
         show_table(frame, kinds={c: "dec" for c in METRIC_COLUMNS})
         download_excel(frame, "evaluasi_walk_forward.xlsx", key="xl-eval-wf")
-        best = frame.loc[frame["Model"] == MODEL_ENSEMBLE] if (frame["Model"] == MODEL_ENSEMBLE).any() else frame
-        results["mape"] = float(best["MAPE agregat (%)"].min()) if not best.empty else np.nan
-        results["top50"] = best["Top 50 tepat"].iloc[0] if "Top 50 tepat" in best.columns and not best.empty else None
+        # Audit K3: semua angka (tabel, kesimpulan, grafik) memakai horizon yang sama, yaitu horizon
+        # terpanjang yang diuji (sama dengan default grafik). Sebelumnya diambil MAPE terkecil
+        # dari semua horizon, sehingga kesimpulan (7,6%) tidak sama dengan grafik (18,21%).
+        horizon = int(frame["Horizon (hari)"].max())
+        part = frame.loc[frame["Horizon (hari)"] == horizon]
+        ens = part.loc[part["Model"] == MODEL_ENSEMBLE] if (part["Model"] == MODEL_ENSEMBLE).any() else part
+        ranked = part.sort_values("MAPE agregat (%)")
+        results["horizon"] = horizon
+        results["mape"] = float(ens["MAPE agregat (%)"].iloc[0]) if not ens.empty else np.nan
+        results["best_model"] = str(ranked["Model"].iloc[0]) if not ranked.empty else ""
+        results["best_mape"] = float(ranked["MAPE agregat (%)"].iloc[0]) if not ranked.empty else np.nan
+        results["top50"] = ens["Top 50 tepat"].iloc[0] if "Top 50 tepat" in ens.columns and not ens.empty else None
         for note in outcome.evaluations[0].notes if outcome.evaluations[0].notes else []:
             st.caption(note)
 
@@ -86,7 +95,7 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date) -> dict:
         {
             "No": 1,
             "Komponen": "Demand forecasting",
-            "Metode": "Walk-forward CV + MAPE agregat",
+            "Metode": f"Walk-forward CV + MAPE agregat ensemble, horizon {results['horizon']} hari" if results.get("horizon") else "Walk-forward CV + MAPE agregat",
             "Target": f"MAPE ≤ {MAPE_TARGET_PCT:.0f}%",
             "Hasil": fmt_pct(mape) if np.isfinite(mape) else "belum tersedia",
             "Status": ("Tercapai" if mape <= MAPE_TARGET_PCT else "Belum tercapai") if np.isfinite(mape) else "-",
@@ -156,17 +165,30 @@ def _comparison(outcome) -> None:
 
 def _conclusion(outcome, results: dict, base_history: pd.DataFrame | None) -> None:
     mape = results.get("mape", np.nan)
-    strengths = ["Prediksi bulan berjalan tidak pernah di bawah realisasi (realisasi + prediksi sisa bulan).", "Hari stok kosong tidak menurunkan prediksi (permintaan tersensor)."]
+    horizon = results.get("horizon")
+    # Audit S9: kekuatan berupa hasil yang terukur, bukan aturan konstruksi.
+    strengths = ["Hari stok kosong tidak menurunkan prediksi (permintaan tersensor)."]
     weaknesses = []
+    if results.get("top50") is not None:
+        strengths.append(f"Akurasi Top 50: {results['top50']} dari 50 SKU prediksi teratas masuk Top 50 aktual (horizon {horizon} hari).")
     if np.isfinite(mape):
-        (strengths if mape <= MAPE_TARGET_PCT else weaknesses).append(f"MAPE agregat ensemble {fmt_pct(mape)} (target {MAPE_TARGET_PCT:.0f}%).")
+        text = f"MAPE agregat ensemble {fmt_pct(mape)} pada horizon {horizon} hari (target {MAPE_TARGET_PCT:.0f}%)."
+        (strengths if mape <= MAPE_TARGET_PCT else weaknesses).append(text)
+        best_model, best_mape = results.get("best_model"), results.get("best_mape", np.nan)
+        if best_model and best_model != MODEL_ENSEMBLE and np.isfinite(best_mape) and best_mape < mape:
+            weaknesses.append(
+                f"Ensemble kalah dari model tunggal terbaik {best_model} ({fmt_pct(best_mape)}) pada horizon yang sama: bobot dan anggota ensemble perlu ditinjau."
+            )
     if outcome is not None and outcome.availability.skipped:
-        weaknesses.append("Model dilewati: " + ", ".join(f"{k} ({v})" for k, v in outcome.availability.skipped.items()) + ".")
+        # Audit S6: hanya model yang memang relevan; detail library ada di tab Pemodelan.
+        skipped = {k: v for k, v in outcome.availability.skipped.items() if k != "LightGBM"}
+        if skipped:
+            weaknesses.append("Model belum dipakai: " + ", ".join(f"{k} ({v})" for k, v in skipped.items()) + ".")
     weaknesses.append("MAPE per SKU tinggi pada SKU jarang laku; pakai MAPE agregat/WAPE untuk keputusan stok.")
     improve = [
         "Unggah snapshot stok DC Cikupa rutin (mingguan) agar hari kosong & lama kosong akurat.",
         "Lengkapi laporan iklan per Kode produk agar ROAS per SKU tidak memakai default.",
-        "Tambah riwayat ≥ 12 bulan untuk menangkap musim renovasi (Quartal/Semester/Tahun).",
+        "Tambah riwayat ≥ 12 bulan untuk menangkap musim renovasi (Kuartal/Semester/Tahun).",
     ]
     cols = st.columns(3)
     for column, (title, items) in zip(cols, (("Kekuatan", strengths), ("Kelemahan", weaknesses), ("Perbaikan data", improve))):

@@ -434,6 +434,7 @@ def clean_order_frame(raw: pd.DataFrame) -> pd.DataFrame:
     frame = frame.dropna(subset=["order_time", "product_name", "qty", "sales"])
     frame = frame[(frame["qty"] > 0) | (frame["gross_qty"] > 0)]
     frame = frame[frame["gross_sales"].fillna(frame["sales"]).fillna(0) >= 0]
+    frame = attach_order_line_totals(frame)
     frame["item_key"] = item_key_series(frame)
     frame = apply_latest_identity(frame)
     return frame.reset_index(drop=True)
@@ -468,8 +469,35 @@ def default_statuses(statuses: list[str]) -> list[str]:
     return kept if kept else list(statuses)
 
 
+ORDER_LINES_GROSS = "order_lines_gross"
+
+
+def attach_order_line_totals(df: pd.DataFrame, gross_col: str = "gross_sales") -> pd.DataFrame:
+    """Simpan nilai baris kotor seluruh pesanan (sebelum retur) di setiap baris.
+
+    Dipakai `order_revenue` untuk mengurangi retur sebagian dari Total Pembayaran.
+    Harus dipanggil sebelum baris retur atau batal dibuang, supaya total pesanan masih lengkap.
+    """
+    if df is None or df.empty or "order_id" not in df.columns:
+        return df
+    column = gross_col if gross_col in df.columns else "sales"
+    if column not in df.columns:
+        return df
+    out = df.copy()
+    ids = out["order_id"].fillna("").astype(str).str.strip()
+    values = pd.to_numeric(out[column], errors="coerce").fillna(0.0)
+    out[ORDER_LINES_GROSS] = values.groupby(ids).transform("sum")
+    return out
+
+
 def order_revenue(df: pd.DataFrame) -> float:
-    """Omzet transaksi: Total Pembayaran dihitung sekali untuk tiap No. Pesanan."""
+    """Omzet transaksi: Total Pembayaran dihitung sekali untuk tiap No. Pesanan.
+
+    Bila kolom `order_lines_gross` tersedia, Total Pembayaran dikalikan porsi nilai baris
+    yang masih dihitung (kolom `sales`) terhadap nilai baris kotor seluruh pesanan. Jadi retur
+    sebagian (1 dari 3 unit, atau 1 dari 2 produk dalam satu pesanan) tidak lagi ikut dihitung
+    sebagai penjualan. Tanpa retur porsinya 1, sehingga hasilnya sama dengan sebelumnya.
+    """
     if df.empty:
         return 0.0
     amount_col = "order_amount" if "order_amount" in df.columns else "sales"
@@ -483,8 +511,15 @@ def order_revenue(df: pd.DataFrame) -> float:
     if (~blank).any():
         named = df.loc[~blank].copy()
         named["_oid"] = ids.loc[~blank].to_numpy()
-        once = named.groupby("_oid", as_index=False).agg(amount=(amount_col, "first"), line=("sales", "sum"))
+        agg = {"amount": (amount_col, "first"), "line": ("sales", "sum")}
+        if ORDER_LINES_GROSS in named.columns:
+            agg["gross"] = (ORDER_LINES_GROSS, "first")
+        once = named.groupby("_oid", as_index=False).agg(**agg)
         chosen = once["amount"].where(once["amount"].fillna(0) > 0, once["line"])
+        if "gross" in once.columns:
+            gross = pd.to_numeric(once["gross"], errors="coerce")
+            share = (once["line"] / gross.where(gross > 0)).clip(lower=0, upper=1).fillna(1.0)
+            chosen = chosen.where(once["amount"].fillna(0) <= 0, chosen * share)
         total += float(chosen.fillna(0).sum())
     if blank.any():
         total += float(df.loc[blank, "sales"].sum())

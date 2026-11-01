@@ -112,13 +112,16 @@ from src.library import (
 )
 from src.movement import compare_runs, frame_from_stock, list_runs, load_run, record_run, setup_notes
 from src.ingest import (
+    ORDER_LINES_GROSS,
     _is_cancelled_status,
+    attach_order_line_totals,
     clean_order_frame,
     clean_sku_columns,
     load_shopee_report,
     order_month_keys,
     order_revenue,
 )
+from src.core import metrics
 from src.ranking import combine_forecasts, model_leaderboard, rank_from_orders
 from src.stock import recommend_stock
 
@@ -1515,11 +1518,19 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         """
         <div class="home-section">UPLOAD DATA LATIH</div>
         <div class="feature-copy">
-        Silakan upload data latih meliputi data transaksi, data performance, data iklan produk otomatis, data iklan produk grup, data keseluruhan iklan, data iklan pencarian, data stok, data produk deskripsi, dan data produk kompetitor. Jika Anda telah meng-upload dan submit, data akan tersimpan; ketika Anda men-submit data baru, sistem akan menambahkannya sebagai data pembaruan. Data yang Anda submit akan menjadi data latih di komputer Anda.
+        Silakan upload data latih meliputi data transaksi, data performance, data iklan produk otomatis, data iklan produk grup, data keseluruhan iklan, data iklan pencarian, data stok, data produk deskripsi, dan data produk kompetitor. Setelah Submit, data tersimpan di server aplikasi dan menjadi data latih. Data transaksi disimpan per bulan: file yang berisi bulan yang sudah ada mengganti data bulan itu. Menu lain: baris baru ditambahkan dan baris yang sama diperbarui, tidak dobel.
         </div>
         """,
         unsafe_allow_html=True,
     )
+    # Audit K7: jujur soal tempat penyimpanan. File data latih dan hasil analisa ada di disk server;
+    # di Streamlit Community Cloud disk ini dikosongkan saat aplikasi restart atau redeploy.
+    if deploy_mode() == "server":
+        st.caption(
+            "Penyimpanan: file data latih dan hasil analisa ada di folder sementara server aplikasi. Di Streamlit "
+            "Community Cloud folder ini dikosongkan saat aplikasi restart atau redeploy, jadi unggah ulang bila Folder "
+            "data kosong. Akun dan riwayat analisa tetap ada bila DATABASE_URL diisi di Secrets."
+        )
     statuses = _source_status_map(store)
     specs = source_menu()
     labels = [f"{spec.label} · {statuses.get(spec.key, 'Kosong')}" for spec in specs]
@@ -1546,7 +1557,7 @@ def show_training_uploads() -> tuple[list[str], str | None]:
             )
             st.markdown(
                 "<div class='upload-note'>Type file CSV, XLSX, atau XLS. Maksimal 50 lampiran, total 1 GB. "
-                "File dibaca setelah tombol Submit ditekan. Unggahan baru menambah data latih, tidak menghapus file lama.</div>",
+                "File dibaca setelah tombol Submit ditekan. Data transaksi: bulan yang sudah ada diganti isi file baru. Menu lain: baris baru ditambahkan, baris yang sama diperbarui.</div>",
                 unsafe_allow_html=True,
             )
             submitted = st.form_submit_button("Submit", type="primary")
@@ -1614,6 +1625,9 @@ def prepare_analysis_orders(
     if orders_raw is None or orders_raw.empty:
         return orders_raw
     work = orders_raw.copy()
+    if ORDER_LINES_GROSS not in work.columns:
+        # Data lama dari penyimpanan belum punya kolom ini; hitung sebelum baris dibuang.
+        work = attach_order_line_totals(work)
     if exclude_return_cancel:
         if "status" in work.columns:
             work = work.loc[~work["status"].map(_is_cancelled_status)].copy()
@@ -1929,7 +1943,10 @@ def pin_app_header() -> None:
             ['position', 'top', 'left', 'width', 'z-index', 'background', 'box-sizing', 'margin'].forEach((p) => el.style.removeProperty(p));
           };
           const previous = parent.__mitraPinned || [];
-          if (!root || !bar || !main) {
+          // Audit K5: di layar sempit kolom header menumpuk (±800 px) dan menutup isi halaman.
+          // Di bawah 900 px header tidak dikunci; halaman menggulir biasa.
+          const narrow = parent.innerWidth < 900;
+          if (!root || !bar || !main || narrow) {
             if (existing) existing.remove();
             previous.forEach(unpin);
             parent.__mitraPinned = [];
@@ -3177,9 +3194,10 @@ def explain_qty_gap(
     }
     resume_short = resume_label if len(resume_label) <= 18 else "Periode laporan"
     bars = [
-        _bar_spec("Bulan ini", resume_short, month_pred, actual, "terjual"),
-        _bar_spec("Kemarin", _short_id_date(yesterday), yesterday_pred, yesterday_sold, "terjual"),
-        _bar_spec("Bulan lalu", m_name, month_ago_pred, month_ago_sold, "terjual"),
+        # Audit T7: label menyebut apa yang dibandingkan, bukan "Bulan ini" berisi data bulan lalu.
+        _bar_spec(BAR_MONTH, f"terjual {resume_short}", month_pred, actual, "terjual"),
+        _bar_spec(BAR_YESTERDAY, _short_id_date(yesterday), yesterday_pred, yesterday_sold, "terjual"),
+        _bar_spec(BAR_MONTH_AGO, m_name, month_ago_pred, month_ago_sold, "terjual"),
     ]
     return {
         "direction": direction,
@@ -3291,17 +3309,22 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
     )
 
 
+BAR_MONTH = "Prediksi bulan ini"
+BAR_YESTERDAY = "Kemarin"
+BAR_MONTH_AGO = "Tanggal sama bulan lalu"
+
+
 def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, today: date) -> list[dict]:
     """Versi Rupiah dari batang QTY untuk parameter Sales volume (prediksi × harga bersih 4 minggu)."""
     price = float(row.get("harga_bersih", 0) or 0)
     yesterday = today - timedelta(days=1)
     month_ago = _same_day_last_month(today)
-    sold_sales = {"Bulan ini": None, "Kemarin": None, "Bulan lalu": None}
+    sold_sales = {BAR_MONTH: None, BAR_YESTERDAY: None, BAR_MONTH_AGO: None}
     if isinstance(item_orders, pd.DataFrame) and not item_orders.empty:
         days = pd.to_datetime(item_orders["order_time"]).dt.date
-        sold_sales["Kemarin"] = float(item_orders.loc[days == yesterday, "sales"].sum())
-        sold_sales["Bulan lalu"] = float(item_orders.loc[days == month_ago, "sales"].sum())
-        sold_sales["Bulan ini"] = float(row.get("sales_total", 0) or 0)
+        sold_sales[BAR_YESTERDAY] = float(item_orders.loc[days == yesterday, "sales"].sum())
+        sold_sales[BAR_MONTH_AGO] = float(item_orders.loc[days == month_ago, "sales"].sum())
+        sold_sales[BAR_MONTH] = float(row.get("sales_total", 0) or 0)
     out = []
     for bar, pred_qty in zip(brief["bars"], (brief.get("month_pred"), brief.get("yesterday_pred"), brief.get("month_ago_pred"))):
         sold = sold_sales.get(bar["label"])
@@ -3315,7 +3338,7 @@ def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, t
 
 
 def _extra_period_bar(row: pd.Series | None, period: str, item_orders: pd.DataFrame | None, today: date, metric: str) -> dict | None:
-    """Baris periode tambahan (Quartal/Semester/Tahun) di bawah Bulan lalu."""
+    """Baris periode tambahan (Kuartal/Semester/Tahun) di bawah Bulan lalu."""
     if row is None or period == "bulan" or "p_qty" not in row.index:
         return None
     months = {"kuartal": 3, "semester": 6, "tahun": 12}[period]
@@ -3567,7 +3590,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     st.session_state["data_start"] = st.session_state.get("data-start")
     st.session_state["data_end"] = st.session_state.get("data-end")
     selected_label = range_text or "kosong"
-    show_store_overview(range_text)
+    show_store_overview(range_text, period_view)
     status_names = sorted(
         {status for status in period_view["status"].tolist() if str(status).strip()},
         key=str.casefold,
@@ -3868,7 +3891,7 @@ def _bold_total(frame: pd.DataFrame, label_column: str):
     )
 
 
-def show_store_overview(range_text: str) -> None:
+def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None) -> None:
     """Kartu performa toko (Data performance) dan ringkasan iklan per periode terpilih."""
     frames = store_frames()
     perf = frames.performance
@@ -3907,16 +3930,19 @@ def show_store_overview(range_text: str) -> None:
             show_metric(column, label, text, hint=delta(value, total(prev, key, is_mean)))
     else:
         st.caption("Data performance belum diunggah: kartu pengunjung, konversi, dan pembeli berulang belum tersedia.")
-    cached = st.session_state.get("_enriched")
-    table = cached[1] if isinstance(cached, tuple) else None
-    if isinstance(table, pd.DataFrame) and "biaya_iklan" in table.columns and float(table["biaya_iklan"].sum()) > 0:
-        cost = float(table["biaya_iklan"].sum())
-        omzet = float(table["omzet_iklan"].sum())
-        st.markdown("<div class='section-title'>Ringkasan iklan</div>", unsafe_allow_html=True)
-        cols = st.columns(3)
-        show_metric(cols[0], "Biaya iklan", format_idr(cost))
-        show_metric(cols[1], "Omzet iklan", format_idr(omzet))
-        show_metric(cols[2], "ROAS", format_number(omzet / cost, 1) if cost > 0 else "-")
+    # Audit K2: ROAS dihitung untuk rentang tanggal yang sama dengan periode data, memakai fungsi
+    # yang sama dengan Laporan (sebelumnya memakai total katalog analisa, rentangnya berbeda).
+    start = st.session_state.get("data-start")
+    end = st.session_state.get("data-end")
+    if frames.ads and isinstance(period_view, pd.DataFrame) and not period_view.empty and start and end:
+        net_view = scope_ledger(period_view, include_cancel=False, include_return=False)
+        cost, omzet, roas = metrics.store_roas(frames.ads, frames.stock, net_view, pd.Timestamp(start), pd.Timestamp(end))
+        if cost > 0:
+            st.markdown("<div class='section-title'>Ringkasan iklan</div>", unsafe_allow_html=True)
+            cols = st.columns(3)
+            show_metric(cols[0], "Biaya iklan", format_idr(cost))
+            show_metric(cols[1], "Omzet iklan", format_idr(omzet))
+            show_metric(cols[2], "ROAS", format_number(roas, 1) if np.isfinite(roas) else "-")
 
 
 def present_product_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -4560,8 +4586,8 @@ def show_folder_menu() -> None:
     st.subheader("Folder data")
     st.caption(
         "Data yang sudah diimpor tersimpan di sini. "
-        "Pilih tahun dan bulan pada menu samping untuk memakai data itu tanpa mengunggah ulang. "
-        "Mengunggah file baru mengganti bulan yang sama dengan isi file baru."
+        "Centang tahun dan bulan di bagian Periode analisis data latih untuk memakai data itu tanpa mengunggah ulang. "
+        "Mengunggah file transaksi baru mengganti bulan yang sama dengan isi file baru."
     )
     if not saved:
         st.write("Belum ada data tersimpan.")
@@ -6091,8 +6117,8 @@ def filter_resume_orders(
             start_kwargs["value"] = span_min
         if end_widget not in st.session_state:
             end_kwargs["value"] = span_max
-        start = _as_date(date_col.date_input("Tanggal mulai", **start_kwargs)) or span_min
-        end = _as_date(date_col_end.date_input("Tanggal selesai", **end_kwargs)) or span_max
+        start = _as_date(date_col.date_input("Tanggal mulai", format="DD/MM/YYYY", **start_kwargs)) or span_min
+        end = _as_date(date_col_end.date_input("Tanggal selesai", format="DD/MM/YYYY", **end_kwargs)) or span_max
         if start > end:
             start, end = end, start
         if show_exclude:
@@ -6968,15 +6994,14 @@ def show_analysis_movement(
 
 
 def removed_counts(raw: pd.DataFrame | None) -> tuple[int, float]:
-    """Jumlah pesanan batal dan unit retur pada data latih (untuk kartu toggle exclude)."""
+    """Jumlah pesanan batal dan unit retur (untuk kartu toggle exclude).
+
+    Kirim data yang sudah dipotong ke periode yang sama dengan kartu penjualan; definisi ada di
+    src/core/metrics.py supaya sama dengan tab Data dan Laporan.
+    """
     if raw is None or raw.empty:
         return 0, 0.0
-    cancelled = raw["status"].map(_is_cancelled_status) if "status" in raw.columns else pd.Series(False, index=raw.index)
-    orders_count = int(raw.loc[cancelled, "order_id"].nunique()) if "order_id" in raw.columns else int(cancelled.sum())
-    units = 0.0
-    if {"gross_qty", "qty"} <= set(raw.columns):
-        units = float((raw.loc[~cancelled, "gross_qty"] - raw.loc[~cancelled, "qty"]).clip(lower=0).sum())
-    return orders_count, units
+    return metrics.removed_counts(raw)
 
 
 def enriched_catalog(
@@ -7389,7 +7414,9 @@ with PAGE_ROOT.container():
 
 
     def show_exclude_and_cards() -> None:
-        removed_orders, removed_units = removed_counts(orders_raw)
+        # Audit K1: hitung pada periode yang sama dengan kartu penjualan, bukan seluruh data latih.
+        raw_period, _raw_label = apply_saved_period(orders_raw, prefix="resume")
+        removed_orders, removed_units = removed_counts(raw_period)
         exclude_toggle_card(key="exclude-return-batal", removed_orders=removed_orders, removed_units=removed_units)
         show_performance_cards(sales_orders, resume_label)
         if period != "bulan":
@@ -7504,8 +7531,8 @@ with PAGE_ROOT.container():
             label_legend()
             f1, f2, f3, f4 = st.columns([2.2, 1.4, 1.4, 1])
             query = f1.text_input("Cari SKU atau nama produk", placeholder="Cari SKU atau nama produk..", key="pred-search")
-            label_pick = f2.multiselect("Label", options=list(LABEL_ICONS), key="pred-labels")
-            status_pick = f3.multiselect("Status stok (bulan ini)", options=["Aman", "Tipis", "Kurang", "Kosong", "Tanpa data stok"], key="pred-status")
+            label_pick = f2.multiselect("Label", options=list(LABEL_ICONS), key="pred-labels", placeholder="Pilih label")
+            status_pick = f3.multiselect("Status stok (bulan ini)", options=["Aman", "Tipis", "Kurang", "Kosong", "Tanpa data stok"], key="pred-status", placeholder="Pilih status")
             page_size = int(f4.selectbox("Tampilkan", options=[10, 50, 100, 200], index=1, key="pred-size"))
             work = enriched
             needle = " ".join(str(query or "").lower().split())

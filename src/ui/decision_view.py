@@ -407,7 +407,7 @@ def sku_charts(
         line = None
     labels_p = grouped["label"].tolist()
     out_idx = next((i for i, v in enumerate(line) if v <= 0), None) if line is not None else None
-    title_name = {"kuartal": "Quartal", "semester": "Semester", "tahun": "Tahun"}[period]
+    title_name = {"kuartal": "Kuartal", "semester": "Semester", "tahun": "Tahun"}[period]
     c3, c4 = st.columns(2)
     with c3:
         st.plotly_chart(

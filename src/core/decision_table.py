@@ -1,7 +1,7 @@
 """Tabel keputusan per SKU untuk semua tab.
 
 Satu fungsi membentuk angka Hari ini, Bulan ini, dan periode tambahan
-(Quartal/Semester/Tahun), supaya Ringkasan, Prediksi, Rekomendasi, dan Laporan
+(Kuartal/Semester/Tahun), supaya Ringkasan, Prediksi, Rekomendasi, dan Laporan
 membaca angka yang sama.
 """
 
@@ -16,7 +16,7 @@ import pandas as pd
 from src.core.inventory import days_cover, inventory_status
 
 PERIOD_MONTHS = {"bulan": 1, "kuartal": 3, "semester": 6, "tahun": 12}
-PERIOD_LABELS = {"bulan": "Bulan", "kuartal": "Quartal", "semester": "Semester", "tahun": "Tahun"}
+PERIOD_LABELS = {"bulan": "Bulan", "kuartal": "Kuartal", "semester": "Semester", "tahun": "Tahun"}
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class PeriodGroup:
 
 
 def period_groups(period: str, today: date) -> list[PeriodGroup]:
-    """Hari ini dan Bulan ini selalu ada. Periode tambahan hanya untuk Quartal/Semester/Tahun."""
+    """Hari ini dan Bulan ini selalu ada. Periode tambahan hanya untuk Kuartal/Semester/Tahun."""
     ref = pd.Timestamp(today).normalize()
     month_end = ref + pd.offsets.MonthEnd(0)
     groups = [

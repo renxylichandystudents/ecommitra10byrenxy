@@ -200,7 +200,7 @@ def _vectorize(texts: list[str]) -> Vectorizer:
     vec = TfidfVectorizer(analyzer="word", ngram_range=(1, 2), min_df=1, sublinear_tf=True)
     stemmed = [" ".join(tokens(text, stem=True)) for text in texts]
     matrix = vec.fit_transform(stemmed if any(stemmed) else [" "])
-    return Vectorizer("TF-IDF", "TF-IDF + cosine similarity (Sentence-BERT tidak terpasang)", matrix, vec)
+    return Vectorizer("TF-IDF", "TF-IDF + cosine similarity", matrix, vec)
 
 
 def match_competitors(own: pd.DataFrame, competitors: pd.DataFrame, *, top_k: int = 5) -> tuple[dict[str, list[int]], dict[str, list[float]], str]:
