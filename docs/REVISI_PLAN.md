@@ -337,6 +337,16 @@ Verifikasi:
 - `python -m unittest discover -s tests` lulus 51 test.
 - Smoke test `streamlit.testing.AppTest`: analisis penuh (Bulan ±55 detik dengan walk-forward, Kuartal ±60 detik) lalu ketujuh tab dan 11 bagian Laporan dibuka tanpa exception. Mode server (`PREDIKSI_DEPLOY_MODE=server`) membuat folder per browser dan halaman input terbuka tanpa error.
 
+### Revisi 01-11-2026 (Prompt_Cursor_011126) - Fase 1–5
+
+Status: selesai.
+
+- Fase 1 (GL-01/02/03, RK-03, UI-01): format angka/rupiah bersama `src/utils/format.py` (`show_table`, `input_rupiah`, Excel angka asli), tinggi tabel dinamis, header sticky, deskripsi tanpa judul KAPITAL + ringkasan 60 karakter + panel detail/salin, input data latih berurutan dengan spinner lokal.
+- Fase 2 (TR-01, RG-02, TR-05, RK-04): atribusi iklan per periode dan dibagi ke varian proporsional sales (`src/core/ads.py`), omzet iklan dibatasi sales aktual SKU; kartu pergerakan dengan aktual kemarin + Top 50 / All SKU; SKU retur & batal sebagai fragment + cache; alokasi budget iklan (`allocate_budget`).
+- Fase 3 (RK-02, RK-05, RK-06): tag packing dipertahankan, kosakata dibatasi produk + `data/brand_dictionary.csv`, kata asing ditolak ("Perlu cek manual"); flash sale "Stok terbatas"; kalender exposure bulanan.
+- Fase 4 (FB-02): login & role (`auth/`), bcrypt, kunci 5 menit setelah 5× gagal, wajib ganti password, Kelola user, super user terakhir dilindungi, repository SQLAlchemy (SQLite ↔ Postgres lewat `DATABASE_URL`).
+- Fase 5 (FB-01): riwayat analisa (`src/core/runs.py`, tabel `analysis_runs`, hasil Parquet/pickle di `data/runs/<id>/`), Beranda "1. Analisa prediksi" + "2. Riwayat analisa", Buka tanpa hitung ulang (termasuk cache pergerakan stok), tawaran "Buka hasil tersimpan / Analisa ulang", analisa sukses terakhir dimuat saat app dibuka, hapus oleh super user, auto-hapus > 90 hari.
+
 Pertanyaan terbuka tersisa:
 - Template resmi Shopee untuk flash sale toko masih memakai template generik.
 - Data stok belum diunggah pada data lokal, sehingga Flash sale toko dan chip stok menampilkan "belum ada data stok".

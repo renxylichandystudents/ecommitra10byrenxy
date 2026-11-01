@@ -48,6 +48,13 @@ def user_root(uid: str | None = None) -> Path:
     return root
 
 
+def team_root() -> Path:
+    """Folder data bersama untuk semua user yang login (satu tim Mitra10)."""
+    root = LOCAL_ROOT if deploy_mode() == "lokal" else SERVER_ROOT / "shared"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def resolve_browser_uid(st) -> str | None:
     """Ambil/buat ID browser di mode server. Mode lokal tidak butuh ID."""
     if deploy_mode() == "lokal":

@@ -103,7 +103,7 @@ def table_parts(
             "sold": {
                 "v": sold_value,
                 "t": fmt_qty(sold_value) if metric == "qty" else fmt_idr(sold_value),
-                "s": fmt_idr_short(row["sales_total"]) if metric == "qty" else f"{fmt_qty(row['qty_total'])} unit",
+                "s": fmt_idr(row["sales_total"]) if metric == "qty" else f"{fmt_qty(row['qty_total'])} unit",
             },
         }
         totals["sold"] = totals.get("sold", 0.0) + sold_value
@@ -124,7 +124,7 @@ def table_parts(
             cells[f"{p}_pred"] = {
                 "v": main,
                 "t": fmt_qty(qty) if metric == "qty" else fmt_idr(sales),
-                "s": fmt_idr_short(sales) if metric == "qty" else f"{fmt_qty(qty)} unit",
+                "s": fmt_idr(sales) if metric == "qty" else f"{fmt_qty(qty)} unit",
             }
             cells[f"{p}_ss"] = {"v": float(row[f"{p}_ss"]), "t": fmt_qty(row[f"{p}_ss"])}
             cells[f"{p}_butuh"] = {"v": float(row[f"{p}_butuh"]), "t": fmt_qty(row[f"{p}_butuh"])}
@@ -239,7 +239,7 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
                 "Sales volume actual": fmt_idr(sales_act),
                 "Prediksi QTY": fmt_qty(view[f"{p}_qty"].sum()),
                 "Prediksi sales volume": fmt_idr(view[f"{p}_sales"].sum()),
-                "Kontribusi sales Top 50": f"{fmt_pct(share)} dari {fmt_idr_short(share_base)}" if share_base > 0 else "-",
+                "Kontribusi sales Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)}" if share_base > 0 else "-",
             }
         )
     frame = pd.DataFrame(rows)

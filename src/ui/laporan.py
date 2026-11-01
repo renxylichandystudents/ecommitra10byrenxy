@@ -15,6 +15,8 @@ from src.core.expert_system import FISHBONE_CATEGORIES, evaluate_rules, fishbone
 from src.core.optimization import monte_carlo_stock_scenarios
 from src.core.preprocessing import promo_flag
 from src.ui.analysis_dialog import store_performance
+from src.core.ads import ad_validation, attribute_ads
+from src.utils.format import input_rupiah, show_table
 from src.ui.common import card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, period_filter, status_key
 
 SECTIONS = (
@@ -129,7 +131,7 @@ def show_report(
         report_all = orders_all.loc[stamps.between(lo, hi)]
 
     target_default = float(params.get("target", {}).get("sales_bulanan_rp", 0) or 0)
-    target = float(st.number_input("Target sales bulanan (Rp)", min_value=0, value=int(target_default), step=1_000_000, key="report-target"))
+    target = float(input_rupiah("Target sales bulanan", target_default, key="report-target-rp"))
     month_pred = float(table["m_sales"].sum()) if table is not None and not table.empty and "m_sales" in table.columns else 0.0
     target_note = ""
     if target <= 0:
@@ -141,8 +143,10 @@ def show_report(
     prev = _previous_span(report_orders, orders)
     sales_prev = float(prev["sales"].sum()) if not prev.empty else np.nan
     growth = (sales_now - sales_prev) / sales_prev * 100 if sales_prev and np.isfinite(sales_prev) and sales_prev > 0 else np.nan
-    ad_cost = float(table.get("biaya_iklan", pd.Series(dtype=float)).sum()) if table is not None else 0.0
-    ad_sales = float(table.get("omzet_iklan", pd.Series(dtype=float)).sum()) if table is not None else 0.0
+    report_lo = pd.to_datetime(report_orders["order_time"]).min().normalize()
+    report_hi = pd.to_datetime(report_orders["order_time"]).max().normalize()
+    ad_result = attribute_ads(frames.ads, frames.stock, orders=report_orders, start=report_lo, end=report_hi)
+    ad_cost, ad_sales = ad_result.cost, ad_result.sales
     roas = ad_sales / ad_cost if ad_cost > 0 else np.nan
     short_top = int(top["m_status"].map(status_key).isin({"Kurang", "Kosong"}).sum()) if not top.empty and "m_status" in top.columns else 0
     cancel_rate = float(_cancel_mask(report_all).mean() * 100) if isinstance(report_all, pd.DataFrame) and not report_all.empty else 0.0
@@ -159,9 +163,9 @@ def show_report(
         try:
             if section == SECTIONS[0]:
                 cols = st.columns(4)
-                card(cols[0], "Sales bersih", fmt_idr_short(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
-                card(cols[1], "Prediksi sales bulan ini", fmt_idr_short(month_pred), hint=f"target {fmt_idr_short(target)}")
-                card(cols[2], "ROAS iklan", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
+                card(cols[0], "Sales bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
+                card(cols[1], "Prediksi sales bulan ini", fmt_idr(month_pred), hint=f"target {fmt_idr(target)}")
+                card(cols[2], "ROAS iklan", fmt_num(roas, 2), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
                 card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint="status Kurang/Kosong bulan ini")
                 if target_note:
                     st.caption(target_note)
@@ -188,13 +192,13 @@ def show_report(
                 st.plotly_chart(fig, use_container_width=True, key="report-trend")
                 if len(monthly) >= 2:
                     last, before = float(monthly.iloc[-1]), float(monthly.iloc[-2])
-                    st.caption(f"Bulan terakhir {fmt_idr_short(last)} vs bulan sebelumnya {fmt_idr_short(before)}. Bulan berjalan masih terpotong sampai data terakhir.")
+                    st.caption(f"Bulan terakhir {fmt_idr(last)} vs bulan sebelumnya {fmt_idr(before)}. Bulan berjalan masih terpotong sampai data terakhir.")
             elif section == SECTIONS[2]:
                 cols = ["peringkat", "sku", "product_name", "qty_total", "sales_total", "m_qty", "m_sales", "label_text"]
                 view = top[[c for c in cols if c in top.columns]].head(20).rename(
                     columns={"peringkat": "Peringkat", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": "Prediksi QTY bulan ini", "m_sales": "Prediksi sales bulan ini", "label_text": "Label"}
                 )
-                st.dataframe(view, hide_index=True, use_container_width=True, column_config={"Sales": st.column_config.NumberColumn(format="Rp %d"), "Prediksi sales bulan ini": st.column_config.NumberColumn(format="Rp %d")})
+                show_table(view)
                 download_excel(view, "laporan_terlaris.xlsx", key="xl-report-top")
             elif section == SECTIONS[3]:
                 if top.empty or "m_status" not in top.columns:
@@ -231,23 +235,29 @@ def show_report(
                         )
                     frame = pd.DataFrame(rows)
                     st.markdown("**Skenario Monte Carlo (1.000 simulasi permintaan × lead time) untuk 10 SKU teratas**")
-                    st.dataframe(frame, hide_index=True, use_container_width=True)
+                    show_table(frame, kinds={"SS": "count", "ROP": "count"})
                     st.caption("ROP = permintaan harian × lead time + SS. Pesan ulang saat stok menyentuh ROP; restock pesimistis = kebutuhan kuantil 90%.")
                     download_excel(frame, "laporan_stok_monte_carlo.xlsx", key="xl-report-mc")
             elif section == SECTIONS[4]:
                 share = ad_sales / sales_now * 100 if sales_now > 0 else np.nan
+                warnings, notes = ad_validation(ad_result, sales_now)
+                for message in warnings:
+                    st.warning(message)
                 cols = st.columns(4)
-                card(cols[0], "Biaya iklan", fmt_idr_short(ad_cost))
-                card(cols[1], "Omzet iklan", fmt_idr_short(ad_sales))
-                card(cols[2], "ROAS", fmt_num(roas, 1))
-                card(cols[3], "Porsi sales dari iklan", fmt_pct(min(share, 100) if np.isfinite(share) else share))
+                card(cols[0], "Biaya iklan", fmt_idr(ad_cost))
+                card(cols[1], "Omzet iklan", fmt_idr(ad_sales))
+                card(cols[2], "ROAS", fmt_num(roas, 2))
+                card(cols[3], "Porsi sales dari iklan", fmt_pct(share))
+                for message in notes:
+                    st.caption(message)
                 if ad_cost <= 0:
-                    st.caption("Laporan iklan belum diunggah atau belum terpetakan ke SKU.")
+                    st.caption("Laporan iklan belum diunggah, belum terpetakan ke SKU, atau tidak ada pada periode laporan.")
                 else:
-                    ads = table.loc[table["biaya_iklan"] > 0, ["sku", "product_name", "biaya_iklan", "omzet_iklan", "m_status"]].copy()
+                    ads = ad_result.per_sku.loc[ad_result.per_sku["biaya_iklan"] > 0].merge(table[["sku", "product_name", "m_status"]].drop_duplicates("sku"), on="sku", how="left")
+                    ads = ads[["sku", "product_name", "biaya_iklan", "omzet_iklan", "m_status"]].copy()
                     ads["ROAS"] = ads["omzet_iklan"] / ads["biaya_iklan"]
                     ads = ads.sort_values("biaya_iklan", ascending=False).head(20)
-                    st.dataframe(ads.rename(columns={"sku": "SKU", "product_name": "Produk", "biaya_iklan": "Biaya", "omzet_iklan": "Omzet iklan", "m_status": "Status stok"}), hide_index=True, use_container_width=True)
+                    show_table(ads.rename(columns={"sku": "SKU", "product_name": "Produk", "biaya_iklan": "Biaya", "omzet_iklan": "Omzet iklan", "m_status": "Status stok"}))
             elif section == SECTIONS[5]:
                 perf = store_performance(frames.performance, today)
                 if not perf:
@@ -268,7 +278,7 @@ def show_report(
                 card(cols[2], "Unit retur", fmt_qty(returned))
                 card(cols[3], "Batal belum bayar", fmt_num(unpaid))
                 if not reasons.empty:
-                    st.dataframe(reasons.rename(columns={"reason": "Alasan batal", "orders": "Pesanan"}).head(10), hide_index=True, use_container_width=True)
+                    show_table(reasons.rename(columns={"reason": "Alasan batal", "orders": "Pesanan"}).head(10))
             elif section == SECTIONS[7]:
                 promo_days = int(promo_flag(pd.Series(pd.date_range(window_start, window_end))).sum())
                 context = {
@@ -304,7 +314,7 @@ def show_report(
                 if adv.empty:
                     st.write("Tidak ada aturan sistem pakar yang terpicu pada Top 50.")
                 else:
-                    st.dataframe(adv, hide_index=True, use_container_width=True)
+                    show_table(adv)
                     download_excel(adv, "laporan_rekomendasi.xlsx", key="xl-report-adv")
             elif section == SECTIONS[10]:
                 days_in_month = pd.Timestamp(today).days_in_month
@@ -320,6 +330,6 @@ def show_report(
                     st.caption(target_note)
                 for name, tasks in guide.items():
                     st.markdown(f"**{name}**")
-                    st.dataframe(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]), hide_index=True, use_container_width=True)
+                    show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))
         except Exception as exc:  # satu bagian gagal tidak menghentikan laporan
             st.warning(f"Bagian ini belum bisa ditampilkan: {exc}")

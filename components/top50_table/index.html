@@ -183,8 +183,11 @@
     const box = root.querySelector(".box");
     const keepTop = box ? box.scrollTop : 0;
     const keepLeft = box ? box.scrollLeft : 0;
+    let viewport = 0;
+    try { viewport = window.top.innerHeight || 0; } catch (err) { viewport = 0; }
+    const maxHeight = viewport > 0 ? Math.min(args.height, Math.round(viewport * 0.7)) : args.height;
     root.innerHTML =
-      `<div class="box" style="max-height:${args.height}px"><table><thead>` +
+      `<div class="box" style="max-height:${maxHeight}px"><table><thead>` +
       `<tr class="h1">${row1}</tr><tr class="h2">${row2}</tr><tr class="total">${row3}</tr>` +
       `</thead><tbody>${body}</tbody></table></div>`;
 

@@ -53,13 +53,28 @@ Repository GitHub: `renxylichandystudents/ecommitra10byrenxy`, branch `main`.
 6. (Opsional) atur App URL, misalnya `prediksi-mitra10`.
 7. Klik **Deploy**. Build pertama ±5–10 menit karena memasang scikit-learn, statsmodels, xgboost, dan PuLP.
 8. Supaya bisa dibuka siapa saja: menu app → **Settings** → **Sharing** → pilih **This app is public and searchable** (atau public tanpa login).
+9. **Wajib (login):** menu app → **Settings** → **Secrets**, tempel isi seperti `.streamlit/secrets.toml.example`:
+
+   ```toml
+   INITIAL_SUPERUSER_USERNAME = "renxy"
+   INITIAL_SUPERUSER_PASSWORD = "password-min-8-karakter"
+   # DATABASE_URL = "postgresql://user:password@host:5432/db?sslmode=require"
+   ```
+
+   Super user pertama dibuat otomatis saat tabel user masih kosong. User lain ditambahkan dari **Kelola user** (tidak ada pendaftaran mandiri). Saat lokal, simpan file yang sama sebagai `.streamlit/secrets.toml` (sudah di `.gitignore`).
+
+### Login dan role
+
+- Semua halaman berada di balik login. Password di-hash bcrypt, minimal 8 karakter. 5× salah password → tunggu 5 menit.
+- User baru dan user yang di-reset wajib ganti password saat login berikutnya.
+- Hak akses ada di satu tempat: `auth/permissions.py` (Super user, E-commerce specialist, IC, Gudang).
 
 ### Perilaku data di server
 
-- Aplikasi otomatis masuk mode server di Streamlit Cloud. Setiap browser mendapat folder data sendiri, ditandai parameter `?uid=...` di URL, sehingga pengunjung lain tidak melihat data Anda.
-- Simpan link lengkap dengan `?uid=...` bila ingin kembali ke data yang sama. Jangan bagikan link ber-`uid` itu ke orang lain.
-- Penyimpanan Streamlit Cloud bersifat sementara: data hilang saat aplikasi tidur (tidak dibuka ±12 jam), di-reboot, atau di-deploy ulang. Unggah ulang laporan Shopee bila itu terjadi.
-- Pengaturan bisnis yang disimpan dari menu "Pengaturan bisnis" juga per browser. Nilai default untuk semua pengunjung ada di `config/business_params.yaml`.
+- Semua user yang login memakai satu folder data tim yang sama (unggahan, Pengaturan bisnis, riwayat analisa).
+- Default database: SQLite `data/app.db`. **Di Streamlit Community Cloud file ini hilang saat reboot/redeploy**, jadi user (selain super user dari Secrets) dan daftar riwayat ikut hilang. Isi `DATABASE_URL` Postgres gratis (Neon/Supabase) di Secrets agar user dan daftar riwayat tetap ada.
+- File hasil analisa (`data/runs/<id>/`) dan laporan yang diunggah tetap di disk server, yang bersifat sementara: hilang saat aplikasi tidur (±12 jam tidak dibuka), reboot, atau redeploy. Riwayat yang filenya hilang tampil "File hasil hilang"; unggah ulang data dan jalankan analisa lagi.
+- Riwayat analisa lebih dari 90 hari dihapus otomatis.
 
 ### Setelah deploy
 

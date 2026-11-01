@@ -129,11 +129,11 @@ def enrich_catalog(
         zero_duration=zero_frame,
         lead_time_days=lead,
     )
-    ads = ads_by_sku(frames.ads, frames.stock) if frames.has_ads and frames.has_stock else pd.DataFrame()
+    ads = ads_by_sku(frames.ads, frames.stock, orders=orders_used) if frames.has_ads and frames.has_stock else pd.DataFrame()
     if not ads.empty:
         key = table["sku"].fillna("").astype(str).str.strip()
         table = table.assign(_sku=key).merge(ads.rename(columns={"sku": "_sku"}), on="_sku", how="left").drop(columns="_sku")
-    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "terjual_iklan", "keranjang"):
+    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "omzet_iklan_shopee", "terjual_iklan", "keranjang"):
         if column not in table.columns:
             table[column] = 0.0
         table[column] = table[column].fillna(0.0)

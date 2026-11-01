@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import html
-import io
 from datetime import date
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+from src.utils.format import angka, desimal, persen, rupiah
+from src.utils.format import excel_bytes as numeric_excel_bytes
 
 ID_MONTHS = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
 ID_MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
@@ -22,39 +24,31 @@ DEFAULT_NOTE = "memakai asumsi default"
 
 
 def fmt_num(value: object, decimals: int = 0) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return "-"
-    if not np.isfinite(number):
-        return "-"
-    text = f"{number:,.{decimals}f}"
-    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+    return angka(value) if decimals == 0 else desimal(value, decimals)
 
 
 def fmt_qty(value: object) -> str:
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return "-"
+        return angka(None)
     if not np.isfinite(number):
-        return "-"
+        return angka(None)
     return fmt_num(number, 0 if abs(number - round(number)) < 0.05 else 1)
 
 
 def fmt_idr(value: object) -> str:
-    text = fmt_num(value, 0)
-    return "-" if text == "-" else f"Rp {text}"
+    return rupiah(value)
 
 
 def fmt_idr_short(value: object) -> str:
-    """Rp 81,5 jt / Rp 1,40 M."""
+    """Label grafik ringkas: Rp 81,5 jt / Rp 1,40 M. Kartu dan tabel memakai fmt_idr (angka lengkap)."""
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return "-"
+        return angka(None)
     if not np.isfinite(number):
-        return "-"
+        return angka(None)
     sign = "−" if number < 0 else ""
     number = abs(number)
     if number >= 1e9:
@@ -70,10 +64,10 @@ def fmt_pct(value: object, decimals: int = 1, signed: bool = False) -> str:
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return "-"
+        return angka(None)
     if not np.isfinite(number):
-        return "-"
-    text = fmt_num(abs(number) if signed else number, decimals) + "%"
+        return angka(None)
+    text = persen(abs(number) if signed else number, decimals)
     if signed:
         return ("+" if number > 0 else "−" if number < 0 else "") + text
     return text
@@ -140,17 +134,7 @@ def section(title: str, kicker: str | None = None) -> None:
 
 
 def excel_bytes(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> bytes:
-    buffer = io.BytesIO()
-    if isinstance(frames, pd.DataFrame):
-        frames = {"Data": frames}
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        for name, frame in frames.items():
-            clean = frame.copy()
-            for column in clean.columns:
-                if clean[column].map(lambda v: isinstance(v, (list, dict))).any():
-                    clean[column] = clean[column].astype(str)
-            clean.to_excel(writer, sheet_name=str(name)[:31], index=False)
-    return buffer.getvalue()
+    return numeric_excel_bytes(frames)
 
 
 def download_excel(frames: dict[str, pd.DataFrame] | pd.DataFrame, filename: str, *, key: str | None = None, label: str = "Unduh Excel") -> None:

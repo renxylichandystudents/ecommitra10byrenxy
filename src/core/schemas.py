@@ -112,6 +112,7 @@ AD_PRODUCT_ALIASES = {
     "voucher_amount": _alias("Voucher Amount"),
     "voucher_sales": _alias("Voucher Sales"),
     "period": _alias("Periode Laporan", "Periode", "Tanggal"),
+    "row_no": _alias("Urutan"),
 }
 
 AD_SEARCH_ALIASES = {
@@ -184,7 +185,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data iklan produk otomatis",
         required=("product_code",),
         aliases=AD_PRODUCT_ALIASES,
-        dedup_keys=("period", "product_code", "product_name"),
+        dedup_keys=("period", "row_no", "product_code", "product_name"),
         date_fields=("period",),
         utility="Fitur iklan otomatis: dilihat, klik, konversi, biaya, ROAS, dan omzet iklan.",
     ),
@@ -193,7 +194,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data iklan produk grup",
         required=("product_code",),
         aliases=AD_PRODUCT_ALIASES,
-        dedup_keys=("period", "product_code", "product_name"),
+        dedup_keys=("period", "row_no", "product_code", "product_name"),
         date_fields=("period",),
         utility="Dasar rekomendasi iklan grup dan bundling produk.",
     ),
@@ -202,7 +203,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data keseluruhan iklan",
         required=("product_code",),
         aliases=AD_PRODUCT_ALIASES,
-        dedup_keys=("period", "product_code", "product_name"),
+        dedup_keys=("period", "row_no", "product_code", "product_name"),
         date_fields=("period",),
         utility="Kontrol total biaya iklan dan efektivitas iklan toko.",
     ),

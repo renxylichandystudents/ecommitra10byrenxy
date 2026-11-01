@@ -16,6 +16,7 @@ from src.core.evaluation import MAPE_TARGET_PCT
 from src.core.expert_system import action_steps, evaluate_rules, sku_facts
 from src.core.optimization import optimize_restock
 from src.core.pipeline import model_comparison_frame
+from src.utils.format import show_table
 from src.ui.common import card, download_excel, fmt_num, fmt_pct, status_key
 
 METRIC_COLUMNS = ("MAPE agregat (%)", "WAPE (%)", "MAPE SKU (%)", "Bias (%)", "RMSE")
@@ -55,7 +56,7 @@ def _modeling(outcome, period: str) -> None:
         return
     rows = [{"Algoritma": name, "Status": "Aktif", "Keterangan": note} for name, note in outcome.availability.active.items()]
     rows += [{"Algoritma": name, "Status": "Dilewati", "Keterangan": note} for name, note in outcome.availability.skipped.items()]
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    show_table(pd.DataFrame(rows))
     if outcome.censored_skus:
         st.caption(f"{fmt_num(outcome.censored_skus)} SKU punya hari stok kosong yang diperlakukan sebagai permintaan tersensor.")
 
@@ -70,7 +71,7 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date) -> dict:
     else:
         st.caption(f"Walk-forward CV: {outcome.evaluations[0].folds} lipatan per horizon, {fmt_num(outcome.evaluated_skus)} SKU aktif, riwayat {fmt_num(outcome.history_days)} hari. MAPE dihitung hanya pada aktual > 0.")
         frame = model_comparison_frame(outcome)
-        st.dataframe(frame, hide_index=True, use_container_width=True, column_config={c: st.column_config.NumberColumn(format="%.2f") for c in METRIC_COLUMNS})
+        show_table(frame, kinds={c: "dec" for c in METRIC_COLUMNS})
         download_excel(frame, "evaluasi_walk_forward.xlsx", key="xl-eval-wf")
         best = frame.loc[frame["Model"] == MODEL_ENSEMBLE] if (frame["Model"] == MODEL_ENSEMBLE).any() else frame
         results["mape"] = float(best["MAPE agregat (%)"].min()) if not best.empty else np.nan
@@ -129,7 +130,7 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date) -> dict:
         build_decision_table(table, period="bulan", today=today, horizon_days=30)
         elapsed = time.perf_counter() - start
         rows.append({"No": 5, "Komponen": "Web performance", "Metode": f"Waktu bangun tabel keputusan {fmt_num(len(table))} SKU", "Target": "< 3 detik (dengan cache)", "Hasil": f"{fmt_num(elapsed, 2)} detik", "Status": "Tercapai" if elapsed < 3 else "Belum tercapai"})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    show_table(pd.DataFrame(rows))
     if results.get("top50") is not None:
         st.caption(f"Akurasi Top 50: {results['top50']} dari 50 SKU prediksi teratas masuk Top 50 aktual pada lipatan uji (rata-rata).")
     return results
@@ -216,7 +217,7 @@ def show_evaluation(
             st.warning(f"Hasil testing belum bisa ditampilkan: {exc}")
         if isinstance(comparison, pd.DataFrame) and not comparison.empty:
             with st.expander("Uji total toko (hold-out 7 hari, metode lama)"):
-                st.dataframe(comparison, hide_index=True, use_container_width=True)
+                show_table(comparison)
     with tabs[3]:
         _comparison(outcome)
     with tabs[4]:

@@ -12,6 +12,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
+from src.core.naming import category_label
 from src.core.preprocessing import promo_flag
 
 SHORT_STATUSES = {"Kosong", "Kurang", "Tipis"}
@@ -39,6 +40,54 @@ def demand_days(orders: pd.DataFrame | None, start: date, end: date, *, limit: i
     score = weekday_weight[days.dayofweek] + promo * 1.0 + ((days.day == days.month) * 1.0)
     order = np.argsort(-score)[:limit]
     return sorted(days[order].date)
+
+
+def allocate_budget(eligible: pd.DataFrame, *, budget_max: float, target_roas: float, ad_share: float, step: float = 1000.0) -> pd.Series:
+    """Alokasi budget iklan per SKU; jumlahnya tidak pernah melebihi `budget_max`.
+
+    1. Budget dasar = sales prediksi periode × porsi sales iklan ÷ target ROAS, diisi berurutan:
+       SKU dengan stok ≥ SS dulu (stok < SS tidak diprioritaskan), lalu ROAS estimasi tertinggi.
+    2. Sisa budget dibagi proporsional ROAS sampai kapasitas SKU: sales iklan tidak boleh melebihi
+       sales prediksi periode maupun nilai stok yang bisa dijual di atas SS.
+    """
+    if eligible is None or eligible.empty or budget_max <= 0:
+        return pd.Series(0.0, index=getattr(eligible, "index", None), dtype=float)
+    roas = eligible["roas_est"].astype(float).clip(lower=1e-9)
+    sales = eligible["sales_periode"].astype(float).clip(lower=0)
+    base = sales * ad_share / max(float(target_roas), 1e-9)
+    cap_sales = sales.copy()
+    if {"stok", "ss", "harga_bersih"} <= set(eligible.columns):
+        known = eligible.get("ada_data_stok", pd.Series(False, index=eligible.index)).fillna(False).astype(bool)
+        sellable = (eligible["stok"].astype(float) - eligible["ss"].astype(float)).clip(lower=0) * eligible["harga_bersih"].astype(float)
+        cap_sales = cap_sales.where(~known, np.minimum(cap_sales, sellable))
+    cap = np.maximum(cap_sales / roas, 0.0)
+    base = np.minimum(base, cap)
+    below_ss = (
+        eligible.get("ada_data_stok", pd.Series(False, index=eligible.index)).fillna(False).astype(bool)
+        & (eligible.get("stok", pd.Series(0.0, index=eligible.index)).astype(float) < eligible.get("ss", pd.Series(0.0, index=eligible.index)).astype(float))
+    )
+    order = pd.DataFrame({"low": below_ss.astype(int), "roas": -roas}).sort_values(["low", "roas"], kind="mergesort").index
+    alloc = pd.Series(0.0, index=eligible.index)
+    left = float(budget_max)
+    for idx in order:
+        take = min(float(base[idx]), left)
+        alloc[idx] = take
+        left -= take
+        if left <= 0:
+            break
+    room = (cap - alloc).clip(lower=0)
+    room = room.where(~below_ss, 0.0)
+    while left > step and room.sum() > step:
+        weight = roas.where(room > 0, 0.0)
+        if weight.sum() <= 0:
+            break
+        add = np.minimum(room, left * weight / weight.sum())
+        alloc += add
+        room -= add
+        left -= float(add.sum())
+        if float(add.sum()) < step:
+            break
+    return np.floor(alloc / step) * step
 
 
 def ads_plan(
@@ -87,11 +136,10 @@ def ads_plan(
             reasons.append("")
     work["alasan_tidak"] = reasons
     eligible = work.loc[work["alasan_tidak"].eq("")].copy()
-    eligible["sales_iklan_target"] = eligible["sales_periode"] * ad_share
-    eligible["budget_raw"] = eligible["sales_iklan_target"] / target_roas
-    total_raw = float(eligible["budget_raw"].sum())
-    scale = min(1.0, budget_max / total_raw) if total_raw > 0 and budget_max > 0 else 1.0
-    eligible["Budget"] = np.floor(eligible["budget_raw"] * scale / 1000) * 1000
+    eligible["Budget"] = allocate_budget(eligible, budget_max=budget_max, target_roas=target_roas, ad_share=ad_share)
+    starved = eligible.index[eligible["Budget"] <= 0]
+    work.loc[starved, "alasan_tidak"] = "Budget tidak cukup: SKU prioritas lebih tinggi didahulukan"
+    eligible = eligible.loc[eligible["Budget"] > 0].copy()
     eligible["Estimasi sales iklan"] = eligible["Budget"] * eligible["roas_est"]
     eligible["Estimasi ROAS"] = np.where(eligible["Budget"] > 0, eligible["Estimasi sales iklan"] / eligible["Budget"], 0.0)
     eligible["Tanggal iklan"] = date_text
@@ -149,6 +197,8 @@ def ads_plan(
         "item_diiklankan": int(len(eligible)),
         "item_tidak": int(len(tidak_part)),
         "budget": total_budget,
+        "budget_input": float(budget_max),
+        "sisa_budget": max(float(budget_max) - total_budget, 0.0),
         "tanggal": peak_days,
     }
     return {"produk": produk, "grup": grup, "tidak": tidak, "ringkasan": summary}
@@ -162,7 +212,11 @@ def flash_sale_plan(
     days: int = 30,
     per_day: int = 5,
 ) -> pd.DataFrame:
-    """Rencana flash sale harian 1 bulan: hanya SKU dengan surplus stok setelah kebutuhan + SS."""
+    """Rencana flash sale harian 1 bulan dari SKU dengan surplus stok setelah kebutuhan + SS.
+
+    Bila tidak ada surplus tetapi ada penjualan, SKU dengan sisa stok terbesar tetap ditampilkan
+    (urut skor flash sale yang sama) dengan alasan berawalan "Stok terbatas" dan kuota kecil.
+    """
     cfg_margin = params.get("margin", {})
     shopee = params.get("shopee", {})
     hpp_pct = float(cfg_margin.get("hpp_pct_harga", 80)) / 100
@@ -172,9 +226,18 @@ def flash_sale_plan(
     columns = ["Tanggal", "SKU", "Produk", "Harga saat ini", "Stok saat ini", "Saran stok flash sale", "Harga flash sale", "Diskon (%)", "Alasan"]
     if table is None or table.empty or "stok" not in table.columns:
         return pd.DataFrame(columns=columns)
-    work = table.loc[table["ada_data_stok"].fillna(False)].copy()
-    work["surplus"] = work["stok"].astype(float) - work["m_butuh"].astype(float)
-    work = work.loc[work["surplus"] > 0]
+    stocked = table.loc[table["ada_data_stok"].fillna(False)].copy()
+    stocked["surplus"] = stocked["stok"].astype(float) - stocked["m_butuh"].astype(float)
+    work = stocked.loc[stocked["surplus"] > 0].copy()
+    limited = work.empty
+    if limited:
+        # Tidak ada stok lebih: tetap tampilkan SKU yang laku dengan sisa stok terbesar (label "Stok terbatas").
+        selling = stocked["stok"].astype(float).gt(0)
+        if "qty_total" in stocked.columns:
+            selling &= stocked["qty_total"].astype(float).gt(0)
+        work = stocked.loc[selling].copy()
+        work["surplus"] = (work["stok"].astype(float) - work["ss"].astype(float)).clip(lower=0) if "ss" in work.columns else work["stok"].astype(float)
+        work = work.sort_values("stok", ascending=False).head(max(per_day * 6, per_day))
     if work.empty:
         return pd.DataFrame(columns=columns)
     views = work.get("dilihat", pd.Series(0.0, index=work.index)).fillna(0.0)
@@ -204,7 +267,10 @@ def flash_sale_plan(
             if disc is None:
                 continue
             quota = int(max(np.floor(row["surplus"] * quota_pct / max(days / 7, 1)), 1))
-            reason = [f"Surplus {int(row['surplus'])} unit setelah kebutuhan + SS"]
+            if limited:
+                reason = [f"Stok terbatas: sisa {int(row['stok'])} unit, belum ada surplus setelah kebutuhan + SS; kuota kecil"]
+            else:
+                reason = [f"Surplus {int(row['surplus'])} unit setelah kebutuhan + SS"]
             if row.get("dilihat", 0) and row.get("dilihat", 0) > 0:
                 reason.append(f"dilihat {int(row['dilihat'])}, klik {int(row.get('klik', 0))}")
             if pd.notna(row["konversi"]):
@@ -288,15 +354,9 @@ def exposure_plan(
             why.append(str(row["label_text"]))
         if pd.notna(row.get("hari_cukup")) and np.isfinite(row.get("hari_cukup", np.nan)):
             why.append(f"stok cukup {row['hari_cukup']:.0f} hari")
-        primary = ""
-        if not name_map.empty and key in name_map.index:
-            primary = str(name_map.loc[key, "Kata kunci utama"]).split(",")[0].strip()
         product = str(row["product_name"])
-        problem = reasons[0] if reasons else ""
-        if problem:
-            hook = f"Pernah ragu beli {primary or product.split()[0]} online karena {problem.lower()}? Ini jawabannya."
-        else:
-            hook = f"Renovasi tertunda karena {primary or 'bahan'} habis di toko? Cek {product.split()[0]} yang dipakai kontraktor."
+        category = category_label(product)
+        hook = f"Renovasi tertunda karena {category} habis di toko? Cek {category} yang dipakai kontraktor, stok siap kirim."
         points = []
         if not name_map.empty and key in name_map.index:
             strengths = name_map.loc[key, "Kekuatan deskripsi lama"]

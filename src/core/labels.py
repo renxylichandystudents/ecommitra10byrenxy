@@ -20,45 +20,18 @@ LABEL_LEGEND = (
 )
 
 
-def ads_by_sku(ads_frames: list[pd.DataFrame], stock_frame: pd.DataFrame | None) -> pd.DataFrame:
-    """Gabung laporan iklan per Kode produk lalu petakan ke SKU dari file stok.
+def ads_by_sku(
+    ads_frames: list[pd.DataFrame],
+    stock_frame: pd.DataFrame | None,
+    *,
+    orders: pd.DataFrame | None = None,
+    start=None,
+    end=None,
+) -> pd.DataFrame:
+    """Metrik iklan per SKU (lihat src.core.ads.attribute_ads untuk aturan periode & pembagian varian)."""
+    from src.core.ads import attribute_ads
 
-    Metrik iklan berlevel item dibagi ke variasi menurut porsi baris stok (proporsional sama rata
-    bila penjualan per variasi belum tersedia).
-    """
-    columns = ["sku", "dilihat", "klik", "biaya_iklan", "omzet_iklan", "terjual_iklan", "keranjang"]
-    frames = [frame for frame in ads_frames if frame is not None and not frame.empty and "product_code" in frame.columns]
-    if not frames or stock_frame is None or stock_frame.empty:
-        return pd.DataFrame(columns=columns)
-    ads = pd.concat(frames, ignore_index=True)
-    ads["product_code"] = ads["product_code"].fillna("").astype(str).str.strip().str.replace(r"\.0+$", "", regex=True)
-    numeric = {
-        "views": "dilihat",
-        "clicks": "klik",
-        "cost": "biaya_iklan",
-        "ad_sales": "omzet_iklan",
-        "products_sold": "terjual_iklan",
-        "cart_adds": "keranjang",
-    }
-    for source, target in numeric.items():
-        ads[target] = pd.to_numeric(ads[source], errors="coerce").fillna(0.0) if source in ads.columns else 0.0
-    per_code = ads.groupby("product_code", as_index=False)[list(numeric.values())].sum()
-    stock = stock_frame.copy()
-    if "_submitted_at" in stock.columns:
-        stock = stock.loc[stock["_submitted_at"].astype(str).eq(stock["_submitted_at"].astype(str).max())]
-    if "product_code" not in stock.columns or "sku" not in stock.columns:
-        return pd.DataFrame(columns=columns)
-    pairs = stock[["product_code", "sku"]].copy()
-    pairs["product_code"] = pairs["product_code"].fillna("").astype(str).str.strip().str.replace(r"\.0+$", "", regex=True)
-    pairs["sku"] = pairs["sku"].fillna("").astype(str).str.strip().str.replace(r"\.0+$", "", regex=True)
-    pairs = pairs.loc[pairs["product_code"].ne("") & pairs["sku"].ne("")].drop_duplicates()
-    if pairs.empty:
-        return pd.DataFrame(columns=columns)
-    pairs["share"] = 1.0 / pairs.groupby("product_code")["sku"].transform("count")
-    merged = pairs.merge(per_code, on="product_code", how="inner")
-    for column in numeric.values():
-        merged[column] = merged[column] * merged["share"]
-    return merged.groupby("sku", as_index=False)[list(numeric.values())].sum()
+    return attribute_ads(ads_frames, stock_frame, orders=orders, start=start, end=end).per_sku
 
 
 def product_labels(

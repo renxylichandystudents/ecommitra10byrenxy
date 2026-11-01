@@ -5,6 +5,9 @@ __pycache__/
 .pytest_cache/
 .streamlit/*
 !.streamlit/config.toml
+!.streamlit/secrets.toml.example
+data/app.db
+data/runs/
 .DS_Store
 uploads/
 *.xlsx

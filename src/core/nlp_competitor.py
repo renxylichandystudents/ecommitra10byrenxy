@@ -17,6 +17,17 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
+from src.core.naming import (
+    MANUAL_CHECK,
+    allowed_keyword,
+    brand_set,
+    extract_packing_tag,
+    foreign_words,
+    strip_packing_words,
+    vocabulary,
+    with_tag,
+)
+
 STOPWORDS = {
     "dan", "atau", "yang", "untuk", "dengan", "di", "ke", "dari", "ini", "itu", "pada", "dalam", "adalah",
     "juga", "akan", "bisa", "dapat", "sudah", "telah", "ada", "tidak", "bukan", "agar", "supaya", "karena",
@@ -154,14 +165,36 @@ class Vectorizer:
     model: object = None
 
 
-def _vectorize(texts: list[str]) -> Vectorizer:
+SBERT_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
+
+def _cache_resource(fn):
+    try:
+        import streamlit as st
+
+        return st.cache_resource(show_spinner=False)(fn)
+    except Exception:
+        return lru_cache(maxsize=1)(fn)
+
+
+@_cache_resource
+def sbert_model():
+    """Model Sentence-BERT sekali muat per server; None bila paket tidak terpasang (fallback TF-IDF)."""
     try:
         from sentence_transformers import SentenceTransformer  # type: ignore
 
-        model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-        return Vectorizer("Sentence-BERT", "paraphrase-multilingual-MiniLM-L12-v2", model.encode(texts, normalize_embeddings=True), model)
+        return SentenceTransformer(SBERT_MODEL)
     except Exception:
-        pass
+        return None
+
+
+def _vectorize(texts: list[str]) -> Vectorizer:
+    model = sbert_model()
+    if model is not None:
+        try:
+            return Vectorizer("Sentence-BERT", SBERT_MODEL, model.encode(texts, normalize_embeddings=True), model)
+        except Exception:
+            pass
     from sklearn.feature_extraction.text import TfidfVectorizer
 
     vec = TfidfVectorizer(analyzer="word", ngram_range=(1, 2), min_df=1, sublinear_tf=True)
@@ -422,7 +455,7 @@ def generate_description(
         f"{title} adalah pilihan {key_main} untuk {usage_text}. "
         f"Produk ini dikirim dari gudang Mitra10 sehingga stok dan kualitasnya terjaga."
     )
-    sections = [title.upper(), "", intro, ""]
+    sections = [intro, ""]
     sections += ["FITUR DAN MANFAAT"]
     features = [f"- {k.capitalize()} sesuai kebutuhan proyek" for k in (primary[1:3] or [])]
     if material:
@@ -461,6 +494,14 @@ def generate_description(
     return text
 
 
+def description_summary(text: str, limit: int = 60) -> str:
+    """Kalimat pertama deskripsi, maks. `limit` karakter + "…"."""
+    first = re.split(r"(?<=[.!?])\s", str(text or "").strip().split("\n")[0], maxsplit=1)[0].strip()
+    if len(first) <= limit:
+        return first
+    return first[: limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+
+
 def build_name_recommendations(
     own: pd.DataFrame,
     descriptions: pd.DataFrame | None,
@@ -473,7 +514,8 @@ def build_name_recommendations(
     max_len = int(shopee.get("judul_maks_karakter", 120))
     min_len = int(shopee.get("judul_min_karakter", 25))
     max_desc = int(shopee.get("deskripsi_maks_karakter", 3000))
-    brands = [str(b) for b in params.get("merek", [])]
+    desc_texts = descriptions["description"].astype(str).tolist() if descriptions is not None and not descriptions.empty and "description" in descriptions.columns else []
+    brands = sorted(brand_set(own.get("product_name", pd.Series(dtype=str)).astype(str).tolist(), desc_texts, [str(b) for b in params.get("merek", [])]))
     desc_map: dict[str, str] = {}
     if descriptions is not None and not descriptions.empty and "description" in descriptions.columns:
         key_col = "sku" if "sku" in descriptions.columns else None
@@ -498,21 +540,31 @@ def build_name_recommendations(
     for _, item in own.iterrows():
         key = str(item["item_key"])
         name = str(item.get("product_name", ""))
+        clean_name, tag = extract_packing_tag(name)
         variation = str(item.get("variasi_tampil", item.get("variation", "")) or "")
         picked = matches.get(key, [])
-        titles = [str(comp.iloc[i]["product_name"]) for i in picked] if picked else []
+        titles = [strip_packing_words(comp.iloc[i]["product_name"]) for i in picked] if picked else []
         sold = [comp_sold[i] for i in picked] if picked else []
-        primary, supporting = keyword_set(name, titles, sold)
-        old = score_name(name, primary, brands, min_len=min_len, max_len=max_len)
-        new_title = synthesize_title(name, variation, primary, brands, max_len=max_len)
+        current_desc = desc_map.get(str(item.get("sku", "")).strip()) or desc_map.get(clean_text(name), "")
+        vocab = vocabulary(clean_name, current_desc, variation, set(brands))
+        primary, supporting = keyword_set(clean_name, titles, sold)
+        primary = [k for k in primary if allowed_keyword(k, vocab)] or [k for k in tokens(clean_name)[:3] if allowed_keyword(k, vocab)]
+        supporting = [k for k in supporting if allowed_keyword(k, vocab) and k not in primary]
+        old = score_name(clean_name, primary, brands, min_len=min_len, max_len=max_len)
+        room = max_len - (len(tag) + 1 if tag else 0)
+        new_title = synthesize_title(clean_name, variation, primary, brands, max_len=room)
+        rejected = foreign_words(new_title, vocab)
+        status = "Siap pakai"
+        if rejected:
+            new_title, status = clean_name, MANUAL_CHECK
         new_score = score_name(new_title, primary, brands, min_len=min_len, max_len=max_len)
         if new_score.points < old.points:
-            new_title, new_score = name, old
-        current_desc = desc_map.get(str(item.get("sku", "")).strip()) or desc_map.get(clean_text(name), "")
+            new_title, new_score = clean_name, old
+        final_title = with_tag(new_title, tag, max_len)
         strengths = description_strengths(current_desc)
         description = generate_description(
             title=new_title,
-            name=name,
+            name=clean_name,
             variation=variation,
             description=current_desc,
             primary=primary,
@@ -527,8 +579,11 @@ def build_name_recommendations(
                 "Nama produk saat ini": name,
                 "Status skor": old.label,
                 "Poin skor": old.points,
-                "Rekomendasi nama baru": new_title,
+                "Rekomendasi nama baru": final_title,
                 "Skor nama baru": new_score.label,
+                "Status saran": status,
+                "Kata ditolak": ", ".join(rejected),
+                "Tag packing": tag or "",
                 "Kata kunci utama": ", ".join(primary),
                 "Kata kunci pendukung": ", ".join(supporting),
                 "Rekomendasi deskripsi": description,

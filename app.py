@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import base64
 import html
-import io
+import os
 import sys
+import time
 from datetime import date, datetime, timedelta
+
+# Server Streamlit Cloud berjalan di UTC; tanggal "hari ini" harus WIB seperti waktu pesanan Shopee.
+if not os.environ.get("TZ"):
+    os.environ["TZ"] = "Asia/Jakarta"
+    if hasattr(time, "tzset"):
+        time.tzset()
 from pathlib import Path
 from statistics import NormalDist
 
@@ -70,8 +77,17 @@ from src.ui.decision_view import (
 from src.ui.settings import show_business_settings
 from src.core.inventory import stock_zero_duration
 from src.core.schemas import SOURCE_SPECS, find_columns, source_menu, validation_report
+from src.utils.format import angka as fmt_angka
+from src.utils.format import desimal as fmt_desimal
+from src.utils.format import excel_bytes as numeric_excel_bytes
+from src.utils.format import help_columns, show_table, style_frame, table_height
+from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
-from src.core.userspace import deploy_mode, resolve_browser_uid, user_root
+from src.core.userspace import deploy_mode, team_root
+from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can
+from auth.ui import get_engine, login_gate, require_role, show_auth_page, user_bar
+from src.core.runs import RunRepository, data_hash as training_data_hash
+import src.library as library_store
 from src.library import configure_root as configure_library_root
 from src.movement import configure_root as configure_movement_root
 from src.forecast import (
@@ -110,8 +126,7 @@ st.set_page_config(
     layout="wide",
 )
 
-BROWSER_UID = resolve_browser_uid(st)
-USER_ROOT = user_root(BROWSER_UID)
+USER_ROOT = team_root()
 if deploy_mode() == "server":
     configure_library_root(USER_ROOT)
     configure_movement_root(USER_ROOT)
@@ -543,8 +558,13 @@ st.markdown(
         font-weight: 500;
         color: #64748b;
     }
+    .sheet-scroll thead tr:nth-child(-n+2) th {
+        height: 2.5rem;
+        line-height: 1.4rem;
+        box-sizing: border-box;
+    }
     .sheet-scroll thead tr:nth-child(2) th {
-        top: 2.45rem;
+        top: 2.5rem;
     }
     .sheet-scroll th.group-head {
         text-align: center;
@@ -557,9 +577,9 @@ st.markdown(
         max-width: 22rem;
     }
     .sheet-scroll.movement-sheet thead th { z-index: 4; }
-    .sheet-scroll.movement-sheet thead tr:nth-child(2) th { top: 2.25rem; }
+    .sheet-scroll.movement-sheet thead tr:nth-child(2) th { top: 2.5rem; }
     .sheet-scroll.movement-sheet thead tr.sheet-total th {
-        top: 4.5rem;
+        top: 5rem;
         background: #f8fafc;
         z-index: 4;
     }
@@ -1133,6 +1153,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+AUTH_USER = login_gate()
+user_bar(AUTH_USER)
+if show_auth_page(AUTH_USER):
+    st.stop()
+
 TOP_N = 50
 METRIC_LABELS = {
     "qty": "QTY terjual",
@@ -1194,25 +1219,17 @@ def slice_forecast(pred_qty: float, pred_sales: float, safety: float, horizon_da
 
 
 def format_number(value: float, decimals: int = 0) -> str:
-    if value is None or pd.isna(value):
-        return "-"
-    number = float(value)
-    if pd.isna(number):
-        return "-"
-    text = f"{number:,.{decimals}f}"
-    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+    return fmt_angka(value) if decimals == 0 else fmt_desimal(value, decimals)
 
 
 def format_idr(value: float) -> str:
-    return f"Rp {format_number(value, 0)}"
+    return fmt_rupiah(value)
 
 
 def format_qty(value: float) -> str:
     if value is None or pd.isna(value):
-        return "-"
+        return fmt_angka(None)
     number = float(value)
-    if pd.isna(number):
-        return "-"
     decimals = 0 if abs(number - round(number)) < 0.05 else 1
     return format_number(number, decimals)
 
@@ -1395,6 +1412,18 @@ def _read_generic_uploads(files, source_key: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def _submit_upload(store, spec, files, parsed: pd.DataFrame):
+    names = [getattr(item, "name", "Lampiran") for item in files]
+    imported_keys: list[str] = []
+    if spec.key == "transactions":
+        orders_raw, source_raw = load_orders(files)
+        result = store.submit_source(spec.key, source_raw, filenames=names)
+        imported_keys, _notes = store_upload(source_raw, orders_raw, names)
+    else:
+        result = store.submit_source(spec.key, parsed, filenames=names)
+    return result, imported_keys
+
+
 def show_training_uploads() -> tuple[list[str], str | None]:
     """Upload 9 menu. Data transaksi juga disalin ke library lama agar analisis lama tetap jalan."""
     store = DATA_STORE
@@ -1448,18 +1477,20 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         elif files and _uploaded_size(files) > MAX_UPLOAD_BYTES:
             load_error = "Total ukuran file melebihi 1 GB."
             files = []
+        status_box = st.container()
         if files and load_error is None:
             try:
-                if selected_spec.key == "transactions":
-                    _orders, parsed = load_orders(files)
-                else:
-                    parsed = _read_generic_uploads(files, selected_spec.key)
+                with status_box, st.spinner("Membaca file..."):
+                    if selected_spec.key == "transactions":
+                        _orders, parsed = load_orders(files)
+                    else:
+                        parsed = _read_generic_uploads(files, selected_spec.key)
                 report = validation_report(parsed, selected_spec)
             except Exception as exc:  # noqa: BLE001 - upload must not crash app
                 parsed = pd.DataFrame()
                 load_error = str(exc)
         if load_error:
-            st.error(load_error)
+            status_box.error(load_error)
         if files:
             file_rows = []
             for item in files:
@@ -1472,11 +1503,12 @@ def show_training_uploads() -> tuple[list[str], str | None]:
                         "Status": report["status"],
                     }
                 )
-            st.dataframe(pd.DataFrame(file_rows), hide_index=True, use_container_width=True)
+            with status_box:
+                show_table(pd.DataFrame(file_rows))
             if report["missing_required"]:
-                st.warning("Kolom wajib belum cocok: " + ", ".join(report["missing_required"]))
+                status_box.warning("Kolom wajib belum cocok: " + ", ".join(report["missing_required"]))
         else:
-            st.caption("Belum ada file dipilih untuk menu ini.")
+            status_box.caption("Belum ada file dipilih untuk menu ini.")
         submitted = st.button("Submit", key=f"submit-{selected_spec.key}", type="primary")
         if submitted:
             if not files:
@@ -1485,42 +1517,33 @@ def show_training_uploads() -> tuple[list[str], str | None]:
                 st.error("File belum disimpan karena kolom wajib belum cocok dengan menu ini.")
             else:
                 try:
-                    if selected_spec.key == "transactions":
-                        orders_raw, source_raw = load_orders(files)
-                        result = store.submit_source(
-                            selected_spec.key,
-                            source_raw,
-                            filenames=[getattr(item, "name", "Lampiran") for item in files],
-                        )
-                        imported_keys, _notes = store_upload(
-                            source_raw,
-                            orders_raw,
-                            [getattr(item, "name", "Lampiran") for item in files],
-                        )
-                    else:
-                        result = store.submit_source(
-                            selected_spec.key,
-                            parsed,
-                            filenames=[getattr(item, "name", "Lampiran") for item in files],
-                        )
+                    with st.spinner("Menyimpan data latih..."):
+                        result, imported_keys = _submit_upload(store, selected_spec, files, parsed)
                     st.success(result.message)
                 except Exception as exc:  # noqa: BLE001 - malformed files should be surfaced
                     load_error = str(exc)
                     st.error(load_error)
+    return imported_keys, load_error
+
+
+def show_training_summary() -> None:
+    """Ringkasan data latih tersimpan dan hasil konsolidasi antar-sumber."""
+    store = DATA_STORE
+    st.markdown("<div class='home-section'>RINGKASAN DATA</div>", unsafe_allow_html=True)
     stored_summary = store.source_summaries()
     with st.expander("Ringkasan data tersimpan", expanded=False):
-        st.dataframe(stored_summary, hide_index=True, use_container_width=True)
+        show_table(stored_summary)
     try:
-        consolidated, metrics = consolidation_summary(store)
+        with st.spinner("Menyusun ringkasan konsolidasi..."):
+            consolidated, metrics = consolidation_summary(store)
         with st.expander("Ringkasan data terkonsolidasi", expanded=False):
             c1, c2, c3 = st.columns(3)
             show_metric(c1, "SKU transaksi cocok stok", f"{format_number(metrics['sku_transaksi_cocok_stok_pct'], 1)}%")
             show_metric(c2, "Produk iklan terpetakan", f"{format_number(metrics['produk_iklan_terpetakan_sku_pct'], 1)}%")
             show_metric(c3, "Snapshot stok", format_number(metrics["snapshot_stok"], 0))
-            st.dataframe(consolidated, hide_index=True, use_container_width=True)
+            show_table(consolidated)
     except Exception as exc:  # noqa: BLE001 - summary is informative, not blocking
         st.caption(f"Ringkasan konsolidasi belum tersedia: {exc}")
-    return imported_keys, load_error
 
 
 def prepare_analysis_orders(
@@ -1585,25 +1608,251 @@ def show_homepage() -> None:
                 Magister Teknik Informatika Renxy Lichandy for Mitra10 - 2026.
             </div>
         </div>
-        <div class="home-section">Fitur</div>
+        <div class="home-section">1. Analisa prediksi</div>
         """,
         unsafe_allow_html=True,
     )
+    notice = st.session_state.pop("run-error", None)
+    if notice:
+        st.error(notice)
     with st.container(border=True):
         st.markdown(
             """
-            <div class="feature-badge">Fitur 01 · sedang dikembangkan</div>
-            <div class="feature-title">Prediksi item terlaris</div>
+            <div class="feature-badge">Fitur 01 · Prediksi item terlaris</div>
             <div class="feature-copy">
-                Isi data dan parameter lebih dulu, lalu jalankan analisis. Hasilnya bisa dibaca
-                setelah itu. Data, unggahan, dan parameter bisa diubah lagi agar prediksi belajar ulang.
+                Jalankan analisa memakai data latih dan parameter terakhir. Ubah data latih untuk mengunggah
+                laporan baru, memilih bulan, periode, parameter, dan safety stock sebelum analisa.
             </div>
             """,
             unsafe_allow_html=True,
         )
-        if st.button("Buka Prediksi item terlaris", type="primary"):
-            st.session_state["active-feature"] = FEATURE_ID
+        run_col, train_col, _gap = st.columns([1.2, 1.2, 3])
+        if run_col.button("Jalankan analisa", type="primary", use_container_width=True, key="home-run"):
+            request_analysis_run(**last_run_settings())
             st.rerun()
+        if train_col.button("Ubah data latih", use_container_width=True, key="home-train"):
+            st.session_state["active-feature"] = FEATURE_ID
+            st.session_state["editing-input"] = True
+            st.rerun()
+        show_duplicate_offer("home")
+    st.markdown("<div class='home-section'>2. Riwayat analisa</div>", unsafe_allow_html=True)
+    show_run_history()
+
+
+@st.cache_resource(show_spinner=False)
+def run_repository() -> RunRepository:
+    repo = RunRepository(get_engine())
+    repo.cleanup()
+    return repo
+
+
+def current_data_hash(keys) -> str:
+    """Sidik isi data latih (bulan terpilih) + data stok, di-cache per waktu ubah file."""
+    keys = tuple(sorted(str(key) for key in keys))
+    paths = [library_store.LIBRARY_DIR / f"{key}.pkl" for key in keys] + [DATA_STORE.registry_path]
+    stamp = tuple(path.stat().st_mtime if path.exists() else 0.0 for path in paths)
+    cached = st.session_state.get("_data-hash")
+    if isinstance(cached, tuple) and cached[0] == (keys, stamp):
+        return cached[1]
+    value = training_data_hash(paths, extra="|".join(keys))
+    st.session_state["_data-hash"] = ((keys, stamp), value)
+    return value
+
+
+def last_run_settings() -> dict:
+    """Landasan analisa terakhir; bila belum ada, semua bulan tersimpan dengan parameter bawaan."""
+    period = str(st.session_state.get("saved-period", "bulan"))
+    keys = tuple(st.session_state.get("active-library-keys") or ()) or tuple(item["key"] for item in list_months())
+    return {
+        "period": period,
+        "metric": str(st.session_state.get("saved-metric", "qty")),
+        "service": int(st.session_state.get("saved-service", recommended_service_level(period, current_params()).pct)),
+        "keys": keys,
+        "exclude": bool(st.session_state.get("exclude-return-batal", st.session_state.get("exclude_applied", False))),
+    }
+
+
+def request_analysis_run(*, period: str, metric: str, service: int, keys, exclude: bool, training_months: int | None = None, service_recommended: int | None = None) -> None:
+    """Tombol Jalankan analisa: tawarkan hasil tersimpan bila data & parameter sama sudah sukses hari ini."""
+    keys = tuple(keys)
+    if not keys:
+        st.session_state["active-feature"] = FEATURE_ID
+        st.session_state["editing-input"] = True
+        st.session_state["input-error"] = "Belum ada data latih. Unggah laporan atau pilih bulan lebih dulu."
+        return
+    st.session_state["saved-period"] = period
+    st.session_state["saved-metric"] = metric
+    st.session_state["saved-service"] = int(service)
+    st.session_state["saved-source-key"] = "library:" + ",".join(keys)
+    st.session_state["active-library-keys"] = keys
+    st.session_state["analysis-config"] = {
+        "training_months": len(keys) if training_months is None else training_months,
+        "period": period,
+        "service": int(service),
+        "service_recommended": int(service if service_recommended is None else service_recommended),
+        "metric": metric,
+    }
+    hashed = current_data_hash(keys)
+    st.session_state["run-data-hash"] = hashed
+    try:
+        duplicate = run_repository().find_duplicate(
+            data_hash=hashed, periode=period, parameter=metric, safety_stock=int(service), exclude=bool(exclude)
+        )
+    except Exception:
+        duplicate = None
+    if duplicate is not None:
+        st.session_state["dup-run"] = {"id": duplicate.id, "run_at": duplicate.run_at, "run_by": duplicate.run_by}
+        return
+    start_analysis_run()
+
+
+def start_analysis_run() -> None:
+    st.session_state.pop("dup-run", None)
+    st.session_state["active-feature"] = FEATURE_ID
+    st.session_state["pending-run"] = True
+    st.session_state["editing-input"] = False
+
+
+def show_duplicate_offer(key: str) -> None:
+    offer = st.session_state.get("dup-run")
+    if not isinstance(offer, dict):
+        return
+    st.info(
+        f"Data latih dan parameter yang sama sudah dianalisa hari ini ({run_stamp_text(offer['run_at'])} oleh "
+        f"{offer['run_by']}). Buka hasil tersimpan agar tidak menunggu, atau analisa ulang."
+    )
+    open_col, again_col, cancel_col, _gap = st.columns([1.3, 1.1, 0.8, 2.8])
+    if open_col.button("Buka hasil tersimpan", type="primary", key=f"dup-open-{key}", use_container_width=True):
+        st.session_state.pop("dup-run", None)
+        open_saved_run(int(offer["id"]))
+        st.rerun()
+    if again_col.button("Analisa ulang", key=f"dup-again-{key}", use_container_width=True):
+        start_analysis_run()
+        st.rerun()
+    if cancel_col.button("Batal", key=f"dup-cancel-{key}", use_container_width=True):
+        st.session_state.pop("dup-run", None)
+        st.rerun()
+
+
+def run_stamp_text(run_at: str) -> str:
+    try:
+        stamp = datetime.fromisoformat(str(run_at))
+    except ValueError:
+        return str(run_at)
+    return f"{format_id_date(stamp.date())} {stamp:%H:%M}"
+
+
+def open_saved_run(run_id: int, *, navigate: bool = True) -> bool:
+    """Muat hasil analisa tersimpan ke session_state tanpa menghitung ulang."""
+    try:
+        record, result = run_repository().load(run_id)
+    except Exception as exc:
+        st.session_state["run-error"] = f"Hasil analisa #{run_id} tidak bisa dibuka: {exc}"
+        return False
+    result.pop("katalog", None)
+    movement_cache = result.pop("movement_asof", None)
+    st.session_state["movement-asof"] = dict(movement_cache) if isinstance(movement_cache, dict) else {}
+    st.session_state["active-run"] = (record.id, tuple(st.session_state["movement-asof"]))
+    keys = tuple(result.get("library_keys") or ())
+    exclude = bool(result.get("exclude_return_cancel", record.exclude_batal_retur))
+    st.session_state["analysis"] = result
+    st.session_state["saved-period"] = str(result.get("period", record.periode))
+    st.session_state["saved-metric"] = str(result.get("metric", record.parameter))
+    st.session_state["saved-service"] = int(result.get("service", record.safety_stock))
+    st.session_state["saved-source-key"] = str(result.get("source_key") or "library:" + ",".join(keys))
+    st.session_state["active-library-keys"] = keys
+    st.session_state["exclude-return-batal"] = exclude
+    st.session_state["exclude_applied"] = exclude
+    st.session_state["editing-input"] = False
+    st.session_state["run-origin"] = {"id": record.id, "run_at": record.run_at, "run_by": record.run_by}
+    if navigate:
+        st.session_state["active-feature"] = FEATURE_ID
+    return True
+
+
+def save_analysis_run(analysis: dict, *, duration: float, window_start: date, window_end: date) -> None:
+    keys = tuple(analysis.get("library_keys") or ())
+    try:
+        hashed = st.session_state.pop("run-data-hash", None) or current_data_hash(keys)
+        repo = run_repository()
+        record = repo.save(
+            analysis,
+            run_by=AUTH_USER.username,
+            periode=str(analysis.get("period")),
+            tgl_mulai=window_start,
+            tgl_akhir=window_end,
+            parameter=str(analysis.get("metric", "qty")),
+            safety_stock=int(analysis.get("service", 0)),
+            exclude=bool(analysis.get("exclude_return_cancel", False)),
+            data_hash=hashed,
+            duration=duration,
+        )
+        repo.cleanup()
+    except Exception as exc:
+        st.session_state["run-error"] = f"Analisa selesai, tetapi belum tersimpan ke riwayat: {exc}"
+        return
+    st.session_state["_run-save-katalog"] = record.id
+    st.session_state["active-run"] = (record.id, tuple())
+    st.session_state.pop("run-origin", None)
+
+
+def persist_run_caches() -> None:
+    """Simpan hasil hitung pergerakan stok ke run aktif, supaya Buka berikutnya tidak menghitung ulang."""
+    active = st.session_state.get("active-run")
+    cache = st.session_state.get("movement-asof")
+    if not isinstance(active, tuple) or not isinstance(cache, dict) or not cache:
+        return
+    run_id, saved_keys = active
+    if tuple(cache) == tuple(saved_keys):
+        return
+    try:
+        run_repository().save_blob(int(run_id), "movement_asof", dict(cache))
+    except Exception:
+        return
+    st.session_state["active-run"] = (run_id, tuple(cache))
+
+
+def show_run_history() -> None:
+    try:
+        runs = run_repository().list_runs(limit=30)
+    except Exception as exc:
+        st.warning(f"Riwayat analisa belum bisa dibaca: {exc}")
+        return
+    if not runs:
+        st.caption("Belum ada riwayat. Klik Jalankan analisa untuk membuat yang pertama.")
+        return
+    can_delete = can(AUTH_USER.role, "hapus_riwayat")
+    opened = (st.session_state.get("run-origin") or {}).get("id")
+    repo = run_repository()
+    widths = [1.7, 1.1, 1.0, 1.1, 0.6, 0.8, 0.8] + ([0.8] if can_delete else [])
+    headers = ["Tanggal & jam", "Oleh", "Periode", "Parameter", "SS", "Status", ""] + ([""] if can_delete else [])
+    with st.container(border=True, height=min(80 + 46 * len(runs), 520)):
+        for column, title in zip(st.columns(widths), headers):
+            column.markdown(f"<div class='field-hint'><b>{title}</b></div>", unsafe_allow_html=True)
+        for record in runs:
+            cells = st.columns(widths, vertical_alignment="center")
+            mark = " · dibuka" if record.id == opened else ""
+            cells[0].markdown(f"{run_stamp_text(record.run_at)}{mark}")
+            cells[1].markdown(html.escape(record.run_by))
+            cells[2].markdown(PERIOD_LABELS.get(record.periode, record.periode))
+            cells[3].markdown("QTY terjual" if record.parameter == "qty" else "Sales volume")
+            cells[4].markdown(f"{record.safety_stock}%")
+            ready = repo.available(record)
+            if ready:
+                cells[5].markdown("✅ Sukses")
+            elif record.status == "sukses":
+                cells[5].markdown("⚠️ File hasil hilang", help="Server sempat restart/redeploy; file hasil di disk server terhapus.")
+            else:
+                cells[5].markdown(f"⚠️ {record.status.title()}")
+            if cells[6].button("Buka", key=f"run-open-{record.id}", disabled=not ready, use_container_width=True):
+                if open_saved_run(record.id):
+                    st.rerun()
+            if can_delete and cells[7].button("Hapus", key=f"run-del-{record.id}", use_container_width=True):
+                repo.delete(record.id)
+                if record.id == opened:
+                    st.session_state.pop("run-origin", None)
+                st.rerun()
+    st.caption("Riwayat lebih dari 90 hari dihapus otomatis. Buka memuat hasil tersimpan tanpa menghitung ulang.")
 
 
 def pin_app_header() -> None:
@@ -1631,7 +1880,7 @@ def pin_app_header() -> None:
           const menuLabel = doc.querySelector('.app-menu-label');
           const menuHost = menuLabel ? menuLabel.closest('[data-testid="stElementContainer"]') : null;
           const menu = menuHost ? menuHost.nextElementSibling : null;
-          const pieces = [rowOf(bar), menu, rowOf(doc.querySelector('.period-name'))].filter((el, index, list) => el && el.isConnected && list.indexOf(el) === index);
+          const pieces = [rowOf(doc.querySelector('.user-bar')), rowOf(bar), menu, rowOf(doc.querySelector('.period-name'))].filter((el, index, list) => el && el.isConnected && list.indexOf(el) === index);
           if (!pieces.length || !pieces[0].parentElement) return;
           const page = pieces[0].parentElement;
           const box = root.getBoundingClientRect();
@@ -1655,7 +1904,7 @@ def pin_app_header() -> None:
           const pinned = new Set(pieces);
           Array.from(page.children).forEach((child) => {
             if (child.id === 'mitra-header-shield') return;
-            const holdsHeader = child.querySelector && child.querySelector('.feature-bar, .app-menu-label, .period-name');
+            const holdsHeader = child.querySelector && child.querySelector('.user-bar, .feature-bar, .app-menu-label, .period-name');
             if (pinned.has(child) || holdsHeader) {
               child.style.setProperty('z-index', '40', 'important');
               return;
@@ -1775,19 +2024,26 @@ def _orders_from_library(keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, s
 
 def show_prediction_inputs() -> None:
     """Halaman landasan prediksi. Terpisah dari hasil analisa."""
+    require_role("ubah_data_latih")
     notice = st.session_state.pop("input-error", None)
     if notice:
         st.error(notice)
     if "analysis" in st.session_state:
         st.caption("Hasil analisis sebelumnya tetap ada sampai analisis dijalankan lagi.")
 
-    with st.container(border=True):
+    upload_box = st.container(border=True)
+    summary_box = st.container(border=True)
+    period_box = st.container(border=True)
+    settings_box = st.container()
+    with upload_box:
         imported_keys, load_error = show_training_uploads()
+    with summary_box:
+        show_training_summary()
     orders_raw = pd.DataFrame()
     source_raw = pd.DataFrame()
     source_key = "empty"
     saved_months = list_months()
-    with st.container(border=True):
+    with period_box:
         st.markdown(
             """
             <div class="home-section">PERIODE ANALISIS DATA LATIH</div>
@@ -1865,7 +2121,8 @@ def show_prediction_inputs() -> None:
         if not rebuilt.empty:
             orders_raw = rebuilt
 
-    params = show_business_settings(current_params(), USER_ROOT)
+    with settings_box:
+        params = show_business_settings(current_params(), USER_ROOT)
     training_months = len(st.session_state.get("active-library-keys", tuple()))
     with st.container(border=True):
         st.markdown("<div class='side-section'>Periode prediksi</div>", unsafe_allow_html=True)
@@ -1959,20 +2216,18 @@ def show_prediction_inputs() -> None:
             if not isinstance(orders_raw, pd.DataFrame) or orders_raw.empty:
                 st.session_state["input-error"] = "Pilih tahun dan bulan, atau unggah laporan, sebelum menjalankan analisis."
                 st.rerun()
-            st.session_state["saved-period"] = period
-            st.session_state["saved-metric"] = sidebar_metric
-            st.session_state["saved-service"] = int(service)
+            request_analysis_run(
+                period=period,
+                metric=sidebar_metric,
+                service=int(service),
+                keys=st.session_state.get("active-library-keys", tuple()),
+                exclude=bool(st.session_state.get("exclude-return-batal", st.session_state.get("exclude_applied", False))),
+                training_months=training_months,
+                service_recommended=rec.pct,
+            )
             st.session_state["saved-source-key"] = source_key
-            st.session_state["analysis-config"] = {
-                "training_months": training_months,
-                "period": period,
-                "service": int(service),
-                "service_recommended": rec.pct,
-                "metric": sidebar_metric,
-            }
-            st.session_state["pending-run"] = True
-            st.session_state["editing-input"] = False
             st.rerun()
+        show_duplicate_offer("input")
     st.stop()
 
 
@@ -2038,8 +2293,9 @@ def show_app_menu() -> str:
     """Menu fitur. Tombol yang sedang terbuka memakai warna utama."""
     current = st.session_state.get("active-sheet", "Ringkasan")
     st.markdown("<div class='app-menu-label'></div>", unsafe_allow_html=True)
-    columns = st.columns(len(APP_SHEETS))
-    for column, name in zip(columns, APP_SHEETS):
+    sheets = allowed_sheets(AUTH_USER.role, APP_SHEETS)
+    columns = st.columns(len(sheets))
+    for column, name in zip(columns, sheets):
         if column.button(
             name,
             key=f"menu-{name}",
@@ -3376,15 +3632,8 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     st.subheader("Status pesanan")
     status_view = append_total_row(status_table, "Status pesanan", ["No. Pesanan", "Kontribusi"])
     if "Kontribusi" in status_view.columns:
-        status_view["Kontribusi"] = status_view["Kontribusi"].map(
-            lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
-        )
-    st.dataframe(
-        status_view,
-        height=min(44 * (len(status_view) + 1) + 36, 480),
-        hide_index=True,
-        column_config=table_column_config(status_view),
-    )
+        status_view["Kontribusi"] = pd.to_numeric(status_view["Kontribusi"], errors="coerce")
+    show_table(status_view, kinds={"Kontribusi": "pct"}, bold_label="Total", column_config=table_column_config(status_view))
     offer_excel(status_view, "status_pesanan.xlsx")
     st.subheader("Kontribusi invoice batal")
     if not include_cancel:
@@ -3403,15 +3652,12 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
         for column in ("Invoice", "Nominal", "Kontribusi invoice", "Kontribusi nominal"):
             contribution_view[column] = pd.to_numeric(contribution_view[column], errors="coerce")
         peak = float(contribution_table["Kontribusi nominal"].max() or 1.0)
-        st.dataframe(
-            _bold_total(contribution_view, "Alasan pembatalan"),
-            height=min(38 * (len(contribution_view) + 1) + 36, 560),
-            hide_index=True,
-            use_container_width=True,
+        show_table(
+            contribution_view,
+            kinds={"Invoice": "count", "Nominal": "money", "Kontribusi invoice": "pct"},
+            bold_label="Total",
             column_config={
-                "Invoice": st.column_config.NumberColumn(format="%d"),
-                "Nominal": st.column_config.NumberColumn(format="Rp %d"),
-                "Kontribusi invoice": st.column_config.NumberColumn(format="%.1f%%", help="Invoice batal ÷ seluruh invoice pada rentang"),
+                "Kontribusi invoice": st.column_config.Column(help="Invoice batal ÷ seluruh invoice pada rentang"),
                 "Kontribusi nominal": st.column_config.ProgressColumn(format="%.1f%%", min_value=0.0, max_value=max(peak, 100.0 if peak > 100 else peak), help="Nominal batal ÷ seluruh nominal pada rentang"),
             },
         )
@@ -3437,131 +3683,108 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             unpaid_view[column] = pd.to_numeric(unpaid_view[column], errors="coerce")
         group_no = unpaid_view["No"].astype(str).replace("", np.nan).ffill().fillna("0")
         shade = group_no.map(lambda value: int(value) % 2 == 0 if str(value).isdigit() else False)
-        styled = unpaid_view.style.apply(
+        styled = style_frame(unpaid_view, kinds={"QTY": "count", "Sales volume": "money"}).apply(
             lambda row: [
                 "font-weight:700" if str(row["Nama akun pembeli"]) == "Total" else ("background-color:#f8fafc" if shade.iloc[row.name] else "")
             ]
             * len(row),
             axis=1,
         )
-        st.dataframe(
-            styled,
-            height=min(38 * (len(unpaid_view) + 1) + 36, 560),
-            hide_index=True,
-            use_container_width=True,
-            column_config={"Sales volume": st.column_config.NumberColumn(format="Rp %d"), "QTY": st.column_config.NumberColumn(format="%d")},
-        )
+        st.dataframe(styled, height=table_height(len(unpaid_view)), hide_index=True, use_container_width=True)
         offer_excel(unpaid_view, "pembeli_belum_bayar.xlsx")
-    st.subheader("SKU dengan retur dan batal")
-    issue_kind = st.selectbox(
-        "Tampilkan",
-        options=["All", "Retur", "Batal"],
-        index=0,
-        key="data-issue-kind",
-    )
-    if issue_kind == "Retur":
-        kind_sheet = sku_sheet.loc[sku_sheet["Qty retur"] > 0] if not sku_sheet.empty else sku_sheet
-        reason_column = "Alasan retur"
-        reason_names = sorted({value for value in kind_sheet[reason_column].tolist() if str(value).strip()})
-    elif issue_kind == "Batal":
-        kind_sheet = sku_sheet.loc[sku_sheet["Qty batal"] > 0] if not sku_sheet.empty else sku_sheet
-        reason_column = "Alasan batal"
-        reason_names = sorted({value for value in kind_sheet[reason_column].tolist() if str(value).strip()})
+    show_sku_issue_section(sku_sheet, selected_label)
+
+
+ISSUE_COLUMNS = {
+    "Retur": ["Peringkat", "SKU", "Product Name", "Product variance", "Qty retur", "Nominal retur", "Alasan retur"],
+    "Batal": ["Peringkat", "SKU", "Product Name", "Product variance", "Qty batal", "Invoice batal", "Nominal batal", "Alasan batal"],
+}
+ISSUE_TITLES = {
+    "Retur": "Hanya kolom retur. Diurutkan dari qty retur terbesar.",
+    "Batal": "Hanya kolom batal. Diurutkan dari qty batal terbesar.",
+    "All": "Kolom retur dan batal. Diurutkan dari retur terbanyak, lalu batal terbanyak.",
+}
+ISSUE_SUMS = ("Qty retur", "Nominal retur", "Qty batal", "Invoice batal", "Nominal batal")
+
+
+def _issue_kind_sheet(sku_sheet: pd.DataFrame, issue_kind: str) -> pd.DataFrame:
+    if sku_sheet.empty or issue_kind == "All":
+        return sku_sheet
+    column = "Qty retur" if issue_kind == "Retur" else "Qty batal"
+    return sku_sheet.loc[pd.to_numeric(sku_sheet[column], errors="coerce").fillna(0) > 0]
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def sku_issue_reasons(sku_sheet: pd.DataFrame, issue_kind: str) -> list[str]:
+    kind_sheet = _issue_kind_sheet(sku_sheet, issue_kind)
+    columns = {"Retur": ["Alasan retur"], "Batal": ["Alasan batal"]}.get(issue_kind, ["Alasan retur", "Alasan batal"])
+    return sorted({str(v) for c in columns if c in kind_sheet.columns for v in kind_sheet[c].tolist() if str(v).strip()})
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str, ...], all_reasons: tuple[str, ...]) -> tuple[pd.DataFrame, int]:
+    """Tabel SKU retur/batal sesuai filter jenis + alasan, dengan peringkat ulang dan baris Total."""
+    kind_sheet = _issue_kind_sheet(sku_sheet, issue_kind)
+    if kind_sheet.empty or not all_reasons:
+        shown = kind_sheet
+    elif not reasons:
+        shown = kind_sheet.iloc[0:0]
+    elif issue_kind in ISSUE_COLUMNS:
+        shown = kind_sheet.loc[kind_sheet[f"Alasan {issue_kind.lower()}"].astype(str).isin(reasons)]
     else:
-        kind_sheet = sku_sheet
-        reason_column = ""
-        reason_names = sorted(
-            {
-                value
-                for column in ("Alasan retur", "Alasan batal")
-                for value in (sku_sheet[column].tolist() if column in sku_sheet.columns else [])
-                if str(value).strip()
-            }
-        )
+        shown = kind_sheet.loc[kind_sheet["Alasan retur"].astype(str).isin(reasons) | kind_sheet["Alasan batal"].astype(str).isin(reasons)]
+    keep = ISSUE_COLUMNS.get(issue_kind, list(shown.columns))
+    shown = shown.loc[:, [c for c in keep if c in shown.columns]].copy()
+    count = len(shown)
+    if shown.empty:
+        return shown, 0
+    sums = [c for c in ISSUE_SUMS if c in shown.columns]
+    shown["Peringkat"] = [str(n) for n in range(1, len(shown) + 1)]
+    shown = append_total_row(shown, "SKU", sums)
+    for column in sums:
+        shown[column] = pd.to_numeric(shown[column], errors="coerce")
+    return shown, count
+
+
+@st.fragment
+def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None:
+    """Filter hanya menjalankan ulang bagian ini (bukan seluruh tab Data)."""
+    st.subheader("SKU dengan retur dan batal")
+    issue_kind = st.selectbox("Tampilkan", options=["All", "Retur", "Batal"], index=0, key="data-issue-kind")
+    reason_names = sku_issue_reasons(sku_sheet, issue_kind)
     selected_reasons: list[str] = []
     if not reason_names:
         st.caption("Tidak ada alasan pada tampilan ini.")
     else:
-        selected_reasons = st.multiselect(
-            "Alasan",
-            options=reason_names,
-            default=reason_names,
-            key=f"data-reasons-{issue_kind}-{selected_label}",
-            placeholder="Cari alasan...",
-        )
+        key = f"data-reasons-{issue_kind}-{selected_label}"
+        if key in st.session_state:
+            st.session_state[key] = [r for r in st.session_state[key] if r in reason_names]
+        else:
+            st.session_state[key] = list(reason_names)
+        selected_reasons = st.multiselect("Alasan", options=reason_names, key=key, placeholder="Cari alasan...")
         if not selected_reasons:
             st.warning("Pilih minimal satu alasan.")
-    if kind_sheet.empty or not reason_names:
-        shown_sheet = kind_sheet
-    elif not selected_reasons:
-        shown_sheet = kind_sheet.iloc[0:0]
-    elif reason_column:
-        shown_sheet = kind_sheet.loc[kind_sheet[reason_column].isin(selected_reasons)]
-    else:
-        shown_sheet = kind_sheet.loc[
-            kind_sheet["Alasan retur"].isin(selected_reasons) | kind_sheet["Alasan batal"].isin(selected_reasons)
-        ]
-    if issue_kind == "Retur":
-        keep_columns = [
-            "Peringkat",
-            "SKU",
-            "Product Name",
-            "Product variance",
-            "Qty retur",
-            "Nominal retur",
-            "Alasan retur",
-        ]
-        sheet_title = "Hanya kolom retur. Diurutkan dari qty retur terbesar."
-    elif issue_kind == "Batal":
-        keep_columns = [
-            "Peringkat",
-            "SKU",
-            "Product Name",
-            "Product variance",
-            "Qty batal",
-            "Invoice batal",
-            "Nominal batal",
-            "Alasan batal",
-        ]
-        sheet_title = "Hanya kolom batal. Diurutkan dari qty batal terbesar."
-    else:
-        keep_columns = list(shown_sheet.columns)
-        sheet_title = "Kolom retur dan batal. Diurutkan dari retur terbanyak, lalu batal terbanyak."
-    if not shown_sheet.empty:
-        shown_sheet = shown_sheet.loc[:, [column for column in keep_columns if column in shown_sheet.columns]].copy()
-    sheet_count = len(shown_sheet)
-    sum_columns = [
-        column
-        for column in ("Qty retur", "Nominal retur", "Qty batal", "Invoice batal", "Nominal batal")
-        if column in shown_sheet.columns
-    ]
-    if not shown_sheet.empty:
-        shown_sheet = shown_sheet.copy()
-        shown_sheet["Peringkat"] = [str(number) for number in range(1, len(shown_sheet) + 1)]
-        shown_sheet = append_total_row(shown_sheet, "SKU", sum_columns)
-    st.caption(f"{format_number(sheet_count)} SKU. {sheet_title}")
+    shown_sheet, sheet_count = sku_issue_view(sku_sheet, issue_kind, tuple(selected_reasons), tuple(reason_names))
+    st.caption(f"{format_number(sheet_count)} SKU. {ISSUE_TITLES[issue_kind]}")
     if shown_sheet.empty:
         st.write("Tidak ada SKU dengan retur atau batal pada filter ini.")
-    else:
-        for column in sum_columns:
-            shown_sheet[column] = pd.to_numeric(shown_sheet[column], errors="coerce")
-        tips = {
-            "Qty retur": st.column_config.NumberColumn("Unit retur", format="%d", help="Returned quantity pada laporan"),
-            "Nominal retur": st.column_config.NumberColumn(format="Rp %d", help="Returned quantity × Harga Setelah Diskon"),
-            "Qty batal": st.column_config.NumberColumn("Unit batal", format="%d", help="Jumlah pada baris berstatus batal"),
-            "Invoice batal": st.column_config.NumberColumn(format="%d", help="No. Pesanan unik berstatus batal"),
-            "Nominal batal": st.column_config.NumberColumn(format="Rp %d", help="Harga Setelah Diskon × Jumlah pada baris batal"),
-            "Alasan retur": st.column_config.TextColumn(help="Dari kolom Status Pembatalan/Pengembalian"),
-            "Alasan batal": st.column_config.TextColumn(help="Dari kolom Alasan Pembatalan"),
-        }
-        st.dataframe(
-            _bold_total(shown_sheet, "SKU"),
-            height=640,
-            hide_index=True,
-            use_container_width=True,
-            column_config={key: value for key, value in tips.items() if key in shown_sheet.columns},
-        )
-        offer_excel(shown_sheet, "sku_retur_batal.xlsx")
+        return
+    tips = {
+        "Qty retur": "Returned quantity pada laporan",
+        "Nominal retur": "Returned quantity × Harga Setelah Diskon",
+        "Qty batal": "Jumlah pada baris berstatus batal",
+        "Invoice batal": "No. Pesanan unik berstatus batal",
+        "Nominal batal": "Harga Setelah Diskon × Jumlah pada baris batal",
+        "Alasan retur": "Dari kolom Status Pembatalan/Pengembalian",
+        "Alasan batal": "Dari kolom Alasan Pembatalan",
+    }
+    show_table(
+        shown_sheet,
+        kinds={"Nominal retur": "money", "Nominal batal": "money"},
+        bold_label="Total",
+        column_config=help_columns(tips, shown_sheet, {"Qty retur": "Unit retur", "Qty batal": "Unit batal"}),
+    )
+    offer_excel(shown_sheet, "sku_retur_batal.xlsx")
 
 
 def _bold_total(frame: pd.DataFrame, label_column: str):
@@ -4103,11 +4326,7 @@ def show_report_menu(
                 status_view["Kontribusi"] = status_view["Kontribusi"].map(
                     lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
                 )
-            st.dataframe(
-                _display_report_numbers(status_view),
-                hide_index=True,
-                height=min(44 * (len(status_view) + 1) + 36, 520),
-            )
+            show_table(status_view, bold_label="Total")
             offer_excel(status_view, "laporan_status_pesanan.xlsx")
             busiest = status_table.sort_values("No. Pesanan", ascending=False).iloc[0]
             st.markdown(
@@ -4146,22 +4365,14 @@ def show_report_menu(
                         lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
                     )
             st.caption("Delapan alasan batal dengan invoice terbanyak.")
-            st.dataframe(
-                _display_report_numbers(preview),
-                hide_index=True,
-                height=min(44 * (len(preview) + 1) + 36, 420),
-            )
+            show_table(preview, bold_label="Total")
             offer_excel(contribution_table, "laporan_kontribusi_batal.xlsx")
         if sku_sheet.empty:
             st.write("Tidak ada SKU retur atau batal pada tanggal ini.")
         else:
             issue = sku_sheet.head(8)
             st.caption("Delapan SKU dengan retur atau batal terbesar. Daftar lengkap ada di menu Data.")
-            st.dataframe(
-                _display_report_numbers(issue),
-                hide_index=True,
-                height=min(44 * (len(issue) + 1) + 36, 420),
-            )
+            show_table(issue, bold_label="Total")
             offer_excel(sku_sheet, "laporan_sku_retur_batal.xlsx")
         reason_text = ""
         if not contribution_table.empty and "Alasan pembatalan" in contribution_table.columns:
@@ -4239,11 +4450,7 @@ def show_report_menu(
                 "Centang bulan yang sudah diunggah sebelum membandingkan tren.",
             )
         else:
-            st.dataframe(
-                _display_report_numbers(month_table),
-                hide_index=True,
-                height=min(44 * (len(month_table) + 1) + 36, 480),
-            )
+            show_table(month_table, bold_label="Total")
             offer_excel(month_table, "laporan_data_tersimpan.xlsx")
             strongest = month_table.loc[month_table["Sales bersih"].idxmax()]
             weakest = month_table.loc[month_table["Sales bersih"].idxmin()]
@@ -4296,19 +4503,14 @@ def show_folder_menu() -> None:
             "Return dan Batal adalah jumlah No. Pesanan. "
             "Berhasil menggabungkan Pesanan Diterima, Sedang Dikirim, Selesai, dan Telah Dikirim."
         )
-        st.dataframe(
-            folder,
-            height=min(44 * (len(folder) + 1) + 36, 480),
-            hide_index=True,
-            column_config=table_column_config(folder),
-        )
+        show_table(folder, bold_label="Total", column_config=table_column_config(folder))
         offer_excel(folder, "folder_data.xlsx")
     st.subheader("Riwayat perubahan data")
     changes = history_frame()
     if changes.empty:
         st.write("Belum ada perubahan impor.")
     else:
-        st.dataframe(changes, height=min(44 * (len(changes) + 1) + 36, 480), hide_index=True)
+        show_table(changes)
         offer_excel(changes, "riwayat_perubahan_data.xlsx")
 
 
@@ -5441,7 +5643,7 @@ def scroll_table(frame: pd.DataFrame, *, max_height: int | None = 680, format_nu
                 kind = ""
             cells.append(f"<td class='{kind}'>{text}</td>")
         body.append("<tr>" + "".join(cells) + "</tr>")
-    height_style = "" if max_height is None else f"max-height:{int(max_height)}px;"
+    height_style = "max-height:70vh;" if max_height is None else f"max-height:min({int(max_height)}px, 70vh);"
     box = (
         "<div class='sheet-scroll' "
         f"style='{height_style}width:100%;max-width:100%;overflow:scroll;display:block;'>"
@@ -5637,9 +5839,7 @@ def show_top50_table(
 
 
 def excel_bytes(frame: pd.DataFrame) -> bytes:
-    buffer = io.BytesIO()
-    frame.to_excel(buffer, index=False, engine="openpyxl")
-    return buffer.getvalue()
+    return numeric_excel_bytes(frame)
 
 
 def offer_excel(frame: pd.DataFrame, filename: str) -> None:
@@ -6191,16 +6391,32 @@ def _move_line(now: int, then: int | None, *, money: bool) -> str:
     return f"<div class='metric-move {tone}'>{html.escape(_delta_text(now, then, money=money))} dibanding prediksi kemarin</div>"
 
 
-def _prediction_card(column, label: str, value: str, move_html: str) -> None:
+def _prediction_card(column, label: str, value: str, move_html: str, *, tip: str = "", extra_html: str = "") -> None:
+    info = f" <span title='{html.escape(tip, quote=True)}' style='cursor:help;color:#64748b'>ⓘ</span>" if tip else ""
     column.markdown(
         "<div class='stat-card'>"
-        f"<div class='readable-metric-label'>{html.escape(label)}</div>"
+        f"<div class='readable-metric-label'>{html.escape(label)}{info}</div>"
         f"<div class='readable-metric-value'>{html.escape(value)}</div>"
         "<div class='metric-hint'>Hasil prediksi</div>"
-        f"{move_html}"
+        f"{extra_html}{move_html}"
         "</div>",
         unsafe_allow_html=True,
     )
+
+
+def actual_on_day(orders: pd.DataFrame | None, keys: list[str], day: date) -> tuple[float, date | None]:
+    """QTY aktual Top 50 pada `day` (WIB). Bila hari itu belum ada transaksi, pakai hari penuh terakhir sebelum `day`."""
+    if orders is None or orders.empty or not keys:
+        return 0.0, None
+    work = orders.loc[orders["item_key"].astype(str).isin(set(keys))]
+    if work.empty:
+        return 0.0, None
+    days = pd.to_datetime(work["order_time"], errors="coerce").dt.date
+    eligible = days[days <= day]
+    if eligible.empty:
+        return 0.0, None
+    pick = day if (eligible == day).any() else eligible.max()
+    return float(pd.to_numeric(work.loc[days == pick, "qty"], errors="coerce").sum()), pick
 
 
 def _move_html(now: int, then: int, *, money: bool) -> str:
@@ -6480,7 +6696,7 @@ def _render_movement_board(
         f"{total_row}"
     )
     st.markdown(
-        "<div class='sheet-scroll movement-sheet' style='max-height:640px;width:100%;max-width:100%;overflow:scroll;display:block;'>"
+        "<div class='sheet-scroll movement-sheet' style='max-height:70vh;width:100%;max-width:100%;overflow:scroll;display:block;'>"
         f"<table><thead>{header}</thead><tbody>{''.join(body)}</tbody></table></div>",
         unsafe_allow_html=True,
     )
@@ -6548,34 +6764,80 @@ def show_analysis_movement(
         unsafe_allow_html=True,
     )
     if now_totals:
+        all_sku = catalog if isinstance(catalog, pd.DataFrame) and not catalog.empty else None
+        actual_qty, actual_day = actual_on_day(orders, focus_keys, yesterday)
+        ss_total = float(decision["ss"].sum()) if isinstance(decision, pd.DataFrame) and "ss" in decision.columns else 0.0
         for group in groups:
             qty_now, sales_now, need_now = now_totals[group.prefix]
             then = prior.get(group.prefix) if prior else None
             if group.extra:
                 st.markdown(f"<div class='field-hint' style='margin-top:.4rem'><b>{html.escape(group.label)}</b></div>", unsafe_allow_html=True)
-            cards = st.columns(3)
+            cards = st.columns(4)
             name = group.label.lower() if not group.extra else group.label
+            is_day = group.prefix == "d"
             main_money = metric == "sales"
             main_now = sales_now if main_money else qty_now
             main_then = None if then is None else int(then[1] if main_money else then[0])
+            qty_label = "QTY terjual" if is_day else "QTY"
+            day_tip = (
+                "Prediksi QTY hari ini = jumlah per SKU dari (prediksi QTY horizon ÷ jumlah hari horizon), dibulatkan per SKU. "
+                "Ini laju harian rata-rata, bukan realisasi; tanggal mengikuti WIB (Asia/Jakarta). Hari ini masih berjalan, "
+                "jadi pembanding yang adil adalah aktual hari penuh terakhir (kemarin)."
+            ) if is_day else ""
+            actual_html = ""
+            if is_day:
+                if actual_day is None:
+                    actual_html = "<div class='metric-move flat'>Aktual terjual kemarin: belum ada transaksi</div>"
+                else:
+                    gap = (qty_now - actual_qty) / actual_qty * 100 if actual_qty > 0 else None
+                    when = "kemarin" if actual_day == yesterday else format_id_date(actual_day) + " (transaksi terakhir)"
+                    gap_text = f" · selisih {'+' if gap >= 0 else '−'}{format_number(abs(gap), 1)}%" if gap is not None else ""
+                    actual_html = f"<div class='metric-move flat'>Aktual terjual {html.escape(when)}: {format_qty(actual_qty)} unit{gap_text}</div>"
             _prediction_card(
                 cards[0],
-                f"Prediksi {'sales' if main_money else 'QTY'} {name}",
+                f"Prediksi {'sales' if main_money else qty_label} {name} · Top 50 SKU",
                 format_idr(main_now) if main_money else f"{format_qty(main_now)} unit",
                 _move_line(int(main_now), main_then, money=main_money),
+                tip=day_tip if not main_money else "",
+                extra_html=actual_html if not main_money else "",
             )
             _prediction_card(
                 cards[1],
-                f"Prediksi {'QTY' if main_money else 'sales'} {name}",
+                f"Prediksi {qty_label if main_money else 'sales'} {name} · Top 50 SKU",
                 f"{format_qty(qty_now)} unit" if main_money else format_idr(sales_now),
                 _move_line(int(qty_now if main_money else sales_now), None if then is None else int(then[0] if main_money else then[1]), money=not main_money),
+                tip=day_tip if main_money else "",
+                extra_html=actual_html if main_money else "",
+            )
+            rounding = need_now - (qty_now + ss_total) if group.prefix != "m" else None
+            need_tip = (
+                "Kebutuhan stok = jumlah per SKU dari ⌈prediksi permintaan yang belum terjadi + safety stock⌉. "
+                "Dibulatkan ke atas per SKU karena stok tidak bisa pecahan"
+                + (
+                    f"; selisih {format_qty(rounding)} unit dibanding prediksi bulat ({format_qty(qty_now)}) + SS ({format_qty(ss_total)}) "
+                    "berasal dari pembulatan ke atas itu."
+                    if rounding is not None and abs(rounding) >= 1
+                    else "."
+                )
+                + (" Bulan ini: hanya sisa bulan (realisasi tanggal 1 s.d. kemarin sudah terjual)." if group.prefix == "m" else "")
             )
             _prediction_card(
                 cards[2],
-                f"Kebutuhan stok {name}",
+                f"Kebutuhan stok {name} · Top 50 SKU",
                 f"{format_qty(need_now)} unit",
                 _move_line(int(need_now), None if then is None else int(then[2]), money=False),
+                tip=need_tip,
             )
+            if all_sku is not None and group.prefix in {"d", "m"} and f"{group.prefix}_sales" in all_sku.columns:
+                total_sales = float(all_sku[f"{group.prefix}_sales"].sum())
+                cards[3].markdown(
+                    "<div class='stat-card'>"
+                    f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
+                    f"<div class='readable-metric-value'>{html.escape(format_idr(total_sales))}</div>"
+                    f"<div class='metric-hint'>{format_number(len(all_sku), 0)} SKU dianalisis</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
 
     st.markdown("<div class='section-title'>Pergerakan Top 50</div>", unsafe_allow_html=True)
     st.markdown(
@@ -6758,6 +7020,16 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
     offer_excel(display, "top10_prioritas_stok.xlsx")
 
 
+if not st.session_state.get("_autoload-done"):
+    st.session_state["_autoload-done"] = True
+    if "analysis" not in st.session_state and not st.session_state.get("pending-run"):
+        try:
+            last_ok = run_repository().last_success()
+        except Exception:
+            last_ok = None
+        if last_ok is not None:
+            open_saved_run(last_ok.id, navigate=False)
+
 if st.session_state.get("active-feature") != FEATURE_ID:
     show_homepage()
     st.stop()
@@ -6781,6 +7053,13 @@ show_feature_header(
 if editing_input:
     show_prediction_inputs()
 
+run_notice = st.session_state.pop("run-error", None)
+if run_notice:
+    st.warning(run_notice)
+origin = st.session_state.get("run-origin")
+if isinstance(origin, dict) and "analysis" in st.session_state:
+    st.info(f"Menampilkan hasil analisa {run_stamp_text(origin['run_at'])} oleh {origin['run_by']}.")
+
 orders_raw, source_raw, source_key, period, sidebar_metric, service = restore_prediction_context()
 run = bool(st.session_state.pop("pending-run", False))
 load_error = None
@@ -6794,13 +7073,16 @@ if run and (not isinstance(orders_raw, pd.DataFrame) or orders_raw.empty):
     st.rerun()
 
 sheet = str(st.session_state.get("active-sheet", "Ringkasan"))
+if sheet not in allowed_sheets(AUTH_USER.role, APP_SHEETS):
+    sheet = "Ringkasan"
+    st.session_state["active-sheet"] = sheet
 if "exclude-return-batal" not in st.session_state:
     st.session_state["exclude-return-batal"] = bool(st.session_state.get("exclude_applied", False))
 exclude_return_cancel = bool(st.session_state.get("exclude-return-batal", False))
 st.session_state["exclude_applied"] = exclude_return_cancel
 if "analysis" in st.session_state and not run:
     sheet = show_app_menu()
-    if sheet not in APP_SHEETS:
+    if sheet not in allowed_sheets(AUTH_USER.role, APP_SHEETS):
         sheet = "Ringkasan"
         st.session_state["active-sheet"] = sheet
     if sheet in SUMMARY_SHEETS:
@@ -6865,6 +7147,7 @@ if run or "analysis" not in st.session_state or exclude_changed:
     frames_now = store_frames()
     _zero_frame, zero_since = zero_since_map(frames_now.stock, today)
     st.session_state.pop("ensemble-error", None)
+    run_started = time.perf_counter()
     with st.spinner("Membaca pola belanja harian, menguji model, dan menyusun ensemble..."):
         bar = st.progress(0.0, text="Level terkini per SKU")
 
@@ -6928,7 +7211,14 @@ if run or "analysis" not in st.session_state or exclude_changed:
         "exclude_return_cancel": exclude_return_cancel,
         "run_id": run_id,
         "previous_run_id": previous_run_id,
+        "library_keys": [str(key) for key in st.session_state.get("active-library-keys", tuple())],
     }
+    save_analysis_run(
+        st.session_state["analysis"],
+        duration=time.perf_counter() - run_started,
+        window_start=window_start,
+        window_end=window_end,
+    )
     st.rerun()
 else:
     stored = st.session_state["analysis"]
@@ -6998,6 +7288,12 @@ enriched = enriched_catalog(
     params=params,
 )
 shown = enriched.head(TOP_N).reset_index(drop=True) if isinstance(enriched, pd.DataFrame) else pd.DataFrame()
+katalog_run = st.session_state.pop("_run-save-katalog", None)
+if katalog_run and isinstance(enriched, pd.DataFrame) and not enriched.empty:
+    try:
+        run_repository().save_extra(int(katalog_run), "katalog", enriched)
+    except Exception:
+        pass
 
 
 def show_performance_cards(frame: pd.DataFrame, label: str, *, tone: str | None = None) -> None:
@@ -7043,6 +7339,8 @@ def show_sku_detail(table: pd.DataFrame, picked: str, key: str) -> None:
     except Exception as exc:  # grafik tidak boleh menghentikan halaman
         st.info(f"Grafik SKU belum bisa digambar: {exc}")
 
+
+require_role(SHEET_PERMISSIONS.get(sheet, "ringkasan"))
 
 if sheet == "Ringkasan":
     show_exclude_and_cards()
@@ -7210,3 +7508,5 @@ elif sheet == "Evaluasi model":
         params=params,
         base_history=stored.get("base_history"),
     )
+
+persist_run_caches()
