@@ -6647,6 +6647,7 @@ with PAGE_ROOT.container():
                 outcome.evaluations = previous["demand_outcome"].evaluations if previous.get("demand_outcome") else []
                 outcome.evaluated_skus = previous["demand_outcome"].evaluated_skus if previous.get("demand_outcome") else 0
                 outcome.history_days = previous["demand_outcome"].history_days if previous.get("demand_outcome") else 0
+                outcome.eval_records = getattr(previous.get("demand_outcome"), "eval_records", {}) or {}
             bar.progress(1.0, text="Selesai")
         if combined.empty:
             st.warning("Tidak ada SKU yang bisa diprediksi dari data latih ini.")
@@ -6674,6 +6675,7 @@ with PAGE_ROOT.container():
             "stock": stock,
             "demand_outcome": outcome,
             "ensemble_weights": outcome.weights if outcome is not None else None,
+            "eval": getattr(outcome, "eval_records", {}) if outcome is not None else {},
             "comparison": comparison,
             "period": period,
             "metric": sidebar_metric,
@@ -6984,6 +6986,7 @@ with PAGE_ROOT.container():
             today=today,
             params=params,
             base_history=stored.get("base_history"),
+            is_super=AUTH_USER.role == "super_user",
         )
 
     persist_run_caches()

@@ -20,6 +20,7 @@ MODEL_MA = "Moving Average 28"
 MODEL_ES = "Exponential Smoothing"
 MODEL_GBM = "XGBoost global"
 MODEL_GBM_FALLBACK = "Gradient Boosting global"
+MODEL_LGBM = "LightGBM global"
 MODEL_PROPHET = "Prophet"
 MODEL_LSTM = "LSTM"
 MODEL_ENSEMBLE = "Ensemble"
@@ -139,7 +140,22 @@ def forecast_exponential(matrix: DemandMatrix, horizon: int, alpha: float = 0.1)
     return np.maximum(level, 0.0) * horizon
 
 
-def _gbm_regressor():
+def _gbm_regressor(engine: str = "xgboost"):
+    if engine == "lightgbm":
+        from lightgbm import LGBMRegressor  # type: ignore
+
+        model = LGBMRegressor(
+            n_estimators=220,
+            num_leaves=31,
+            learning_rate=0.06,
+            subsample=0.9,
+            subsample_freq=1,
+            colsample_bytree=0.9,
+            n_jobs=2,
+            random_state=42,
+            verbose=-1,
+        )
+        return model, MODEL_LGBM
     try:
         from xgboost import XGBRegressor
 
@@ -204,7 +220,7 @@ def _features_at(filled: np.ndarray, valid: np.ndarray, end: int, dates: pd.Date
     )
 
 
-def forecast_global_gbm(matrix: DemandMatrix, horizon: int, *, max_rows: int = 120_000) -> tuple[np.ndarray, str]:
+def forecast_global_gbm(matrix: DemandMatrix, horizon: int, *, max_rows: int = 120_000, engine: str = "xgboost") -> tuple[np.ndarray, str]:
     """Model global satu untuk semua SKU (direct): prediksi laju harian 28 hari ke depan × horizon."""
     keys = len(matrix.keys)
     days = matrix.values.shape[1] if matrix.values.size else 0
@@ -232,8 +248,8 @@ def forecast_global_gbm(matrix: DemandMatrix, horizon: int, *, max_rows: int = 1
     if len(y) > max_rows:
         pick = rng.choice(len(y), size=max_rows, replace=False)
         x, y = x[pick], y[pick]
-    model, name = _gbm_regressor()
     try:
+        model, name = _gbm_regressor(engine)
         model.fit(x, y)
         rate = model.predict(_features_at(filled, valid, days, matrix.dates, target))
     except Exception:
@@ -301,7 +317,7 @@ def feature_importance(matrix: DemandMatrix, *, max_rows: int = 30_000) -> tuple
         y_sample = model.predict(sample)
         result = permutation_importance(model, sample, y_sample, n_repeats=3, random_state=7)
         score = np.maximum(result.importances_mean, 0)
-        method = "Permutation importance (SHAP tidak terpasang)"
+        method = "Permutation importance"
     total = float(score.sum()) or 1.0
     frame = pd.DataFrame({"Fitur": list(FEATURE_LABELS), "Kepentingan": score / total * 100})
     return frame.sort_values("Kepentingan", ascending=False).reset_index(drop=True), method
@@ -309,8 +325,19 @@ def feature_importance(matrix: DemandMatrix, *, max_rows: int = 30_000) -> tuple
 
 def forecast_prophet_share(matrix: DemandMatrix, horizon: int) -> tuple[np.ndarray | None, str]:
     """Prophet pada total toko (musiman, promo), lalu dibagi ke SKU menurut porsi 28 hari terakhir."""
+    out, note = forecast_prophet_multi(matrix, (horizon,))
+    return (out[horizon] if out else None), note
+
+
+def forecast_prophet_multi(matrix: DemandMatrix, horizons) -> tuple[dict[int, np.ndarray] | None, str]:
+    """Satu kali fit Prophet, dijumlahkan untuk beberapa horizon."""
     try:
+        import logging
+
         from prophet import Prophet  # type: ignore
+
+        logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+        logging.getLogger("prophet").setLevel(logging.WARNING)
     except Exception:
         return None, "library prophet tidak terpasang"
     days = matrix.values.shape[1] if matrix.values.size else 0
@@ -323,14 +350,15 @@ def forecast_prophet_share(matrix: DemandMatrix, horizon: int) -> tuple[np.ndarr
         model = Prophet(weekly_seasonality=True, yearly_seasonality=days >= 365, daily_seasonality=False)
         model.add_regressor("promo")
         model.fit(frame)
-        future = model.make_future_dataframe(periods=horizon, include_history=False)
+        longest = max(int(h) for h in horizons)
+        future = model.make_future_dataframe(periods=longest, include_history=False)
         future["promo"] = promo_flag(future["ds"]).astype(float)
-        store_total = float(np.maximum(model.predict(future)["yhat"].to_numpy(), 0).sum())
+        daily = np.maximum(model.predict(future)["yhat"].to_numpy(), 0)
     except Exception as exc:  # noqa: BLE001
         return None, f"Prophet gagal dilatih: {exc}"
     recent = matrix.filled[:, -28:].sum(axis=1)
     share = recent / recent.sum() if recent.sum() > 0 else np.zeros(len(recent))
-    return share * store_total, MODEL_PROPHET
+    return {int(h): share * float(daily[: int(h)].sum()) for h in horizons}, MODEL_PROPHET
 
 
 def lstm_status(days: int, horizon: int) -> str | None:
@@ -350,17 +378,26 @@ def lstm_status(days: int, horizon: int) -> str | None:
 
 
 def model_forecasts(matrix: DemandMatrix, horizon: int) -> tuple[dict[str, np.ndarray], ModelAvailability]:
+    multi, availability = model_forecasts_multi(matrix, (int(horizon),))
+    return multi[int(horizon)], availability
+
+
+def model_forecasts_multi(matrix: DemandMatrix, horizons) -> tuple[dict[int, dict[str, np.ndarray]], ModelAvailability]:
+    """Semua model untuk beberapa horizon sekaligus: model global & Prophet cukup dilatih sekali."""
+    horizons = tuple(sorted({max(int(h), 1) for h in horizons}))
     availability = ModelAvailability()
-    out: dict[str, np.ndarray] = {}
-    out[MODEL_LEVEL] = forecast_level(matrix, horizon)
+    out: dict[int, dict[str, np.ndarray]] = {h: {} for h in horizons}
+    for h in horizons:
+        out[h][MODEL_LEVEL] = forecast_level(matrix, h)
+        out[h][MODEL_MA] = forecast_moving_average(matrix, h)
+        out[h][MODEL_ES] = forecast_exponential(matrix, h)
     availability.active[MODEL_LEVEL] = "metode lama, level 28 hari terakhir"
-    out[MODEL_MA] = forecast_moving_average(matrix, horizon)
     availability.active[MODEL_MA] = "rata-rata 28 hari terakhir"
-    out[MODEL_ES] = forecast_exponential(matrix, horizon)
     availability.active[MODEL_ES] = "simple exponential smoothing α = 0,1"
-    gbm, name = forecast_global_gbm(matrix, horizon)
+    rate, name = forecast_global_gbm(matrix, 1)
     if name in {MODEL_GBM, MODEL_GBM_FALLBACK}:
-        out[name] = gbm
+        for h in horizons:
+            out[h][name] = rate * h
         note = "fitur lag 1/7/14/28, rolling, kalender promo, flag stok"
         if name == MODEL_GBM_FALLBACK:
             note += "; XGBoost tidak bisa dimuat, memakai HistGradientBoosting scikit-learn"
@@ -368,41 +405,57 @@ def model_forecasts(matrix: DemandMatrix, horizon: int) -> tuple[dict[str, np.nd
         availability.active[name] = note
     else:
         availability.skipped[MODEL_GBM] = "riwayat harian < 63 hari atau sampel latih < 200"
-    prophet, note = forecast_prophet_share(matrix, horizon)
+    lgbm_rate, lgbm_name = forecast_global_gbm(matrix, 1, engine="lightgbm")
+    if lgbm_name == MODEL_LGBM:
+        for h in horizons:
+            out[h][MODEL_LGBM] = lgbm_rate * h
+        availability.active[MODEL_LGBM] = "fitur sama dengan XGBoost, leaf-wise boosting"
+    else:
+        availability.skipped[MODEL_LGBM] = "library lightgbm tidak bisa dimuat atau riwayat belum cukup"
+    prophet, note = forecast_prophet_multi(matrix, horizons)
     if prophet is not None:
-        out[MODEL_PROPHET] = prophet
+        for h in horizons:
+            out[h][MODEL_PROPHET] = prophet[h]
         availability.active[MODEL_PROPHET] = "total toko + regresor promo, dibagi ke SKU"
     else:
         availability.skipped[MODEL_PROPHET] = note
     days = matrix.values.shape[1] if matrix.values.size else 0
-    lstm_note = lstm_status(days, horizon)
+    lstm_note = lstm_status(days, max(horizons))
     availability.skipped[MODEL_LSTM] = lstm_note or "disiapkan, belum diaktifkan pada versi ini"
-    try:
-        import lightgbm  # type: ignore  # noqa: F401
-    except Exception:
-        availability.skipped["LightGBM"] = "library lightgbm tidak terpasang; peran model global diisi XGBoost/Gradient Boosting"
     return out, availability
 
 
-ENSEMBLE_MEMBERS = (MODEL_GBM, MODEL_GBM_FALLBACK, MODEL_PROPHET, MODEL_MA, MODEL_LEVEL)
+ENSEMBLE_MEMBERS = (MODEL_GBM, MODEL_GBM_FALLBACK, MODEL_LGBM, MODEL_PROPHET, MODEL_ES, MODEL_MA, MODEL_LEVEL)
+BIAS_KEY = "_koreksi_bias"
 
 
-def ensemble_weights(scores: dict[str, float]) -> dict[str, float]:
-    """Bobot invers WAPE walk-forward untuk anggota ensemble yang tersedia."""
-    members = {name: wape for name, wape in scores.items() if name in ENSEMBLE_MEMBERS and np.isfinite(wape)}
-    if not members:
+def ensemble_weights(scores: dict[str, float], *, baseline: str | None = MODEL_MA) -> dict[str, float]:
+    """Bobot (1/WAPE) / Σ(1/WAPE), hanya dari model yang WAPE-nya lebih kecil dari WAPE MA28.
+
+    Bila tidak ada yang mengalahkan MA28, MA28 dipakai sendiri (bobot 1).
+    """
+    finite = {name: wape for name, wape in scores.items() if name in ENSEMBLE_MEMBERS and np.isfinite(wape)}
+    if not finite:
         return {MODEL_LEVEL: 1.0}
+    limit = finite.get(baseline) if baseline else None
+    members = {name: wape for name, wape in finite.items() if limit is None or wape < limit}
+    if not members:
+        return {baseline: 1.0} if baseline in finite else {min(finite, key=finite.get): 1.0}
     inverse = {name: 1.0 / max(wape, 1e-3) for name, wape in members.items()}
     total = sum(inverse.values())
     return {name: value / total for name, value in inverse.items()}
 
 
 def blend(forecasts: dict[str, np.ndarray], weights: dict[str, float]) -> np.ndarray:
+    """Rata-rata berbobot, lalu dikali faktor koreksi bias (kunci BIAS_KEY) bila ada."""
     size = len(next(iter(forecasts.values()))) if forecasts else 0
     out = np.zeros(size)
     used = 0.0
     for name, weight in weights.items():
+        if name.startswith("_"):
+            continue
         if name in forecasts:
             out += weight * forecasts[name]
             used += weight
-    return out / used if used > 0 else out
+    out = out / used if used > 0 else out
+    return out * float(weights.get(BIAS_KEY, 1.0))

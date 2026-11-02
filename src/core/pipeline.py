@@ -12,11 +12,10 @@ from src.core.ensemble import (
     MODEL_ENSEMBLE,
     MODEL_LEVEL,
     ModelAvailability,
-    blend,
     build_demand_matrix,
     model_forecasts,
 )
-from src.core.evaluation import WalkForwardResult, evaluation_horizons, walk_forward
+from src.core.evaluation import WalkForwardResult
 from src.core.inventory import average_net_price_last_4_weeks
 
 
@@ -29,6 +28,7 @@ class DemandOutcome:
     censored_skus: int = 0
     evaluated_skus: int = 0
     history_days: int = 0
+    eval_records: dict = field(default_factory=dict)
 
 
 def _evaluation_subset(matrix, limit: int):
@@ -57,22 +57,24 @@ def run_demand_models(
     matrix = build_demand_matrix(base_history, zero_since=zero_since)
     days = matrix.values.shape[1] if matrix.values.size else 0
     censored = int(np.isnan(matrix.values).any(axis=1).sum()) if matrix.values.size else 0
+    from src.models.evaluate import HORIZONS, evaluate_all, segment_blend, walk_forward_results
+
     subset = _evaluation_subset(matrix, eval_limit)
-    evaluations: list[WalkForwardResult] = []
-    horizons = evaluation_horizons(horizon, days)
-    for index, eval_h in enumerate(horizons):
-        if progress:
-            progress(0.1 + 0.6 * index / max(len(horizons), 1), f"Walk-forward horizon {eval_h} hari")
-        evaluations.append(walk_forward(subset, eval_h))
-    # Bobot ensemble dari horizon uji yang paling dekat dengan periode prediksi.
+    records = evaluate_all(
+        subset,
+        progress=(lambda pct, label: progress(0.1 + 0.6 * pct, label)) if progress else None,
+    )
+    evaluations: list[WalkForwardResult] = walk_forward_results(records)
+    # Bobot ensemble (+ faktor koreksi bias) dari horizon uji yang paling dekat dengan periode prediksi.
     weights = {MODEL_LEVEL: 1.0}
-    if evaluations:
-        closest = min(evaluations, key=lambda result: abs(result.horizon - horizon))
-        weights = closest.weights
+    ready = {name: rec for name, rec in records.items() if rec.get("weights")}
+    if ready:
+        closest = min(ready, key=lambda name: abs(HORIZONS[name] - horizon))
+        weights = dict(ready[closest]["weights"])
     if progress:
         progress(0.8, "Melatih model akhir dan menyusun ensemble")
     forecasts, availability = model_forecasts(matrix, horizon)
-    forecasts[MODEL_ENSEMBLE] = blend(forecasts, weights)
+    forecasts[MODEL_ENSEMBLE] = segment_blend(matrix, forecasts, weights)
     per_model = pd.DataFrame({"item_key": matrix.keys})
     for name, values in forecasts.items():
         per_model[name] = values
@@ -84,6 +86,7 @@ def run_demand_models(
         censored_skus=censored,
         evaluated_skus=len(subset.keys),
         history_days=days,
+        eval_records=records,
     )
 
 
@@ -96,8 +99,10 @@ def outcome_with_weights(
 ) -> DemandOutcome:
     """Model akhir dengan bobot yang sudah diuji (tanpa walk-forward ulang), untuk prediksi pada tanggal lampau."""
     matrix = build_demand_matrix(base_history, zero_since=zero_since)
+    from src.models.evaluate import segment_blend
+
     forecasts, availability = model_forecasts(matrix, horizon)
-    forecasts[MODEL_ENSEMBLE] = blend(forecasts, weights or {MODEL_LEVEL: 1.0})
+    forecasts[MODEL_ENSEMBLE] = segment_blend(matrix, forecasts, weights or {MODEL_LEVEL: 1.0})
     per_model = pd.DataFrame({"item_key": matrix.keys})
     for name, values in forecasts.items():
         per_model[name] = values
@@ -153,6 +158,7 @@ def model_comparison_frame(outcome: DemandOutcome) -> pd.DataFrame:
             continue
         part = result.metrics.copy()
         part.insert(0, "Horizon (hari)", result.horizon)
-        part["Bobot ensemble"] = part["Model"].map(result.weights).fillna(0.0)
+        if "Bobot ensemble" not in part.columns:
+            part["Bobot ensemble"] = part["Model"].map(result.weights).fillna(0.0)
         frames.append(part)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
