@@ -1,38 +1,40 @@
-"""Satu matriks hak akses untuk seluruh aplikasi."""
+"""Hak akses aplikasi. Sumber kebenaran: matriks `src.core.access.ACCESS`."""
 
 from __future__ import annotations
 
-SUPER_USER = "SUPER_USER"
-ECOMMERCE_SPECIALIST = "ECOMMERCE_SPECIALIST"
-IC = "IC"
-GUDANG = "GUDANG"
-ROLES = (SUPER_USER, ECOMMERCE_SPECIALIST, IC, GUDANG)
-ROLE_LABELS = {
-    SUPER_USER: "Super user",
-    ECOMMERCE_SPECIALIST: "E-commerce specialist",
-    IC: "IC",
-    GUDANG: "Gudang",
-}
+from src.core.access import (
+    ECOMMERCE_SPECIALIST,
+    ROLE_LABELS,
+    ROLES,
+    SUPER_USER,
+    TEAM_DC,
+    TEAM_ICMD,
+    allowed,
+    normalize_role,
+)
 
-_ALL = frozenset(ROLES)
-_ECOM = frozenset({SUPER_USER, ECOMMERCE_SPECIALIST})
-_SUPER = frozenset({SUPER_USER})
+__all__ = [
+    "ECOMMERCE_SPECIALIST", "ROLE_LABELS", "ROLES", "SUPER_USER", "TEAM_DC", "TEAM_ICMD",
+    "PERMISSIONS", "SHEET_PERMISSIONS", "can", "allowed_sheets", "role_label",
+]
 
-PERMISSIONS: dict[str, frozenset[str]] = {
-    "beranda": _ALL,
-    "riwayat_analisa": _ALL,
-    "jalankan_analisa": _ALL,
-    "ubah_data_latih": _ALL,
-    "ringkasan": _ALL,
-    "prediksi": _ALL,
-    "ubah_password": _ALL,
-    "data": _ECOM,
-    "folder_data": _ECOM,
-    "rekomendasi": _ECOM,
-    "laporan": _ECOM,
-    "evaluasi_model": _SUPER,
-    "kelola_user": _SUPER,
-    "hapus_riwayat": _SUPER,
+# Nama izin lama → (menu di matriks, level yang dibutuhkan).
+PERMISSIONS: dict[str, tuple[str, str]] = {
+    "beranda": ("beranda", "view"),
+    "riwayat_analisa": ("riwayat_analisa", "view"),
+    "hapus_riwayat": ("riwayat_analisa", "edit"),
+    "jalankan_analisa": ("data_latih", "edit"),
+    "ubah_data_latih": ("data_latih", "edit"),
+    "ringkasan": ("ringkasan_prediksi", "view"),
+    "prediksi": ("ringkasan_prediksi", "view"),
+    "prediksi_vs_aktual": ("prediksi_vs_aktual", "view"),
+    "ubah_password": ("ubah_password", "view"),
+    "data": ("data", "view"),
+    "folder_data": ("folder_data", "view"),
+    "rekomendasi": ("rekomendasi", "view"),
+    "laporan": ("laporan", "view"),
+    "evaluasi_model": ("evaluasi_model", "view"),
+    "kelola_user": ("kelola_user", "edit"),
 }
 
 SHEET_PERMISSIONS = {
@@ -47,7 +49,8 @@ SHEET_PERMISSIONS = {
 
 
 def can(role: str | None, permission: str) -> bool:
-    return bool(role) and role in PERMISSIONS.get(permission, frozenset())
+    rule = PERMISSIONS.get(permission)
+    return bool(rule) and allowed(role, *rule)
 
 
 def allowed_sheets(role: str | None, sheets) -> list[str]:
@@ -55,4 +58,5 @@ def allowed_sheets(role: str | None, sheets) -> list[str]:
 
 
 def role_label(role: str | None) -> str:
-    return ROLE_LABELS.get(str(role or ""), str(role or "-"))
+    key = normalize_role(role)
+    return ROLE_LABELS.get(key, str(role or "-"))

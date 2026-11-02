@@ -11,12 +11,14 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from auth.permissions import ROLES, SUPER_USER
+from src.core.access import LEGACY_ROLES
 from auth.security import hash_password, password_problem, verify_password
 from src.core.db import id_column
 
 MAX_FAILED = 5
-LOCK_MINUTES = 5
+LOCK_MINUTES = 15
 SESSION_HOURS = 8
+FORCE_CHANGE_MIGRATION = "2026-11-force-password-change"
 
 
 class AuthError(ValueError):
@@ -89,6 +91,18 @@ class UserRepository:
                 )
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS sessions_username ON sessions (lower(username))"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS auth_migrations (name VARCHAR(80) PRIMARY KEY, applied_at VARCHAR(32))"))
+            for old, new in LEGACY_ROLES.items():
+                conn.execute(text("UPDATE users SET role = :n WHERE role = :o"), {"n": new, "o": old})
+                conn.execute(text("UPDATE sessions SET role = :n WHERE role = :o"), {"n": new, "o": old})
+            done = conn.execute(text("SELECT 1 FROM auth_migrations WHERE name = :n"), {"n": FORCE_CHANGE_MIGRATION}).first()
+            if done is None:
+                # Password lama pernah beredar lewat chat: semua user wajib ganti password sekali.
+                conn.execute(text("UPDATE users SET must_change_password = :m"), {"m": True})
+                conn.execute(
+                    text("INSERT INTO auth_migrations (name, applied_at) VALUES (:n, :t)"),
+                    {"n": FORCE_CHANGE_MIGRATION, "t": _now().isoformat(sep=" ")},
+                )
 
     @staticmethod
     def _user(row) -> User | None:
@@ -130,7 +144,7 @@ class UserRepository:
             raise AuthError("Username wajib diisi (maks. 80 karakter).")
         if role not in ROLES:
             raise AuthError("Role tidak dikenal.")
-        problem = password_problem(password)
+        problem = password_problem(password, name)
         if problem:
             raise AuthError(problem)
         if self.get(name) is not None:
@@ -242,7 +256,7 @@ class UserRepository:
         self._store_password(username, new_password, must_change=False)
 
     def _store_password(self, username: str, password: str, *, must_change: bool) -> None:
-        problem = password_problem(password)
+        problem = password_problem(password, username)
         if problem:
             raise AuthError(problem)
         target = self.get(username)
@@ -290,8 +304,8 @@ class UserRepository:
         if user is None or hashed is None or not verify_password(password, hashed):
             failed = self._register_failure(username, now)
             if failed >= MAX_FAILED:
-                raise AuthError(f"Login gagal {MAX_FAILED}× berturut-turut. Tunggu {LOCK_MINUTES} menit sebelum mencoba lagi.")
-            raise AuthError(f"Username atau password salah ({failed}/{MAX_FAILED}).")
+                raise AuthError(f"Login gagal {MAX_FAILED}× berturut-turut. Akun dikunci {LOCK_MINUTES} menit.")
+            raise AuthError(f"Username atau password salah. Sisa percobaan: {MAX_FAILED - failed}.")
         if not user.is_active:
             raise AuthError("Akun ini dinonaktifkan. Hubungi super user.")
         self.clear_failures(username)

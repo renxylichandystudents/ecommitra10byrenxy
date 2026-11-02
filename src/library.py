@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.activity import ledger_from_raw, scope_ledger
+from src.activity import ledger_from_raw
+from src.core.metrics import order_metrics
 from src.ingest import _clean_token, _parse_datetime, map_columns, order_revenue
 
 LIBRARY_DIR = Path(__file__).resolve().parents[1] / "uploads" / "library"
@@ -132,17 +133,17 @@ def month_status_counts(source: pd.DataFrame | None) -> dict[str, float]:
     if ledger.empty:
         return empty
     cancel = ledger.loc[ledger["is_cancel"]]
-    kept = scope_ledger(ledger, include_cancel=False, include_return=False)
+    facts = order_metrics(ledger)
     return {
-        "return_orders": _unique_order_count(ledger, ledger["returned_qty"] > 0),
-        "cancel_orders": _unique_order_count(ledger, ledger["is_cancel"]),
+        "return_orders": facts["pesanan_retur"],
+        "cancel_orders": facts["pesanan_batal"],
         "success_orders": _unique_order_count(ledger, ledger["is_success"]),
-        "qty_net": float(kept["qty"].sum()) if not kept.empty else 0.0,
-        "sales_net": float(order_revenue(kept)) if not kept.empty else 0.0,
-        "qty_return": float(ledger["returned_qty"].sum()),
-        "sales_return": float(ledger["return_value"].sum()),
+        "qty_net": facts["qty_bersih"],
+        "sales_net": facts["sales_bersih"],
+        "qty_return": facts["retur_unit"],
+        "sales_return": facts["nominal_retur"],
         "qty_batal": float(cancel["qty"].sum()) if not cancel.empty else 0.0,
-        "sales_batal": float(order_revenue(cancel)) if not cancel.empty else 0.0,
+        "sales_batal": facts["nominal_batal"],
     }
 
 
@@ -153,14 +154,14 @@ def folder_frame() -> pd.DataFrame:
         "Baris",
         "No. Pesanan",
         "Berhasil",
-        "QTY terjual",
-        "Sales",
-        "QTY return",
-        "Sales return",
+        "QTY bersih",
+        "Sales bersih",
+        "Unit retur",
+        "Sales retur",
         "QTY batal",
         "Sales batal",
-        "Return",
-        "Batal",
+        "Pesanan retur",
+        "Pesanan batal",
         "File terakhir",
         "Diperbarui",
     ]
@@ -178,14 +179,14 @@ def folder_frame() -> pd.DataFrame:
                 "Baris": item["rows"],
                 "No. Pesanan": item["orders"],
                 "Berhasil": counts["success_orders"],
-                "QTY terjual": int(round(counts["qty_net"])),
-                "Sales": int(round(counts["sales_net"])),
-                "QTY return": int(round(counts["qty_return"])),
-                "Sales return": int(round(counts["sales_return"])),
+                "QTY bersih": int(round(counts["qty_net"])),
+                "Sales bersih": int(round(counts["sales_net"])),
+                "Unit retur": int(round(counts["qty_return"])),
+                "Sales retur": int(round(counts["sales_return"])),
                 "QTY batal": int(round(counts["qty_batal"])),
                 "Sales batal": int(round(counts["sales_batal"])),
-                "Return": counts["return_orders"],
-                "Batal": counts["cancel_orders"],
+                "Pesanan retur": counts["return_orders"],
+                "Pesanan batal": counts["cancel_orders"],
                 "File terakhir": ", ".join(item["files"]),
                 "Diperbarui": item["updated_at"],
             }

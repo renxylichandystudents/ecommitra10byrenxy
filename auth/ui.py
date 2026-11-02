@@ -10,8 +10,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from auth.permissions import ROLES, SUPER_USER, can, role_label
-from auth.repository import AuthError, User, UserRepository
+from auth.repository import LOCK_MINUTES, AuthError, User, UserRepository
+from auth.security import PASSWORD_RULE
+from src.core.access import MENU_LABELS, access_matrix_rows, allowed
 from src.core.db import database_url, make_engine
+from src.core.feature_store import FeatureStore
+from src.ui.confirm import confirm_action
 from src.utils.format import show_table
 
 SESSION_KEY = "auth-user"
@@ -47,6 +51,24 @@ def get_engine():
     return _engine(database_url(_secrets_obj()))
 
 
+@st.cache_resource(show_spinner=False)
+def _features(url: str) -> FeatureStore:
+    return FeatureStore(_engine(url))
+
+
+def get_features() -> FeatureStore:
+    """Tabel fitur baru (terpisah dari 9 sumber data latih) + audit_log."""
+    return _features(database_url(_secrets_obj()))
+
+
+def audit(action: str, detail: str = "") -> None:
+    user = current_user()
+    try:
+        get_features().audit(user.username if user else "-", action, detail)
+    except Exception:
+        pass
+
+
 def get_repo() -> UserRepository:
     repo = UserRepository(get_engine())
     repo.ensure_initial_superuser(_secret("INITIAL_SUPERUSER_USERNAME"), _secret("INITIAL_SUPERUSER_PASSWORD"))
@@ -67,6 +89,16 @@ def require_role(permission: str) -> User:
     return user
 
 
+def require(menu: str, need: str = "view") -> User:
+    """Guard server-side: hentikan halaman/aksi bila role tidak punya level `need` di menu `menu`."""
+    user = current_user()
+    if user is None or not allowed(user.role, menu, need):
+        label = MENU_LABELS.get(menu, menu)
+        st.error(f"Anda tidak punya akses ke {label}. Hubungi super user bila perlu akses.")
+        st.stop()
+    return user
+
+
 def _hide_chrome() -> None:
     st.markdown(
         "<style>section[data-testid='stSidebar'],[data-testid='stSidebarCollapsedControl']{display:none!important}</style>",
@@ -82,7 +114,7 @@ def _login_page(repo: UserRepository) -> None:
         st.caption("Mitra10 × Shopee · Prediksi item terlaris")
         if repo.count() == 0:
             st.warning(
-                "Belum ada user. Isi INITIAL_SUPERUSER_USERNAME dan INITIAL_SUPERUSER_PASSWORD (min. 8 karakter) "
+                "Belum ada user. Isi INITIAL_SUPERUSER_USERNAME dan INITIAL_SUPERUSER_PASSWORD (min. 10 karakter) "
                 "di Secrets Streamlit (atau .streamlit/secrets.toml saat lokal), lalu muat ulang halaman."
             )
             return
@@ -95,21 +127,29 @@ def _login_page(repo: UserRepository) -> None:
                 user = repo.authenticate(username, password)
             except AuthError as exc:
                 st.error(str(exc))
+                try:
+                    get_features().audit(username.strip() or "-", "login_gagal", str(exc))
+                except Exception:
+                    pass
             else:
                 token = repo.create_session(user)
                 st.session_state[SESSION_KEY] = user
                 st.session_state[TOKEN_KEY] = token
                 st.rerun()
-        st.caption("Akun dibuat oleh super user. Lupa password? Minta super user mereset password Anda.")
+        st.caption(
+            f"Akun dibuat oleh super user. Setelah 5 kali gagal, akun dikunci {LOCK_MINUTES} menit. "
+            "Lupa password? Minta super user mereset password Anda."
+        )
 
 
 def _password_form(repo: UserRepository, user: User, *, forced: bool) -> None:
     st.markdown("### Ubah password")
     if forced:
-        st.info("Ini login pertama Anda (atau password baru direset). Ganti password sebelum memakai aplikasi.")
+        st.info("Ganti password sebelum memakai aplikasi (login pertama, password direset, atau pembaruan keamanan).")
+    st.caption(PASSWORD_RULE)
     with st.form("password-form"):
         old = st.text_input("Password lama / sementara", type="password")
-        new = st.text_input("Password baru (min. 8 karakter)", type="password")
+        new = st.text_input("Password baru", type="password")
         again = st.text_input("Ulangi password baru", type="password")
         submitted = st.form_submit_button("Simpan password", type="primary")
     if submitted:
@@ -118,6 +158,7 @@ def _password_form(repo: UserRepository, user: User, *, forced: bool) -> None:
             return
         try:
             repo.change_password(user.username, old, new)
+            audit("ubah_password", user.username)
             st.session_state[SESSION_KEY] = repo.get(user.username)
             st.session_state.pop(PAGE_KEY, None)
             st.success("Password tersimpan.")
@@ -178,6 +219,7 @@ def _restore_from_cookie(repo: UserRepository) -> User | None:
 
 def logout() -> None:
     repo = get_repo()
+    audit("logout")
     repo.delete_session(st.session_state.get(TOKEN_KEY) or _cookie_token())
     for key in list(st.session_state.keys()):
         del st.session_state[key]
@@ -235,8 +277,12 @@ def user_bar(user: User) -> None:
 
 
 def _users_page(repo: UserRepository, user: User) -> None:
-    require_role("kelola_user")
     st.markdown("### Kelola user")
+    users_panel(repo, user)
+
+
+def users_panel(repo: UserRepository, user: User) -> None:
+    require("kelola_user", "edit")
     flash = st.session_state.pop(FLASH_KEY, None)
     if flash:
         st.success(flash)
@@ -262,10 +308,11 @@ def _users_page(repo: UserRepository, user: User) -> None:
         with st.form("user-add", clear_on_submit=True):
             name = st.text_input("Username")
             role = st.selectbox("Role", ROLES, format_func=role_label)
-            temp = st.text_input("Password sementara (min. 8 karakter)", type="password")
+            temp = st.text_input("Password sementara", type="password", help=PASSWORD_RULE)
             if st.form_submit_button("Tambah", type="primary"):
                 try:
                     repo.create(name, temp, role, created_by=user.username, must_change=True)
+                    audit("tambah_user", f"{name} · {role}")
                     st.session_state[FLASH_KEY] = f"User {name} dibuat. Ia wajib mengganti password saat login pertama."
                     st.rerun()
                 except AuthError as exc:
@@ -281,30 +328,51 @@ def _users_page(repo: UserRepository, user: User) -> None:
         if c1.button("Simpan role", key=f"user-save-role-{target}", use_container_width=True):
             try:
                 repo.set_role(target, new_role)
+                audit("ubah_role", f"{target} → {new_role}")
                 st.session_state[FLASH_KEY] = f"Role {target} diperbarui menjadi {role_label(new_role)}."
                 st.rerun()
             except AuthError as exc:
                 st.error(str(exc))
         toggle = "Nonaktifkan" if chosen.is_active else "Aktifkan"
         if c2.button(toggle, key=f"user-toggle-{target}", use_container_width=True):
-            try:
-                repo.set_active(target, not chosen.is_active)
+
+            def _apply(active: bool = not chosen.is_active) -> str | None:
+                try:
+                    repo.set_active(target, active)
+                except AuthError as exc:
+                    return str(exc)
+                audit("aktifkan_user" if active else "nonaktifkan_user", target)
                 st.session_state[FLASH_KEY] = (
-                    f"User {target} dinonaktifkan; semua sesi login-nya dihapus." if chosen.is_active else f"User {target} diaktifkan."
+                    f"User {target} diaktifkan." if active else f"User {target} dinonaktifkan; semua sesi login-nya dihapus."
                 )
-                st.rerun()
-            except AuthError as exc:
-                st.error(str(exc))
-        temp = st.text_input("Password sementara baru", type="password", key=f"user-reset-{target}")
+                return None
+
+            if chosen.is_active:
+                confirm_action(
+                    "Nonaktifkan user?",
+                    f"User **{html.escape(target)}** tidak bisa login lagi dan semua sesinya dihapus. Lanjutkan?",
+                    _apply,
+                    confirm_label="Ya, nonaktifkan",
+                )
+            else:
+                problem = _apply()
+                if problem:
+                    st.error(problem)
+                else:
+                    st.rerun()
+        temp = st.text_input("Password sementara baru", type="password", key=f"user-reset-{target}", help=PASSWORD_RULE)
         if st.button("Reset password", key=f"user-reset-btn-{target}"):
             try:
                 repo.reset_password(target, temp)
+                audit("reset_password", target)
                 st.session_state[FLASH_KEY] = f"Password {target} direset; semua sesi login-nya dihapus. Ia wajib menggantinya saat login berikutnya."
                 st.rerun()
             except AuthError as exc:
                 st.error(str(exc))
     if not any(u.role == SUPER_USER and u.is_active for u in users):
         st.warning("Tidak ada super user aktif.")
+    with st.expander("Matriks hak akses per role (hanya baca)"):
+        show_table(pd.DataFrame(access_matrix_rows()))
 
 
 def show_auth_page(user: User) -> bool:
@@ -314,7 +382,7 @@ def show_auth_page(user: User) -> bool:
         return False
     repo = get_repo()
     if page == "password":
-        require_role("ubah_password")
+        require("ubah_password")
         _password_form(repo, user, forced=False)
     else:
         _users_page(repo, user)

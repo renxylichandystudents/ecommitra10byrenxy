@@ -1,9 +1,7 @@
 """Folder data per pengguna.
 
-Lokal (laptop): ~/.prediksi_shopee. Server (Streamlit Community Cloud): satu folder
-per ID browser, supaya pengunjung publik tidak saling melihat data. ID disimpan di
-localStorage browser bila komponen tersedia, atau di parameter URL sebagai cadangan.
-Isi data tidak pernah disimpan di localStorage.
+Lokal (laptop): ~/.prediksi_shopee. Server (Streamlit Community Cloud): folder bersama tim
+yang login. Tidak ada lagi ID browser di URL (?uid=); akses diatur oleh login.
 """
 
 from __future__ import annotations
@@ -53,37 +51,3 @@ def team_root() -> Path:
     root = LOCAL_ROOT if deploy_mode() == "lokal" else SERVER_ROOT / "shared"
     root.mkdir(parents=True, exist_ok=True)
     return root
-
-
-def resolve_browser_uid(st) -> str | None:
-    """Ambil/buat ID browser di mode server. Mode lokal tidak butuh ID."""
-    if deploy_mode() == "lokal":
-        return None
-    cached = st.session_state.get("_browser_uid")
-    if valid_uid(cached):
-        return cached
-    uid: str | None = None
-    storage = None
-    try:
-        from streamlit_local_storage import LocalStorage
-
-        storage = LocalStorage()
-        stored = storage.getItem("prediksi_shopee_uid")
-        if valid_uid(stored):
-            uid = str(stored)
-    except Exception:
-        storage = None
-    if uid is None:
-        param = st.query_params.get("uid")
-        if valid_uid(param):
-            uid = str(param)
-    if uid is None:
-        uid = new_uid()
-    if storage is not None:
-        try:
-            storage.setItem("prediksi_shopee_uid", uid)
-        except Exception:
-            pass
-    st.query_params["uid"] = uid
-    st.session_state["_browser_uid"] = uid
-    return uid

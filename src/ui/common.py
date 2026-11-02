@@ -128,6 +128,42 @@ def card(column, label: str, value: str, *, hint: str | None = None, tone: str |
     )
 
 
+def metric_card(column, key: str, value: str, *, hint: str | None = None, tone: str | None = None, label: str | None = None) -> None:
+    """Kartu KPI dengan nama metrik baku dan tooltip ⓘ dari METRIC_DEFINITIONS."""
+    from src.core.metrics import METRIC_DEFINITIONS, METRIC_LABELS
+
+    name = html.escape(label or METRIC_LABELS.get(key, key))
+    definition = METRIC_DEFINITIONS.get(key, "")
+    info = (
+        f" <span title='{html.escape(definition, quote=True)}' style='cursor:help;color:#94a3b8;font-weight:600'>ⓘ</span>"
+        if definition
+        else ""
+    )
+    style = f"background:{EXTRA_BG};" if tone == "extra" else (f"background:{STOCK_BG};" if tone == "stock" else "")
+    hint_html = f"<div class='metric-hint'>{hint}</div>" if hint else ""
+    column.markdown(
+        f"<div class='stat-card' style='{style}'><div class='readable-metric-label'>{name}{info}</div>"
+        f"<div class='readable-metric-value'>{value}</div>{hint_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_order_metrics(frame: pd.DataFrame, start=None, end=None, exclude_flag: bool = False) -> dict:
+    """order_metrics dengan cache (hash data, start, end, exclude_flag)."""
+    from src.core.metrics import order_metrics
+
+    del exclude_flag
+    return order_metrics(frame, start, end)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_sku_coverage(frame: pd.DataFrame, start=None, end=None) -> dict:
+    from src.core.metrics import sku_coverage
+
+    return sku_coverage(frame, start, end)
+
+
 def section(title: str, kicker: str | None = None) -> None:
     kicker_html = f"<div style='font-size:.72rem;font-weight:700;color:#64748b;letter-spacing:.08em;text-transform:uppercase'>{html.escape(kicker)}</div>" if kicker else ""
     st.markdown(f"{kicker_html}<div class='section-title'>{html.escape(title)}</div>", unsafe_allow_html=True)
@@ -249,10 +285,10 @@ def exclude_toggle_card(*, key: str, removed_orders: int, removed_units: float) 
         with right:
             if value:
                 st.markdown(badge("AKTIF · nilai bersih", "on"), unsafe_allow_html=True)
-                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur dikeluarkan")
+                st.caption(f"Seluruh data latih: {fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur dikeluarkan dari prediksi")
             else:
                 st.markdown(badge("NONAKTIF · termasuk batal & return", "off"), unsafe_allow_html=True)
-                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur ikut dihitung")
+                st.caption(f"Seluruh data latih: {fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur ikut dihitung di prediksi")
     return bool(value)
 
 

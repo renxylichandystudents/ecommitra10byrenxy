@@ -351,3 +351,52 @@ Pertanyaan terbuka tersisa:
 - Template resmi Shopee untuk flash sale toko masih memakai template generik.
 - Data stok belum diunggah pada data lokal, sehingga Flash sale toko dan chip stok menampilkan "belum ada data stok".
 - Di Streamlit Cloud, xgboost (Linux) akan aktif menggantikan HistGradientBoosting; angka evaluasi bisa sedikit berbeda dari hasil lokal macOS.
+
+## Revisi Final Mitra10 × Shopee (Prompt_Cursor_Mitra10xShopee)
+
+### Tahap 0 — Peta repo (sebelum perubahan)
+
+| Bagian | Lokasi | Catatan |
+|---|---|---|
+| Entry point | `app.py` (±7.600 baris) | Login, routing `?page=`/`?tab=`, Beranda, halaman Ubah data latih, Jalankan analisis, ketujuh tab hasil. Render tab di `main` bagian `if sheet == ...`. |
+| Routing | `src/ui/routing.py` | Halaman: `beranda`, `data-latih`, `analisa`, `kelola-user`, `ubah-password`. |
+| Perhitungan metrik (sebelum 1A) | tersebar | `src/activity.py` (`activity_report`, `cancel_contribution`, `unpaid_buyer_table`) untuk tab Data; `src/library.py` (`month_status_counts`) untuk Folder data; `app.py` (`removed_counts`, `show_performance_cards`, `_month_rows`) untuk Ringkasan; `src/ui/laporan.py` (`show_report`) untuk Laporan. Omzet per pesanan: `src/ingest.py::order_revenue`. |
+| Pembaca transaksi | `src/ingest.py` | `clean_order_frame` (frame analisis: `gross_qty`, `qty` bersih retur, `sales`, `order_amount`), `cancelled_status_mask`. `src/activity.py::ledger_from_raw` (frame Data: `qty` kotor, `returned_qty`, `line_value`, `return_value`). |
+| Prediksi | `src/forecast.py`, `src/core/forecasting.py`, `src/core/ensemble.py`, `src/aggregate.py` | Ensemble Level terkini + MA28 + GBM global (+ Prophet opsional), bobot invers WAPE. |
+| Stok & SS | `src/core/inventory.py`, `src/core/decision_table.py`, `src/core/service_level.py`, `src/stock.py` | |
+| Evaluasi | `src/core/evaluation.py`, `src/ui/evaluasi.py`, `src/intelligence/` | |
+| Rekomendasi | `src/core/recommendations.py`, `src/core/expert_system.py`, `src/core/nlp_competitor.py`, `src/core/naming.py`, `src/ui/rekomendasi.py` | |
+| Iklan | `src/core/ads.py` (`attribute_ads`) | Atribusi per SKU, omzet dibatasi sales SKU. |
+| Laporan | `src/ui/laporan.py::show_report` (dipakai tab Laporan). `app.py::show_report_menu` (versi slide lama, tidak dipanggil). | |
+| Penyimpanan 9 data latih | `src/core/storage.py::LocalDataStore` (Parquet per sumber + `registry.json` di folder user) dan `src/library.py` (transaksi per bulan `uploads/library/YYYY-MM.pkl`) | Tidak disentuh (aturan wajib no. 2). |
+| Riwayat analisa | `src/core/runs.py` (tabel `analysis_runs`, hasil di `data/runs/<id>/`) | |
+| Database | `src/core/db.py` | SQLAlchemy; SQLite `data/app.db` atau Postgres via `DATABASE_URL`. |
+| Autentikasi | `auth/` (`security.py` bcrypt, `repository.py` user/sesi/lockout, `permissions.py` matriks role, `ui.py`) | Role saat ini: SUPER_USER, ECOMMERCE_SPECIALIST, IC, GUDANG (akan dipetakan ke super_user, ecommerce_specialist, team_icmd, team_dc di Tahap 1C). Kunci 5 menit (target 15 menit). |
+| Folder per browser | `src/core/userspace.py` | Masih memakai `?uid=` (dihapus di Tahap 1C). |
+
+Temuan awal penyebab angka beda antar halaman (Oktober 2026):
+- "11.575 pesanan batal dan 1.576 unit retur" di Ringkasan berasal dari `removed_counts(orders_raw)` yang menghitung seluruh data latih (Jan–Okt), bukan periode yang dipilih.
+- Sales Ringkasan = Total Pembayaran pesanan non-batal setelah baris yang habis diretur dibuang; Laporan = Σ harga setelah diskon × QTY bersih (bukan Total Pembayaran); Data = Total Pembayaran semua status (bruto).
+- Tingkat batal Laporan dihitung per baris produk, bukan per pesanan.
+- Belum bayar Laporan (758) menghitung semua pesanan batal beralasan "bayar"; Data (584) mengecualikan pembeli yang akhirnya membayar SKU yang sama.
+- ROAS Ringkasan/Data memakai bulan iklan terakhir dan sales SKU dari frame analisis; Laporan memakai periode laporan, sehingga batas omzet per SKU berbeda.
+
+### Tahap 1A — Modul metrik tunggal (selesai)
+
+- `src/core/metrics.py`: `order_metrics`, `ads_metrics`, `sku_coverage`, `METRIC_DEFINITIONS`, `sales_gap_breakdown`. Menerima frame Data maupun frame analisis; hasil identik.
+- Cache: `src/ui/common.py::cached_order_metrics` (hash data, start, end, exclude_flag) dan `metric_card` (label baku + tooltip ⓘ).
+- Dipakai di: kartu Ringkasan/Prediksi, kartu & ROAS tab Data, tabel Folder data (`src/library.py::month_status_counts`), Laporan (sales bersih, pertumbuhan, ROAS, tingkat batal, belum bayar, bagian Iklan dan Transaksi).
+- `app.py::show_report_menu` beserta helper slide (tidak pernah dipanggil, berisi perhitungan sales sendiri) dihapus.
+- `ledger_from_raw` menambah kolom `buyer` agar belum bayar bisa dihitung dari frame Data.
+- Belum bayar = definisi tab Data (pesanan batal belum dibayar, tanpa pembeli yang membayar SKU yang sama) → 584 di audit. Versi tanpa pengecualian tersedia sebagai `belum_bayar_semua` (758 di audit).
+- Selisih sales Ringkasan lama vs bersih: Ringkasan lama tidak mengurangi nominal retur pada pesanan yang masih punya baris tersisa (retur sebagian), dan membuang Total Pembayaran pesanan retur penuh yang nilainya bisa lebih kecil dari unit × harga (voucher/ongkir). Rincian per No. Pesanan: `sales_gap_breakdown(...)["detail"]`.
+- Uji: `tests/test_metrics.py` (10 test, termasuk data asli Oktober 2026 bila tersedia).
+
+### Tahap 1B — Penyimpanan data fitur baru (selesai)
+
+- `src/core/feature_store.py`: tabel `prediction_snapshot`, `report_meta`, `excluded_sku`, `cost_component`, `carton_dimension`, `warehouse_rack`, `import_po`, `import_note`, `brand_portal`, `sales_target`, `audit_log` (SQLAlchemy Core, sama untuk SQLite dan Postgres).
+- Koneksi = `DATABASE_URL` yang sudah dipakai tabel user & riwayat analisa (bukan `st.secrets["db"]`), sehingga tidak perlu secret baru.
+- `app_user` di prompt sudah tercakup tabel `users` + `login_attempts`; penyesuaian kolom/role di Tahap 1C.
+- Setiap tambah/simpan/hapus lewat `FeatureStore` menulis `audit_log` dalam transaksi yang sama.
+- Tabel dibuat otomatis saat aplikasi dibuka (`app.py::feature_store`). Penyimpanan 9 data latih tidak disentuh.
+- Uji: `tests/test_feature_store.py` (7 test: tabel lengkap, bertahan setelah restart, upsert, audit, snapshot, periode laporan, hash file data latih tidak berubah).

@@ -15,9 +15,10 @@ from src.core.expert_system import FISHBONE_CATEGORIES, evaluate_rules, fishbone
 from src.core.optimization import monte_carlo_stock_scenarios
 from src.core.preprocessing import promo_flag
 from src.ui.analysis_dialog import store_performance
-from src.core.ads import ad_validation, attribute_ads
+from src.core.ads import ad_validation
+from src.core.metrics import ads_metrics
 from src.utils.format import input_rupiah, show_table
-from src.ui.common import card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, period_filter, status_key
+from src.ui.common import cached_order_metrics, card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, period_filter, status_key
 
 SECTIONS = (
     "1. Ringkasan eksekutif",
@@ -47,23 +48,6 @@ def _cancel_mask(frame: pd.DataFrame) -> pd.Series:
     from src.ingest import cancelled_status_mask
 
     return cancelled_status_mask(frame["status"])
-
-
-def _orders_count(frame: pd.DataFrame) -> int:
-    if frame is None or frame.empty:
-        return 0
-    return int(frame["order_id"].nunique()) if "order_id" in frame.columns else len(frame)
-
-
-def _previous_span(frame: pd.DataFrame, orders: pd.DataFrame) -> pd.DataFrame:
-    """Rentang sebelumnya dengan panjang hari yang sama (dipakai sebagai pembanding 'bulan lalu')."""
-    if frame is None or frame.empty:
-        return orders.iloc[0:0]
-    lo = pd.to_datetime(frame["order_time"]).min().normalize()
-    hi = pd.to_datetime(frame["order_time"]).max().normalize()
-    span = hi - lo + pd.Timedelta(days=1)
-    stamps = pd.to_datetime(orders["order_time"]).dt.normalize()
-    return orders.loc[stamps.ge(lo - span) & stamps.lt(lo)]
 
 
 def _top_advices(table: pd.DataFrame, today: date, limit: int = 8) -> pd.DataFrame:
@@ -139,19 +123,21 @@ def show_report(
         target_note = "Target belum diisi: memakai prediksi sales bulan ini sebagai target."
 
     top = table.head(50) if table is not None else pd.DataFrame()
-    sales_now = float(report_orders["sales"].sum())
-    prev = _previous_span(report_orders, orders)
-    sales_prev = float(prev["sales"].sum()) if not prev.empty else np.nan
-    growth = (sales_now - sales_prev) / sales_prev * 100 if sales_prev and np.isfinite(sales_prev) and sales_prev > 0 else np.nan
     report_lo = pd.to_datetime(report_orders["order_time"]).min().normalize()
     report_hi = pd.to_datetime(report_orders["order_time"]).max().normalize()
-    ad_result = attribute_ads(frames.ads, frames.stock, orders=report_orders, start=report_lo, end=report_hi)
-    ad_cost, ad_sales = ad_result.cost, ad_result.sales
-    roas = ad_sales / ad_cost if ad_cost > 0 else np.nan
+    facts = cached_order_metrics(orders_all, report_lo.date(), report_hi.date(), exclude)
+    span = report_hi - report_lo + pd.Timedelta(days=1)
+    prev_facts = cached_order_metrics(orders_all, (report_lo - span).date(), (report_lo - pd.Timedelta(days=1)).date(), exclude)
+    sales_now = float(facts["sales_bersih"])
+    sales_prev = float(prev_facts["sales_bersih"]) if prev_facts["pesanan_semua"] > 0 else np.nan
+    growth = (sales_now - sales_prev) / sales_prev * 100 if sales_prev and np.isfinite(sales_prev) and sales_prev > 0 else np.nan
+    ads = ads_metrics(frames.ads, frames.stock, orders_all, report_lo, report_hi)
+    ad_result = ads["result"]
+    ad_cost, ad_sales, roas = ads["biaya_iklan"], ads["omzet_iklan"], ads["roas"]
     short_top = int(top["m_status"].map(status_key).isin({"Kurang", "Kosong"}).sum()) if not top.empty and "m_status" in top.columns else 0
-    cancel_rate = float(_cancel_mask(report_all).mean() * 100) if isinstance(report_all, pd.DataFrame) and not report_all.empty else 0.0
+    cancel_rate = float(facts["tingkat_batal"] * 100)
     reasons = _cancel_reasons(report_all)
-    unpaid = int(reasons.loc[reasons["reason"].str.lower().str.contains("bayar"), "orders"].sum()) if not reasons.empty else 0
+    unpaid = int(facts["belum_bayar"])
 
     nav, body = st.columns([1, 4])
     with nav:
@@ -163,9 +149,9 @@ def show_report(
         try:
             if section == SECTIONS[0]:
                 cols = st.columns(4)
-                card(cols[0], "Sales bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
+                metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
                 card(cols[1], "Prediksi sales bulan ini", fmt_idr(month_pred), hint=f"target {fmt_idr(target)}")
-                card(cols[2], "ROAS iklan", fmt_num(roas, 2), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
+                metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
                 card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint="status Kurang/Kosong bulan ini")
                 if target_note:
                     st.caption(target_note)
@@ -244,9 +230,9 @@ def show_report(
                 for message in warnings:
                     st.warning(message)
                 cols = st.columns(4)
-                card(cols[0], "Biaya iklan", fmt_idr(ad_cost))
-                card(cols[1], "Omzet iklan", fmt_idr(ad_sales))
-                card(cols[2], "ROAS", fmt_num(roas, 2))
+                metric_card(cols[0], "biaya_iklan", fmt_idr(ad_cost))
+                metric_card(cols[1], "omzet_iklan", fmt_idr(ad_sales))
+                metric_card(cols[2], "roas", fmt_num(roas, 1))
                 card(cols[3], "Porsi sales dari iklan", fmt_pct(share))
                 for message in notes:
                     st.caption(message)
@@ -269,14 +255,11 @@ def show_report(
                     card(cols[2], "Konversi", fmt_pct(perf["konversi"], 2), hint=f"sebelumnya {fmt_pct(perf['konversi_prev'], 2)}")
                     card(cols[3], "Pembeli baru", fmt_num(perf["pembeli_baru"]))
             elif section == SECTIONS[6]:
-                total = _orders_count(report_all)
-                cancelled = _orders_count(report_all.loc[_cancel_mask(report_all)]) if total else 0
-                returned = float((report_all["gross_qty"] - report_all["qty"]).clip(lower=0).sum()) if {"gross_qty", "qty"} <= set(report_all.columns) else 0.0
                 cols = st.columns(4)
-                card(cols[0], "Pesanan", fmt_num(total))
-                card(cols[1], "Batal", fmt_num(cancelled), hint=fmt_pct(cancel_rate))
-                card(cols[2], "Unit retur", fmt_qty(returned))
-                card(cols[3], "Batal belum bayar", fmt_num(unpaid))
+                metric_card(cols[0], "pesanan_semua", fmt_num(facts["pesanan_semua"]), hint=f"bersih {fmt_num(facts['pesanan_bersih'])}")
+                metric_card(cols[1], "pesanan_batal", fmt_num(facts["pesanan_batal"]), hint=fmt_pct(cancel_rate))
+                metric_card(cols[2], "retur_unit", fmt_qty(facts["retur_unit"]), hint=f"{fmt_num(facts['pesanan_retur_penuh'])} pesanan diretur penuh")
+                metric_card(cols[3], "belum_bayar", fmt_num(unpaid), hint=f"{fmt_num(facts['belum_bayar_akun'])} akun")
                 if not reasons.empty:
                     show_table(reasons.rename(columns={"reason": "Alasan batal", "orders": "Pesanan"}).head(10))
             elif section == SECTIONS[7]:

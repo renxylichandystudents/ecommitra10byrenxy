@@ -123,6 +123,7 @@ def ledger_from_raw(raw: pd.DataFrame) -> pd.DataFrame:
         frame["return_reason"] = clean_text_series(table[mapping["return_reason"]])
     else:
         frame["return_reason"] = ""
+    frame["buyer"] = clean_text_series(table[mapping["buyer"]]) if "buyer" in mapping else ""
     frame["sales"] = frame["line_value"]
     frame = frame.dropna(subset=["order_time"])
     frame = frame[frame["product_name"].ne("") | frame["sku"].ne("")]

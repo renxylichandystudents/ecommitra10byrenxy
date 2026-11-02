@@ -62,8 +62,10 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, exclude_toggle_card, period_filter
-from src.ui.common import card as ui_card
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, exclude_toggle_card, metric_card, period_filter
+from src.ui.common import fmt_pct as format_pct_id
+from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
+from src.ui.confirm import confirm_action
 from src.ui.evaluasi import show_evaluation
 from src.ui.laporan import show_report
 from src.ui.rekomendasi import show_recommendations
@@ -86,7 +88,7 @@ from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.userspace import deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can
-from auth.ui import get_engine, login_gate, require_role, show_auth_page, user_bar
+from auth.ui import audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar
 from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_RESULT, apply_route, route_from_state, sync_route
 from src.core.runs import RunRepository, data_hash as training_data_hash
 import src.library as library_store
@@ -117,7 +119,6 @@ from src.ingest import (
     clean_sku_columns,
     load_shopee_report,
     order_month_keys,
-    order_revenue,
 )
 from src.ranking import combine_forecasts, model_leaderboard, rank_from_orders
 from src.stock import recommend_stock
@@ -1157,6 +1158,13 @@ st.markdown(
         transform: none;
         box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
     }
+    button:focus-visible, input:focus, textarea:focus,
+    [data-baseweb="select"] > div:focus-within, [data-baseweb="input"]:focus-within {
+        outline: 2px solid #3B6FE0 !important;
+        outline-offset: 1px;
+        border-color: #3B6FE0 !important;
+        box-shadow: 0 0 0 3px rgba(59, 111, 224, 0.18) !important;
+    }
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-radius: 20px !important;
         border-color: #e7e9f2 !important;
@@ -1170,6 +1178,7 @@ st.markdown(
 )
 
 AUTH_USER = login_gate()
+get_features()
 
 TOP_N = 50
 METRIC_LABELS = {
@@ -1685,10 +1694,13 @@ def show_homepage() -> None:
             unsafe_allow_html=True,
         )
         run_col, train_col, _gap = st.columns([1.2, 1.2, 3])
-        if run_col.button("Jalankan analisa", type="primary", use_container_width=True, key="home-run"):
+        may_run = can(AUTH_USER.role, "jalankan_analisa")
+        if not may_run:
+            st.caption("Role Anda melihat hasil analisa terakhir. Buka hasil dari Riwayat analisa di bawah.")
+        if may_run and run_col.button("Jalankan analisa", type="primary", use_container_width=True, key="home-run"):
             request_analysis_run(**last_run_settings())
             st.rerun()
-        if train_col.button("Ubah data latih", use_container_width=True, key="home-train"):
+        if may_run and train_col.button("Ubah data latih", use_container_width=True, key="home-train"):
             st.session_state["active-feature"] = FEATURE_ID
             st.session_state["editing-input"] = True
             st.rerun()
@@ -1732,6 +1744,7 @@ def last_run_settings() -> dict:
 
 def request_analysis_run(*, period: str, metric: str, service: int, keys, exclude: bool, training_months: int | None = None, service_recommended: int | None = None) -> None:
     """Tombol Jalankan analisa: tawarkan hasil tersimpan bila data & parameter sama sudah sukses hari ini."""
+    require("data_latih", "edit")
     keys = tuple(keys)
     if not keys:
         st.session_state["active-feature"] = FEATURE_ID
@@ -1906,10 +1919,20 @@ def show_run_history() -> None:
                 if open_saved_run(record.id):
                     st.rerun()
             if can_delete and cells[7].button("Hapus", key=f"run-del-{record.id}", use_container_width=True):
-                repo.delete(record.id)
-                if record.id == opened:
-                    st.session_state.pop("run-origin", None)
-                st.rerun()
+
+                def _delete(run_id: int = record.id, stamp: str = run_stamp_text(record.run_at)) -> None:
+                    require("riwayat_analisa", "edit")
+                    repo.delete(run_id)
+                    audit("hapus_riwayat", f"#{run_id} · {stamp}")
+                    if run_id == opened:
+                        st.session_state.pop("run-origin", None)
+
+                confirm_action(
+                    "Hapus riwayat analisa?",
+                    f"Hasil analisa {run_stamp_text(record.run_at)} oleh {html.escape(record.run_by)} akan dihapus permanen.",
+                    _delete,
+                    confirm_label="Ya, hapus",
+                )
     st.caption("Riwayat lebih dari 90 hari dihapus otomatis. Buka memuat hasil tersimpan tanpa menghitung ulang.")
 
 
@@ -2045,7 +2068,7 @@ def render_header() -> None:
     user_bar(AUTH_USER)
     page = route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0]
     show_analysis_button = "analysis" in st.session_state and page != PAGE_RESULT
-    show_training_button = page not in (PAGE_INPUT, PAGE_HOME)
+    show_training_button = page not in (PAGE_INPUT, PAGE_HOME) and can(AUTH_USER.role, "ubah_data_latih")
     mitra, shopee = _logo_uri("mitra10.png"), _logo_uri("shopee.svg")
     columns = st.columns([4.8, 1.85, 2.15, 1.35], vertical_alignment="center")
     columns[0].markdown(
@@ -2095,7 +2118,7 @@ def _orders_from_library(keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, s
 
 def show_prediction_inputs() -> None:
     """Halaman landasan prediksi. Terpisah dari hasil analisa."""
-    require_role("ubah_data_latih")
+    require("data_latih", "edit")
     notice = st.session_state.pop("input-error", None)
     if notice:
         st.error(notice)
@@ -3567,7 +3590,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     st.session_state["data_start"] = st.session_state.get("data-start")
     st.session_state["data_end"] = st.session_state.get("data-end")
     selected_label = range_text or "kosong"
-    show_store_overview(range_text)
+    show_store_overview(range_text, period_view)
     status_names = sorted(
         {status for status in period_view["status"].tolist() if str(status).strip()},
         key=str.casefold,
@@ -3688,18 +3711,36 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     else:
         _contribution, contribution_table = cancel_contribution(period_view.iloc[0:0])
     st.markdown(f"**{range_text or 'tidak ada tanggal yang dipilih'}**")
+    period_start_day, period_end_day = period_bounds(period_view)
+    facts = cached_order_metrics(period_view, period_start_day, period_end_day)
+    if select_all:
+        summary = {
+            **summary,
+            "orders": facts["pesanan_semua"],
+            "sales_volume": facts["sales_bruto"],
+            "invoice_cancel": facts["pesanan_batal"],
+            "nominal_cancel": facts["nominal_batal"],
+            "sales_return": facts["retur_unit"],
+            "nominal_return": facts["nominal_retur"],
+        }
     qty_shown = float(filtered["qty"].sum()) if not filtered.empty and "qty" in filtered.columns else 0.0
     sku_shown = int(filtered["item_key"].nunique()) if not filtered.empty and "item_key" in filtered.columns else 0
     resume_row = st.columns(4)
     show_metric(resume_row[0], "Jumlah pesanan", format_number(summary["orders"]), hint=order_hint)
     show_metric(resume_row[1], "Produk / varian", format_number(sku_shown), hint=sku_hint)
-    show_metric(resume_row[2], "Sales volume", format_idr(summary["sales_volume"]), hint=sales_hint)
+    show_metric(resume_row[2], "Sales bruto" if select_all else "Sales volume", format_idr(summary["sales_volume"]), hint=sales_hint)
     show_metric(resume_row[3], "QTY terjual", format_qty(qty_shown))
     row_two = st.columns(4)
-    show_metric(row_two[0], "Invoice batal", format_number(summary["invoice_cancel"]))
-    show_metric(row_two[1], "Nominal batal", format_idr(summary["nominal_cancel"]))
-    show_metric(row_two[2], "Unit return", format_qty(summary["sales_return"]))
-    show_metric(row_two[3], "Nominal return", format_idr(summary["nominal_return"]))
+    metric_card(row_two[0], "pesanan_batal", format_number(summary["invoice_cancel"]))
+    metric_card(row_two[1], "nominal_batal", format_idr(summary["nominal_cancel"]))
+    metric_card(row_two[2], "retur_unit", format_qty(summary["sales_return"]))
+    metric_card(row_two[3], "nominal_retur", format_idr(summary["nominal_return"]))
+    row_three = st.columns(4)
+    net_hint = "Semua status pada periode ini"
+    metric_card(row_three[0], "pesanan_bersih", format_number(facts["pesanan_bersih"]), hint=net_hint)
+    metric_card(row_three[1], "sales_bersih", format_idr(facts["sales_bersih"]), hint=net_hint)
+    metric_card(row_three[2], "belum_bayar", format_number(facts["belum_bayar"]), hint=f"{format_number(facts['belum_bayar_akun'])} akun")
+    metric_card(row_three[3], "tingkat_batal", format_pct_id(facts["tingkat_batal"] * 100))
     st.subheader("Status pesanan")
     status_view = append_total_row(status_table, "Status pesanan", ["No. Pesanan", "Kontribusi"])
     if "Kontribusi" in status_view.columns:
@@ -3858,17 +3899,7 @@ def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None
     offer_excel(shown_sheet, "sku_retur_batal.xlsx")
 
 
-def _bold_total(frame: pd.DataFrame, label_column: str):
-    """Baris Total tebal pada st.dataframe."""
-    if frame is None or frame.empty or label_column not in frame.columns:
-        return frame
-    return frame.style.apply(
-        lambda row: ["font-weight:700;background-color:#f1f5f9" if str(row[label_column]) == "Total" else "" for _ in row],
-        axis=1,
-    )
-
-
-def show_store_overview(range_text: str) -> None:
+def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None) -> None:
     """Kartu performa toko (Data performance) dan ringkasan iklan per periode terpilih."""
     frames = store_frames()
     perf = frames.performance
@@ -3907,651 +3938,16 @@ def show_store_overview(range_text: str) -> None:
             show_metric(column, label, text, hint=delta(value, total(prev, key, is_mean)))
     else:
         st.caption("Data performance belum diunggah: kartu pengunjung, konversi, dan pembeli berulang belum tersedia.")
-    cached = st.session_state.get("_enriched")
-    table = cached[1] if isinstance(cached, tuple) else None
-    if isinstance(table, pd.DataFrame) and "biaya_iklan" in table.columns and float(table["biaya_iklan"].sum()) > 0:
-        cost = float(table["biaya_iklan"].sum())
-        omzet = float(table["omzet_iklan"].sum())
+    if not frames.has_ads or period_view is None or period_view.empty:
+        return
+    start, end = period_bounds(period_view)
+    ads = ads_metrics(frames.ads, frames.stock, period_view, start, end)
+    if ads["biaya_iklan"] > 0:
         st.markdown("<div class='section-title'>Ringkasan iklan</div>", unsafe_allow_html=True)
         cols = st.columns(3)
-        show_metric(cols[0], "Biaya iklan", format_idr(cost))
-        show_metric(cols[1], "Omzet iklan", format_idr(omzet))
-        show_metric(cols[2], "ROAS", format_number(omzet / cost, 1) if cost > 0 else "-")
-
-
-def present_product_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    """SKU di kiri nama produk, Product variance di kanannya, pada tabel yang masih memakai nama lampiran."""
-    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
-        return frame
-    mapping: dict[str, str] = {}
-    for column in frame.columns:
-        label = str(column).strip().lower()
-        if label in {"sku", "referensi sku"} or "referensi sku" in label:
-            mapping.setdefault("SKU", str(column))
-        elif label in {"product name", "nama produk", "produk"}:
-            mapping.setdefault("Product Name", str(column))
-        elif label in {"product variance", "variasi", "nama variasi", "varian"}:
-            mapping.setdefault("Product variance", str(column))
-    if "Product Name" not in mapping:
-        return frame
-    sources = set(mapping.values())
-    original = [str(column) for column in frame.columns]
-    first = min(index for index, column in enumerate(original) if column in sources)
-    before = sum(1 for column in original[:first] if column not in sources)
-    rename = {source: target for target, source in mapping.items() if source != target}
-    work = frame.rename(columns=rename)
-    ordered = [column for column in ("SKU", "Product Name", "Product variance") if column in work.columns]
-    rest = [rename.get(column, column) for column in original if column not in sources]
-    return work.loc[:, rest[:before] + ordered + rest[before:]]
-
-
-def _slide_head(kicker: str, title: str) -> None:
-    st.markdown(
-        "<div class='report-stage-head'>"
-        f"<div class='report-kicker'>{html.escape(kicker)}</div>"
-        f"<div class='report-title'>{html.escape(title)}</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _slide_advice(analysis: str, action: str) -> None:
-    """Dua kotak di bawah data: analisa, lalu tindakan yang bisa dijalankan."""
-    note, recommendation = st.columns(2, vertical_alignment="top")
-    note.markdown(
-        "<div class='slide-note'>"
-        "<div class='slide-note-label'>Analisa</div>"
-        f"{html.escape(analysis)}</div>",
-        unsafe_allow_html=True,
-    )
-    recommendation.markdown(
-        "<div class='slide-note action'>"
-        "<div class='slide-note-label'>Rekomendasi</div>"
-        f"{html.escape(action)}</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _slide_strategy(
-    *,
-    scope_label: str,
-    net_sales: float,
-    net_orders: int,
-    net_qty: float,
-    cancel_share: float,
-    cancel_nominal: float,
-    return_qty: float,
-    return_nominal: float,
-    top_share: float,
-    stock_sum: float,
-    pred_qty_sum: float,
-    safety_sum: float,
-    top_cancel_reason: str,
-    top_cancel_invoices: float,
-    top_cancel_nominal: float,
-    has_items: bool,
-) -> None:
-    """SWOT, akar masalah, dan rencana kerja yang memakai angka periode ini."""
-    leak_is_cancel = cancel_nominal > return_nominal * 3 if return_nominal else cancel_nominal > 0
-    reason_bit = (
-        f"Alasan terbesar: {top_cancel_reason}, {format_number(top_cancel_invoices)} invoice, {format_idr(top_cancel_nominal)}."
-        if top_cancel_reason
-        else "Belum ada satu alasan batal yang menonjol pada tanggal ini."
-    )
-    strength = (
-        f"Penjualan bersih {format_idr(net_sales)} dari {format_number(net_orders)} pesanan dan {format_qty(net_qty)} unit. "
-        f"Top 50 menopang {format_number(top_share, 1)}% sales bersih, jadi iklan tidak perlu disebar ke seluruh katalog."
-    )
-    weakness = (
-        f"Batal {format_number(cancel_share, 1)}% pesanan, senilai {format_idr(cancel_nominal)}. "
-        f"Retur {format_qty(return_qty)} unit senilai {format_idr(return_nominal)}. {reason_bit}"
-    )
-    opportunity = (
-        "Iklan Pencarian Shopee dengan kata kunci exact pada SKU yang bersih, "
-        "chat kejar bayar sebelum pembatalan otomatis, dan voucher ongkir kecil hanya untuk order yang masih menunggu bayar."
-    )
-    threat = (
-        "GMV iklan yang masih berisi batal membuat ROAS terlihat sehat padahal uangnya tidak masuk. "
-        "Jendela bayar Shopee singkat, dan alasan ubah alamat atau ubah pesanan muncul karena listing belum jelas sebelum checkout."
-    )
-    if leak_is_cancel:
-        root = (
-            "Akar masalahnya ada di sebelum bayar, bukan di mutu barang. "
-            f"Nominal batal {format_idr(cancel_nominal)} jauh di atas nominal retur {format_idr(return_nominal)}. "
-            "Iklan yang menambah klik tanpa memastikan pembayaran hanya memperbesar tulang batal."
-        )
-    else:
-        root = (
-            "Retur cukup besar dibanding batal, jadi akarnya ada di janji produk: foto, varian, atau kualitas yang tidak sesuai yang diterima pembeli."
-        )
-    bones = [
-        ("Pembeli", reason_bit),
-        (
-            "Iklan",
-            "Budget yang mengejar klik atau GMV kotor menarik order yang tidak dibayar. Ukur iklan dari sales bersih.",
-        ),
-        (
-            "Listing",
-            "Ubah alamat dan ubah pesanan berarti ongkir, varian, atau ukuran baru ketahuan setelah checkout.",
-        ),
-        (
-            "Operasi",
-            "Belum ada shift yang mengingatkan bayar sebelum Shopee membatalkan otomatis.",
-        ),
-        (
-            "Produk",
-            "SKU dengan retur berulang jangan diisi ulang penuh dan jangan masuk Iklan Produk Serupa.",
-        ),
-    ]
-    if has_items:
-        plan = [
-            f"Gudang: buat PO Top 50 sebesar {format_qty(stock_sum)} unit, yaitu prediksi QTY {format_qty(pred_qty_sum)} ditambah safety stock {format_qty(safety_sum)}. Jangan memesan dari QTY batal.",
-            "Iklan: 70% budget Iklan Pencarian, kata kunci exact nama produk Top 50 yang batal dan retur-nya rendah. 20% Iklan Produk Serupa hanya untuk SKU itu. 10% uji satu kampanye. Matikan maximize clicks.",
-            "Kejar bayar: dua jam sebelum batas batal otomatis, chat cara bayar. Voucher ongkir kecil hanya untuk order menunggu bayar, bukan voucher toko yang terbuka untuk semua.",
-            "Listing: untuk alasan ubah alamat dan ubah pesanan, taruh ongkir, varian, dan ukuran di gambar pertama. Ukur ulang seminggu kemudian apakah invoice alasan itu turun.",
-            "Rapat 20 menit tiap minggu pada slide ini: jika kontribusi alasan terbesar tidak turun, budget iklan minggu itu tidak dinaikkan.",
-        ]
-    else:
-        plan = [
-            "Perlebar tanggal sampai ada penjualan sebelum mengatur iklan dan pembelian.",
-            "Selama rentang kosong, jangan menaikkan budget Iklan Pencarian.",
-        ]
-    cards = (
-        ("swot-s", "Strength", strength),
-        ("swot-w", "Weakness", weakness),
-        ("swot-o", "Opportunity", opportunity),
-        ("swot-t", "Threat", threat),
-    )
-    swot_html = "".join(
-        f"<div class='swot-card {css}'><b>{html.escape(title)}</b>{html.escape(body)}</div>"
-        for css, title, body in cards
-    )
-    bone_html = "".join(
-        f"<div><b>{html.escape(name)}.</b> {html.escape(text)}</div>" for name, text in bones
-    )
-    plan_html = "".join(f"<div>{index}. {html.escape(step)}</div>" for index, step in enumerate(plan, start=1))
-    st.markdown(
-        f"<div class='report-stage-head'><div class='report-kicker'>{html.escape(scope_label)}</div>"
-        "<div class='report-title'>Strategi dan rencana minggu ini</div></div>"
-        "<div class='swot-grid'>"
-        f"{swot_html}"
-        "</div>"
-        "<div class='bone-result'>"
-        "<div class='slide-note-label'>Akar masalah</div>"
-        f"<div>{html.escape(root)}</div>"
-        f"{bone_html}"
-        "</div>"
-        "<div class='slide-note action'>"
-        "<div class='slide-note-label'>Rencana untuk tim</div>"
-        f"{plan_html}"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _display_report_numbers(frame: pd.DataFrame) -> pd.DataFrame:
-    """Pisah ribuan dengan titik. Kolom SKU tetap utuh."""
-    if frame is None or frame.empty:
-        return frame
-    shown = frame.copy()
-    for column in shown.columns:
-        key = str(column).strip().casefold()
-        if "sku" in key or key in {"no", "tanggal pembelian"}:
-            continue
-        numeric = pd.to_numeric(shown[column], errors="coerce")
-        if numeric.notna().mean() < 0.6:
-            continue
-        money = any(token in key for token in ("nominal", "sales", "omzet"))
-        labels = []
-        for value in numeric:
-            if pd.isna(value):
-                labels.append("")
-            elif money:
-                labels.append(format_idr(value))
-            else:
-                labels.append(format_number(value, 0))
-        shown[column] = labels
-    return shown
-
-
-def _month_rows(ledger: pd.DataFrame) -> pd.DataFrame:
-    """Ringkas transaksi per bulan pada rentang laporan."""
-    columns = ["Bulan", "No. Pesanan", "QTY bersih", "Sales bersih", "Sales batal", "Nominal retur"]
-    if ledger is None or ledger.empty or "order_time" not in ledger.columns:
-        return pd.DataFrame(columns=columns)
-    work = ledger.copy()
-    work["_bulan"] = pd.to_datetime(work["order_time"], errors="coerce").dt.to_period("M").astype(str)
-    rows = []
-    for key, group in work.groupby("_bulan", sort=True):
-        net = scope_ledger(group, include_cancel=False, include_return=False)
-        cancel = group.loc[group["is_cancel"]] if "is_cancel" in group.columns else group.iloc[0:0]
-        rows.append(
-            {
-                "Bulan": month_label(str(key)),
-                "No. Pesanan": count_orders(group),
-                "QTY bersih": int(round(float(net["qty"].sum()))) if not net.empty and "qty" in net.columns else 0,
-                "Sales bersih": int(round(order_revenue(net))),
-                "Sales batal": int(round(order_revenue(cancel))),
-                "Nominal retur": int(round(float(group["return_value"].sum()))) if "return_value" in group.columns else 0,
-            }
-        )
-    return pd.DataFrame(rows, columns=columns)
-
-
-def show_report_menu(
-    source_raw: pd.DataFrame,
-    orders: pd.DataFrame,
-    combined: pd.DataFrame,
-    stock: pd.DataFrame,
-    history: pd.DataFrame,
-    metric: str,
-    period: str,
-    period_text: str,
-    last_period,
-    *,
-    window_start,
-    window_end,
-    service: int,
-    exclude_return_cancel: bool,
-) -> None:
-    """Slide presentasi dari Ringkasan, Prediksi & stok, Data, dan Folder data."""
-    titles = [
-        "Sampul",
-        "Penjualan",
-        "Item terlaris",
-        "Prediksi dan stok",
-        "Status transaksi",
-        "Retur dan batal",
-        "Belum bayar",
-        "Data tersimpan",
-        "Rekomendasi",
-    ]
-    active_keys = tuple(st.session_state.get("active-library-keys") or ())
-    if active_keys:
-        ledger = cached_ledger(active_keys, bundle_stamp(list(active_keys)))
-    elif source_raw is not None and not source_raw.empty:
-        ledger = ledger_from_raw(source_raw)
-    else:
-        ledger = pd.DataFrame()
-    period_view, range_text = filter_resume_orders(
-        ledger,
-        show_controls=True,
-        prefix="laporan",
-        caption="Tahun, bulan, dan tanggal ini memotong seluruh slide laporan.",
-    )
-    forecast_orders, _forecast_label = filter_resume_orders(
-        orders,
-        show_controls=False,
-        prefix="laporan",
-    )
-    scope_label = range_text or "tidak ada tanggal yang dipilih"
-    if "laporan-slide-name" not in st.session_state or st.session_state["laporan-slide-name"] not in titles:
-        st.session_state["laporan-slide-name"] = titles[0]
-    position = titles.index(st.session_state["laporan-slide-name"])
-    st.markdown(
-        f"<div class='field-hint'>Slide {position + 1} dari {len(titles)}</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("<div class='slide-nav'></div>", unsafe_allow_html=True)
-    previous, picker, following = st.columns([1, 2.6, 1], vertical_alignment="center")
-    if previous.button("Sebelumnya", disabled=position == 0, use_container_width=True):
-        st.session_state["laporan-slide-name"] = titles[position - 1]
-        st.rerun()
-    if following.button("Berikutnya", disabled=position >= len(titles) - 1, use_container_width=True):
-        st.session_state["laporan-slide-name"] = titles[position + 1]
-        st.rerun()
-    picker.selectbox(
-        "Slide presentasi",
-        titles,
-        key="laporan-slide-name",
-        label_visibility="collapsed",
-    )
-    slide = str(st.session_state["laporan-slide-name"])
-
-    summary, status_table, sku_sheet = activity_report(period_view if period_view is not None else pd.DataFrame())
-    net = scope_ledger(period_view, include_cancel=False, include_return=False)
-    net_orders = count_orders(net)
-    net_qty = float(net["qty"].sum()) if not net.empty and "qty" in net.columns else 0.0
-    net_sales = order_revenue(net)
-    gross_orders = int(summary.get("orders", 0))
-    gross_sales = float(summary.get("sales_volume", 0))
-    catalog = top_bestsellers(
-        forecast_orders if forecast_orders is not None else pd.DataFrame(),
-        combined,
-        stock,
-        history,
-        metric,
-        last_period,
-        period,
-        top_n=None,
-    )
-    view = catalog.head(TOP_N).reset_index(drop=True) if not catalog.empty else catalog
-    if not view.empty:
-        view = view.sort_values(["peringkat", "item_key"], kind="mergesort").reset_index(drop=True)
-    cancel_share = float(summary.get("invoice_cancel", 0)) / gross_orders * 100 if gross_orders else 0.0
-    sales_gap = gross_sales - net_sales
-    top_sales = float(view["sales_total"].sum()) if not view.empty else 0.0
-    top_share = top_sales / net_sales * 100 if net_sales > 0 else 0.0
-    below_forecast = int((view["pred_sales"] + 0.5 < view["sales_total"]).sum()) if not view.empty else 0
-    pred_qty_sum = float(view["pred_qty"].sum()) if not view.empty else 0.0
-    pred_sales_sum = float(view["pred_sales"].sum()) if not view.empty else 0.0
-    safety_sum = float(view["safety_stock"].sum()) if not view.empty else 0.0
-    stock_sum = float(view["stok_disarankan"].sum()) if not view.empty else 0.0
-    average_order = net_sales / net_orders if net_orders else 0.0
-    metric_name = METRIC_LABELS.get(metric, metric)
-    _contribution, contribution_table = cancel_contribution(period_view)
-    top_cancel_reason = ""
-    top_cancel_invoices = 0.0
-    top_cancel_nominal = 0.0
-    if not contribution_table.empty:
-        top_row = contribution_table.iloc[0]
-        top_cancel_reason = str(top_row.get("Alasan pembatalan", "")).strip()
-        top_cancel_invoices = float(top_row.get("Invoice", 0) or 0)
-        top_cancel_nominal = float(top_row.get("Nominal", 0) or 0)
-
-    if slide == "Sampul":
-        _slide_head("Tinjauan manajer", "Laporan analisa toko")
-        st.markdown(
-            "<div class='report-body'>"
-            "Laporan kerja e-commerce dan digital marketing Mitra10, supermarket bahan bangunan. "
-            "Angka yang sama dipakai untuk rapat toko dan untuk bab hasil tesis Magister Teknik Informatika. "
-            f"Periode data pada slide ini: <b>{html.escape(scope_label)}</b>. "
-            f"Parameter peringkat: <b>{html.escape(METRIC_LABELS.get(metric, metric))}</b>. "
-            f"Prediksi {html.escape(period_text)}, {html.escape(format_id_date(window_start))} – {html.escape(format_id_date(window_end))}. "
-            f"Safety stock pada analisis terakhir {html.escape(format_number(service))}%. "
-            f"Exclude return dan batal {'sedang menyala' if exclude_return_cancel else 'sedang mati'} "
-            "pada angka prediksi, karena angka itu mengikuti hasil Jalankan analisis."
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        cards = st.columns(4)
-        show_metric(cards[0], "Pesanan pada periode", format_number(gross_orders))
-        show_metric(cards[1], "Sales seluruh status", format_idr(gross_sales))
-        show_metric(cards[2], "Sales bersih", format_idr(net_sales), hint="Tanpa batal dan tanpa baris yang habis diretur")
-        show_metric(cards[3], "QTY bersih", format_qty(net_qty))
-        _slide_advice(
-            (
-                f"Dari {format_number(gross_orders)} pesanan, yang menjadi penjualan bersih "
-                f"{format_number(net_orders)} pesanan senilai {format_idr(net_sales)}. "
-                f"Selisih {format_idr(sales_gap)} adalah batal dan baris yang habis diretur, "
-                "jadi bukan permintaan yang harus disiapkan stoknya."
-            ),
-            (
-                "Nilai omzet dan pembelian dari sales bersih. "
-                "Jika selisih terhadap sales seluruh status besar, selesaikan dulu batal dan belum bayar sebelum menambah iklan."
-            ),
-        )
-    elif slide == "Penjualan":
-        _slide_head(scope_label, "Penjualan pada periode ini")
-        cards = st.columns(4)
-        show_metric(cards[0], "No. Pesanan bersih", format_number(net_orders))
-        show_metric(cards[1], "Sales bersih", format_idr(net_sales))
-        show_metric(cards[2], "QTY bersih", format_qty(net_qty))
-        show_metric(
-            cards[3],
-            "Selisih sales kotor",
-            format_idr(gross_sales - net_sales),
-            hint="Sales seluruh status dikurangi sales bersih",
-        )
-        if net.empty:
-            st.write("Tidak ada penjualan bersih pada tanggal ini.")
-            _slide_advice(
-                "Tidak ada penjualan bersih pada tanggal ini.",
-                "Perlebar bulan atau tanggal. Jangan mengambil keputusan stok dari rentang yang kosong.",
-            )
-        else:
-            st.plotly_chart(daily_actual_chart(net, scope_label, "sales"), use_container_width=True)
-            st.caption("Batang adalah sales bersih per tanggal. Angka mengikuti Total Pembayaran sekali tiap No. Pesanan.")
-            peak_text = ""
-            by_day = net.groupby(pd.to_datetime(net["order_time"]).dt.floor("D"))["sales"].sum()
-            if not by_day.empty and float(by_day.sum()) > 0:
-                peak_day = pd.Timestamp(by_day.idxmax())
-                peak_share = float(by_day.max()) / float(by_day.sum()) * 100
-                peak_text = (
-                    f" Puncak grafik jatuh pada {format_id_date(peak_day.date())}, "
-                    f"{format_number(peak_share, 1)}% dari nilai harian di grafik ini."
-                )
-            _slide_advice(
-                f"Rata-rata pembayaran pesanan bersih {format_idr(average_order)} dari {format_qty(net_qty)} unit.{peak_text}",
-                "Siapkan orang dan iklan pada hari puncak. Iklan Pencarian Shopee bid-nya dinaikkan hanya di tanggal itu, lalu diturunkan di hari sepi. Target iklan adalah sales bersih, bukan GMV yang masih berisi batal.",
-            )
-    elif slide == "Item terlaris":
-        _slide_head(scope_label, f"50 item terlaris menurut {METRIC_LABELS.get(metric, metric)}")
-        if view.empty:
-            st.write("Tidak ada item pada tanggal ini.")
-        elif metric == "sales":
-            st.caption(
-                "Biru dan oranye adalah sales. Hijau adalah stok prediksi dalam unit. "
-                "Tiap produk punya skala sendiri."
-            )
-            st.plotly_chart(item_sales_chart(view, "laporan"), use_container_width=True)
-        else:
-            st.caption("Biru adalah QTY pada periode laporan. Oranye adalah prediksi.")
-            st.plotly_chart(item_qty_chart(view, "laporan"), use_container_width=True)
-        if not view.empty:
-            st.caption(
-                f"Sales Top 50 pada periode ini {format_idr(top_sales)}, "
-                f"{format_number(top_share, 1)}% dari sales bersih."
-            )
-        _slide_advice(
-            (
-                f"Top 50 menyumbang {format_number(top_share, 1)}% sales bersih. "
-                f"{format_number(below_forecast)} SKU prediksi sales-nya di bawah sales periode ini, "
-                "karena prediksi mengikuti 28 hari terakhir, bukan lonjakan satu periode."
-                if not view.empty
-                else "Tidak ada item pada tanggal ini, jadi belum ada konsentrasi penjualan yang bisa diurutkan."
-            ),
-            (
-                "Beli lebih dulu SKU di Top 50, sebesar stok prediksi. "
-                "Iklan: 70% budget Iklan Pencarian memakai kata kunci exact nama produk yang batal dan retur-nya rendah. "
-                "SKU yang sering diretur dikeluarkan dari Iklan Produk Serupa."
-                if not view.empty
-                else "Perlebar tanggal sampai ada penjualan, lalu ulang slide ini."
-            ),
-        )
-    elif slide == "Prediksi dan stok":
-        _slide_head(period_text, "Prediksi permintaan dan stok yang disiapkan")
-        if view.empty:
-            st.write("Prediksi belum punya item pada tanggal ini.")
-            _slide_advice(
-                "Belum ada SKU pada tanggal ini, jadi stok prediksi belum bisa diurutkan.",
-                "Perlebar tanggal penjualan, lalu jalankan analisis bila data inputnya berubah.",
-            )
-        else:
-            pred_qty = float(view["pred_qty"].sum())
-            pred_sales = float(view["pred_sales"].sum())
-            safety_units = float(view["safety_stock"].sum())
-            stock_units = float(view["stok_disarankan"].sum())
-            cards = st.columns(4)
-            show_metric(cards[0], "Prediksi QTY Top 50", format_qty(pred_qty))
-            show_metric(cards[1], "Prediksi sales Top 50", format_idr(pred_sales))
-            show_metric(cards[2], "Safety stock", format_qty(safety_units), hint="Cadangan, dalam unit")
-            show_metric(cards[3], "Stok disarankan periode", format_qty(stock_units), hint="Prediksi QTY periode ditambah safety stock periode. Bukan angka hari ini.")
-            display = leaderboard_frame(view.head(10), period)
-            st.caption("Sepuluh peringkat teratas. Daftar lengkap ada di menu Prediksi & stok.")
-            scroll_table(display, max_height=520)
-            offer_excel(display, "laporan_prediksi_stok.xlsx")
-            _slide_advice(
-                (
-                    f"Prediksi QTY Top 50 {format_qty(pred_qty_sum)} unit, safety stock {format_qty(safety_sum)} unit, "
-                    f"stok yang disiapkan {format_qty(stock_sum)} unit, senilai prediksi sales {format_idr(pred_sales_sum)}. "
-                    f"Parameter {metric_name} hanya mengubah urutan 50 SKU. "
-                    "Prediksi satu SKU tetap dari QTY 28 hari terakhir, lalu sales-nya QTY itu kali harga jual. "
-                    "Total Top 50 berubah saat parameter diganti karena daftar SKU-nya berbeda. Angka SKU yang sama tidak berubah."
-                ),
-                "Purchase order memakai stok prediksi dalam unit. Sebelum flash sale, cocokkan kuota iklan dengan stok itu. SKU yang stok prediksinya tipis dihentikan dari GMV Max supaya iklan tidak menjual barang yang tidak ada.",
-            )
-    elif slide == "Status transaksi":
-        _slide_head(scope_label, "Status pesanan")
-        st.caption("Seluruh status pada tanggal yang dipilih, termasuk batal dan retur.")
-        if status_table.empty:
-            st.write("Tidak ada status pada tanggal ini.")
-            _slide_advice(
-                "Tidak ada pesanan pada tanggal ini.",
-                "Perlebar filter sebelum menilai apakah operasi pengiriman atau pembatalan yang perlu ditangani.",
-            )
-        else:
-            status_view = append_total_row(status_table, "Status pesanan", ["No. Pesanan", "Kontribusi"])
-            if "Kontribusi" in status_view.columns:
-                status_view = status_view.copy()
-                status_view["Kontribusi"] = status_view["Kontribusi"].map(
-                    lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
-                )
-            show_table(status_view, bold_label="Total")
-            offer_excel(status_view, "laporan_status_pesanan.xlsx")
-            busiest = status_table.sort_values("No. Pesanan", ascending=False).iloc[0]
-            st.markdown(
-                "<div class='report-body'>"
-                f"Status dengan pesanan terbanyak: <b>{html.escape(str(busiest['Status pesanan']))}</b>, "
-                f"{html.escape(format_number(float(busiest['No. Pesanan'])))} pesanan."
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            status_share = float(busiest["Kontribusi"]) if "Kontribusi" in busiest.index else 0.0
-            _slide_advice(
-                (
-                    f"{busiest['Status pesanan']} memegang {format_number(float(busiest['No. Pesanan']))} pesanan"
-                    f" ({format_number(status_share, 1)}%). "
-                    f"Batal mencakup {format_number(cancel_share, 1)}% seluruh pesanan pada tanggal ini."
-                ),
-                (
-                    "Jika batal masuk kelompok besar, tahan kenaikan budget Iklan Toko dan Iklan Pencarian sampai alasan terbesar turun. "
-                    "Status berhasil yang dominan artinya pesanan sampai. Anggaran iklan berikutnya diarahkan ke SKU yang menopang status itu."
-                ),
-            )
-    elif slide == "Retur dan batal":
-        _slide_head(scope_label, "Retur dan pembatalan")
-        cards = st.columns(4)
-        show_metric(cards[0], "Invoice batal", format_number(summary.get("invoice_cancel", 0)))
-        show_metric(cards[1], "Nominal batal", format_idr(summary.get("nominal_cancel", 0)))
-        show_metric(cards[2], "QTY retur", format_qty(summary.get("sales_return", 0)))
-        show_metric(cards[3], "Nominal retur", format_idr(summary.get("nominal_return", 0)))
-        if contribution_table.empty:
-            st.write("Tidak ada pesanan batal pada tanggal ini.")
-        else:
-            preview = contribution_table.head(8).copy()
-            for column in ("Kontribusi invoice", "Kontribusi nominal"):
-                if column in preview.columns:
-                    preview[column] = preview[column].map(
-                        lambda value: f"{format_number(float(value), 1)}%" if str(value).strip() not in {"", "nan"} else ""
-                    )
-            st.caption("Delapan alasan batal dengan invoice terbanyak.")
-            show_table(preview, bold_label="Total")
-            offer_excel(contribution_table, "laporan_kontribusi_batal.xlsx")
-        if sku_sheet.empty:
-            st.write("Tidak ada SKU retur atau batal pada tanggal ini.")
-        else:
-            issue = sku_sheet.head(8)
-            st.caption("Delapan SKU dengan retur atau batal terbesar. Daftar lengkap ada di menu Data.")
-            show_table(issue, bold_label="Total")
-            offer_excel(sku_sheet, "laporan_sku_retur_batal.xlsx")
-        reason_text = ""
-        if not contribution_table.empty and "Alasan pembatalan" in contribution_table.columns:
-            top_reason = contribution_table.iloc[0]
-            reason_text = (
-                f" Alasan dengan invoice terbanyak: {top_reason['Alasan pembatalan']} "
-                f"({format_number(float(top_reason['Invoice']))} invoice)."
-            )
-        _slide_advice(
-            (
-                f"Batal {format_number(summary.get('invoice_cancel', 0))} invoice senilai {format_idr(summary.get('nominal_cancel', 0))}, "
-                f"{format_number(cancel_share, 1)}% dari jumlah pesanan. "
-                f"Retur {format_qty(summary.get('sales_return', 0))} unit senilai {format_idr(summary.get('nominal_return', 0))}."
-                f"{reason_text}"
-            ),
-            "Tim iklan menghentikan perluasan kata kunci untuk SKU di tabel retur. Tim listing menaruh ongkir, varian, dan ukuran di gambar pertama untuk alasan ubah alamat dan ubah pesanan. Tim gudang mengisi ulang SKU retur hanya setelah alasannya dicek.",
-        )
-    elif slide == "Belum bayar":
-        _slide_head(scope_label, "Batal karena pembeli belum bayar")
-        months = list(st.session_state.get("laporan_months") or [])
-        if not months or source_raw is None or source_raw.empty:
-            unpaid = pd.DataFrame()
-        else:
-            unpaid = unpaid_buyer_table(
-                source_raw,
-                months=months,
-                start=st.session_state.get("laporan_start"),
-                end=st.session_state.get("laporan_end"),
-            )
-        if unpaid.empty:
-            st.write("Tidak ada pembeli yang batal karena belum bayar pada tanggal ini.")
-            _slide_advice(
-                "Pada tanggal ini tidak ada akun yang batal hanya karena belum bayar.",
-                "Pembatalan yang tersisa datang dari alasan lain. Gunakan slide retur dan batal untuk alasan yang masih menghasilkan invoice.",
-            )
-        else:
-            buyer_count = int(unpaid.loc[unpaid["No"].astype(str).str.strip().ne(""), "No"].nunique()) if "No" in unpaid.columns else 0
-            order_count = int(unpaid["No. Pesanan"].replace("", pd.NA).nunique()) if "No. Pesanan" in unpaid.columns else 0
-            qty_missed = float(pd.to_numeric(unpaid["QTY"], errors="coerce").fillna(0).sum()) if "QTY" in unpaid.columns else 0.0
-            sales_missed = float(pd.to_numeric(unpaid["Sales volume"], errors="coerce").fillna(0).sum()) if "Sales volume" in unpaid.columns else 0.0
-            cards = st.columns(4)
-            show_metric(cards[0], "Akun pembeli", format_number(buyer_count))
-            show_metric(cards[1], "No. Pesanan", format_number(order_count))
-            show_metric(cards[2], "QTY", format_qty(qty_missed))
-            show_metric(cards[3], "Sales yang tidak masuk", format_idr(sales_missed), hint="Harga setelah diskon kali jumlah")
-            share_cancel = sales_missed / float(summary.get("nominal_cancel", 0) or 0) * 100 if float(summary.get("nominal_cancel", 0) or 0) > 0 else 0.0
-            st.markdown(
-                "<div class='report-body'>"
-                "Ini pembeli yang batal karena belum bayar, dan tidak punya pesanan lain untuk SKU yang sama. "
-                f"Nilainya {html.escape(format_number(share_cancel, 1))}% dari nominal batal pada periode ini. "
-                "Nama akun dan nomor pesanan ada di menu Data."
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            _slide_advice(
-                (
-                    f"{format_number(buyer_count)} akun membatalkan karena belum bayar, "
-                    f"{format_number(order_count)} pesanan, {format_qty(qty_missed)} unit, senilai {format_idr(sales_missed)}. "
-                    f"Porsi ini {format_number(share_cancel, 1)}% dari nominal batal, dan bukan permintaan yang sudah dibayar."
-                ),
-                "Dua jam sebelum Shopee membatalkan otomatis, chat cara bayar. Voucher ongkir kecil hanya untuk order yang masih menunggu, bukan voucher terbuka. Matikan maximize clicks pada produk yang banyak menghasilkan order belum bayar. QTY ini tidak masuk pembelian stok.",
-            )
-    elif slide == "Data tersimpan":
-        _slide_head(scope_label, "Data yang diunggah pada periode ini")
-        month_table = _month_rows(period_view)
-        saved = list_months()
-        st.caption(
-            f"{format_number(len(saved))} bulan tersimpan di Folder data. "
-            "Tabel di bawah hanya bulan yang masuk filter laporan."
-        )
-        if month_table.empty:
-            st.write("Tidak ada bulan pada tanggal ini.")
-            _slide_advice(
-                "Filter ini tidak memotong bulan yang tersimpan.",
-                "Centang bulan yang sudah diunggah sebelum membandingkan tren.",
-            )
-        else:
-            show_table(month_table, bold_label="Total")
-            offer_excel(month_table, "laporan_data_tersimpan.xlsx")
-            strongest = month_table.loc[month_table["Sales bersih"].idxmax()]
-            weakest = month_table.loc[month_table["Sales bersih"].idxmin()]
-            _slide_advice(
-                (
-                    f"Sales bersih tertinggi {strongest['Bulan']} sebesar {format_idr(float(strongest['Sales bersih']))}. "
-                    f"Terendah {weakest['Bulan']} sebesar {format_idr(float(weakest['Sales bersih']))}. "
-                    "Angka ini sama dengan Folder data: tanpa batal dan tanpa baris yang habis diretur."
-                ),
-                "Latih prediksi dari bulan yang lengkap. Bulan yang baru separuh jangan dijadikan satu-satunya patokan di luar level 28 hari terakhir.",
-            )
-    else:
-        _slide_strategy(
-            scope_label=scope_label,
-            net_sales=net_sales,
-            net_orders=net_orders,
-            net_qty=net_qty,
-            cancel_share=cancel_share,
-            cancel_nominal=float(summary.get("nominal_cancel", 0)),
-            return_qty=float(summary.get("sales_return", 0)),
-            return_nominal=float(summary.get("nominal_return", 0)),
-            top_share=top_share,
-            stock_sum=stock_sum,
-            pred_qty_sum=pred_qty_sum,
-            safety_sum=safety_sum,
-            top_cancel_reason=top_cancel_reason,
-            top_cancel_invoices=top_cancel_invoices,
-            top_cancel_nominal=top_cancel_nominal,
-            has_items=not view.empty and gross_orders > 0,
-        )
+        metric_card(cols[0], "biaya_iklan", format_idr(ads["biaya_iklan"]))
+        metric_card(cols[1], "omzet_iklan", format_idr(ads["omzet_iklan"]))
+        metric_card(cols[2], "roas", format_number(ads["roas"], 1))
 
 
 def show_folder_menu() -> None:
@@ -4568,10 +3964,9 @@ def show_folder_menu() -> None:
     else:
         folder = cached_folder(bundle_stamp([item["key"] for item in saved]))
         st.caption(
-            "QTY terjual dan Sales sama dengan Ringkasan saat Exclude return dan batal dicentang: "
-            "Total Pembayaran tanpa pesanan batal, sekali tiap No. Pesanan, dan tanpa baris yang habis diretur. "
-            "QTY return berdampingan dengan Sales return. QTY batal berdampingan dengan Sales batal. "
-            "Return dan Batal adalah jumlah No. Pesanan. "
+            "Sales bersih = sales bruto − nominal batal − nominal retur, sama dengan Ringkasan, Data, dan Laporan untuk bulan yang sama. "
+            "QTY bersih = QTY selain batal − unit retur. Sales retur = unit retur × Harga Setelah Diskon. "
+            "Pesanan retur dan Pesanan batal adalah jumlah No. Pesanan. "
             "Berhasil menggabungkan Pesanan Diterima, Sedang Dikirim, Selesai, dan Telah Dikirim."
         )
         show_table(folder, bold_label="Total", column_config=table_column_config(folder))
@@ -7376,32 +6771,34 @@ with PAGE_ROOT.container():
             pass
 
 
-    def show_performance_cards(frame: pd.DataFrame, label: str, *, tone: str | None = None) -> None:
+    def show_performance_cards(start, end, label: str, *, tone: str | None = None) -> dict:
+        if start is None:
+            facts, coverage = dict(EMPTY_ORDER_METRICS), {"sku_terjual_bersih": 0}
+        else:
+            facts = cached_order_metrics(orders_all, start, end, exclude_return_cancel)
+            coverage = cached_sku_coverage(orders_all, start, end)
         cols = st.columns(4)
-        values = (
-            ("Jumlah pesanan", format_number(count_orders(frame), 0)),
-            ("Produk / varian", format_number(frame["item_key"].nunique() if not frame.empty else 0, 0)),
-            ("Sales volume", format_idr(order_revenue(frame) if not frame.empty else 0)),
-            ("QTY terjual", format_qty(float(frame["qty"].sum()) if not frame.empty else 0)),
-        )
-        for column, (name, value) in zip(cols, values):
-            ui_card(column, name, value, hint=label, tone=tone)
+        metric_card(cols[0], "pesanan_bersih", format_number(facts["pesanan_bersih"], 0), hint=f"{label} · dari {format_number(facts['pesanan_semua'], 0)} pesanan semua status", tone=tone)
+        metric_card(cols[1], "sku_terjual_bersih", format_number(coverage["sku_terjual_bersih"], 0), hint=label, tone=tone)
+        metric_card(cols[2], "sales_bersih", format_idr(facts["sales_bersih"]), hint=f"Bruto {format_idr(facts['sales_bruto'])}", tone=tone)
+        metric_card(cols[3], "qty_bersih", format_qty(facts["qty_bersih"]), hint=label, tone=tone)
+        return facts
 
 
     def show_exclude_and_cards() -> None:
         removed_orders, removed_units = removed_counts(orders_raw)
         exclude_toggle_card(key="exclude-return-batal", removed_orders=removed_orders, removed_units=removed_units)
-        show_performance_cards(sales_orders, resume_label)
+        start, end = period_bounds(sales_orders)
+        facts = show_performance_cards(start, end, resume_label)
         if period != "bulan":
             months_back = {"kuartal": 3, "semester": 6, "tahun": 12}[period]
-            lo = pd.Timestamp(today) - pd.DateOffset(months=months_back)
-            stamps = pd.to_datetime(orders["order_time"])
-            extra = orders.loc[stamps.ge(lo) & stamps.lt(pd.Timestamp(today) + pd.Timedelta(days=1))]
-            show_performance_cards(extra, f"{PERIOD_LABELS[period]} · {months_back} bulan terakhir s.d. hari ini", tone="extra")
-        if exclude_return_cancel:
-            note = f"Nilai bersih: {format_number(removed_orders, 0)} pesanan batal dan {format_qty(removed_units)} unit retur tidak dihitung."
-        else:
-            note = f"Termasuk {format_number(removed_orders, 0)} pesanan batal dan {format_qty(removed_units)} unit retur."
+            lo = (pd.Timestamp(today) - pd.DateOffset(months=months_back)).date()
+            show_performance_cards(lo, today, f"{PERIOD_LABELS[period]} · {months_back} bulan terakhir s.d. hari ini", tone="extra")
+        note = (
+            f"{resume_label}: {format_number(facts['pesanan_batal'], 0)} pesanan batal "
+            f"({format_pct_id(facts['tingkat_batal'] * 100)}) dan {format_qty(facts['retur_unit'])} unit retur "
+            f"({format_number(facts['pesanan_retur_penuh'], 0)} pesanan diretur penuh)."
+        )
         st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
 
 
