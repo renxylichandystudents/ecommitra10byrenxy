@@ -1,0 +1,20 @@
+# Hook promosi per kategori (Revisi Final 2D). Dipakai Exposure media sosial & Flash sale.
+# Kategori dikenali dari nama produk (src/core/promo_calendar.category_of).
+Sealant:
+  - "Celah kamar mandi bocor? Sekali aplikasi, kedap air bertahun-tahun."
+  - "Rapikan sambungan kaca & keramik tanpa tukang."
+Lem:
+  - "Rekat kuat untuk keramik, kayu, dan logam — cukup sekali oles."
+  - "Renovasi cepat: lem kering dalam hitungan jam."
+Kloset:
+  - "Kamar mandi baru, hemat air setiap siram."
+  - "Desain modern, mudah dipasang, mudah dibersihkan."
+Wastafel:
+  - "Upgrade wastafel, ruang terasa lebih lega."
+  - "Material kuat dan mudah dibersihkan untuk pemakaian harian."
+Glass block:
+  - "Cahaya alami masuk, privasi tetap terjaga."
+  - "Dinding dekoratif tahan lama tanpa cat ulang."
+Aksesoris:
+  - "Detail kecil yang membuat renovasi terasa selesai."
+  - "Lengkapi proyek rumah Anda dalam satu pesanan."

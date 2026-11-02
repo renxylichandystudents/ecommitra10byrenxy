@@ -1,0 +1,42 @@
+# Normalisasi alasan batal Shopee ke 4 kategori (Revisi Final S8).
+# Pencocokan: teks alasan (huruf kecil) mengandung salah satu frasa. Urutan kategori = urutan cek.
+# Teks yang tidak dikenali masuk "Pembeli" dan dicatat di log agar bisa ditambahkan ke sini.
+Belum bayar:
+  - belum bayar
+  - belum dibayar
+  - tidak dibayar
+  - pembayaran
+  - unpaid
+  - payment
+Penjual:
+  - stok habis
+  - stok kosong
+  - out of stock
+  - tidak responsif
+  - penjual
+  - seller
+  - tidak dikirim
+  - gagal kirim
+Sistem Shopee:
+  - sistem
+  - system
+  - otomatis
+  - shopee
+  - fraud
+  - kebijakan
+Pembeli:
+  - ganti alamat
+  - ubah alamat
+  - change delivery address
+  - need to change delivery address
+  - menemukan harga lebih murah
+  - lebih murah
+  - berubah pikiran
+  - change of mind
+  - alasan lainnya
+  - lainnya
+  - others
+  - ubah pesanan
+  - modify existing order
+  - voucher
+  - pembeli
