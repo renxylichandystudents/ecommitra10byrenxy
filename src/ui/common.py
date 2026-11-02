@@ -244,7 +244,7 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
     if start == lo and end == hi:
         label = names[0] if len(names) == 1 else ", ".join(names)
     else:
-        label = f"{fmt_date(start)} – {fmt_date(end)}"
+        label = fmt_date(start) if start == end else f"{fmt_date(start)} – {fmt_date(end)}"
     return filtered, label, selected
 
 
@@ -271,7 +271,7 @@ def apply_saved_period(orders: pd.DataFrame, *, prefix: str) -> tuple[pd.DataFra
     days = pd.to_datetime(part["order_time"]).dt.normalize()
     filtered = part.loc[days.between(pd.Timestamp(start), pd.Timestamp(end))].drop(columns="_month").reset_index(drop=True)
     names = [month_label(key) for key in selected]
-    label = (", ".join(names)) if (start == lo and end == hi) else f"{fmt_date(start)} – {fmt_date(end)}"
+    label = (", ".join(names)) if (start == lo and end == hi) else (fmt_date(start) if start == end else f"{fmt_date(start)} – {fmt_date(end)}")
     return filtered, label
 
 

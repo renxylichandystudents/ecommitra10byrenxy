@@ -65,6 +65,7 @@ from src.core.labels import LABEL_ICONS
 from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, exclude_toggle_card, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
+from src.core.periods import format_period_label, month_year, prediction_window, same_target, same_day_last_month
 from src.ui.confirm import confirm_action
 from src.ui.evaluasi import show_evaluation
 from src.ui.laporan import show_report
@@ -2803,7 +2804,7 @@ def explain_qty_gap(
     month_ago = _same_day_last_month(today)
     y_name = f"kemarin ({_short_id_date(yesterday)})"
     m_name = _short_id_date(month_ago)
-    month_label = f"{ID_MONTHS[today.month - 1]} {today.year}"
+    month_label = month_year(today)
     key = str(row["item_key"])
     actual = int(round(float(row["qty_total"])))
     sold_value = float(row["sales_total"]) if "sales_total" in row.index and pd.notna(row["sales_total"]) else 0.0
@@ -3200,9 +3201,9 @@ def explain_qty_gap(
     }
     resume_short = resume_label if len(resume_label) <= 18 else "Periode laporan"
     bars = [
-        _bar_spec("Bulan ini", resume_short, month_pred, actual, "terjual"),
-        _bar_spec("Kemarin", _short_id_date(yesterday), yesterday_pred, yesterday_sold, "terjual"),
-        _bar_spec("Bulan lalu", m_name, month_ago_pred, month_ago_sold, "terjual"),
+        _bar_spec(format_period_label("prediksi", today), resume_short, month_pred, actual, "terjual"),
+        _bar_spec(format_period_label("aktual_hari", yesterday), "prediksi vs terjual", yesterday_pred, yesterday_sold, "terjual"),
+        _bar_spec("Tanggal sama bulan lalu", m_name, month_ago_pred, month_ago_sold, "terjual"),
     ]
     return {
         "direction": direction,
@@ -3319,15 +3320,16 @@ def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, t
     price = float(row.get("harga_bersih", 0) or 0)
     yesterday = today - timedelta(days=1)
     month_ago = _same_day_last_month(today)
-    sold_sales = {"Bulan ini": None, "Kemarin": None, "Bulan lalu": None}
+    sold_sales = [None, None, None]
     if isinstance(item_orders, pd.DataFrame) and not item_orders.empty:
         days = pd.to_datetime(item_orders["order_time"]).dt.date
-        sold_sales["Kemarin"] = float(item_orders.loc[days == yesterday, "sales"].sum())
-        sold_sales["Bulan lalu"] = float(item_orders.loc[days == month_ago, "sales"].sum())
-        sold_sales["Bulan ini"] = float(row.get("sales_total", 0) or 0)
+        sold_sales = [
+            float(row.get("sales_total", 0) or 0),
+            float(item_orders.loc[days == yesterday, "sales"].sum()),
+            float(item_orders.loc[days == month_ago, "sales"].sum()),
+        ]
     out = []
-    for bar, pred_qty in zip(brief["bars"], (brief.get("month_pred"), brief.get("yesterday_pred"), brief.get("month_ago_pred"))):
-        sold = sold_sales.get(bar["label"])
+    for bar, pred_qty, sold in zip(brief["bars"], (brief.get("month_pred"), brief.get("yesterday_pred"), brief.get("month_ago_pred")), sold_sales):
         pred = None if pred_qty is None else int(round(float(pred_qty) * price))
         spec = _bar_spec(bar["label"], bar["sub"], pred, None if sold is None else int(round(sold)), "terjual")
         if pred is not None:
@@ -3415,7 +3417,7 @@ def show_qty_forecast_board(
     decision: pd.DataFrame | None = None,
     performance: dict | None = None,
 ) -> None:
-    """R6: per SKU baris Bulan ini, Kemarin, Bulan lalu, + periode tambahan, dan Stok DC Cikupa paling bawah."""
+    """R6: per SKU baris Prediksi bulan, Aktual kemarin, Tanggal sama bulan lalu, + periode tambahan, dan Stok DC Cikupa paling bawah."""
     if view.empty:
         st.write("Tidak ada item untuk grafik ini.")
         return
@@ -3522,7 +3524,7 @@ def show_qty_forecast_board(
             st.rerun()
     st.markdown(
         "<div class='qty-legend'><span><i class='up'></i>Naik</span><span><i class='down'></i>Turun</span><span><i class='flat'></i>Tetap</span></div>"
-        f"<p class='qty-board-copy'>{counts['naik']} naik · {counts['turun']} turun · {counts['tetap']} tetap pada baris Bulan ini.</p>",
+        f"<p class='qty-board-copy'>{counts['naik']} naik · {counts['turun']} turun · {counts['tetap']} tetap pada baris {html.escape(format_period_label('prediksi', as_of))}.</p>",
         unsafe_allow_html=True,
     )
     needle = " ".join(str(query or "").lower().split())
@@ -4194,7 +4196,7 @@ def apply_horizon_slices(
     if not {"pred_qty", "pred_sales", "safety_stock"} <= set(view.columns):
         return view
     horizon = max(int(horizon_days) if horizon_days else horizon_day_count(period, day), 1)
-    month_days = days_in_calendar_month(day)
+    month_days = horizon_day_count("bulan", day)
     out = view.copy()
     sales_day: list[int] = []
     sales_month: list[int] = []
@@ -5851,7 +5853,12 @@ def _delta_text(now: int, then: int, *, money: bool) -> str:
     return f"{sign}{amount} ({percent_sign}{format_number(abs(percent), 1)}%)"
 
 
-def _move_line(now: int, then: int | None, *, money: bool) -> str:
+def _move_line(now: int, then: int | None, *, money: bool, fresh: bool = False) -> str:
+    if fresh:
+        return (
+            "<div class='metric-move flat'><span style='display:inline-block;padding:1px 8px;border-radius:999px;"
+            "background:#e0e7ff;color:#3730a3;font-weight:700'>periode baru</span> target periode berbeda dari prediksi kemarin</div>"
+        )
     if then is None:
         return "<div class='metric-move flat'>Data latih sebelum hari ini belum cukup untuk dihitung.</div>"
     tone = "up" if int(now) > int(then) else "down" if int(now) < int(then) else "flat"
@@ -6236,11 +6243,12 @@ def show_analysis_movement(
         ss_total = float(decision["ss"].sum()) if isinstance(decision, pd.DataFrame) and "ss" in decision.columns else 0.0
         for group in groups:
             qty_now, sales_now, need_now = now_totals[group.prefix]
-            then = prior.get(group.prefix) if prior else None
+            fresh = group.prefix != "d" and not same_target(yesterday, period_key, today, period_key)
+            then = None if fresh else (prior.get(group.prefix) if prior else None)
             if group.extra:
                 st.markdown(f"<div class='field-hint' style='margin-top:.4rem'><b>{html.escape(group.label)}</b></div>", unsafe_allow_html=True)
             cards = st.columns(4)
-            name = group.label.lower() if not group.extra else group.label
+            name = "hari ini" if group.prefix == "d" else (month_year(today) if group.prefix == "m" else group.label)
             is_day = group.prefix == "d"
             main_money = metric == "sales"
             main_now = sales_now if main_money else qty_now
@@ -6264,7 +6272,7 @@ def show_analysis_movement(
                 cards[0],
                 f"Prediksi {'sales' if main_money else qty_label} {name} · Top 50 SKU",
                 format_idr(main_now) if main_money else f"{format_qty(main_now)} unit",
-                _move_line(int(main_now), main_then, money=main_money),
+                _move_line(int(main_now), main_then, money=main_money, fresh=fresh),
                 tip=day_tip if not main_money else "",
                 extra_html=actual_html if not main_money else "",
             )
@@ -6272,7 +6280,7 @@ def show_analysis_movement(
                 cards[1],
                 f"Prediksi {qty_label if main_money else 'sales'} {name} · Top 50 SKU",
                 f"{format_qty(qty_now)} unit" if main_money else format_idr(sales_now),
-                _move_line(int(qty_now if main_money else sales_now), None if then is None else int(then[0] if main_money else then[1]), money=not main_money),
+                _move_line(int(qty_now if main_money else sales_now), None if then is None else int(then[0] if main_money else then[1]), money=not main_money, fresh=fresh),
                 tip=day_tip if main_money else "",
                 extra_html=actual_html if main_money else "",
             )
@@ -6286,13 +6294,13 @@ def show_analysis_movement(
                     if rounding is not None and abs(rounding) >= 1
                     else "."
                 )
-                + (" Bulan ini: hanya sisa bulan (realisasi tanggal 1 s.d. kemarin sudah terjual)." if group.prefix == "m" else "")
+                + (f" Jendela prediksi bulan: {format_id_date(today)} – {format_id_date(prediction_window('bulan', today)[1])}." if group.prefix == "m" else "")
             )
             _prediction_card(
                 cards[2],
                 f"Kebutuhan stok {name} · Top 50 SKU",
                 f"{format_qty(need_now)} unit",
-                _move_line(int(need_now), None if then is None else int(then[2]), money=False),
+                _move_line(int(need_now), None if then is None else int(then[2]), money=False, fresh=fresh),
                 tip=need_tip,
             )
             if all_sku is not None and group.prefix in {"d", "m"} and f"{group.prefix}_sales" in all_sku.columns:

@@ -12,6 +12,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
+from src.core.periods import prediction_window
 from src.core.decision_table import lama_kosong_text, period_groups, safety_stock_summary
 from src.core.labels import LABEL_ICONS, LABEL_LEGEND
 from src.forecast import forecast_calendar
@@ -65,8 +66,13 @@ def table_parts(
 ) -> tuple[list[dict], list[dict], dict, pd.DataFrame]:
     """Kolom, baris, baris Total, dan salinan Excel. Kolom per kelompok: Prediksi, SS, Butuh, Stok."""
     groups = period_groups(period, today)
-    month_name = f"{fmt_date(today).split(' ', 1)[1]}"
-    titles = {"d": f"Hari ini · {fmt_date(today, short=True)}", "m": f"Bulan ini · {month_name}", "p": window_label}
+    month_group = next(g for g in groups if g.prefix == "m")
+    month_end = prediction_window("bulan", today)[1]
+    titles = {
+        "d": f"Hari ini · {fmt_date(today, short=True)}",
+        "m": f"{month_group.label} · {fmt_date(today, short=True)} – {fmt_date(month_end, short=True)}",
+        "p": window_label,
+    }
     main_label = "QTY" if metric == "qty" else "Sales"
     columns: list[dict] = [
         {"id": "pick", "label": "Grafik", "pin": True, "width": 64},
@@ -222,7 +228,7 @@ def safety_stock_box(table: pd.DataFrame, *, period: str, today: date, definitio
 
 
 def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, period: str, today: date, resume_label: str) -> None:
-    """R5: baris Hari ini/Bulan ini/+periode, kolom actual, prediksi, kontribusi sales Top 50."""
+    """R5: baris Hari ini/Prediksi bulan/+periode, kolom actual, prediksi, kontribusi sales Top 50."""
     groups = period_groups(period, today)
     rows = []
     for group in groups:
@@ -235,6 +241,7 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
         rows.append(
             {
                 "Periode": group.label,
+                "Actual pembanding": act.get("label", "-"),
                 "QTY actual": fmt_qty(qty_act),
                 "Sales volume actual": fmt_idr(sales_act),
                 "Prediksi QTY": fmt_qty(view[f"{p}_qty"].sum()),
@@ -246,7 +253,7 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
     header = "".join(f"<th>{c}</th>" for c in frame.columns)
     body = ""
     for _, r in frame.iterrows():
-        extra = r["Periode"] not in {"Hari ini", "Bulan ini"}
+        extra = r["Periode"] not in {g.label for g in groups if not g.extra}
         style = " style='background:#eff6ff'" if extra else ""
         body += f"<tr{style}>" + "".join(f"<td>{r[c]}</td>" for c in frame.columns) + "</tr>"
     st.markdown(
@@ -255,7 +262,7 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
     )
     extra = next((g.label for g in groups if g.extra), None)
     extra_text = f"; {extra} = {extra.lower()} terakhir s.d. kemarin" if extra else ""
-    st.caption(f"Actual Hari ini = data hari terakhir yang tercatat; Bulan ini = tanggal 1 s.d. kemarin{extra_text}. Kontribusi = sales Top 50 ÷ sales seluruh toko pada rentang yang sama.")
+    st.caption(f"Actual hari = hari terakhir yang ada transaksi; actual bulan = bulan penuh terakhir{extra_text}. Kontribusi = sales Top 50 ÷ sales seluruh toko pada rentang yang sama.")
 
 
 def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, start: date, end: date, total: float) -> pd.DataFrame:

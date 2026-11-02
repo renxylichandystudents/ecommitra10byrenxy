@@ -1,8 +1,8 @@
 """Tabel keputusan per SKU untuk semua tab.
 
-Satu fungsi membentuk angka Hari ini, Bulan ini, dan periode tambahan
-(Quartal/Semester/Tahun), supaya Ringkasan, Prediksi, Rekomendasi, dan Laporan
-membaca angka yang sama.
+Satu fungsi membentuk angka Hari ini, jendela prediksi bulan (mis. 2 Nov – 1 Des 2026,
+label "Prediksi Nov 2026"), dan periode tambahan (Kuartal/Semester/Tahun), supaya Ringkasan,
+Prediksi, Rekomendasi, dan Laporan membaca angka yang sama.
 """
 
 from __future__ import annotations
@@ -14,9 +14,10 @@ import numpy as np
 import pandas as pd
 
 from src.core.inventory import days_cover, inventory_status
+from src.core.periods import format_period_label, last_full_month, window_days
 
 PERIOD_MONTHS = {"bulan": 1, "kuartal": 3, "semester": 6, "tahun": 12}
-PERIOD_LABELS = {"bulan": "Bulan", "kuartal": "Quartal", "semester": "Semester", "tahun": "Tahun"}
+PERIOD_LABELS = {"bulan": "Bulan", "kuartal": "Kuartal", "semester": "Semester", "tahun": "Tahun"}
 
 
 @dataclass(frozen=True)
@@ -28,12 +29,11 @@ class PeriodGroup:
 
 
 def period_groups(period: str, today: date) -> list[PeriodGroup]:
-    """Hari ini dan Bulan ini selalu ada. Periode tambahan hanya untuk Quartal/Semester/Tahun."""
+    """Hari ini dan jendela prediksi bulan selalu ada. Periode tambahan hanya untuk Kuartal/Semester/Tahun."""
     ref = pd.Timestamp(today).normalize()
-    month_end = ref + pd.offsets.MonthEnd(0)
     groups = [
         PeriodGroup("d", "Hari ini", 1, False),
-        PeriodGroup("m", "Bulan ini", int((month_end - ref).days) + 1, False),
+        PeriodGroup("m", format_period_label("prediksi", today), window_days("bulan", today), False),
     ]
     if period != "bulan":
         end = ref + pd.DateOffset(months=PERIOD_MONTHS[period]) - pd.Timedelta(days=1)
@@ -98,10 +98,9 @@ def build_decision_table(
     {p}_stok, {p}_selisih, {p}_pct, {p}_status.
 
     - Hari ini = laju harian prediksi.
-    - Bulan ini = realisasi tanggal 1 s.d. kemarin + prediksi sisa bulan; tidak pernah
-      lebih kecil dari realisasi.
-    - Butuh = prediksi permintaan yang belum terjadi pada periode itu + SS, karena stok
-      hari ini hanya menutup permintaan yang akan datang.
+    - Prediksi bulan = laju harian × hari jendela prediksi bulan (hari ini s.d. sebulan ke depan),
+      sama dengan kartu Periode prediksi dan kartu Ringkasan.
+    - Butuh = prediksi permintaan pada periode itu + SS.
     """
     if view is None or view.empty:
         return view
@@ -149,11 +148,9 @@ def build_decision_table(
     for group in period_groups(period, today):
         p = group.prefix
         if p == "m":
-            remaining = out["pred_harian"] * group.days
-            qty = out["actual_mtd_qty"] + remaining
-            qty = np.maximum(qty, out["actual_mtd_qty"])
-            sales = out["actual_mtd_sales"] + remaining * out["harga_bersih"]
-            future_need = remaining
+            qty = out["pred_harian"] * group.days
+            sales = qty * out["harga_bersih"]
+            future_need = qty
         elif p == "p":
             qty = pred_qty.astype(float)
             sales = pred_sales.astype(float)
@@ -195,8 +192,8 @@ def build_decision_table(
 def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today: date) -> dict[str, dict[str, float]]:
     """Actual Top 50 dan seluruh toko per kelompok periode (untuk matriks Ringkasan total Top 50).
 
-    Hari ini = tanggal terakhir yang ada transaksi (≤ hari ini); Bulan ini = tanggal 1 s.d. kemarin;
-    periode tambahan = 3/6/12 bulan terakhir s.d. kemarin.
+    Hari = tanggal terakhir yang ada transaksi (≤ hari ini); bulan = bulan penuh terakhir
+    ("Aktual Okt 2026"); periode tambahan = 3/6/12 bulan terakhir s.d. kemarin.
     """
     out: dict[str, dict[str, float]] = {}
     if orders is None or orders.empty:
@@ -205,13 +202,16 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
     days = pd.to_datetime(orders["order_time"], errors="coerce").dt.normalize()
     last_day = min(days.max(), ref)
     in_top = orders["item_key"].astype(str).isin(set(keys))
-    spans = {"d": (last_day, last_day + pd.Timedelta(days=1)), "m": (ref.replace(day=1), ref)}
+    month_lo, month_hi = last_full_month(last_day.date())
+    spans = {"d": (last_day, last_day + pd.Timedelta(days=1)), "m": (pd.Timestamp(month_lo), pd.Timestamp(month_hi) + pd.Timedelta(days=1))}
+    labels = {"d": format_period_label("aktual_hari", last_day.date()), "m": format_period_label("aktual_bulan", month_lo)}
     if period != "bulan":
         spans["p"] = (ref - pd.DateOffset(months=PERIOD_MONTHS[period]), ref)
     for prefix, (lo, hi) in spans.items():
         mask = days.ge(lo) & days.lt(hi)
         part = orders.loc[mask & in_top]
         out[prefix] = {
+            "label": labels.get(prefix, f"{PERIOD_MONTHS.get(period, 0)} bulan terakhir"),
             "qty": float(part["qty"].sum()),
             "sales": float(part["sales"].sum()) if "sales" in part.columns else 0.0,
             "store_sales": float(orders.loc[mask, "sales"].sum()) if "sales" in orders.columns else 0.0,

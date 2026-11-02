@@ -59,7 +59,9 @@ class DecisionTableTests(unittest.TestCase):
         self.assertEqual([g.prefix for g in period_groups("bulan", TODAY)], ["d", "m"])
         groups = period_groups("kuartal", TODAY)
         self.assertEqual([g.prefix for g in groups], ["d", "m", "p"])
-        self.assertEqual(groups[2].label, "Quartal")
+        self.assertEqual(groups[2].label, "Kuartal")
+        self.assertEqual(groups[1].label, "Prediksi Okt 2026")
+        self.assertEqual(groups[1].days, 30)
 
     def test_month_forecast_not_below_actual_and_need_formula(self) -> None:
         orders = pd.DataFrame(
@@ -73,9 +75,10 @@ class DecisionTableTests(unittest.TestCase):
         stock = pd.DataFrame({"sku": ["A", "B", "C"], "stock_dc_cikupa": [100, 0, 50], "_submitted_at": ["2026-10-31T08:00:00"] * 3})
         table = build_decision_table(_view(), period="bulan", today=TODAY, horizon_days=30, orders=orders, stock_frame=stock)
         a = table.set_index("item_key").loc["A"]
-        self.assertGreaterEqual(a["m_qty"], a["actual_mtd_qty"])
+        # A1: prediksi bulan = jendela prediksi (31 Okt – 29 Nov) = pred_qty horizon bulan, sama dengan kartu Ringkasan.
+        self.assertEqual(a["m_qty"], np.rint(a["pred_qty"]))
         self.assertEqual(a["actual_mtd_qty"], 600.0)
-        self.assertEqual(a["m_butuh"], np.ceil(a["pred_harian"] * 1 + a["ss"]))
+        self.assertEqual(a["m_butuh"], np.ceil(a["pred_harian"] * 30 + a["ss"]))
         self.assertEqual(a["d_butuh"], np.ceil(a["pred_harian"] + a["ss"]))
         self.assertEqual(a["m_selisih"], a["stok"] - a["m_butuh"])
         b = table.set_index("item_key").loc["B"]
@@ -256,3 +259,18 @@ class PerformanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PeriodLabelTests(unittest.TestCase):
+    def test_window_and_labels(self) -> None:
+        from src.core.periods import format_period_label, last_full_month, prediction_window, same_target
+
+        self.assertEqual(prediction_window("bulan", date(2026, 11, 2)), (date(2026, 11, 2), date(2026, 12, 1)))
+        self.assertEqual(format_period_label("prediksi", date(2026, 11, 2)), "Prediksi Nov 2026")
+        self.assertEqual(format_period_label("aktual_bulan", date(2026, 10, 1)), "Aktual Okt 2026")
+        self.assertEqual(format_period_label("aktual_hari", date(2026, 10, 27)), "Aktual 27 Okt 2026")
+        self.assertEqual(format_period_label("bulan_lalu", date(2026, 10, 2)), "Tanggal sama bulan lalu (2 Okt 2026)")
+        self.assertEqual(last_full_month(date(2026, 10, 31)), (date(2026, 10, 1), date(2026, 10, 31)))
+        self.assertEqual(last_full_month(date(2026, 10, 27)), (date(2026, 9, 1), date(2026, 9, 30)))
+        self.assertFalse(same_target(date(2026, 10, 31), "bulan", date(2026, 11, 1), "bulan"))
+        self.assertTrue(same_target(date(2026, 11, 2), "bulan", date(2026, 11, 3), "bulan"))

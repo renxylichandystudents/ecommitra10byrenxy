@@ -100,8 +100,8 @@ def analysis_markup(
             f"<td>{fmt_qty(row[f'{p}_ss'])}</td><td>{fmt_qty(row[f'{p}_butuh'])}</td><td>{stock_text}</td></tr>"
         )
     block1 = f"<table class='insight-table'>{header}{''.join(lines)}</table>"
-    if row.get("m_qty", 0) and row.get("actual_mtd_qty", 0):
-        block1 += f"<p class='insight-copy'>Bulan ini = terjual tanggal 1 s.d. kemarin {fmt_qty(row['actual_mtd_qty'])} unit + prediksi sisa bulan.</p>"
+    if row.get("m_qty", 0):
+        block1 += "<p class='insight-copy'>Prediksi bulan = jendela prediksi hari ini s.d. sebulan ke depan, sama dengan kartu Periode prediksi.</p>"
     # 2. Kesehatan stok
     cover = row.get("hari_cukup")
     cover_text = "-" if cover is None or pd.isna(cover) else ("tidak habis pada laju sekarang" if not np.isfinite(float(cover)) else f"{fmt_num(cover, 0)} hari")
