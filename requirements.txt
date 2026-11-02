@@ -19,6 +19,7 @@ PuLP>=2.8.0,<4
 Sastrawi>=1.0.1
 joblib>=1.3.0
 bcrypt>=4.0.0
+extra-streamlit-components==0.1.81
 SQLAlchemy>=2.0.0
 psycopg2-binary>=2.9.0
 # sentence-transformers==3.0.1  # Sentence-BERT (paraphrase-multilingual-MiniLM-L12-v2) butuh torch ±1–2,5 GB,

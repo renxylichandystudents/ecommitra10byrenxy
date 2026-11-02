@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import html
 import os
+import time
+from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from auth.permissions import ROLES, SUPER_USER, can, role_label
-from auth.repository import LOCK_MINUTES, AuthError, User, UserRepository
+from auth import session_cookie
+from auth.repository import LOCK_MINUTES, SESSION_HOURS, AuthError, User, UserRepository
 from auth.security import PASSWORD_RULE
 from src.core.access import MENU_LABELS, access_matrix_rows, allowed
 from src.core.db import database_url, make_engine
@@ -22,8 +24,8 @@ SESSION_KEY = "auth-user"
 PAGE_KEY = "auth-page"
 TOKEN_KEY = "auth-token"
 LOGGED_OUT_KEY = "_auth-logged-out"
+EXPIRES_KEY = "auth-expires"
 FLASH_KEY = "_users-flash"
-COOKIE_NAME = "mitra10_session"
 
 
 def _secret(name: str) -> str:
@@ -132,9 +134,7 @@ def _login_page(repo: UserRepository) -> None:
                 except Exception:
                     pass
             else:
-                token = repo.create_session(user)
-                st.session_state[SESSION_KEY] = user
-                st.session_state[TOKEN_KEY] = token
+                _start_session(repo, user)
                 st.rerun()
         st.caption(
             f"Akun dibuat oleh super user. Setelah 5 kali gagal, akun dikunci {LOCK_MINUTES} menit. "
@@ -159,7 +159,7 @@ def _password_form(repo: UserRepository, user: User, *, forced: bool) -> None:
         try:
             repo.change_password(user.username, old, new)
             audit("ubah_password", user.username)
-            st.session_state[SESSION_KEY] = repo.get(user.username)
+            _start_session(repo, repo.get(user.username))
             st.session_state.pop(PAGE_KEY, None)
             st.success("Password tersimpan.")
             st.rerun()
@@ -167,60 +167,33 @@ def _password_form(repo: UserRepository, user: User, *, forced: bool) -> None:
             st.error(str(exc))
 
 
-def _cookie_token() -> str | None:
-    """Token dari cookie browser (dibaca server saat sesi Streamlit dibuat)."""
+def _session_hours() -> float:
+    """Masa berlaku sesi (jam) dari secrets SESSION_TTL_HOURS; default 12, dibatasi 1–168."""
     try:
-        value = st.context.cookies.get(COOKIE_NAME)
-    except Exception:
-        value = None
-    return str(value) if value else None
+        hours = float(_secret("SESSION_TTL_HOURS") or SESSION_HOURS)
+    except ValueError:
+        hours = SESSION_HOURS
+    return min(max(hours, 1.0), 168.0)
 
 
-def _cookie_script(op: tuple[str, str | None]) -> str:
-    action, token = op
-    if action == "set":
-        value, age = token or "", 8 * 3600
-    else:
-        value, age = "", 0
-    return (
-        "<script>(function(){const d=window.parent.document;"
-        "const secure=window.parent.location.protocol==='https:'?'; Secure':'';"
-        f"d.cookie='{COOKIE_NAME}={value}; Max-Age={age}; Path=/; SameSite=Lax'+secure;"
-        "})();</script>"
-    )
+def _start_session(repo: UserRepository, user: User) -> None:
+    hours = _session_hours()
+    st.session_state[SESSION_KEY] = user
+    st.session_state[TOKEN_KEY] = repo.create_session(user, hours=hours)
+    st.session_state[EXPIRES_KEY] = datetime.now().replace(microsecond=0) + timedelta(hours=hours)
+    st.session_state.pop(LOGGED_OUT_KEY, None)
 
 
-def _sync_cookie(slot, token: str | None) -> None:
-    """Samakan cookie browser dengan token sesi, lewat slot yang posisinya tetap (elemen lain tidak bergeser).
-
-    st.context.cookies hanya berisi cookie saat sesi dibuat, jadi skrip ditulis ulang tiap run selama
-    berbeda; isi yang sama tidak memuat ulang iframe.
-    """
-    cookie = _cookie_token()
-    if token and cookie != token:
-        op = ("set", token)
-    elif not token and cookie:
-        op = ("delete", None)
-    else:
-        slot.empty()
-        return
-    with slot:
-        components.html(_cookie_script(op), height=0, width=0)
-
-
-def _restore_from_cookie(repo: UserRepository) -> User | None:
-    token = _cookie_token()
-    user = repo.user_for_token(token)
-    if user is not None:
-        st.session_state[SESSION_KEY] = user
-        st.session_state[TOKEN_KEY] = token
-    return user
+def _drop_session() -> None:
+    for key in (SESSION_KEY, TOKEN_KEY, EXPIRES_KEY):
+        st.session_state.pop(key, None)
+    st.session_state[LOGGED_OUT_KEY] = True
 
 
 def logout() -> None:
     repo = get_repo()
     audit("logout")
-    repo.delete_session(st.session_state.get(TOKEN_KEY) or _cookie_token())
+    repo.delete_session(st.session_state.get(TOKEN_KEY) or session_cookie._server_token())
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.session_state[LOGGED_OUT_KEY] = True
@@ -231,28 +204,48 @@ def logout() -> None:
 def login_gate() -> User:
     """Panggil di awal app. Mengembalikan user yang sudah login; selain itu halaman berhenti.
 
-    Login dipulihkan dari cookie token (back/refresh membuat sesi Streamlit baru), sampai Logout
-    atau token dicabut (nonaktif / reset password) atau kedaluwarsa 8 jam.
+    Refresh / tab baru membuat sesi Streamlit baru: login dipulihkan dari cookie token selama sesi
+    server belum kedaluwarsa, belum dicabut (logout, ubah/reset password, ganti role, nonaktif), dan
+    user masih aktif. Role dibaca ulang dari tabel users. Query param ?page= tidak disentuh.
     """
-    slot = st.empty()
+    jar = session_cookie.box()
     repo = get_repo()
     user = current_user()
     if user is not None:
         token = st.session_state.get(TOKEN_KEY)
-        fresh = repo.user_for_token(token) if token else repo.get(user.username)
-        if fresh is None or not fresh.is_active:
-            for key in (SESSION_KEY, TOKEN_KEY):
-                st.session_state.pop(key, None)
+        found = repo.session_for_token(token)
+        if found is None:
+            _drop_session()
             user = None
         else:
-            st.session_state[SESSION_KEY] = user = fresh
+            user, expires, seen = found
+            st.session_state[SESSION_KEY] = user
+            slid = repo.touch_session(token, hours=_session_hours(), last_seen=seen)
+            st.session_state[EXPIRES_KEY] = slid or expires
     if user is None and not st.session_state.get(LOGGED_OUT_KEY):
-        user = _restore_from_cookie(repo)
-    _sync_cookie(slot, st.session_state.get(TOKEN_KEY) if user is not None else None)
+        token, ready = session_cookie.read_token(jar)
+        if not ready and session_cookie.may_wait():
+            _hide_chrome()
+            with st.spinner("Memeriksa sesi login…"):
+                time.sleep(session_cookie.WAIT_SECONDS)
+            st.rerun()
+        found = repo.session_for_token(token) if token else None
+        if found is not None:
+            user, expires, _seen = found
+            st.session_state[SESSION_KEY] = user
+            st.session_state[TOKEN_KEY] = token
+            st.session_state[EXPIRES_KEY] = expires
+        elif token:
+            st.session_state[LOGGED_OUT_KEY] = True
+    if user is not None:
+        session_cookie.write(jar, st.session_state[TOKEN_KEY], st.session_state[EXPIRES_KEY])
+    elif st.session_state.get(LOGGED_OUT_KEY):
+        session_cookie.clear(jar)
     if user is None:
         _login_page(repo)
         st.stop()
     st.session_state.pop(LOGGED_OUT_KEY, None)
+    st.session_state.pop(session_cookie.WAIT_KEY, None)
     if user.must_change_password:
         _hide_chrome()
         _password_form(repo, user, forced=True)

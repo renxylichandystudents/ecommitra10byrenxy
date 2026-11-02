@@ -7,7 +7,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from auth.permissions import ROLES, SUPER_USER
@@ -17,7 +17,8 @@ from src.core.db import id_column
 
 MAX_FAILED = 5
 LOCK_MINUTES = 15
-SESSION_HOURS = 8
+SESSION_HOURS = 12
+TOUCH_MINUTES = 5
 FORCE_CHANGE_MIGRATION = "2026-11-force-password-change"
 
 
@@ -91,6 +92,9 @@ class UserRepository:
                 )
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS sessions_username ON sessions (lower(username))"))
+            columns = {c["name"] for c in inspect(conn).get_columns("sessions")}
+            if "last_seen" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_seen VARCHAR(32)"))
             conn.execute(text("CREATE TABLE IF NOT EXISTS auth_migrations (name VARCHAR(80) PRIMARY KEY, applied_at VARCHAR(32))"))
             for old, new in LEGACY_ROLES.items():
                 conn.execute(text("UPDATE users SET role = :n WHERE role = :o"), {"n": new, "o": old})
@@ -183,6 +187,8 @@ class UserRepository:
             self._guard_last_super(target)
         with self.engine.begin() as conn:
             conn.execute(text("UPDATE users SET role = :r WHERE id = :i"), {"r": role, "i": target.id})
+        if role != target.role:
+            self.delete_user_sessions(target.username)
 
     def set_active(self, username: str, active: bool) -> None:
         target = self.get(username)
@@ -205,37 +211,76 @@ class UserRepository:
     def _token_hash(token: str) -> str:
         return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
 
-    def create_session(self, user: User, *, hours: int = SESSION_HOURS, now: datetime | None = None) -> str:
+    def create_session(self, user: User, *, hours: float = SESSION_HOURS, now: datetime | None = None) -> str:
         """Token acak untuk cookie browser. Yang disimpan di server hanya hash-nya."""
         now = now or _now()
         token = secrets.token_urlsafe(32)
+        stamp = now.isoformat(sep=" ")
         with self.engine.begin() as conn:
-            conn.execute(text("DELETE FROM sessions WHERE expires_at < :n"), {"n": now.isoformat(sep=" ")})
+            conn.execute(text("DELETE FROM sessions WHERE expires_at < :n"), {"n": stamp})
             conn.execute(
-                text("INSERT INTO sessions (token_hash, username, role, created_at, expires_at) VALUES (:h, :u, :r, :c, :e)"),
+                text(
+                    "INSERT INTO sessions (token_hash, username, role, created_at, expires_at, last_seen) "
+                    "VALUES (:h, :u, :r, :c, :e, :s)"
+                ),
                 {
                     "h": self._token_hash(token),
                     "u": user.username,
                     "r": user.role,
-                    "c": now.isoformat(sep=" "),
+                    "c": stamp,
                     "e": (now + timedelta(hours=hours)).isoformat(sep=" "),
+                    "s": stamp,
                 },
             )
         return token
 
-    def user_for_token(self, token: str | None, *, now: datetime | None = None) -> User | None:
-        """User aktif pemilik token yang belum kedaluwarsa; selain itu None."""
+    def session_for_token(self, token: str | None, *, now: datetime | None = None) -> tuple[User, datetime, datetime | None] | None:
+        """(user aktif, expires_at, last_seen) untuk token yang belum kedaluwarsa; selain itu None.
+
+        Role selalu dibaca ulang dari tabel users, bukan dari baris sesi.
+        """
         if not token:
             return None
         now = now or _now()
         with self.engine.connect() as conn:
             row = conn.execute(
-                text("SELECT username, expires_at FROM sessions WHERE token_hash = :h"), {"h": self._token_hash(token)}
+                text("SELECT username, expires_at, last_seen FROM sessions WHERE token_hash = :h"), {"h": self._token_hash(token)}
             ).first()
         if row is None or str(row[1]) <= now.isoformat(sep=" "):
             return None
         user = self.get(str(row[0]))
-        return user if user is not None and user.is_active else None
+        if user is None or not user.is_active:
+            return None
+        seen = datetime.fromisoformat(str(row[2])) if row[2] else None
+        return user, datetime.fromisoformat(str(row[1])), seen
+
+    def user_for_token(self, token: str | None, *, now: datetime | None = None) -> User | None:
+        """User aktif pemilik token yang belum kedaluwarsa; selain itu None."""
+        found = self.session_for_token(token, now=now)
+        return found[0] if found else None
+
+    def touch_session(
+        self,
+        token: str | None,
+        *,
+        hours: float = SESSION_HOURS,
+        every_minutes: float = TOUCH_MINUTES,
+        last_seen: datetime | None = None,
+        now: datetime | None = None,
+    ) -> datetime | None:
+        """Perpanjang expires_at bergeser (sliding), paling sering sekali per `every_minutes`. Kembali expires_at baru bila ditulis."""
+        if not token:
+            return None
+        now = now or _now()
+        if last_seen is not None and now - last_seen < timedelta(minutes=every_minutes):
+            return None
+        expires = now + timedelta(hours=hours)
+        with self.engine.begin() as conn:
+            done = conn.execute(
+                text("UPDATE sessions SET last_seen = :s, expires_at = :e WHERE token_hash = :h AND expires_at > :s"),
+                {"s": now.isoformat(sep=" "), "e": expires.isoformat(sep=" "), "h": self._token_hash(token)},
+            )
+        return expires if done.rowcount else None
 
     def delete_session(self, token: str | None) -> None:
         if not token:
@@ -254,6 +299,7 @@ class UserRepository:
         if old_password == new_password:
             raise AuthError("Password baru harus berbeda dari password lama.")
         self._store_password(username, new_password, must_change=False)
+        self.delete_user_sessions(username)
 
     def _store_password(self, username: str, password: str, *, must_change: bool) -> None:
         problem = password_problem(password, username)

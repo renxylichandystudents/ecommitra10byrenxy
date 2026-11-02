@@ -180,8 +180,8 @@ class RepositoryTests(unittest.TestCase):
         with self.repo.engine.connect() as conn:
             stored = [row[0] for row in conn.exec_driver_sql("SELECT token_hash FROM sessions")]
         self.assertNotIn(token, stored)
-        self.assertEqual(self.repo.user_for_token(token, now=now + timedelta(hours=7)).username, "ec1")
-        self.assertIsNone(self.repo.user_for_token(token, now=now + timedelta(hours=8, seconds=1)))
+        self.assertEqual(self.repo.user_for_token(token, now=now + timedelta(hours=11)).username, "ec1")
+        self.assertIsNone(self.repo.user_for_token(token, now=now + timedelta(hours=12, seconds=1)))
         self.assertIsNone(self.repo.user_for_token("palsu", now=now))
         self.assertIsNone(self.repo.user_for_token(None, now=now))
 
@@ -201,6 +201,46 @@ class RepositoryTests(unittest.TestCase):
         token = self.repo.create_session(self.repo.get("ec1"))
         self.repo.set_active("ec1", False)
         self.assertIsNone(self.repo.user_for_token(token))
+
+
+    def test_sliding_expiry_is_throttled(self):
+        user = self.repo.create("ec1", "Ecom1234567", ECOMMERCE_SPECIALIST, must_change=False)
+        now = datetime(2026, 11, 1, 9, 0, 0)
+        token = self.repo.create_session(user, hours=12, now=now)
+        _user, expires, seen = self.repo.session_for_token(token, now=now)
+        self.assertEqual(expires, now + timedelta(hours=12))
+        self.assertIsNone(self.repo.touch_session(token, hours=12, last_seen=seen, now=now + timedelta(minutes=2)))
+        later = now + timedelta(hours=11)
+        self.assertEqual(self.repo.touch_session(token, hours=12, last_seen=seen, now=later), later + timedelta(hours=12))
+        self.assertIsNotNone(self.repo.user_for_token(token, now=now + timedelta(hours=20)))
+        self.assertIsNone(self.repo.touch_session(token, hours=12, now=later + timedelta(hours=13)))
+
+    def test_role_read_from_users_and_role_change_revokes(self):
+        self.repo.create("admin", "Admin12345x", SUPER_USER, must_change=False)
+        user = self.repo.create("ec1", "Ecom1234567", ECOMMERCE_SPECIALIST, must_change=False)
+        token = self.repo.create_session(user)
+        with self.repo.engine.begin() as conn:
+            conn.exec_driver_sql("UPDATE sessions SET role = 'super_user'")
+        self.assertEqual(self.repo.user_for_token(token).role, ECOMMERCE_SPECIALIST)
+        self.repo.set_role("ec1", GUDANG)
+        self.assertIsNone(self.repo.user_for_token(token))
+
+    def test_change_password_revokes_all_sessions(self):
+        user = self.repo.create("ec1", "Ecom1234567", ECOMMERCE_SPECIALIST, must_change=False)
+        tokens = [self.repo.create_session(user) for _ in range(2)]
+        self.repo.change_password("ec1", "Ecom1234567", "Baru1234567x")
+        self.assertTrue(all(self.repo.user_for_token(t) is None for t in tokens))
+
+    def test_old_sessions_table_gets_last_seen_column(self):
+        with self.repo.engine.begin() as conn:
+            conn.exec_driver_sql("DROP TABLE sessions")
+            conn.exec_driver_sql(
+                "CREATE TABLE sessions (token_hash VARCHAR(64) PRIMARY KEY, username VARCHAR(80) NOT NULL, "
+                "role VARCHAR(40) NOT NULL, created_at VARCHAR(32) NOT NULL, expires_at VARCHAR(32) NOT NULL)"
+            )
+        repo = UserRepository(self.repo.engine)
+        user = repo.create("ec1", "Ecom1234567", ECOMMERCE_SPECIALIST, must_change=False)
+        self.assertIsNotNone(repo.session_for_token(repo.create_session(user))[2])
 
 
 class DatabaseUrlTests(unittest.TestCase):
