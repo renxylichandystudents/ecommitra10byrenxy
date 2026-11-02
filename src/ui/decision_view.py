@@ -33,7 +33,10 @@ from src.ui.common import (
 
 ROOT = Path(__file__).resolve().parents[2]
 _TABLE = components.declare_component("decision_table", path=str(ROOT / "components" / "top50_table"))
-SS_DEFINITION_TOP = "Safety stock adalah stok yang harus dimiliki agar tidak terjadi kekosongan produk."
+SS_DEFINITION_TOP = (
+    "Safety stock (SS) = stok cadangan agar produk tidak kosong. "
+    "SS = Z × σ permintaan harian × √lead time; untuk barang impor ditambah (lead time maks − lead time rata-rata) × permintaan harian."
+)
 
 
 def _clean(value: object, fallback: str) -> str:
@@ -78,8 +81,8 @@ def table_parts(
         {"id": "pick", "label": "Grafik", "pin": True, "width": 64},
         {"id": "rank", "label": "Peringkat", "pin": True, "width": 86, "kind": "num", "sort": True},
         {"id": "sku", "label": "SKU", "kicker": "Produk", "pin": True, "width": 116, "sort": True},
-        {"id": "name", "label": "Product Name", "kicker": "Produk", "pin": True, "width": 290, "kind": "name", "sort": True},
-        {"id": "variance", "label": "Product variance", "width": 160, "kind": "name", "sort": True},
+        {"id": "name", "label": "Produk", "kicker": "Produk", "pin": True, "width": 290, "kind": "name", "sort": True},
+        {"id": "variance", "label": "Varian", "width": 160, "kind": "name", "sort": True},
         {"id": "sold", "label": main_label, "group": f"Terjual · {resume_label}", "kind": "num", "sort": True},
     ]
     for group in groups:
@@ -116,8 +119,8 @@ def table_parts(
         export = {
             "Peringkat": int(row["peringkat"]),
             "SKU": cells["sku"]["t"],
-            "Product Name": cells["name"]["t"],
-            "Product variance": cells["variance"]["t"],
+            "Produk": cells["name"]["t"],
+            "Varian": cells["variance"]["t"],
             "Label": ", ".join(row.get("label") or []),
             "QTY terjual": float(row["qty_total"]),
             "Sales terjual": float(row["sales_total"]),
@@ -414,7 +417,7 @@ def sku_charts(
         line = None
     labels_p = grouped["label"].tolist()
     out_idx = next((i for i, v in enumerate(line) if v <= 0), None) if line is not None else None
-    title_name = {"kuartal": "Quartal", "semester": "Semester", "tahun": "Tahun"}[period]
+    title_name = {"kuartal": "Kuartal", "semester": "Semester", "tahun": "Tahun"}[period]
     c3, c4 = st.columns(2)
     with c3:
         st.plotly_chart(

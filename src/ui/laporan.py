@@ -16,6 +16,7 @@ from src.core.optimization import monte_carlo_stock_scenarios
 from src.core.preprocessing import promo_flag
 from src.ui.analysis_dialog import store_performance
 from src.core.ads import ad_validation
+from src.core.cancel_reasons import CATEGORIES, categorize_series
 from src.core.metrics import ads_metrics
 from src.core.periods import format_period_label, last_full_month
 from src.core.restock import recommendation_records, records_display
@@ -69,13 +70,14 @@ def _top_advices(table: pd.DataFrame, today: date, limit: int = 8) -> pd.DataFra
 
 def _cancel_reasons(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty or "cancel_reason" not in frame.columns:
-        return pd.DataFrame(columns=["reason", "orders"])
+        return pd.DataFrame(columns=["reason", "orders", "kategori"])
     part = frame.loc[_cancel_mask(frame)]
     if part.empty:
-        return pd.DataFrame(columns=["reason", "orders"])
+        return pd.DataFrame(columns=["reason", "orders", "kategori"])
     reason = part["cancel_reason"].fillna("").astype(str).str.strip().replace("", "Tanpa alasan")
     key = part["order_id"] if "order_id" in part.columns else part.index.to_series()
     out = pd.DataFrame({"reason": reason, "key": key}).drop_duplicates().groupby("reason").size().rename("orders").reset_index()
+    out["kategori"] = categorize_series(out["reason"])
     return out.sort_values("orders", ascending=False).reset_index(drop=True)
 
 
@@ -304,7 +306,10 @@ def show_report(
                 metric_card(cols[2], "retur_unit", fmt_qty(facts["retur_unit"]), hint=f"{fmt_num(facts['pesanan_retur_penuh'])} pesanan diretur penuh")
                 metric_card(cols[3], "belum_bayar", fmt_num(unpaid), hint=f"{fmt_num(facts['belum_bayar_akun'])} akun")
                 if not reasons.empty:
-                    show_table(reasons.rename(columns={"reason": "Alasan batal", "orders": "Pesanan"}).head(10))
+                    per_cat = reasons.groupby("kategori")["orders"].sum().reindex(list(CATEGORIES), fill_value=0)
+                    st.markdown("**Alasan batal per kategori**")
+                    show_table(pd.DataFrame({"Kategori": per_cat.index, "Pesanan": per_cat.values.astype(int)}))
+                    show_table(reasons.rename(columns={"reason": "Alasan batal", "orders": "Pesanan", "kategori": "Kategori"})[["Kategori", "Alasan batal", "Pesanan"]].head(10))
             elif section == SECTIONS[7]:
                 promo_days = int(promo_flag(pd.Series(pd.date_range(window_start, window_end))).sum())
                 context = {

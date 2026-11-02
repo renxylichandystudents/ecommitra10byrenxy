@@ -88,8 +88,9 @@ from src.utils.format import ROW_PX, drop_blank_rows, help_columns, show_table, 
 from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.userspace import deploy_mode, team_root
-from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can
-from auth.ui import audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar
+from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
+from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar
+from auth.ui import logout as auth_logout
 from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_RESULT, PAGE_SETTING, apply_route, route_from_state, sync_route
 from src.core.promo import drop_excluded
 from src.core.periods import last_full_month
@@ -1203,6 +1204,23 @@ st.markdown(
         box-shadow: 0 16px 40px rgba(15, 23, 42, 0.05);
         padding: 0.35rem 0.4rem 0.2rem;
     }
+    [class*="st-key-mobile-"] { display: none !important; }
+    .sku-card { border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; padding: .6rem .75rem; margin-bottom: .5rem; }
+    .sku-card .sku-title { font-weight: 650; color: #0f172a; line-height: 1.3; }
+    .sku-card .sku-meta { font-size: .8rem; color: #64748b; margin: .15rem 0 .35rem; }
+    .sku-card .sku-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem .75rem; font-size: .85rem; }
+    .sku-card .sku-nums b { color: #0f172a; }
+    @media (max-width: 767px) {
+        [class*="st-key-mobile-"] { display: block !important; }
+        [class*="st-key-desktop-"] { display: none !important; }
+        [data-testid="stHorizontalBlock"]:has(.user-bar),
+        [data-testid="stHorizontalBlock"]:has(.feature-bar),
+        [data-testid="stElementContainer"]:has(.app-menu-label) + div { display: none !important; }
+        .st-key-mobile-header { position: static !important; }
+        .st-key-mobile-header [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center; min-height: 56px; max-height: 56px; }
+        .st-key-mobile-header [data-testid="stColumn"] { min-width: 0 !important; width: auto !important; flex: 1 1 auto !important; }
+        .st-key-mobile-header img { height: 30px; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1990,7 +2008,7 @@ def pin_app_header() -> None:
             ['position', 'top', 'left', 'width', 'z-index', 'background', 'box-sizing', 'margin'].forEach((p) => el.style.removeProperty(p));
           };
           const previous = parent.__mitraPinned || [];
-          if (!root || !bar || !main) {
+          if (!root || !bar || !main || parent.innerWidth < 768) {
             if (existing) existing.remove();
             previous.forEach(unpin);
             parent.__mitraPinned = [];
@@ -2097,13 +2115,41 @@ def _go(page: str) -> None:
     st.rerun()
 
 
+def _mobile_header(logo: str, title: str, analysis: bool, training: bool, setting: bool) -> None:
+    """Header HP (< 768 px): logo + popover "☰ Akun". Disembunyikan CSS di desktop."""
+    with st.container(key="mobile-header"):
+        left, right = st.columns([3, 1.4], vertical_alignment="center")
+        left.markdown(
+            f"<div style='display:flex;align-items:center;gap:.5rem'><img src='{logo}' alt='Mitra10' style='height:30px'>"
+            f"<b style='font-size:.95rem;color:#0f172a'>{html.escape(title)}</b></div>",
+            unsafe_allow_html=True,
+        )
+        with right.popover("☰ Akun", use_container_width=True):
+            st.markdown(f"👤 **{html.escape(AUTH_USER.username)}** · {role_label(AUTH_USER.role)}")
+            if st.button("Beranda", key="m-beranda", use_container_width=True):
+                _go(PAGE_HOME)
+            if analysis and st.button("Analisa prediksi", key="m-analisa", use_container_width=True):
+                _go(PAGE_RESULT)
+            if training and st.button("Ubah data latih", key="m-latih", use_container_width=True):
+                _go(PAGE_INPUT)
+            if setting and st.button("Setting", key="m-setting", use_container_width=True):
+                _go(PAGE_SETTING)
+            if st.button("Ubah password", key="m-pwd", use_container_width=True):
+                st.session_state[AUTH_PAGE_KEY] = "password"
+                st.rerun()
+            if can(AUTH_USER.role, "kelola_user") and st.button("Kelola user", key="m-users", use_container_width=True):
+                st.session_state[AUTH_PAGE_KEY] = "users"
+                st.rerun()
+            if st.button("Logout", key="m-logout", use_container_width=True):
+                auth_logout()
+
+
 def render_header() -> None:
     """Header semua halaman setelah login (termasuk Kelola user & Ubah password): bar user, logo, judul, Beranda.
 
     Tata letak kolom selalu sama agar elemen header tidak bergeser antarhalaman.
     """
     pin_app_header()
-    user_bar(AUTH_USER)
     page = route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0]
     on_setting = page == PAGE_SETTING
     show_analysis_button = "analysis" in st.session_state and page != PAGE_RESULT
@@ -2111,6 +2157,8 @@ def render_header() -> None:
     show_setting_button = not on_setting and bool(setting_tabs(AUTH_USER.role))
     mitra, shopee = _logo_uri("mitra10.png"), _logo_uri("shopee.svg")
     title = "Setting" if on_setting else "Prediksi item terlaris"
+    _mobile_header(mitra, title, show_analysis_button, show_training_button, show_setting_button)
+    user_bar(AUTH_USER)
     columns = st.columns([4.3, 1.75, 1.85, 1.1, 1.2], vertical_alignment="center")
     columns[0].markdown(
         f"""
@@ -2429,8 +2477,13 @@ SUMMARY_SHEETS = {"Ringkasan", "Prediksi"}
 def show_app_menu() -> str:
     """Menu fitur. Tombol yang sedang terbuka memakai warna utama."""
     current = st.session_state.get("active-sheet", "Ringkasan")
-    st.markdown("<div class='app-menu-label'></div>", unsafe_allow_html=True)
     sheets = allowed_sheets(AUTH_USER.role, APP_SHEETS)
+    with st.container(key="mobile-menu"):
+        pick = st.selectbox("Halaman", sheets, index=sheets.index(current) if current in sheets else 0, key=f"m-sheet-{current}")
+        if current in sheets and pick != current:
+            st.session_state["active-sheet"] = pick
+            st.session_state["_menu_rerun"] = True
+    st.markdown("<div class='app-menu-label'></div>", unsafe_allow_html=True)
     columns = st.columns(len(sheets))
     for column, name in zip(columns, sheets):
         if column.button(
@@ -2479,7 +2532,7 @@ def chart_axis_label(
     width: int = 48,
     max_lines: int = 6,
 ) -> str:
-    """Kiri SKU, tengah Product Name, kanan Product variance."""
+    """Kiri SKU, tengah Produk, kanan Varian."""
     sku_text = _clean_product_piece(sku, "Tanpa SKU")
     name_text = _clean_product_piece(name, "Tanpa nama")
     variance_text = _clean_product_piece(variation, "Tanpa variasi")
@@ -2491,14 +2544,14 @@ def chart_axis_label(
     return "<br>".join(
         [
             wrap_label(head, width=width, max_lines=2),
-            wrap_label(f"Product Name {name_text}", width=width, max_lines=max_lines),
-            wrap_label(f"Product variance {variance_text}", width=width, max_lines=2),
+            wrap_label(f"Produk {name_text}", width=width, max_lines=max_lines),
+            wrap_label(f"Varian {variance_text}", width=width, max_lines=2),
         ]
     )
 
 
 def product_identity(rank, sku, name: str, variation: str = "") -> str:
-    """Nama lengkap satu baris: SKU, Product Name, lalu Product variance."""
+    """Nama lengkap satu baris: SKU, Produk, lalu Varian."""
     return chart_axis_label(rank, sku, name, variation).replace("<br>", " ")
 
 
@@ -3382,7 +3435,7 @@ def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, t
 
 
 def _extra_period_bar(row: pd.Series | None, period: str, item_orders: pd.DataFrame | None, today: date, metric: str) -> dict | None:
-    """Baris periode tambahan (Quartal/Semester/Tahun) di bawah Bulan lalu."""
+    """Baris periode tambahan (Kuartal/Semester/Tahun) di bawah Bulan lalu."""
     if row is None or period == "bulan" or "p_qty" not in row.index:
         return None
     months = {"kuartal": 3, "semester": 6, "tahun": 12}[period]
@@ -3430,7 +3483,7 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
         "<div class='qty-id'>"
         f"<div class='qty-rank'>{rank}. SKU {sku}</div>"
         f"<div class='qty-name'>{name}</div>"
-        f"<div class='qty-var'>Product variance {variance}</div>"
+        f"<div class='qty-var'>Varian {variance}</div>"
         "</div>"
         "<div class='qty-line qty-head-row'>"
         "<div class='qty-metric'>Periode</div><div class='qty-head-mid'>Prediksi</div><div class='qty-base'>Terjual</div>"
@@ -3852,8 +3905,8 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
 
 
 ISSUE_COLUMNS = {
-    "Retur": ["Peringkat", "SKU", "Product Name", "Product variance", "Qty retur", "Nominal retur", "Alasan retur"],
-    "Batal": ["Peringkat", "SKU", "Product Name", "Product variance", "Qty batal", "Invoice batal", "Nominal batal", "Alasan batal"],
+    "Retur": ["Peringkat", "SKU", "Produk", "Varian", "Qty retur", "Nominal retur", "Alasan retur"],
+    "Batal": ["Peringkat", "SKU", "Produk", "Varian", "Qty batal", "Invoice batal", "Nominal batal", "Alasan batal"],
 }
 ISSUE_TITLES = {
     "Retur": "Hanya kolom retur. Diurutkan dari qty retur terbesar.",
@@ -3999,9 +4052,9 @@ def show_folder_menu() -> None:
     saved = list_months()
     st.subheader("Folder data")
     st.caption(
-        "Data yang sudah diimpor tersimpan di sini. "
-        "Pilih tahun dan bulan pada menu samping untuk memakai data itu tanpa mengunggah ulang. "
-        "Mengunggah file baru mengganti bulan yang sama dengan isi file baru."
+        "Data yang sudah diimpor tersimpan di sini. Pilih tahun dan bulan untuk memakai data itu tanpa "
+        "mengunggah ulang. Data baru diunggah lewat tombol Ubah data latih. Untuk data transaksi, file baru "
+        "yang memuat bulan yang sama mengganti isi bulan itu di folder ini dengan isi file baru."
     )
     if not saved:
         st.write("Belum ada data tersimpan.")
@@ -4281,8 +4334,8 @@ def leaderboard_frame(view: pd.DataFrame, period: str) -> pd.DataFrame:
         {
             "Stok disarankan hari ini": view["stok_hari"].astype(int) if "stok_hari" in view.columns else view["stok_disarankan"].astype(int),
             "SKU": view["sku"].map(lambda value: _clean_product_piece(value, "Tanpa SKU")),
-            "Product Name": view["product_name"].map(lambda value: _clean_product_piece(value, "Tanpa nama")),
-            "Product variance": view["variasi_tampil"].map(lambda value: _clean_product_piece(value, "Tanpa variasi")),
+            "Produk": view["product_name"].map(lambda value: _clean_product_piece(value, "Tanpa nama")),
+            "Varian": view["variasi_tampil"].map(lambda value: _clean_product_piece(value, "Tanpa variasi")),
             "Peringkat": view["peringkat"].astype(int),
             "QTY terjual": view["qty_total"].astype(int),
             "Sales volume": view["sales_total"].round().astype(int),
@@ -5077,7 +5130,7 @@ def numeric_column_config(frame: pd.DataFrame) -> dict:
     """Angka tetap numerik supaya klik header mengurutkan nilai, bukan teks."""
     config = {}
     for column in frame.columns:
-        if column in {"Produk", "Variasi", "Referensi SKU", "Item", "SKU", "Product Name", "Product variance"}:
+        if column in {"Produk", "Variasi", "Referensi SKU", "Item", "SKU", "Varian"}:
             continue
         if not pd.api.types.is_numeric_dtype(frame[column]):
             continue
@@ -5205,8 +5258,8 @@ def top50_table_parts(
         {"id": "pick", "label": "Grafik", "pin": True, "width": 64},
         {"id": "rank", "label": "Peringkat", "pin": True, "width": 92, "kind": "num", "sort": True},
         {"id": "sku", "label": "SKU", "kicker": "Produk", "pin": True, "width": 116, "sort": True},
-        {"id": "name", "label": "Product Name", "kicker": "Produk", "pin": True, "width": 280, "kind": "name", "sort": True},
-        {"id": "variance", "label": "Product variance", "width": 170, "kind": "name", "sort": True},
+        {"id": "name", "label": "Produk", "kicker": "Produk", "pin": True, "width": 280, "kind": "name", "sort": True},
+        {"id": "variance", "label": "Varian", "width": 170, "kind": "name", "sort": True},
         {"id": "sold_qty", "label": "QTY", "group": f"Penjualan · {resume_label}", "kind": "num", "sort": True},
         {"id": "sold_sales", "label": "Sales", "group": f"Penjualan · {resume_label}", "kind": "num", "sort": True},
     ]
@@ -5278,8 +5331,8 @@ def top50_table_parts(
         export = {
             "Peringkat": int(row["peringkat"]),
             "SKU": cells["sku"]["t"],
-            "Product Name": cells["name"]["t"],
-            "Product variance": cells["variance"]["t"],
+            "Produk": cells["name"]["t"],
+            "Varian": cells["variance"]["t"],
         }
         for column in columns[5:]:
             name = column["id"]
@@ -5301,7 +5354,7 @@ def top50_table_parts(
     total: dict[str, dict] = {
         "name": {"t": "Total", "s": f"{len(rows)} item"},
     }
-    total_export = {"Peringkat": "", "SKU": "", "Product Name": "Total", "Product variance": ""}
+    total_export = {"Peringkat": "", "SKU": "", "Produk": "Total", "Varian": ""}
     for column in columns[5:]:
         name = column["id"]
         money = name.endswith("sales")
@@ -5371,7 +5424,7 @@ def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
     """Kolom nama cukup lebar supaya nama produk dan SKU tidak terpotong."""
     config = {}
     for column in frame.columns:
-        if column in {"Produk", "Variasi", "Referensi SKU", "Item", "SKU", "Product Name", "Product variance"}:
+        if column in {"Produk", "Variasi", "Referensi SKU", "Item", "SKU", "Varian"}:
             continue
         if not pd.api.types.is_numeric_dtype(frame[column]):
             continue
@@ -5382,9 +5435,8 @@ def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
             config[column] = st.column_config.NumberColumn(column, format="localized", step=1)
     widths = {
         "SKU": 220,
-        "Product Name": 780 if roomy else 640,
-        "Product variance": 280,
         "Produk": 780 if roomy else 640,
+        "Varian": 280,
         "Variasi": 320 if roomy else 260,
         "Referensi SKU": 260 if roomy else 220,
         "Item": 780 if roomy else 640,
@@ -5524,8 +5576,8 @@ def filter_resume_orders(
                 if widget in st.session_state:
                     st.session_state[widget] = fallback
         date_col, date_col_end = st.columns(2)
-        start_kwargs = {"min_value": span_min, "max_value": span_max, "key": start_widget}
-        end_kwargs = {"min_value": span_min, "max_value": span_max, "key": end_widget}
+        start_kwargs = {"min_value": span_min, "max_value": span_max, "key": start_widget, "format": "DD/MM/YYYY"}
+        end_kwargs = {"min_value": span_min, "max_value": span_max, "key": end_widget, "format": "DD/MM/YYYY"}
         if start_widget not in st.session_state:
             start_kwargs["value"] = span_min
         if end_widget not in st.session_state:
@@ -6121,37 +6173,32 @@ def _render_movement_board(
 
     body = []
     export_rows = []
-    for number, item in enumerate(records, start=1):
+    for item in records:
         body.append(
             "<tr>"
-            f"{stock_cell(item['key'], 'd')}"
-            f"{stock_cell(item['key'], 'm')}"
-            f"<td class='num pin pin-no'>{number}</td>"
+            f"<td class='num pin pin-no'>{item['rank']}</td>"
             f"<td class='pin pin-sku'>{html.escape(item['sku'])}</td>"
             f"<td class='wrap-name pin pin-name'>{html.escape(item['product'])}</td>"
             f"<td>{html.escape(item['variance'])}</td>"
-            f"<td class='num'>{item['rank']}</td>"
-            f"{_sales_cell(item['sold_sales'])}"
-            f"{_qty_cell(item['sold_qty'], None)}"
             f"{_sales_cell(item['sales_day'], item['sales_day_now'], item['sales_day_then'])}"
             f"{_qty_cell(item['qty_day'], item['safety_day'], item['qty_day_now'], item['qty_day_then'])}"
             f"{_sales_cell(item['sales_month'], item['sales_month_now'], item['sales_month_then'])}"
             f"{_qty_cell(item['qty_month'], item['safety_month'], item['qty_month_now'], item['qty_month_then'])}"
+            f"{stock_cell(item['key'], 'd')}"
+            f"{stock_cell(item['key'], 'm')}"
             f"{empty_cell(item['key'])}"
+            f"{_sales_cell(item['sold_sales'])}"
+            f"{_qty_cell(item['sold_qty'], None)}"
             "</tr>"
         )
         row = decision.get(item["key"])
         has_stock = row is not None and bool(row.get("ada_data_stok", False))
         export_rows.append(
             {
-                "Stok DC Cikupa": float(row["stok"]) if has_stock else None,
-                "Selisih stok hari ini": float(row["d_selisih"]) if has_stock else None,
-                "Selisih stok bulan ini": float(row["m_selisih"]) if has_stock else None,
-                "No": number,
-                "SKU": item["sku"],
-                "Product Name": item["product"],
-                "Product variance": item["variance"],
                 "Peringkat": item["rank"],
+                "SKU": item["sku"],
+                "Produk": item["product"],
+                "Varian": item["variance"],
                 "Penjualan sales": item["sold_sales"],
                 "Penjualan qty": item["sold_qty"],
                 "Prediksi sales hari ini": item["sales_day"],
@@ -6164,6 +6211,9 @@ def _render_movement_board(
                 "Safety stock bulan ini": item["safety_month"],
                 "Perubahan sales bulan ini": item["sales_month_now"] - item["sales_month_then"],
                 "Perubahan qty bulan ini": item["qty_month_now"] - item["qty_month_then"],
+                "Stok DC Cikupa": float(row["stok"]) if has_stock else None,
+                "Selisih stok hari ini": float(row["d_selisih"]) if has_stock else None,
+                "Selisih stok bulan ini": float(row["m_selisih"]) if has_stock else None,
                 "Lama kosong": lama_kosong_text(row) if row is not None else "-",
             }
         )
@@ -6174,40 +6224,39 @@ def _render_movement_board(
     stock_total = sum(float(decision[item["key"]]["stok"]) for item in records if item["key"] in decision and bool(decision[item["key"]].get("ada_data_stok", False)))
     total_row = (
         "<tr class='sheet-total'>"
-        f"<th class='num stock-col'>{html.escape(format_qty(stock_total))}</th>"
-        f"<th class='num stock-col'>{html.escape(format_qty(stock_total))}</th>"
         "<th class='pin pin-no'></th>"
         "<th class='pin pin-sku'></th>"
         "<th class='pin pin-name'>Total"
         f"<div class='qty-safety'>{len(records)} item bergerak</div></th>"
-        "<th></th><th></th>"
-        f"{_sales_cell(_total('sold_sales'), tag='th')}"
-        f"{_qty_cell(_total('sold_qty'), None, tag='th')}"
+        "<th></th>"
         f"{_sales_cell(_total('sales_day'), _total('sales_day_now'), _total('sales_day_then'), tag='th')}"
         f"{_qty_cell(_total('qty_day'), _total('safety_day'), _total('qty_day_now'), _total('qty_day_then'), tag='th')}"
         f"{_sales_cell(_total('sales_month'), _total('sales_month_now'), _total('sales_month_then'), tag='th')}"
         f"{_qty_cell(_total('qty_month'), _total('safety_month'), _total('qty_month_now'), _total('qty_month_then'), tag='th')}"
+        f"<th class='num stock-col'>{html.escape(format_qty(stock_total))}</th>"
+        f"<th class='num stock-col'>{html.escape(format_qty(stock_total))}</th>"
         "<th class='stock-col'></th>"
+        f"{_sales_cell(_total('sold_sales'), tag='th')}"
+        f"{_qty_cell(_total('sold_qty'), None, tag='th')}"
         "</tr>"
     )
     header = (
         "<tr>"
-        "<th class='stock-col' rowspan='2'>Stok hari ini</th>"
-        "<th class='stock-col' rowspan='2'>Stok bulan ini</th>"
-        "<th class='pin pin-no' rowspan='2'>No</th>"
-        "<th class='pin pin-sku' rowspan='2'><div class='pin-kicker'>Produk</div>SKU</th>"
-        "<th class='pin pin-name' rowspan='2'><div class='pin-kicker'>Produk</div>Product Name</th>"
-        "<th rowspan='2'>Product variance</th>"
-        "<th rowspan='2'>Peringkat</th>"
-        "<th class='group-head' colspan='2'>Penjualan</th>"
+        "<th class='pin pin-no' rowspan='2'>Peringkat</th>"
+        "<th class='pin pin-sku' rowspan='2'>SKU</th>"
+        "<th class='pin pin-name' rowspan='2'>Produk</th>"
+        "<th rowspan='2'>Varian</th>"
         "<th class='group-head' colspan='2'>Prediksi hari ini</th>"
-        "<th class='group-head' colspan='2'>Prediksi bulan ini</th>"
+        f"<th class='group-head' colspan='2'>{html.escape(format_period_label('prediksi', today))}</th>"
+        "<th class='stock-col' rowspan='2'>Stok DC · hari ini</th>"
+        f"<th class='stock-col' rowspan='2'>Stok DC · {html.escape(month_year(today))}</th>"
         "<th class='stock-col' rowspan='2'>Lama kosong</th>"
+        "<th class='group-head' colspan='2'>Penjualan</th>"
         "</tr>"
         "<tr>"
+        "<th class='num'>Sales</th><th class='num'>QTY · SS</th>"
+        "<th class='num'>Sales</th><th class='num'>QTY · SS</th>"
         "<th class='num'>Sales</th><th class='num'>QTY</th>"
-        "<th class='num'>Sales</th><th class='num'>QTY · SS</th>"
-        "<th class='num'>Sales</th><th class='num'>QTY · SS</th>"
         "</tr>"
         f"{total_row}"
     )
@@ -6358,7 +6407,8 @@ def show_analysis_movement(
 
     st.markdown("<div class='section-title'>Pergerakan Top 50</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='field-hint'>Tabel ini memberikan informasi data yang mengalami pergerakan sesuai periode yang dipilih</div>",
+        "<div class='field-hint'>SKU Top 50 yang prediksinya bergerak pada rentang tanggal yang dipilih. "
+        "Urutan: perubahan prediksi QTY terbesar (naik atau turun) lebih dulu, lalu peringkat. Angka kecil di sel Prediksi = gerak.</div>",
         unsafe_allow_html=True,
     )
     if "movement-date-from" not in st.session_state:
@@ -6401,14 +6451,6 @@ def show_analysis_movement(
         )
     else:
         offer_excel(export, "pergerakan_top50.xlsx")
-    if isinstance(decision, pd.DataFrame) and not decision.empty:
-        safety_stock_box(
-            decision.loc[decision["item_key"].astype(str).isin(set(str(k) for k in focus_keys))],
-            period=period_key,
-            today=today,
-            definition=SS_DEFINITION_MOVEMENT,
-            used_default=used_default_lead,
-        )
     return detail
 
 
@@ -7015,8 +7057,8 @@ with PAGE_ROOT.container():
             label_legend()
             f1, f2, f3, f4 = st.columns([2.2, 1.4, 1.4, 1])
             query = f1.text_input("Cari SKU atau nama produk", placeholder="Cari SKU atau nama produk..", key="pred-search")
-            label_pick = f2.multiselect("Label", options=list(LABEL_ICONS), key="pred-labels")
-            status_pick = f3.multiselect("Status stok (bulan ini)", options=["Aman", "Tipis", "Kurang", "Kosong", "Tanpa data stok"], key="pred-status")
+            label_pick = f2.multiselect("Label", options=list(LABEL_ICONS), key="pred-labels", placeholder="Pilih")
+            status_pick = f3.multiselect("Status stok (bulan ini)", options=["Aman", "Tipis", "Kurang", "Kosong", "Tanpa data stok"], key="pred-status", placeholder="Pilih")
             page_size = int(f4.selectbox("Tampilkan", options=[10, 50, 100, 200], index=1, key="pred-size"))
             work = enriched
             needle = " ".join(str(query or "").lower().split())

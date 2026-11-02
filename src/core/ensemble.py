@@ -364,7 +364,7 @@ def forecast_prophet_multi(matrix: DemandMatrix, horizons) -> tuple[dict[int, np
 def lstm_status(days: int, horizon: int) -> str | None:
     """LSTM/TFT hanya untuk horizon panjang dengan riwayat ≥ 2× horizon dan library tersedia."""
     if horizon <= 31:
-        return "hanya dipakai untuk Quartal/Semester/Tahun"
+        return "hanya dipakai untuk Kuartal/Semester/Tahun"
     if days < 2 * horizon:
         return f"riwayat {days} hari < 2× horizon ({2 * horizon} hari)"
     try:

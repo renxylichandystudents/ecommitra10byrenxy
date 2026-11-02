@@ -13,7 +13,7 @@ from src.core.fmt import fmt_date, fmt_date_short
 from src.core.pred_actual import STATUS_ORDER, daily_comparison, lost_sales_from_stock
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
-from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct, status_key
+from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct, sku_cards, status_key
 from src.ui.dashboard import status_badges
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table
@@ -87,7 +87,8 @@ def show_prediction_checklist(
         }
     )
     shown = status_badges(frame, "Status stok")
-    edited = st.data_editor(
+    editor_box = st.container(key="desktop-chk-editor")
+    edited = editor_box.data_editor(
         shown.drop(columns="_key"),
         hide_index=True,
         use_container_width=True,
@@ -105,6 +106,25 @@ def show_prediction_checklist(
     )
     keys_on_page = set(frame["_key"])
     picked = (picked_before - keys_on_page) | set(frame.loc[edited["Pilih"].to_numpy(), "_key"])
+    sku_cards(
+        [
+            {
+                "sku": r["SKU"],
+                "produk": r["Produk"],
+                "varian": r["Varian"],
+                "status": r["Status stok"],
+                "nums": [(pred_label, fmt_num(r[pred_label])), (actual_label, fmt_num(r[actual_label])), ("Stok DC", fmt_num(r["Stok DC"])), ("SS", fmt_num(r["SS"]))],
+            }
+            for r in frame.to_dict("records")
+        ],
+        key="chk",
+    )
+    names = dict(zip(frame["_key"], frame["SKU"] + " · " + frame["Produk"]))
+    default = sorted(picked_before & keys_on_page)
+    with st.container(key="mobile-chk-pick"):
+        mobile_pick = st.multiselect("Pilih SKU untuk penjelasan", list(names), default=default, format_func=lambda k: names.get(k, k), placeholder="Pilih", key=f"chk-mpick-{hash(tuple(default))}")
+    if sorted(mobile_pick) != default:
+        picked = (picked_before - keys_on_page) | set(mobile_pick)
     st.session_state["chk-picked"] = sorted(picked)
     c1, c2, c3 = st.columns([1.2, 1, 3])
     if limit < len(work) and c1.button("Muat 20 SKU lagi", key="chk-more"):

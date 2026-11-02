@@ -233,8 +233,8 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
         st.session_state[end_key] = hi
         st.session_state[stamp_key] = (lo, hi)
     c1, c2 = st.columns(2)
-    start = c1.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key)
-    end = c2.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key)
+    start = c1.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key, format="DD/MM/YYYY")
+    end = c2.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key, format="DD/MM/YYYY")
     if start > end:
         start, end = end, start
     days = pd.to_datetime(work["order_time"]).dt.normalize()
@@ -322,10 +322,32 @@ def lttb(x: np.ndarray, y: np.ndarray, threshold: int = 400) -> tuple[np.ndarray
 
 
 def button_tabs(options: list[tuple[str, str]], current: str, *, key: str) -> str | None:
-    """Baris tombol sub-menu (gaya sama dengan menu utama). Mengembalikan slug yang diklik, atau None."""
-    cols = st.columns(len(options))
+    """Baris tombol sub-menu (gaya sama dengan menu utama); di HP berupa selectbox. Mengembalikan slug yang diklik, atau None."""
     clicked = None
-    for column, (slug, label) in zip(cols, options):
-        if column.button(label, key=f"{key}-{slug}", type="primary" if slug == current else "secondary", use_container_width=True):
-            clicked = slug
+    slugs = [slug for slug, _ in options]
+    names = dict(options)
+    with st.container(key=f"mobile-{key}"):
+        pick = st.selectbox("Bagian", slugs, index=slugs.index(current) if current in slugs else 0, format_func=lambda s: names.get(s, s), key=f"m-{key}-{current}", label_visibility="collapsed")
+        if pick != current and current in slugs:
+            clicked = pick
+    with st.container(key=f"desktop-{key}"):
+        cols = st.columns(len(options))
+        for column, (slug, label) in zip(cols, options):
+            if column.button(label, key=f"{key}-{slug}", type="primary" if slug == current else "secondary", use_container_width=True):
+                clicked = slug
     return clicked
+
+
+def sku_cards(rows: list[dict], *, key: str) -> None:
+    """Kartu per SKU untuk layar HP. Tiap baris: sku, produk, varian, status (opsional), nums [(label, teks)]."""
+    parts = []
+    for row in rows:
+        title = html.escape(str(row.get("produk") or "-"))
+        meta = " · ".join(html.escape(str(v)) for v in (row.get("sku"), row.get("varian")) if v and str(v).lower() != "nan")
+        status = str(row.get("status") or "")
+        tone = {"Aman": "on", "Tipis": "warn", "Kurang": "bad", "Kosong": "bad"}.get(status_key(status), "neutral")
+        tag = f" {badge(status_key(status), tone)}" if status else ""
+        nums = "".join(f"<div>{html.escape(str(label))}: <b>{html.escape(str(value))}</b></div>" for label, value in row.get("nums", []))
+        parts.append(f"<div class='sku-card'><div class='sku-title'>{title}</div><div class='sku-meta'>{meta}{tag}</div><div class='sku-nums'>{nums}</div></div>")
+    with st.container(key=f"mobile-cards-{key}"):
+        st.markdown("".join(parts) or "<div class='field-hint'>Belum ada SKU.</div>", unsafe_allow_html=True)

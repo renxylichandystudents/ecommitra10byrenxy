@@ -13,7 +13,7 @@ from src.core.access import ROLE_LABELS, setting_tabs
 from src.core.fmt import fmt_date, fmt_date_short
 from src.core.promo import promo_eligible
 from src.core.restock import restock_priority
-from src.ui.common import badge, card, download_excel, fmt_num
+from src.ui.common import badge, card, download_excel, fmt_num, sku_cards
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table
 
@@ -111,7 +111,21 @@ def show_priority_dashboard(
             display = status_badges(shown.rename(columns={"sku": "SKU"}).drop(columns=[c for c in shown.columns if c.startswith("_")]))
             if not display["Inbound"].astype(str).str.strip().any():
                 display = display.drop(columns="Inbound")
-            show_table(display, kinds={"Stok DC": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small")})
+            with st.container(key="desktop-dash-restock"):
+                show_table(display, kinds={"Stok DC": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small")})
+            sku_cards(
+                [
+                    {
+                        "sku": r.get("SKU"),
+                        "produk": r.get("Produk"),
+                        "varian": r.get("Varian"),
+                        "status": r.get("Status"),
+                        "nums": [("Stok DC", fmt_num(r.get("Stok DC"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))],
+                    }
+                    for r in shown.rename(columns={"sku": "SKU"}).to_dict("records")
+                ],
+                key="dash-restock",
+            )
             b1, b2 = st.columns([1, 1])
             if limit < len(priority) and b1.button("Muat 10 SKU lagi", key="dash-more"):
                 st.session_state["dash-limit"] = limit + STEP

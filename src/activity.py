@@ -218,8 +218,8 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
         columns=[
             "Peringkat",
             "SKU",
-            "Product Name",
-            "Product variance",
+            "Produk",
+            "Varian",
             "Qty retur",
             "Nominal retur",
             "Alasan retur",
@@ -304,8 +304,8 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
         {
             "Peringkat": np.arange(1, len(grouped) + 1),
             "SKU": grouped["sku"].where(grouped["sku"].ne(""), "Tanpa SKU"),
-            "Product Name": grouped["product_name"].where(grouped["product_name"].ne(""), "Tanpa nama"),
-            "Product variance": grouped["variation"].where(grouped["variation"].ne(""), "Tanpa variasi"),
+            "Produk": grouped["product_name"].where(grouped["product_name"].ne(""), "Tanpa nama"),
+            "Varian": grouped["variation"].where(grouped["variation"].ne(""), "Tanpa variasi"),
             "Qty retur": grouped["qty_retur"].round().astype(int),
             "Nominal retur": grouped["nominal_retur"].round().astype(int),
             "Alasan retur": grouped["alasan_retur"],
@@ -436,8 +436,8 @@ def unpaid_buyer_table(
         "Tanggal pembelian",
         "No. Pesanan",
         "SKU",
-        "Product Name",
-        "Product variance",
+        "Produk",
+        "Varian",
         "QTY",
         "Sales volume",
     ]
@@ -523,8 +523,8 @@ def unpaid_buyer_table(
                     "Tanggal pembelian": pd.Timestamp(record.order_time).strftime("%d-%m-%Y"),
                     "No. Pesanan": str(record.order_id),
                     "SKU": str(record.sku).strip() or "Tanpa SKU",
-                    "Product Name": product,
-                    "Product variance": variation,
+                    "Produk": product,
+                    "Varian": variation,
                     "QTY": int(round(float(record.qty))),
                     "Sales volume": int(round(float(record.line_sales))),
                 }
