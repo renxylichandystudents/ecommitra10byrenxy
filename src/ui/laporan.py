@@ -17,8 +17,10 @@ from src.core.preprocessing import promo_flag
 from src.ui.analysis_dialog import store_performance
 from src.core.ads import ad_validation
 from src.core.metrics import ads_metrics
-from src.utils.format import input_rupiah, show_table
-from src.ui.common import cached_order_metrics, card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, period_filter, status_key
+from src.core.periods import format_period_label, last_full_month
+from src.core.restock import recommendation_records, records_display
+from src.utils.format import show_table
+from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key
 
 SECTIONS = (
     "1. Ringkasan eksekutif",
@@ -77,6 +79,47 @@ def _cancel_reasons(frame: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("orders", ascending=False).reset_index(drop=True)
 
 
+def _records(table: pd.DataFrame, today: date, data) -> pd.DataFrame:
+    """Rekomendasi ber-SKU (Top 50): satu sumber untuk Laporan dan unduhan."""
+    if table is None or table.empty:
+        return pd.DataFrame()
+    advice = {}
+    adv = _top_advices(table, today, limit=50)
+    for sku, text in zip(adv["SKU"].astype(str), adv["Rekomendasi"]):
+        advice.setdefault(sku, str(text))
+    return recommendation_records(
+        table.head(50),
+        today,
+        po=getattr(data, "po", None),
+        margin_pct=getattr(data, "margin_pct", None),
+        advice=advice,
+    )
+
+
+def _report_month(orders: pd.DataFrame, features, run_id: int, username: str, can_edit: bool) -> tuple[pd.DataFrame, str]:
+    """Periode laporan = bulan penuh terakhir sebelum data s.d. (disimpan per run); pilihan user ikut disimpan per run."""
+    if orders is None or orders.empty:
+        return orders, ""
+    stamps = pd.to_datetime(orders["order_time"], errors="coerce")
+    months = sorted(stamps.dt.to_period("M").dropna().astype(str).unique())
+    lo, _hi = last_full_month(stamps.max().date())
+    default = f"{lo.year:04d}-{lo.month:02d}"
+    saved = None
+    if features is not None and run_id:
+        try:
+            saved = features.report_period(run_id)
+        except Exception:
+            saved = None
+    chosen = saved if saved in months else (default if default in months else months[-1])
+    names = {key: f"{ID_MONTHS[int(key[5:]) - 1]} {key[:4]}" for key in months}
+    options = months[::-1]
+    pick = st.selectbox("Periode laporan", options, index=options.index(chosen), format_func=names.get, key=f"report-month-{run_id}", disabled=not can_edit)
+    if pick != chosen and features is not None and run_id and can_edit:
+        features.set_report_period(run_id, pick, username=username)
+    part = orders.loc[stamps.dt.to_period("M").astype(str) == pick].reset_index(drop=True)
+    return part, names[pick]
+
+
 def show_report(
     table: pd.DataFrame,
     *,
@@ -92,6 +135,11 @@ def show_report(
     window_start: date,
     window_end: date,
     stock: pd.DataFrame | None = None,
+    features=None,
+    data=None,
+    run_id: int = 0,
+    username: str = "",
+    can_edit: bool = False,
 ) -> None:
     st.subheader("Laporan penjualan e-commerce Mitra10 × Shopee")
     st.markdown(
@@ -102,8 +150,7 @@ def show_report(
         + _chip("Exclude batal & return: aktif" if exclude else "Exclude batal & return: nonaktif"),
         unsafe_allow_html=True,
     )
-    with st.expander("Periode laporan", expanded=False):
-        report_orders, report_label, _months = period_filter(orders, prefix="report", compact=True)
+    report_orders, report_label = _report_month(orders, features, run_id, username, can_edit)
     if report_orders is None or report_orders.empty:
         st.write("Tidak ada transaksi pada periode laporan.")
         return
@@ -114,13 +161,11 @@ def show_report(
         hi = pd.to_datetime(report_orders["order_time"]).max().normalize()
         report_all = orders_all.loc[stamps.between(lo, hi)]
 
-    target_default = float(params.get("target", {}).get("sales_bulanan_rp", 0) or 0)
-    target = float(input_rupiah("Target sales bulanan", target_default, key="report-target-rp"))
+    saved_target = getattr(data, "target", None) or {}
+    target = float(saved_target.get("target_sales_bersih", 0) or 0)
     month_pred = float(table["m_sales"].sum()) if table is not None and not table.empty and "m_sales" in table.columns else 0.0
-    target_note = ""
-    if target <= 0:
-        target = month_pred
-        target_note = "Target belum diisi: memakai prediksi sales bulan ini sebagai target."
+    pred_label = format_period_label("prediksi", window_start)
+    records = _records(table, today, data)
 
     top = table.head(50) if table is not None else pd.DataFrame()
     report_lo = pd.to_datetime(report_orders["order_time"]).min().normalize()
@@ -150,21 +195,19 @@ def show_report(
             if section == SECTIONS[0]:
                 cols = st.columns(4)
                 metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
-                card(cols[1], "Prediksi sales bulan ini", fmt_idr(month_pred), hint=f"target {fmt_idr(target)}")
+                card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"target {fmt_idr(target)}" if target > 0 else None)
                 metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
-                card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint="status Kurang/Kosong bulan ini")
-                if target_note:
-                    st.caption(target_note)
+                card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint=f"status Kurang/Kosong · {pred_label}")
                 gap = month_pred - target
+                target_line = f"- {pred_label} {fmt_idr(month_pred)} {'di atas' if gap >= 0 else 'di bawah'} target sebesar {fmt_idr(abs(gap))}.\n" if target > 0 else ""
                 st.markdown(
-                    f"- Prediksi bulan ini {fmt_idr(month_pred)} {'di atas' if gap >= 0 else 'di bawah'} target sebesar {fmt_idr(abs(gap))}.\n"
-                    f"- {short_top} SKU Top 50 stoknya belum menutup kebutuhan (prediksi + safety stock): prioritas restock sebelum menambah iklan.\n"
+                    target_line
+                    + f"- {short_top} SKU Top 50 stoknya belum menutup kebutuhan (prediksi + safety stock): prioritas restock sebelum menambah iklan.\n"
                     f"- Tingkat batal {fmt_pct(cancel_rate)}; {unpaid} pesanan batal karena belum bayar bisa dikejar lewat chat."
                 )
-                adv = _top_advices(table, today, limit=3)
-                if not adv.empty:
+                if not records.empty:
                     st.markdown("**Rekomendasi utama**")
-                    st.markdown("\n".join(f"1. {r}" for r in adv["Rekomendasi"]))
+                    show_table(records_display(records.head(5)), kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"})
             elif section == SECTIONS[1]:
                 monthly = orders.assign(m=pd.to_datetime(orders["order_time"]).dt.to_period("M").dt.to_timestamp()).groupby("m")["sales"].sum()
                 ma = monthly.rolling(3, min_periods=1).mean()
@@ -173,7 +216,7 @@ def show_report(
                 fig.add_scatter(x=ma.index, y=ma.values, name="Moving average 3 bulan", mode="lines+markers", line=dict(color="#0f766e"))
                 if month_pred > 0:
                     this_month = pd.Timestamp(today).to_period("M").to_timestamp()
-                    fig.add_scatter(x=[this_month], y=[month_pred], name="Prediksi bulan ini", mode="markers+text", marker=dict(color="#ee4d2d", size=14, symbol="diamond"), text=[fmt_idr_short(month_pred)], textposition="top center")
+                    fig.add_scatter(x=[this_month], y=[month_pred], name=pred_label, mode="markers+text", marker=dict(color="#ee4d2d", size=14, symbol="diamond"), text=[fmt_idr_short(month_pred)], textposition="top center")
                 fig.update_layout(height=420, legend=dict(orientation="h", y=-0.2), yaxis_title="Rupiah", margin=dict(l=40, r=20, t=30, b=40))
                 st.plotly_chart(fig, use_container_width=True, key="report-trend")
                 if len(monthly) >= 2:
@@ -182,7 +225,7 @@ def show_report(
             elif section == SECTIONS[2]:
                 cols = ["peringkat", "sku", "product_name", "qty_total", "sales_total", "m_qty", "m_sales", "label_text"]
                 view = top[[c for c in cols if c in top.columns]].head(20).rename(
-                    columns={"peringkat": "Peringkat", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": "Prediksi QTY bulan ini", "m_sales": "Prediksi sales bulan ini", "label_text": "Label"}
+                    columns={"peringkat": "Peringkat", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": f"{pred_label} · QTY", "m_sales": f"{pred_label} · sales", "label_text": "Label"}
                 )
                 show_table(view)
                 download_excel(view, "laporan_terlaris.xlsx", key="xl-report-top")
@@ -293,24 +336,26 @@ def show_report(
                         items = bones.get(category) or ["Tidak ada alasan pada kategori ini"]
                         st.markdown("\n".join(f"- {item}" for item in items[:6]))
             elif section == SECTIONS[9]:
-                adv = _top_advices(table, today, limit=12)
-                if adv.empty:
-                    st.write("Tidak ada aturan sistem pakar yang terpicu pada Top 50.")
+                if records.empty:
+                    st.write("Belum ada rekomendasi.")
                 else:
-                    show_table(adv)
-                    download_excel(adv, "laporan_rekomendasi.xlsx", key="xl-report-adv")
+                    st.caption("Restock = max(0, prediksi + SS − stok DC). Tenggat = hari ini + stok ÷ prediksi harian (Segera bila sudah habis). PIC: restock lokal → Team DC; ada PO impor → Team IC/MD; harga/iklan → E-commerce.")
+                    display = records_display(records.head(30))
+                    show_table(display, kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"}, column_config={"Alasan": st.column_config.TextColumn(width="large")})
+                    download_excel(records_display(records), "laporan_rekomendasi.xlsx", key="xl-report-adv")
             elif section == SECTIONS[10]:
                 days_in_month = pd.Timestamp(today).days_in_month
+                basis = target if target > 0 else month_pred
                 guide = work_guide(
                     {
-                        "target_sales": target,
-                        "target_text": fmt_idr(target),
-                        "daily_target_text": fmt_idr(target / days_in_month),
+                        "target_sales": basis,
+                        "target_text": fmt_idr(basis),
+                        "daily_target_text": fmt_idr(basis / days_in_month),
                         "target_roas": params.get("iklan", {}).get("target_roas", 8),
                     }
                 )
-                if target_note:
-                    st.caption(target_note)
+                if target <= 0:
+                    st.caption(f"Acuan panduan = {pred_label} (target belum diisi di Rekomendasi › Iklan).")
                 for name, tasks in guide.items():
                     st.markdown(f"**{name}**")
                     show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))

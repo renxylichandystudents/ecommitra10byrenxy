@@ -292,8 +292,7 @@ def users_panel(repo: UserRepository, user: User) -> None:
             {
                 "Username": u.username,
                 "Role": role_label(u.role),
-                "Status": "Aktif" if u.is_active else "Nonaktif",
-                "Wajib ganti password": "Ya" if u.must_change_password else "Tidak",
+                "Status": "Nonaktif" if not u.is_active else ("Wajib ganti password" if u.must_change_password else "Aktif"),
                 "Dibuat": u.created_at,
                 "Oleh": u.created_by,
                 "Login terakhir": u.last_login_at or "-",

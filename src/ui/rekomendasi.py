@@ -14,9 +14,9 @@ import pandas as pd
 import streamlit as st
 
 from src.core.nlp_competitor import build_name_recommendations, clean_text, description_summary
-from src.core.recommendations import ads_plan, exposure_plan, flash_sale_plan, flash_sale_template
+from src.core.recommendations import ads_plan, flash_sale_plan, flash_sale_template
 from src.core.segmentation import association_rules
-from src.ui.common import card, download_excel, fmt_date, fmt_idr, fmt_num
+from src.ui.common import button_tabs, card, download_excel, fmt_date, fmt_idr, fmt_num
 from src.utils.format import input_rupiah, show_table
 
 STATUS_TONES = {"Poor": "#fee2e2", "Standard": "#fef9c3", "Excellence": "#dcfce7"}
@@ -94,7 +94,7 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
         else:
             st.caption("Pilih satu baris untuk melihat nama rekomendasi, kata kunci, dan deskripsi lengkap.")
     left, right = st.columns(2)
-    if len(view) > shown_n and left.button("Load more", key="name-load-more"):
+    if len(view) > shown_n and left.button(f"Muat {size} SKU lagi", key="name-load-more"):
         st.session_state["name-more"] = shown_n + size
         st.rerun()
     with right:
@@ -196,7 +196,7 @@ def _ads_tab(table: pd.DataFrame, orders: pd.DataFrame, params: dict, today: dat
         rules = _similar_name_rules(table)
     plan = ads_plan(table, orders=orders, start=start, end=end, target_roas=target, budget_max=budget, params=params, rules=rules)
     summary = plan["ringkasan"]
-    view = st.segmented_control("Jenis rekomendasi", ADS_VIEWS, default=ADS_VIEWS[0], key="ads-view", label_visibility="collapsed") or ADS_VIEWS[0]
+    view = st.radio("Jenis rekomendasi", ADS_VIEWS, horizontal=True, key="ads-view", label_visibility="collapsed")
     if summary:
         _ads_cards(plan, view, target)
         st.caption(
@@ -268,102 +268,61 @@ def _flash_tab(table: pd.DataFrame, params: dict, today: date, user_root: Path) 
     return plan
 
 
-WEEKDAYS = ("Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min")
+SUB_TABS = (
+    ("nama-deskripsi", "Nama & deskripsi"),
+    ("iklan", "Iklan"),
+    ("flash-sale", "Flash sale toko"),
+    ("exposure", "Exposure media sosial"),
+    ("ranking-kategori", "Ranking kategori"),
+)
 
 
-def month_grid(year: int, month: int) -> list[list[date | None]]:
-    """Minggu kalender Senin–Minggu; sel di luar bulan = None."""
-    import calendar
+def show_recommendations(
+    table: pd.DataFrame,
+    *,
+    orders: pd.DataFrame,
+    orders_all: pd.DataFrame,
+    frames,
+    params: dict,
+    today: date,
+    user_root: Path,
+    features=None,
+    data=None,
+    window_start: date | None = None,
+    username: str = "",
+    can_edit: bool = False,
+) -> None:
+    from src.ui import rekomendasi_plus as plus
 
-    return [[d if d.month == month else None for d in week] for week in calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)]
-
-
-def _exposure_calendar(plan: pd.DataFrame, month_start: date) -> None:
-    by_day: dict[date, list[str]] = {}
-    for _, row in plan.iterrows():
-        by_day.setdefault(pd.Timestamp(row["Tanggal"]).date(), []).append(str(row["Produk"]))
-    picked = st.session_state.get("expo-day")
-    head = st.columns(7)
-    for column, name in zip(head, WEEKDAYS):
-        column.markdown(f"<div style='text-align:center;font-size:.75rem;color:#64748b;font-weight:700'>{name}</div>", unsafe_allow_html=True)
-    for week in month_grid(month_start.year, month_start.month):
-        cols = st.columns(7)
-        for column, day in zip(cols, week):
-            if day is None:
-                column.markdown("<div style='min-height:96px'></div>", unsafe_allow_html=True)
-                continue
-            items = by_day.get(day, [])
-            with column.container(border=True):
-                label = f"{day.day}" + (f" · {len(items)}" if items else "")
-                kind = "primary" if picked == day.isoformat() else "secondary"
-                if st.button(label, key=f"expo-day-{day.isoformat()}", use_container_width=True, type=kind, disabled=not items):
-                    st.session_state["expo-day"] = day.isoformat()
-                    st.rerun()
-                lines = "".join(f"<div style='font-size:.68rem;line-height:1.25'>• {html.escape(name[:26])}</div>" for name in items[:2])
-                if len(items) > 2:
-                    lines += f"<div style='font-size:.68rem;color:#64748b'>+{len(items) - 2} lainnya</div>"
-                st.markdown(lines or "<div style='font-size:.68rem;color:#cbd5e1'>–</div>", unsafe_allow_html=True)
-
-
-def _exposure_tab(table: pd.DataFrame, names: pd.DataFrame, today: date, ads: dict, flash: pd.DataFrame) -> None:
-    start = st.date_input("Mulai kalender exposure (1 bulan)", value=today, key="expo-start", format="DD/MM/YYYY")
-    ad_days = [d for d in (ads.get("ringkasan", {}) or {}).get("tanggal", []) if d >= start] if ads else []
-    plan = exposure_plan(table, names=names, cancel_reasons=_cancel_reason_map(table), start=start, ad_days=ad_days, flash=flash)
-    if plan.empty:
-        st.write("Belum ada SKU yang layak di-exposure (stok aman dan ada prediksi).")
-        return
-    st.caption("Tanggal tayang diselaraskan: sehari sebelum flash sale SKU itu, atau tanggal permintaan tinggi rencana iklan. Klik tanggal untuk melihat detailnya.")
-    months = sorted({pd.Timestamp(d).to_period("M") for d in plan["Tanggal"]})
-    month_key = st.session_state.get("expo-month")
-    labels = [m.strftime("%m/%Y") for m in months]
-    if len(months) > 1:
-        month_key = st.segmented_control("Bulan", labels, default=labels[0], key="expo-month", label_visibility="collapsed") or labels[0]
-    current = months[labels.index(month_key)] if month_key in labels else months[0]
-    _exposure_calendar(plan, current.to_timestamp().date())
-    picked = st.session_state.get("expo-day")
-    detail = plan
-    if picked:
-        detail = plan.loc[pd.to_datetime(plan["Tanggal"]).dt.date.astype(str) == picked]
-        left, right = st.columns([3, 1])
-        left.markdown(f"**Detail {fmt_date(date.fromisoformat(picked))}** · {fmt_num(len(detail))} SKU")
-        if right.button("Tampilkan semua", key="expo-all", use_container_width=True):
-            st.session_state.pop("expo-day", None)
-            st.rerun()
-    for _, row in detail.iterrows():
-        with st.container(border=True):
-            st.markdown(f"**{fmt_date(row['Tanggal'])} · {html.escape(row['Produk'])}** · SKU {html.escape(row['SKU'])} {('· ' + html.escape(row['Label'])) if row['Label'] else ''}")
-            st.markdown(f"Kenapa layak: {html.escape(row['Kenapa layak'])}")
-            st.markdown(f"Hook: _{html.escape(row['Hook masalah'])}_")
-            st.markdown(row["Poin penting"])
-    download_excel(plan, "kalender_exposure.xlsx", key="xl-expo")
-
-
-def show_recommendations(table: pd.DataFrame, *, orders: pd.DataFrame, orders_all: pd.DataFrame, frames, params: dict, today: date, user_root: Path) -> None:
     st.subheader("Rekomendasi")
     if table is None or table.empty:
         st.write("Jalankan analisis terlebih dahulu.")
         return
-    tabs = st.tabs(["Nama & deskripsi", "Iklan", "Flash sale toko", "Exposure media sosial"])
-    names = pd.DataFrame()
-    plan_ads: dict = {}
-    flash = pd.DataFrame()
-    with tabs[0]:
-        try:
-            names = _names_tab(table, frames, params)
-        except Exception as exc:
-            st.warning(f"Rekomendasi nama belum bisa dibuat: {exc}")
-    with tabs[1]:
-        try:
-            plan_ads = _ads_tab(table, orders, params, today)
-        except Exception as exc:
-            st.warning(f"Rekomendasi iklan belum bisa dibuat: {exc}")
-    with tabs[2]:
-        try:
-            flash = _flash_tab(table, params, today, user_root)
-        except Exception as exc:
-            st.warning(f"Rencana flash sale belum bisa dibuat: {exc}")
-    with tabs[3]:
-        try:
-            _exposure_tab(table, names, today, plan_ads, flash)
-        except Exception as exc:
-            st.warning(f"Kalender exposure belum bisa dibuat: {exc}")
+    slugs = [slug for slug, _label in SUB_TABS]
+    current = st.session_state.get("rek-sub") or slugs[0]
+    if current not in slugs:
+        current = slugs[0]
+    st.session_state["rek-sub"] = current
+    clicked = button_tabs(list(SUB_TABS), current, key="rek-sub-btn")
+    if clicked and clicked != current:
+        st.session_state["rek-sub"] = clicked
+        st.rerun()
+    picked = current
+    window_start = window_start or today
+    try:
+        if picked == "nama-deskripsi":
+            _names_tab(table, frames, params)
+        elif picked == "iklan":
+            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit)
+            with st.expander("Rencana iklan per periode (perhitungan sebelumnya)"):
+                _ads_tab(table, orders, params, today)
+        elif picked == "flash-sale":
+            plus.show_flash_sale(table, data=data, today=today)
+            with st.expander("Rencana flash sale harian & template Shopee (perhitungan sebelumnya)"):
+                _flash_tab(table, params, today, user_root)
+        elif picked == "exposure":
+            plus.show_exposure(table, features=features, data=data, orders=orders, frames=frames, today=today, username=username, can_edit=can_edit)
+        elif picked == "ranking-kategori":
+            plus.show_ranking(table, features=features, frames=frames, username=username, can_edit=can_edit)
+    except Exception as exc:
+        st.warning(f"Bagian ini belum bisa ditampilkan: {exc}")

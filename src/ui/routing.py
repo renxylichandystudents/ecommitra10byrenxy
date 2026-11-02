@@ -14,7 +14,11 @@ PAGE_INPUT = "data-latih"
 PAGE_RESULT = "analisa"
 PAGE_USERS = "kelola-user"
 PAGE_PASSWORD = "ubah-password"
-PAGES = (PAGE_HOME, PAGE_INPUT, PAGE_RESULT, PAGE_USERS, PAGE_PASSWORD)
+PAGE_SETTING = "setting"
+PAGES = (PAGE_HOME, PAGE_INPUT, PAGE_RESULT, PAGE_USERS, PAGE_PASSWORD, PAGE_SETTING)
+SUB_TAB = "rekomendasi"
+SUB_KEY = "rek-sub"
+SETTING_KEY = "setting-slug"
 AUTH_PAGES = {PAGE_USERS: "users", PAGE_PASSWORD: "password"}
 LAST_ROUTE = "_route"
 
@@ -29,6 +33,8 @@ def route_from_state(state: MutableMapping, sheets) -> tuple[str, str]:
     for page, value in AUTH_PAGES.items():
         if auth_page == value:
             return page, ""
+    if state.get("setting-open"):
+        return PAGE_SETTING, str(state.get(SETTING_KEY, "") or "")
     if state.get("active-feature") != FEATURE_ID:
         return PAGE_HOME, ""
     if state.get("editing-input", "analysis" not in state):
@@ -44,6 +50,11 @@ def apply_route(state: MutableMapping, route: tuple[str, str], sheets) -> None:
         state["auth-page"] = AUTH_PAGES[page]
         return
     state.pop("auth-page", None)
+    if page == PAGE_SETTING:
+        state["setting-open"] = True
+        state[SETTING_KEY] = tab
+        return
+    state.pop("setting-open", None)
     if page == PAGE_HOME or page not in PAGES:
         state["active-feature"] = ""
         return
@@ -69,19 +80,22 @@ def sync_route(state: MutableMapping, params, sheets) -> bool:
     if last is None or tuple(last) != url_route:
         # Sesi baru (refresh / login dipulihkan) atau URL berubah karena tombol back/forward.
         apply_route(state, url_route, sheets)
+        if url_route[1] == SUB_TAB:
+            state[SUB_KEY] = str(params.get("sub", "") or "")
     current = route_from_state(state, sheets)
     raw = (str(params.get("page", "") or PAGE_HOME), str(params.get("tab", "") or ""))
-    if current != raw:
-        _write_params(params, current)
+    sub = str(state.get(SUB_KEY, "") or "") if current[1] == SUB_TAB else ""
+    if current != raw or sub != str(params.get("sub", "") or ""):
+        _write_params(params, current, sub)
     changed = last is not None and tuple(last) != current
     state[LAST_ROUTE] = current
     return changed
 
 
-def _write_params(params, route: tuple[str, str]) -> None:
+def _write_params(params, route: tuple[str, str], sub: str = "") -> None:
     """Tulis URL sekaligus: tiap perubahan query param terpisah menambah satu entri riwayat browser."""
     page, tab = route
-    target = {"page": page, **({"tab": tab} if tab else {})}
+    target = {"page": page, **({"tab": tab} if tab else {}), **({"sub": sub} if sub else {})}
     if hasattr(params, "from_dict"):
         params.from_dict(target)
         return

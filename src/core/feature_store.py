@@ -161,6 +161,27 @@ sales_target = Table(
     Column("set_by", String(80), nullable=False, default=""),
 )
 
+run_info = Table(
+    "run_info",
+    metadata,
+    Column("run_id", Integer, primary_key=True, autoincrement=False),
+    Column("data_until", Date),
+)
+
+exposure_schedule = Table(
+    "exposure_schedule",
+    metadata,
+    _id(),
+    Column("periode", String(20), nullable=False, index=True),
+    Column("tanggal", Date, nullable=False),
+    Column("sku", String(64), nullable=False),
+    Column("label", String(400), nullable=False, default=""),
+    Column("kanal", String(40), nullable=False, default=""),
+    Column("kategori", String(60), nullable=False, default=""),
+    Column("spesial", String(60), nullable=False, default=""),
+    Column("saved_by", String(80), nullable=False, default=""),
+)
+
 audit_log = Table(
     "audit_log",
     metadata,

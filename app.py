@@ -90,7 +90,16 @@ from src.core.storage import LocalDataStore, read_upload_file
 from src.core.userspace import deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can
 from auth.ui import audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar
-from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_RESULT, apply_route, route_from_state, sync_route
+from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_RESULT, PAGE_SETTING, apply_route, route_from_state, sync_route
+from src.core.promo import drop_excluded
+from src.core.periods import last_full_month
+from src.core.warehouse import lead_time_stats
+from src.ui.dashboard import show_priority_dashboard
+from src.ui.feature_data import cached_feature_data, excluded_skus
+from src.ui.prediksi_top import save_run_snapshot, show_pred_vs_actual, show_prediction_checklist
+from src.ui.setting_page import show_setting
+from src.core.access import allowed as allowed_access, setting_tabs
+from src.core.fmt import fmt_date_short
 from src.core.runs import RunRepository, data_hash as training_data_hash
 import src.library as library_store
 from src.library import configure_root as configure_library_root
@@ -146,7 +155,28 @@ DATA_STORE = LocalDataStore(USER_ROOT)
 
 
 def current_params() -> dict:
-    return load_params(USER_ROOT)
+    """Pengaturan bisnis; lead time impor diganti lead time aktual dari Setting › Kedatangan impor bila sudah ada."""
+    params = load_params(USER_ROOT)
+    stats = import_lead_time()
+    if stats:
+        lead = dict(params.get("lead_time", {}))
+        lead["impor_rata_hari"], lead["impor_maks_hari"] = int(round(stats[0])), int(round(stats[1]))
+        lead["impor_sumber"] = "Kedatangan impor"
+        params = {**params, "lead_time": lead}
+    return params
+
+
+def import_lead_time() -> tuple[float, float] | None:
+    version = st.session_state.get("_feature-version", 0)
+    cached = st.session_state.get("_import-lead")
+    if isinstance(cached, tuple) and cached[0] == version:
+        return cached[1]
+    try:
+        stats = lead_time_stats(get_features().read("import_note"))
+    except Exception:
+        stats = None
+    st.session_state["_import-lead"] = (version, stats)
+    return stats
 
 
 def store_frames() -> StoreFrames:
@@ -1896,8 +1926,13 @@ def show_run_history() -> None:
     can_delete = can(AUTH_USER.role, "hapus_riwayat")
     opened = (st.session_state.get("run-origin") or {}).get("id")
     repo = run_repository()
-    widths = [1.7, 1.1, 1.0, 1.1, 0.6, 0.8, 0.8] + ([0.8] if can_delete else [])
-    headers = ["Tanggal & jam", "Oleh", "Periode", "Parameter", "SS", "Status", ""] + ([""] if can_delete else [])
+    try:
+        info = get_features().read("run_info")
+        data_until = {int(r): d for r, d in zip(info["run_id"], info["data_until"])}
+    except Exception:
+        data_until = {}
+    widths = [1.6, 1.0, 0.9, 1.0, 0.55, 0.95, 0.8, 0.8] + ([0.8] if can_delete else [])
+    headers = ["Tanggal & jam", "Oleh", "Periode", "Parameter", "SS", "Data s.d.", "Status", ""] + ([""] if can_delete else [])
     with st.container(border=True, height=min(80 + 46 * len(runs), 520)):
         for column, title in zip(st.columns(widths), headers):
             column.markdown(f"<div class='field-hint'><b>{title}</b></div>", unsafe_allow_html=True)
@@ -1909,17 +1944,19 @@ def show_run_history() -> None:
             cells[2].markdown(PERIOD_LABELS.get(record.periode, record.periode))
             cells[3].markdown("QTY terjual" if record.parameter == "qty" else "Sales volume")
             cells[4].markdown(f"{record.safety_stock}%")
+            until = data_until.get(int(record.id))
+            cells[5].markdown(fmt_date_short(until) if until else "–")
             ready = repo.available(record)
             if ready:
-                cells[5].markdown("✅ Sukses")
+                cells[6].markdown("✅ Sukses")
             elif record.status == "sukses":
-                cells[5].markdown("⚠️ File hasil hilang", help="Server sempat restart/redeploy; file hasil di disk server terhapus.")
+                cells[6].markdown("⚠️ File hasil hilang", help="Server sempat restart/redeploy; file hasil di disk server terhapus.")
             else:
-                cells[5].markdown(f"⚠️ {record.status.title()}")
-            if cells[6].button("Buka", key=f"run-open-{record.id}", disabled=not ready, use_container_width=True):
+                cells[6].markdown(f"⚠️ {record.status.title()}")
+            if cells[7].button("Buka", key=f"run-open-{record.id}", disabled=not ready, use_container_width=True):
                 if open_saved_run(record.id):
                     st.rerun()
-            if can_delete and cells[7].button("Hapus", key=f"run-del-{record.id}", use_container_width=True):
+            if can_delete and cells[8].button("Hapus", key=f"run-del-{record.id}", use_container_width=True):
 
                 def _delete(run_id: int = record.id, stamp: str = run_stamp_text(record.run_at)) -> None:
                     require("riwayat_analisa", "edit")
@@ -2068,10 +2105,13 @@ def render_header() -> None:
     pin_app_header()
     user_bar(AUTH_USER)
     page = route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0]
+    on_setting = page == PAGE_SETTING
     show_analysis_button = "analysis" in st.session_state and page != PAGE_RESULT
-    show_training_button = page not in (PAGE_INPUT, PAGE_HOME) and can(AUTH_USER.role, "ubah_data_latih")
+    show_training_button = page not in (PAGE_INPUT, PAGE_HOME) and not on_setting and can(AUTH_USER.role, "ubah_data_latih")
+    show_setting_button = not on_setting and bool(setting_tabs(AUTH_USER.role))
     mitra, shopee = _logo_uri("mitra10.png"), _logo_uri("shopee.svg")
-    columns = st.columns([4.8, 1.85, 2.15, 1.35], vertical_alignment="center")
+    title = "Setting" if on_setting else "Prediksi item terlaris"
+    columns = st.columns([4.3, 1.75, 1.85, 1.1, 1.2], vertical_alignment="center")
     columns[0].markdown(
         f"""
         <div class="feature-bar">
@@ -2079,17 +2119,19 @@ def render_header() -> None:
             <img class="shopee-mark" src="{shopee}" alt="Shopee">
             <div>
                 <div class="feature-kicker">Mitra10 × Shopee</div>
-                <div class="feature-name">Prediksi item terlaris</div>
+                <div class="feature-name">{title}</div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    if show_analysis_button and columns[1].button("Analisa Prediksi", key="hdr-analisa", use_container_width=True):
+    if show_analysis_button and columns[1].button("Analisa prediksi", key="hdr-analisa", use_container_width=True):
         _go(PAGE_RESULT)
     if show_training_button and columns[2].button("Ubah data latih", key="hdr-latih", use_container_width=True):
         _go(PAGE_INPUT)
-    if columns[3].button("Beranda", key="hdr-beranda", type="primary" if page == PAGE_HOME else "secondary", use_container_width=True):
+    if show_setting_button and columns[3].button("Setting", key="hdr-setting", use_container_width=True):
+        _go(PAGE_SETTING)
+    if columns[4].button("Beranda", key="hdr-beranda", type="primary" if page == PAGE_HOME else "secondary", use_container_width=True):
         _go(PAGE_HOME)
 
 
@@ -6529,6 +6571,25 @@ if ROUTE_CHANGED:
 with PAGE_ROOT.container():
     if show_auth_page(AUTH_USER):
         st.stop()
+    if st.session_state.get("setting-open"):
+        setting_table = (st.session_state.get("_enriched") or (None, pd.DataFrame()))[1]
+        setting_orders = (st.session_state.get("analysis") or {}).get("orders")
+        setting_data = cached_feature_data(st.session_state, get_features(), setting_table, date.today(), periode="", stamp="setting")
+        shown_tab = show_setting(
+            str(st.session_state.get("setting-slug", "") or ""),
+            role=AUTH_USER.role,
+            username=AUTH_USER.username,
+            features=get_features(),
+            table=setting_table,
+            data=setting_data,
+            orders=setting_orders,
+            today=date.today(),
+            user_root=USER_ROOT,
+        )
+        if shown_tab != st.session_state.get("setting-slug"):
+            st.session_state["setting-slug"] = shown_tab
+            st.rerun()
+        st.stop()
     if st.session_state.get("active-feature") != FEATURE_ID:
         show_homepage()
         st.stop()
@@ -6745,6 +6806,7 @@ with PAGE_ROOT.container():
     applied_service = int(stored.get("service", service))
     lead_default = not changed_from_default(params, "lead_time.lokal_hari")
 
+    dashboard_slot = st.container() if sheet == "Ringkasan" else None
     if sheet in SUMMARY_SHEETS:
         st.markdown(
             "<div class='section-title'>Periode penjualan "
@@ -6760,6 +6822,12 @@ with PAGE_ROOT.container():
 
     last_period = history["period_start"].max()
     catalog = top_bestsellers(sales_orders, combined, stock, history, metric, last_period, period, top_n=None)
+    FEATURES = get_features()
+    EXCLUDED = excluded_skus(FEATURES)
+    if isinstance(catalog, pd.DataFrame) and not catalog.empty and EXCLUDED:
+        catalog = drop_excluded(catalog, EXCLUDED).reset_index(drop=True)
+        if "peringkat" in catalog.columns:
+            catalog["peringkat"] = range(1, len(catalog) + 1)
     enriched = enriched_catalog(
         catalog,
         run_id=str(stored.get("run_id") or ""),
@@ -6779,6 +6847,22 @@ with PAGE_ROOT.container():
             run_repository().save_extra(int(katalog_run), "katalog", enriched)
         except Exception:
             pass
+        try:
+            data_until = pd.to_datetime(orders_all["order_time"]).max().date()
+            month_lo, _month_hi = last_full_month(data_until)
+            FEATURES.set_report_period(int(katalog_run), f"{month_lo.year:04d}-{month_lo.month:02d}", username=AUTH_USER.username)
+            FEATURES.replace("run_info", [{"run_id": int(katalog_run), "data_until": data_until}], keys=["run_id"], username=AUTH_USER.username, action="simpan:data_sd")
+            save_run_snapshot(FEATURES, int(katalog_run), enriched, window_start, window_end, AUTH_USER.username)
+        except Exception as exc:
+            st.session_state["run-error"] = f"Snapshot prediksi belum tersimpan: {exc}"
+    FEATURE_DATA = cached_feature_data(
+        st.session_state,
+        FEATURES,
+        enriched if isinstance(enriched, pd.DataFrame) else pd.DataFrame(),
+        today,
+        periode=f"{window_start.year:04d}-{window_start.month:02d}",
+        stamp=str(stored.get("run_id") or ""),
+    )
 
 
     def show_performance_cards(start, end, label: str, *, tone: str | None = None) -> dict:
@@ -6830,6 +6914,17 @@ with PAGE_ROOT.container():
     require_role(SHEET_PERMISSIONS.get(sheet, "ringkasan"))
 
     if sheet == "Ringkasan":
+        with dashboard_slot:
+            show_priority_dashboard(
+                enriched,
+                today=today,
+                orders=orders,
+                features=FEATURES,
+                data=FEATURE_DATA,
+                role=AUTH_USER.role,
+                window_label=format_period_label("prediksi", window_start),
+                fresh_period=window_start.day == 1,
+                )
         show_exclude_and_cards()
         if isinstance(stock, pd.DataFrame) and not shown.empty:
             movement_detail = show_analysis_movement(
@@ -6903,6 +6998,15 @@ with PAGE_ROOT.container():
                 st.info("Centang kolom Grafik pada satu SKU untuk menampilkan Grafik QTY dan Grafik Sales.")
 
     elif sheet == "Prediksi":
+        show_prediction_checklist(
+            enriched,
+            orders=orders,
+            today=today,
+            window_start=window_start,
+            data=FEATURE_DATA,
+            label_options=list(LABEL_ICONS),
+        )
+        show_pred_vs_actual(FEATURES, orders=orders, table=enriched)
         show_exclude_and_cards()
         st.subheader("Prediksi semua produk")
         if enriched is None or enriched.empty:
@@ -6965,6 +7069,11 @@ with PAGE_ROOT.container():
             params=params,
             today=today,
             user_root=USER_ROOT,
+            features=FEATURES,
+            data=FEATURE_DATA,
+            window_start=window_start,
+            username=AUTH_USER.username,
+            can_edit=allowed_access(AUTH_USER.role, "rekomendasi", "edit"),
         )
 
     elif sheet == "Laporan":
@@ -6982,6 +7091,11 @@ with PAGE_ROOT.container():
             window_start=window_start,
             window_end=window_end,
             stock=stock if isinstance(stock, pd.DataFrame) else None,
+            features=FEATURES,
+            data=FEATURE_DATA,
+            run_id=int((st.session_state.get("active-run") or (0,))[0] or 0),
+            username=AUTH_USER.username,
+            can_edit=allowed_access(AUTH_USER.role, "laporan", "edit"),
         )
 
     elif sheet == "Evaluasi model":

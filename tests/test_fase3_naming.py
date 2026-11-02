@@ -130,7 +130,7 @@ class FlashAndExposureTest(unittest.TestCase):
         self.assertIn("kloset", hooks)
 
     def test_month_grid_monday_first(self):
-        from src.ui.rekomendasi import month_grid
+        from src.core.promo_calendar import month_grid
 
         grid = month_grid(2026, 11)
         self.assertEqual(len(grid[0]), 7)

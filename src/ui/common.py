@@ -319,3 +319,13 @@ def lttb(x: np.ndarray, y: np.ndarray, threshold: int = 400) -> tuple[np.ndarray
     keep.append(n - 1)
     idx = np.array(keep)
     return np.asarray(x)[idx], ys[idx]
+
+
+def button_tabs(options: list[tuple[str, str]], current: str, *, key: str) -> str | None:
+    """Baris tombol sub-menu (gaya sama dengan menu utama). Mengembalikan slug yang diklik, atau None."""
+    cols = st.columns(len(options))
+    clicked = None
+    for column, (slug, label) in zip(cols, options):
+        if column.button(label, key=f"{key}-{slug}", type="primary" if slug == current else "secondary", use_container_width=True):
+            clicked = slug
+    return clicked
