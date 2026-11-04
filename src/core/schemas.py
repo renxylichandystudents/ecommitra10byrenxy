@@ -173,7 +173,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
     ),
     "performance": SourceSpec(
         key="performance",
-        label="Data performance",
+        label="Data performa toko",
         required=("date",),
         aliases=PERFORMANCE_ALIASES,
         dedup_keys=("date",),

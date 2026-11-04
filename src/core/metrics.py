@@ -248,12 +248,17 @@ def ads_metrics(ads_frames, stock_frame, frame: pd.DataFrame | None, start=None,
     if start is None and end is None and frame is not None and not frame.empty and "order_time" in frame.columns:
         stamps = pd.to_datetime(frame["order_time"], errors="coerce")
         start, end = stamps.min(), stamps.max()
-    result = attribute_ads(list(ads_frames or []), stock_frame, orders=net_sku_sales(frame, start, end), start=start, end=end)
+    lines = net_sku_sales(frame, start, end)
+    result = attribute_ads(list(ads_frames or []), stock_frame, orders=lines, start=start, end=end)
     cost, sales = result.cost, result.sales
+    product_sales = float(lines["sales"].sum()) if not lines.empty else 0.0
     return {
         "biaya_iklan": cost,
         "omzet_iklan": sales,
         "roas": sales / cost if cost > 0 else float("nan"),
+        # Pembanding porsi iklan: dasar sama dengan batas omzet iklan per SKU (Harga Setelah Diskon × QTY, tanpa batal, dikurangi retur).
+        "sales_produk_bersih": product_sales,
+        "porsi_sales_iklan_pct": sales / product_sales * 100 if product_sales > 0 else float("nan"),
         "biaya_iklan_file": result.file_cost,
         "biaya_iklan_tanpa_sku": result.unmapped_cost,
         "result": result,

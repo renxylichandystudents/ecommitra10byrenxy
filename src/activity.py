@@ -326,7 +326,7 @@ def focus_summary(
     return_only: bool,
     cancel_only: bool,
 ) -> dict[str, float]:
-    """Nominal retur hanya saat filter Return. Nominal batal hanya saat filter batal."""
+    """Nominal retur hanya saat filter Retur. Nominal batal hanya saat filter batal."""
     result = dict(summary)
     if return_only:
         result["sales_volume"] = float(result["nominal_return"])

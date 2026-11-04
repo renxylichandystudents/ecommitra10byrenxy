@@ -81,10 +81,12 @@ def product_feature_table(
     features["roas"] = np.where(features["ad_cost"].gt(0), features["ad_sales"] / features["ad_cost"], 0.0)
     features["conversion_rate"] = np.where(features["views"].gt(0), features["clicks"] / features["views"], 0.0)
     if performance is not None and not performance.empty:
+        from src.core.performance import perf_number
+
         if "conversion_rate" in performance.columns:
-            features["store_conversion_rate"] = float(pd.to_numeric(performance["conversion_rate"], errors="coerce").mean())
+            features["store_conversion_rate"] = float(perf_number(performance["conversion_rate"]).mean())
         if "visitors" in performance.columns:
-            features["store_visitors"] = float(pd.to_numeric(performance["visitors"], errors="coerce").mean())
+            features["store_visitors"] = float(perf_number(performance["visitors"]).mean())
     return features.fillna(0.0)
 
 

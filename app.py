@@ -53,6 +53,7 @@ from src.core.config import changed_from_default, default_params, load_params, s
 from src.core.consolidation import consolidation_summary
 from src.core.decision_table import PERIOD_LABELS, build_decision_table, lama_kosong_text, period_actuals, period_groups
 from src.core.enrich import StoreFrames, enrich_catalog, load_store_frames, zero_since_map
+from src.core.performance import clean_performance, perf_number
 from src.core.pipeline import (
     apply_ensemble,
     apply_recent_price,
@@ -87,6 +88,7 @@ from src.utils.format import excel_bytes as numeric_excel_bytes
 from src.utils.format import ROW_PX, drop_blank_rows, help_columns, show_table, style_frame, table_height
 from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
+from src.core.filevault import FileVault, vault_enabled
 from src.core.userspace import deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
 from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar
@@ -126,6 +128,7 @@ from src.library import (
 from src.movement import compare_runs, frame_from_stock, list_runs, load_run, record_run, setup_notes
 from src.ingest import (
     _is_cancelled_status,
+    cancelled_status_mask,
     clean_order_frame,
     clean_sku_columns,
     load_shopee_report,
@@ -153,6 +156,66 @@ if deploy_mode() == "server":
     configure_library_root(USER_ROOT)
     configure_movement_root(USER_ROOT)
 DATA_STORE = LocalDataStore(USER_ROOT)
+
+
+def _vault_areas() -> dict[str, Path]:
+    import src.movement as movement_store
+    from src.core.runs import DEFAULT_RUNS_ROOT
+
+    areas = {"team": USER_ROOT, "runs": DEFAULT_RUNS_ROOT}
+    for name, folder in (("library", library_store.LIBRARY_DIR), ("history", movement_store.RUNS_DIR)):
+        if USER_ROOT not in Path(folder).resolve().parents:
+            areas[name] = Path(folder)
+    return areas
+
+
+@st.cache_resource(show_spinner="Memulihkan data latih dan hasil analisa tersimpan…")
+def file_vault() -> FileVault | None:
+    """Sekali per proses server: pulihkan file dari database ke disk yang baru (kosong)."""
+    engine = get_engine()
+    if not vault_enabled(engine):
+        return None
+    vault = FileVault(engine, _vault_areas())
+    vault.restore()
+    return vault
+
+
+def sync_file_vault() -> None:
+    """Salin file data/hasil yang baru berubah ke database. Gagal sinkron tidak menghentikan halaman."""
+    try:
+        vault = file_vault()
+        if vault is not None:
+            vault.push()
+    except Exception as exc:  # noqa: BLE001
+        st.session_state["_vault-error"] = str(exc)
+
+
+sync_file_vault()
+
+
+def show_vault_status() -> None:
+    """Keterangan apakah data latih aman dari restart/redeploy server."""
+    error = st.session_state.pop("_vault-error", None)
+    if error:
+        st.warning(f"Data latih belum tersalin ke database permanen: {error}. Data tetap terbaca selama server belum restart.")
+        return
+    try:
+        vault = file_vault()
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Database permanen untuk data latih belum bisa dihubungi: {exc}")
+        return
+    if vault is None:
+        if deploy_mode() == "server":
+            st.warning(
+                "Data latih tersimpan di disk server sementara dan akan hilang saat server tidur, restart, atau redeploy. "
+                "Isi `DATABASE_URL` (Postgres Neon) di Secrets agar data latih dan hasil analisa tetap ada."
+            )
+        return
+    files, size = vault.summary()
+    st.caption(
+        f"Data latih dan hasil analisa tersimpan permanen di database: {format_number(files)} file · "
+        f"{format_number(size / 1024 / 1024, 1)} MB. Tetap terbaca walau server restart atau redeploy."
+    )
 
 
 def current_params() -> dict:
@@ -1420,11 +1483,14 @@ def cached_consolidation(root: str, stamp: float) -> tuple[pd.DataFrame, dict]:
     return consolidation_summary(LocalDataStore(root))
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=2)
 def cached_library_frames(
     keys: tuple[str, ...], stamp: tuple[float, ...]
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Baca bulan tersimpan sekali. Stempel file membuat cache batal saat impor baru."""
+    """Baca bulan tersimpan sekali. Stempel file membuat cache batal saat impor baru.
+
+    Dibagi antar-sesi tanpa disalin (frame besar, dibaca setiap rerun): pemanggil tidak boleh mengubahnya di tempat.
+    """
     del stamp
     source, _stored = load_months(list(keys))
     if source is None or source.empty:
@@ -1432,14 +1498,14 @@ def cached_library_frames(
     return source, clean_order_frame(source)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=2)
 def cached_ledger(keys: tuple[str, ...], stamp: tuple[float, ...]) -> pd.DataFrame:
     del stamp
     source, _orders = load_months(list(keys))
     return ledger_from_raw(source)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=2)
 def cached_merged(keys: tuple[str, ...], stamp: tuple[float, ...]) -> tuple[pd.DataFrame, pd.Series]:
     del stamp
     source, _orders = load_months(list(keys))
@@ -1529,7 +1595,7 @@ def _submit_upload(store, spec, files, parsed: pd.DataFrame, orders: pd.DataFram
 
 
 def _process_upload(store, spec, files) -> dict:
-    """Dijalankan hanya saat Submit: baca per file dengan progress, validasi, lalu simpan (parquet + library)."""
+    """Dijalankan hanya saat tombol Simpan ditekan: baca per file dengan progress, validasi, lalu simpan (parquet + library)."""
     total = len(files)
     outcome: dict = {"level": "error", "message": "", "warning": "", "rows": [], "keys": []}
     with st.status(f"Memproses {total} file...", expanded=True) as status:
@@ -1559,6 +1625,8 @@ def _process_upload(store, spec, files) -> dict:
             status.update(label="Gagal menyimpan", state="error")
             outcome["message"] = str(exc)
             return outcome
+        bar.progress(1.0, text="Menyalin data latih ke database permanen...")
+        sync_file_vault()
         status.update(label=f"Selesai: {total} file diproses dan disimpan", state="complete", expanded=False)
     outcome.update(level="success", message=result.message, keys=list(keys))
     return outcome
@@ -1573,11 +1641,12 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         """
         <div class="home-section">UPLOAD DATA LATIH</div>
         <div class="feature-copy">
-        Silakan upload data latih meliputi data transaksi, data performance, data iklan produk otomatis, data iklan produk grup, data keseluruhan iklan, data iklan pencarian, data stok, data produk deskripsi, dan data produk kompetitor. Jika Anda telah meng-upload dan submit, data akan tersimpan; ketika Anda men-submit data baru, sistem akan menambahkannya sebagai data pembaruan. Data yang Anda submit akan menjadi data latih di komputer Anda.
+        Silakan upload data latih meliputi data transaksi, data performa toko, data iklan produk otomatis, data iklan produk grup, data keseluruhan iklan, data iklan pencarian, data stok, data produk deskripsi, dan data produk kompetitor. Setelah file diunggah dan tombol Simpan ditekan, data tersimpan. Unggahan berikutnya ditambahkan sebagai pembaruan (baris yang sama diganti, bukan digandakan). Data yang disimpan menjadi data latih.
         </div>
         """,
         unsafe_allow_html=True,
     )
+    show_vault_status()
     statuses = _source_status_map(store)
     specs = source_menu()
     labels = [f"{spec.label} · {statuses.get(spec.key, 'Kosong')}" for spec in specs]
@@ -1603,15 +1672,15 @@ def show_training_uploads() -> tuple[list[str], str | None]:
                 label_visibility="collapsed",
             )
             st.markdown(
-                "<div class='upload-note'>Type file CSV, XLSX, atau XLS. Maksimal 50 lampiran, total 1 GB. "
-                "File dibaca setelah tombol Submit ditekan. Unggahan baru menambah data latih, tidak menghapus file lama.</div>",
+                "<div class='upload-note'>Tipe file CSV, XLSX, atau XLS. Maksimal 50 lampiran, total 1 GB. "
+                "File dibaca setelah tombol Simpan ditekan. Unggahan baru menambah data latih, tidak menghapus file lama.</div>",
                 unsafe_allow_html=True,
             )
-            submitted = st.form_submit_button("Submit", type="primary")
+            submitted = st.form_submit_button("Simpan", type="primary")
         if submitted:
             files = list(uploaded or [])
             if not files:
-                st.info("Submit dijalankan tanpa file baru. Data tersimpan yang sudah ada tetap dipakai.")
+                st.info("Tombol Simpan ditekan tanpa file baru. Data tersimpan yang sudah ada tetap dipakai.")
             elif len(files) > MAX_FILES:
                 load_error = f"Maksimal {MAX_FILES} file. Yang dipilih {len(files)} file."
             elif _uploaded_size(files) > MAX_UPLOAD_BYTES:
@@ -1635,10 +1704,10 @@ def show_training_uploads() -> tuple[list[str], str | None]:
             if saved.get("warning"):
                 st.warning(saved["warning"])
             if saved.get("rows"):
-                st.caption("File terakhir yang di-submit")
+                st.caption("File terakhir yang disimpan")
                 show_table(pd.DataFrame(saved["rows"]))
         else:
-            st.caption("Pilih file lalu klik Submit. File dibaca dan disimpan setelah Submit.")
+            st.caption("Pilih file lalu klik Simpan. File dibaca dan disimpan setelah tombol Simpan ditekan.")
     return imported_keys, load_error
 
 
@@ -1674,7 +1743,7 @@ def prepare_analysis_orders(
     work = orders_raw.copy()
     if exclude_return_cancel:
         if "status" in work.columns:
-            work = work.loc[~work["status"].map(_is_cancelled_status)].copy()
+            work = work.loc[~cancelled_status_mask(work["status"])].copy()
         if "qty" in work.columns:
             work = work.loc[work["qty"] > 0].copy()
         return work.reset_index(drop=True)
@@ -1911,6 +1980,7 @@ def save_analysis_run(analysis: dict, *, duration: float, window_start: date, wi
     except Exception as exc:
         st.session_state["run-error"] = f"Analisa selesai, tetapi belum tersimpan ke riwayat: {exc}"
         return
+    sync_file_vault()
     st.session_state["_run-save-katalog"] = record.id
     st.session_state["active-run"] = (record.id, tuple())
     st.session_state.pop("run-origin", None)
@@ -2088,6 +2158,7 @@ def pin_app_header() -> None:
             const main = parent.document.querySelector('[data-testid="stMain"]');
             if (!main || main.__mitraWatch) return;
             main.__mitraWatch = true;
+            parent.__mitraHeaderPin();
             let queued = false;
             const schedule = () => {
               if (queued) return;
@@ -2100,7 +2171,8 @@ def pin_app_header() -> None:
             new MutationObserver(schedule).observe(main, {childList: true, subtree: true});
           };
           watch();
-          parent.setInterval(() => parent.__mitraHeaderPin(), 1000);
+          // Hanya memasang ulang observer bila Streamlit mengganti elemen stMain; tidak menghitung layout tiap detik.
+          parent.setInterval(watch, 1500);
         }
         pin();
         </script>
@@ -2342,7 +2414,7 @@ def show_prediction_inputs() -> None:
         sidebar_metric = st.radio(
             "Parameter",
             options=["qty", "sales"],
-            format_func=lambda key: "Quantity terjual" if key == "qty" else "Sales volume",
+            format_func=lambda key: "QTY terjual" if key == "qty" else "Sales volume",
             captions=[
                 "Peringkat dan prediksi dibaca dari jumlah unit terjual. Cocok untuk keputusan stok.",
                 "Peringkat dan prediksi dibaca dari nilai rupiah. Cocok untuk target omzet dan iklan.",
@@ -2393,7 +2465,7 @@ def show_prediction_inputs() -> None:
         summary_col.markdown(
             "<div class='field-hint'>"
             f"<b>Data latih</b> {training_months} bulan · <b>Periode</b> {PERIOD_LABELS[period]} · "
-            f"<b>Safety stock</b> {service}% · <b>Parameter</b> {'Quantity terjual' if sidebar_metric == 'qty' else 'Sales volume'}"
+            f"<b>Safety stock</b> {service}% · <b>Parameter</b> {'QTY terjual' if sidebar_metric == 'qty' else 'Sales volume'}"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -3719,11 +3791,11 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     box_count = min(4, max(len(choice_names) + 1, 1))
     status_boxes = st.columns(box_count)
     with status_boxes[0]:
-        st.checkbox("All", key=all_key, on_change=toggle_all)
+        st.checkbox("Semua", key=all_key, on_change=toggle_all)
     picked = []
     for index, status in enumerate(choice_names):
         with status_boxes[(index + 1) % box_count]:
-            if st.checkbox(status, key=status_widget_key(status), on_change=toggle_one):
+            if st.checkbox("Retur" if status == "Return" else status, key=status_widget_key(status), on_change=toggle_one):
                 picked.append(status)
     select_all = bool(st.session_state.get(all_key, False)) or set(picked) == set(choice_names)
     status_picked = [name for name in picked if name != "Return"]
@@ -3769,7 +3841,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             include_return=include_return,
         )
         if not include_return and not include_cancel:
-            sales_hint = "Sama dengan Ringkasan saat Exclude return dan batal. Total Pembayaran tanpa batal, sekali tiap No. Pesanan. Baris yang habis diretur tidak dihitung"
+            sales_hint = "Sama dengan Ringkasan saat Kecualikan batal & retur dicentang. Total Pembayaran tanpa batal, sekali tiap No. Pesanan. Baris yang habis diretur tidak dihitung"
             order_hint = "Tanpa batal dan tanpa pesanan yang habis diretur"
             sku_hint = "SKU yang masih punya QTY setelah retur dikurangi"
         else:
@@ -3997,12 +4069,11 @@ def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None
 
 
 def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None) -> None:
-    """Kartu performa toko (Data performance) dan ringkasan iklan per periode terpilih."""
+    """Kartu performa toko (data performa toko) dan ringkasan iklan per periode terpilih."""
     frames = store_frames()
     perf = frames.performance
     if isinstance(perf, pd.DataFrame) and not perf.empty and "date" in perf.columns:
-        work = perf.copy()
-        work["date"] = pd.to_datetime(work["date"], errors="coerce", dayfirst=True)
+        work = clean_performance(perf)
         start = st.session_state.get("data-start")
         end = st.session_state.get("data-end")
         if start and end:
@@ -4015,7 +4086,7 @@ def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None
         def total(frame: pd.DataFrame, column: str, mean: bool = False) -> float:
             if column not in frame.columns or frame.empty:
                 return float("nan")
-            values = pd.to_numeric(frame[column].astype(str).str.replace("%", "", regex=False).str.replace(",", ".", regex=False), errors="coerce")
+            values = perf_number(frame[column])
             return float(values.mean() if mean else values.sum())
 
         def delta(a: float, b: float) -> str | None:
@@ -4034,7 +4105,7 @@ def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None
             text = "-" if not np.isfinite(value) else (f"{format_number(value, 2)}%" if pct else format_number(value, 0))
             show_metric(column, label, text, hint=delta(value, total(prev, key, is_mean)))
     else:
-        st.caption("Data performance belum diunggah: kartu pengunjung, konversi, dan pembeli berulang belum tersedia.")
+        st.caption("Data performa toko belum diunggah: kartu pengunjung, konversi, dan pembeli berulang belum tersedia.")
     if not frames.has_ads or period_view is None or period_view.empty:
         return
     start, end = period_bounds(period_view)
@@ -5589,7 +5660,7 @@ def filter_resume_orders(
         if show_exclude:
             if "exclude-return-batal" not in st.session_state:
                 st.session_state["exclude-return-batal"] = bool(st.session_state.get("exclude_applied", False))
-            st.checkbox("Exclude return dan batal", key="exclude-return-batal")
+            st.checkbox("Kecualikan batal & retur", key="exclude-return-batal")
             st.markdown(
                 "<div class='field-hint'>Mengurangi pesanan batal dan unit retur pada angka penjualan, Top 50, dan Prediksi & stok.</div>",
                 unsafe_allow_html=True,
@@ -6323,7 +6394,7 @@ def show_analysis_movement(
     prior = _period_totals(prior_frame, keys, period=period_key, day=today, orders=orders)
     st.markdown("<div class='section-title'>Pergerakan dari analisis sebelumnya</div>", unsafe_allow_html=True)
     st.markdown(
-        f"<div class='field-hint'>Parameter {'Quantity terjual' if metric == 'qty' else 'Sales volume'} · "
+        f"<div class='field-hint'>Parameter {'QTY terjual' if metric == 'qty' else 'Sales volume'} · "
         f"safety stock {int(current_meta.get('service', service) or 0)}% · dibanding prediksi kemarin, "
         f"{html.escape(format_id_date(yesterday))}.</div>",
         unsafe_allow_html=True,
@@ -6458,7 +6529,7 @@ def removed_counts(raw: pd.DataFrame | None) -> tuple[int, float]:
     """Jumlah pesanan batal dan unit retur pada data latih (untuk kartu toggle exclude)."""
     if raw is None or raw.empty:
         return 0, 0.0
-    cancelled = raw["status"].map(_is_cancelled_status) if "status" in raw.columns else pd.Series(False, index=raw.index)
+    cancelled = cancelled_status_mask(raw["status"]) if "status" in raw.columns else pd.Series(False, index=raw.index)
     orders_count = int(raw.loc[cancelled, "order_id"].nunique()) if "order_id" in raw.columns else int(cancelled.sum())
     units = 0.0
     if {"gross_qty", "qty"} <= set(raw.columns):
@@ -6675,7 +6746,7 @@ with PAGE_ROOT.container():
             stored_meta = st.session_state.get("analysis", {})
             shown_period = str(stored_meta.get("period", period))
             shown_start, shown_end, _shown_text = forecast_window(shown_period, today)
-            shown_metric = "Quantity terjual" if stored_meta.get("metric", sidebar_metric) == "qty" else "Sales volume"
+            shown_metric = "QTY terjual" if stored_meta.get("metric", sidebar_metric) == "qty" else "Sales volume"
             date_col, period_col = st.columns([1, 2.2])
             show_metric(date_col, "Tanggal hari ini", format_id_date(today))
             period_col.markdown(

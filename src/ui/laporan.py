@@ -147,9 +147,9 @@ def show_report(
     st.markdown(
         _chip(f"Periode prediksi: {PERIOD_LABELS[period]}")
         + _chip(f"Prediksi: {fmt_date(window_start, short=True)} – {fmt_date(window_end)}")
-        + _chip(f"Parameter: {'Quantity terjual' if metric == 'qty' else 'Sales volume'}")
+        + _chip(f"Parameter: {'QTY terjual' if metric == 'qty' else 'Sales volume'}")
         + _chip(f"Safety stock: {service}%")
-        + _chip("Exclude batal & return: aktif" if exclude else "Exclude batal & return: nonaktif"),
+        + _chip("Kecualikan batal & retur: aktif" if exclude else "Kecualikan batal & retur: nonaktif"),
         unsafe_allow_html=True,
     )
     report_orders, report_label = _report_month(orders, features, run_id, username, can_edit)
@@ -270,17 +270,23 @@ def show_report(
                     st.caption("ROP = permintaan harian × lead time + SS. Pesan ulang saat stok menyentuh ROP; restock pesimistis = kebutuhan kuantil 90%.")
                     download_excel(frame, "laporan_stok_monte_carlo.xlsx", key="xl-report-mc")
             elif section == SECTIONS[4]:
-                share = ad_sales / sales_now * 100 if sales_now > 0 else np.nan
-                warnings, notes = ad_validation(ad_result, sales_now)
+                product_sales = float(ads["sales_produk_bersih"])
+                share = float(ads["porsi_sales_iklan_pct"])
+                warnings, notes = ad_validation(ad_result, product_sales)
                 for message in warnings:
                     st.warning(message)
                 cols = st.columns(4)
                 metric_card(cols[0], "biaya_iklan", fmt_idr(ad_cost))
                 metric_card(cols[1], "omzet_iklan", fmt_idr(ad_sales))
                 metric_card(cols[2], "roas", fmt_num(roas, 1))
-                card(cols[3], "Porsi sales dari iklan", fmt_pct(share))
+                card(cols[3], "Porsi sales dari iklan", fmt_pct(share), hint=f"dari sales produk bersih {fmt_idr(product_sales)}")
                 for message in notes:
                     st.caption(message)
+                st.caption(
+                    "Porsi sales dari iklan = omzet iklan ÷ sales produk bersih (Harga Setelah Diskon × QTY, tanpa pesanan batal, "
+                    "dikurangi retur). Dasar ini sama dengan batas omzet iklan per SKU. Sales bersih di kartu Ringkasan memakai "
+                    "Total Pembayaran per pesanan (setelah voucher/koin, ditambah ongkir), jadi nilainya bisa berbeda."
+                )
                 if ad_cost <= 0:
                     st.caption("Laporan iklan belum diunggah, belum terpetakan ke SKU, atau tidak ada pada periode laporan.")
                 else:
@@ -292,7 +298,7 @@ def show_report(
             elif section == SECTIONS[5]:
                 perf = store_performance(frames.performance, today)
                 if not perf:
-                    st.write("Data performance belum diunggah.")
+                    st.write("Data performa toko belum diunggah.")
                 else:
                     cols = st.columns(4)
                     card(cols[0], "Pengunjung 28 hari", fmt_num(perf["pengunjung"]), hint=f"sebelumnya {fmt_num(perf['pengunjung_prev'])}")
@@ -314,7 +320,11 @@ def show_report(
                 promo_days = int(promo_flag(pd.Series(pd.date_range(window_start, window_end))).sum())
                 context = {
                     "sales_growth_pct": growth,
-                    "top50_share_pct": float(top["sales_total"].sum() / sales_now * 100) if sales_now > 0 and not top.empty else None,
+                    "top50_share_pct": (
+                        float(top["sales_total"].sum() / table["sales_total"].sum() * 100)
+                        if not top.empty and table is not None and float(table["sales_total"].sum()) > 0
+                        else None
+                    ),
                     "roas": roas,
                     "target_roas": params.get("iklan", {}).get("target_roas", 8),
                     "cancel_pct": cancel_rate,

@@ -11,6 +11,7 @@ import pandas as pd
 from src.core.decision_table import build_decision_table
 from src.core.inventory import stock_zero_duration
 from src.core.labels import ads_by_sku, product_labels
+from src.core.performance import clean_performance
 from src.core.segmentation import abc_xyz_segments, label_productivity, product_feature_table
 from src.core.storage import LocalDataStore
 
@@ -46,7 +47,7 @@ def load_store_frames(store: LocalDataStore) -> StoreFrames:
         stock=read("stock"),
         ads=[read(key) for key in AD_SOURCES],
         ads_search=read("ads_search"),
-        performance=read("performance"),
+        performance=clean_performance(read("performance")),
         descriptions=read("product_descriptions"),
         competitors=read("competitors"),
     )

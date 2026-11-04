@@ -230,7 +230,7 @@ def setup_notes(current: dict, previous: dict) -> list[str]:
         after_label = after.label if after else str(current.get("period", ""))
         notes.append(f"Periode prediksi berubah dari {before_label} menjadi {after_label}.")
     if str(current.get("metric", "qty")) != str(previous.get("metric", "qty")):
-        names = {"qty": "Quantity terjual", "sales": "Sales volume"}
+        names = {"qty": "QTY terjual", "sales": "Sales volume"}
         notes.append(
             "Parameter peringkat berubah dari "
             f"{names.get(str(previous.get('metric')), 'sebelumnya')} "
@@ -244,7 +244,7 @@ def setup_notes(current: dict, previous: dict) -> list[str]:
         )
     if bool(current.get("exclude_return_cancel", False)) != bool(previous.get("exclude_return_cancel", False)):
         state = "menyala" if current.get("exclude_return_cancel") else "mati"
-        notes.append(f"Exclude return dan batal sekarang {state}.")
+        notes.append(f"Pilihan Kecualikan batal & retur sekarang {state}.")
     if str(current.get("window_start", "")) != str(previous.get("window_start", "")):
         notes.append("Tanggal mulai prediksi bergeser, jadi horizon dihitung dari hari analisis yang baru.")
     return notes

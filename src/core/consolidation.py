@@ -15,7 +15,7 @@ def _date_range(frame: pd.DataFrame, fields: tuple[str, ...]) -> str:
     for field in fields:
         if field not in frame.columns:
             continue
-        dates = pd.to_datetime(frame[field], errors="coerce")
+        dates = pd.to_datetime(frame[field], errors="coerce", dayfirst=True)
         if dates.notna().any():
             return f"{dates.min().date()} - {dates.max().date()}"
     return "-"

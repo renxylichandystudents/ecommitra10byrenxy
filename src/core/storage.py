@@ -236,7 +236,19 @@ def read_upload_file(source: BinaryIO | bytes, filename: str, spec: SourceSpec |
         frame = _read_csv_bytes(data, spec)
     if spec is not None and spec.key == "competitors":
         frame = _collapse_ranked_listing(frame)
+    if spec is not None and spec.key == "performance":
+        frame = _daily_performance_rows(frame, spec)
     return _drop_template_rows(frame, spec)
+
+
+def _daily_performance_rows(frame: pd.DataFrame, spec: SourceSpec) -> pd.DataFrame:
+    """Buang baris total bulanan dan header berulang dari ekspor performa toko Shopee."""
+    from src.core.performance import is_daily_row
+
+    column = find_columns(frame.columns, spec).get("date")
+    if column is None or frame.empty:
+        return frame
+    return frame.loc[is_daily_row(frame, column)].reset_index(drop=True)
 
 
 def read_many_uploads(files: list[BinaryIO], spec: SourceSpec | None = None) -> pd.DataFrame:

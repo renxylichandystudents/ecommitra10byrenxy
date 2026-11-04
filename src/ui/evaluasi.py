@@ -70,7 +70,7 @@ def _modeling(outcome, period: str, *, is_super: bool = False) -> None:
     st.markdown(
         "- **Target**: QTY terjual per SKU per hari, dijumlahkan ke horizon bergulir periode prediksi "
         f"({PERIOD_LABELS[period]}). Sales = prediksi QTY × harga bersih rata-rata 4 minggu terakhir.\n"
-        "- **Data latih**: bulan yang dicentang pada halaman input; QTY bersih bila Exclude batal & return aktif.\n"
+        "- **Data latih**: bulan yang dicentang pada halaman input; QTY bersih bila Kecualikan batal & retur aktif.\n"
         "- **Fitur model global**: lag 1, rata-rata 7/14/28/90 hari, rata-rata 28 hari sebelumnya, variasi 28 hari, porsi hari aktif, "
         "status stok kemarin, porsi hari promo ke depan, bulan, perubahan level.\n"
         "- **Hari stok kosong**: tidak dihitung sebagai permintaan nol (dikeluarkan dari latih & evaluasi), karena penjualan 0 saat stok 0 bukan berarti tidak ada permintaan.\n"

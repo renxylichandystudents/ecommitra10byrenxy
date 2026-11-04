@@ -30,11 +30,21 @@ _FALLBACK_PARAMS: dict[str, Any] = {
 }
 
 
+_YAML_CACHE: dict[str, tuple[float, Any]] = {}
+
+
 def _load_yaml(path: Path) -> Any:
+    """Isi YAML; dibaca ulang dari disk hanya bila file berubah (dipanggil puluhan kali per halaman)."""
     try:
         import yaml
 
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
+        stamp = path.stat().st_mtime
+        hit = _YAML_CACHE.get(str(path))
+        if hit is None or hit[0] != stamp:
+            loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+            hit = (stamp, yaml.load(path.read_text(encoding="utf-8"), Loader=loader))
+            _YAML_CACHE[str(path)] = hit
+        return copy.deepcopy(hit[1])
     except Exception:
         return None
 

@@ -10,16 +10,15 @@ import pandas as pd
 
 from src.core.decision_table import lama_kosong_text, period_groups
 from src.core.expert_system import action_steps, drivers_and_risks, evaluate_rules, root_cause, sku_facts
+from src.core.performance import clean_performance, perf_number
 from src.ui.common import STATUS_COLOR, fmt_date, fmt_idr, fmt_num, fmt_pct, fmt_qty, status_key
 
 
 def store_performance(performance: pd.DataFrame | None, today: date) -> dict[str, float] | None:
-    """Ringkasan 28 hari terakhir vs 28 hari sebelumnya dari Data performance."""
+    """Ringkasan 28 hari terakhir vs 28 hari sebelumnya dari data performa toko (hanya baris harian)."""
     if performance is None or performance.empty or "date" not in performance.columns:
         return None
-    work = performance.copy()
-    work["date"] = pd.to_datetime(work["date"], errors="coerce", dayfirst=True).dt.normalize()
-    work = work.dropna(subset=["date"])
+    work = clean_performance(performance)
     if work.empty:
         return None
     end = min(pd.Timestamp(today).normalize(), work["date"].max() + pd.Timedelta(days=1))
@@ -29,14 +28,12 @@ def store_performance(performance: pd.DataFrame | None, today: date) -> dict[str
     def total(frame: pd.DataFrame, column: str) -> float:
         if column not in frame.columns:
             return float("nan")
-        values = pd.to_numeric(frame[column].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False).str.replace("%", "", regex=False), errors="coerce")
-        return float(values.sum())
+        return float(perf_number(frame[column]).sum())
 
     def mean(frame: pd.DataFrame, column: str) -> float:
         if column not in frame.columns:
             return float("nan")
-        values = pd.to_numeric(frame[column].astype(str).str.replace(",", ".", regex=False).str.replace("%", "", regex=False), errors="coerce")
-        return float(values.mean())
+        return float(perf_number(frame[column]).mean())
 
     return {
         "pengunjung": total(recent, "visitors"),
@@ -123,7 +120,7 @@ def analysis_markup(
             f"pesanan batal <b>{fmt_num(performance['batal'])}</b>, pembeli baru <b>{fmt_num(performance['pembeli_baru'])}</b>.</p>"
         )
     else:
-        block3 = "<p class='insight-copy'>Data performance belum diunggah.</p>"
+        block3 = "<p class='insight-copy'>Data performa toko belum diunggah.</p>"
     # 4. Iklan
     cost = float(row.get("biaya_iklan", 0) or 0)
     ad_sales = float(row.get("omzet_iklan", 0) or 0)
@@ -134,7 +131,7 @@ def analysis_markup(
         share = ad_sales / sales_total * 100 if sales_total > 0 else float("nan")
         block4 = (
             f"<p class='insight-copy'>Biaya <b>{fmt_idr(cost)}</b> · Omzet iklan <b>{fmt_idr(ad_sales)}</b> · "
-            f"ROAS <b>{fmt_num(roas, 1)}</b> · Biaya/penjualan <b>{fmt_pct(acos)}</b> · Porsi penjualan dari iklan <b>{fmt_pct(min(share, 100) if np.isfinite(share) else share)}</b></p>"
+            f"ROAS <b>{fmt_num(roas, 1)}</b> · ACoS (biaya ÷ omzet iklan) <b>{fmt_pct(acos)}</b> · Porsi sales dari iklan <b>{fmt_pct(min(share, 100) if np.isfinite(share) else share)}</b></p>"
         )
     else:
         block4 = "<p class='insight-copy'>SKU ini tidak tercatat di laporan iklan (atau Kode produk belum terpetakan ke SKU).</p>"

@@ -63,19 +63,36 @@ Repository GitHub: `renxylichandystudents/ecommitra10byrenxy`, branch `main`.
 
    Super user pertama dibuat otomatis saat tabel user masih kosong. User lain ditambahkan dari **Kelola user** (tidak ada pendaftaran mandiri). Saat lokal, simpan file yang sama sebagai `.streamlit/secrets.toml` (sudah di `.gitignore`).
 
+### Database permanen (Neon, gratis) — agar login tidak hilang saat redeploy
+
+1. Daftar di [neon.tech](https://neon.tech) (bisa login dengan GitHub) → **Create project**. Region: **AWS Asia Pacific (Singapore)**, versi Postgres bawaan.
+2. Di dashboard project klik **Connect** → pilih **Pooled connection** → salin *connection string*, bentuknya:
+   `postgresql://neondb_owner:xxxx@ep-xxxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require`
+3. Streamlit Cloud → app → **Settings** → **Secrets**, tambahkan satu baris (dalam tanda kutip):
+
+   ```toml
+   DATABASE_URL = "postgresql://neondb_owner:xxxx@ep-xxxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+   ```
+
+4. **Save** → app restart sendiri. Tabel dibuat otomatis saat app pertama dibuka; super user dibuat dari `INITIAL_SUPERUSER_*`.
+5. Login sebagai super user, buka **Kelola user**: peringatan "SQLite di disk server sementara" harus sudah hilang. Buat ulang user lain (user di SQLite lama tidak bisa dipindahkan karena disk server sudah terhapus).
+
+Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL-encoded (mis. `@` → `%40`). Pakai Supabase? Gunakan URI **Session pooler** (port 5432), bukan *direct connection* (hanya IPv6). Neon gratis menidurkan database setelah ±5 menit tanpa akses; klik pertama sesudahnya ±1 detik lebih lambat, data tetap aman.
+
 ### Login dan role
 
 - Semua halaman berada di balik login. Password di-hash bcrypt, minimal 8 karakter. 5× salah password → tunggu 5 menit.
 - User baru dan user yang di-reset wajib ganti password saat login berikutnya.
 - Hak akses ada di satu tempat: `auth/permissions.py` (Super user, E-commerce specialist, IC, Gudang).
-- Sesi login bertahan 8 jam: refresh, tab baru, dan tombol back browser tidak meminta login lagi. Cookie `mitra10_session` hanya berisi token acak; di database hanya disimpan hash token-nya (tabel `sessions`). Logout, nonaktifkan user, atau reset password menghapus sesi tersebut.
+- Sesi login bertahan 12 jam sejak aktivitas terakhir (atur lewat secret `SESSION_TTL_HOURS`): refresh, tab baru, dan tombol back browser tidak meminta login lagi. Cookie `mitra10_session` hanya berisi token acak; di database hanya disimpan hash token-nya (tabel `sessions`). Logout, nonaktifkan user, atau reset password menghapus sesi tersebut.
 - Alamat halaman ada di URL (`?page=beranda`, `?page=data-latih`, `?page=analisa&tab=prediksi`, `?page=kelola-user`), jadi back/forward browser berpindah antarhalaman aplikasi.
 
 ### Perilaku data di server
 
 - Semua user yang login memakai satu folder data tim yang sama (unggahan, Pengaturan bisnis, riwayat analisa).
 - Default database: SQLite `data/app.db`. **Di Streamlit Community Cloud file ini hilang saat reboot/redeploy**, jadi user (selain super user dari Secrets) dan daftar riwayat ikut hilang. Isi `DATABASE_URL` Postgres gratis (Neon/Supabase) di Secrets agar user dan daftar riwayat tetap ada.
-- File hasil analisa (`data/runs/<id>/`) dan laporan yang diunggah tetap di disk server, yang bersifat sementara: hilang saat aplikasi tidur (±12 jam tidak dibuka), reboot, atau redeploy. Riwayat yang filenya hilang tampil "File hasil hilang"; unggah ulang data dan jalankan analisa lagi.
+- Data latih yang diunggah (folder bulan dan 9 menu) serta file hasil analisa (`data/runs/<id>/`) disalin otomatis ke tabel `file_vault` di Postgres. Saat server baru menyala (setelah tidur, reboot, atau redeploy), file dipulihkan ke disk sebelum halaman tampil, jadi data kemarin tetap terbaca tanpa unggah ulang. Status tampil di halaman Data latih. Tanpa `DATABASE_URL`, file tetap hanya di disk sementara.
+- Cek connection string dari laptop: `.venv/bin/python scripts/cek_database.py` (pesan error tidak disensor seperti di Streamlit Cloud).
 - Riwayat analisa lebih dari 90 hari dihapus otomatis.
 
 ### Setelah deploy

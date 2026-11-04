@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
+from collections import OrderedDict
 from typing import Iterable
 
 import numpy as np
@@ -220,12 +222,47 @@ def _excel_ready(frame: pd.DataFrame) -> pd.DataFrame:
     return clean
 
 
-def excel_bytes(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> bytes:
-    """Excel dengan angka asli + number format '#,##0' / '0.00' (bukan teks)."""
-    from openpyxl.utils import get_column_letter
+_EXCEL_CACHE: "OrderedDict[str, bytes]" = OrderedDict()
+_EXCEL_CACHE_SIZE = 16
+_EXCEL_CACHE_MAX_ROWS = 20000
 
+
+def _frames_key(frames: dict[str, pd.DataFrame]) -> str | None:
+    if sum(len(frame) for frame in frames.values()) > _EXCEL_CACHE_MAX_ROWS:
+        return None
+    digest = hashlib.sha1()
+    try:
+        for name, frame in frames.items():
+            digest.update(str(name).encode())
+            digest.update(repr([(str(c), str(t)) for c, t in frame.dtypes.items()]).encode())
+            digest.update(pd.util.hash_pandas_object(frame.astype(str), index=False).values.tobytes())
+    except Exception:
+        return None
+    return digest.hexdigest()
+
+
+def excel_bytes(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> bytes:
+    """Excel dengan angka asli + number format '#,##0' / '0.00' (bukan teks).
+
+    Tombol unduh membuat file pada setiap rerun; isi yang sama diambil dari memo agar halaman tidak lambat.
+    """
     if isinstance(frames, pd.DataFrame):
         frames = {"Data": frames}
+    key = _frames_key(frames)
+    if key is not None and key in _EXCEL_CACHE:
+        _EXCEL_CACHE.move_to_end(key)
+        return _EXCEL_CACHE[key]
+    data = _build_excel(frames)
+    if key is not None:
+        _EXCEL_CACHE[key] = data
+        while len(_EXCEL_CACHE) > _EXCEL_CACHE_SIZE:
+            _EXCEL_CACHE.popitem(last=False)
+    return data
+
+
+def _build_excel(frames: dict[str, pd.DataFrame]) -> bytes:
+    from openpyxl.utils import get_column_letter
+
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         for name, frame in frames.items():

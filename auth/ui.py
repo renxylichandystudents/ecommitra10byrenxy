@@ -71,10 +71,49 @@ def audit(action: str, detail: str = "") -> None:
         pass
 
 
-def get_repo() -> UserRepository:
-    repo = UserRepository(get_engine())
-    repo.ensure_initial_superuser(_secret("INITIAL_SUPERUSER_USERNAME"), _secret("INITIAL_SUPERUSER_PASSWORD"))
+@st.cache_resource(show_spinner=False)
+def _repo(url: str, username: str, password: str) -> UserRepository:
+    repo = UserRepository(_engine(url))
+    repo.ensure_initial_superuser(username, password)
     return repo
+
+
+def get_repo() -> UserRepository:
+    """Satu repository per proses: skema tabel user/sesi dibuat sekali, bukan pada setiap rerun."""
+    return _repo(database_url(_secrets_obj()), _secret("INITIAL_SUPERUSER_USERNAME"), _secret("INITIAL_SUPERUSER_PASSWORD"))
+
+
+def database_error_text(exc: BaseException) -> str:
+    """Baris pertama pesan driver, tanpa password yang mungkin ikut di URL."""
+    import re
+
+    raw = str(getattr(exc, "orig", None) or exc).strip().splitlines()
+    first = raw[0] if raw else type(exc).__name__
+    return re.sub(r"://([^:/@\s]+):[^@\s]*@", r"://\1:***@", first)[:300]
+
+
+def _database_down(exc: BaseException) -> None:
+    _hide_chrome()
+    text = database_error_text(exc)
+    hint = "Periksa `DATABASE_URL` di Secrets: satu baris, diapit tanda kutip, tanpa spasi."
+    lower = text.lower()
+    if "password authentication failed" in lower:
+        hint = "Password di `DATABASE_URL` tidak cocok dengan password Neon. Salin ulang connection string terbaru dari Neon (Connect) ke Secrets."
+    elif "could not translate host name" in lower or "name or service not known" in lower:
+        hint = "Nama host di `DATABASE_URL` salah ketik atau terpotong. Salin ulang connection string dari Neon (Connect)."
+    elif "does not exist" in lower:
+        hint = "Nama database atau user di `DATABASE_URL` tidak ada di Neon. Salin ulang connection string dari Neon (Connect)."
+    elif "timeout" in lower or "timed out" in lower:
+        hint = "Database tidak menjawab. Cek project Neon masih aktif, lalu Reboot app."
+    st.error(f"Aplikasi belum bisa tersambung ke database.\n\n{hint}\n\nPesan dari database: `{text}`")
+    st.stop()
+
+
+def ephemeral_database() -> bool:
+    """True bila aplikasi berjalan di server dengan SQLite lokal (user & sesi hilang saat server restart/redeploy)."""
+    from src.core.userspace import deploy_mode
+
+    return deploy_mode() == "server" and database_url(_secrets_obj()).startswith("sqlite")
 
 
 def current_user() -> User | None:
@@ -209,18 +248,28 @@ def login_gate() -> User:
     user masih aktif. Role dibaca ulang dari tabel users. Query param ?page= tidak disentuh.
     """
     jar = session_cookie.box()
-    repo = get_repo()
+    try:
+        repo = get_repo()
+    except Exception as exc:  # noqa: BLE001
+        _database_down(exc)
     user = current_user()
     if user is not None:
         token = st.session_state.get(TOKEN_KEY)
-        found = repo.session_for_token(token)
+        try:
+            found = repo.session_for_token(token)
+        except Exception:
+            # Database sedang sibuk/terputus sesaat: sesi di memori tetap dipakai, jangan paksa login ulang.
+            found = (user, st.session_state.get(EXPIRES_KEY) or datetime.now(), datetime.now())
         if found is None:
             _drop_session()
             user = None
         else:
             user, expires, seen = found
             st.session_state[SESSION_KEY] = user
-            slid = repo.touch_session(token, hours=_session_hours(), last_seen=seen)
+            try:
+                slid = repo.touch_session(token, hours=_session_hours(), last_seen=seen)
+            except Exception:
+                slid = None
             st.session_state[EXPIRES_KEY] = slid or expires
     if user is None and not st.session_state.get(LOGGED_OUT_KEY):
         token, ready = session_cookie.read_token(jar)
@@ -229,7 +278,11 @@ def login_gate() -> User:
             with st.spinner("Memeriksa sesi login…"):
                 time.sleep(session_cookie.WAIT_SECONDS)
             st.rerun()
-        found = repo.session_for_token(token) if token else None
+        try:
+            found = repo.session_for_token(token) if token else None
+        except Exception:
+            found = None
+            token = None
         if found is not None:
             user, expires, _seen = found
             st.session_state[SESSION_KEY] = user
@@ -276,6 +329,12 @@ def _users_page(repo: UserRepository, user: User) -> None:
 
 def users_panel(repo: UserRepository, user: User) -> None:
     require("kelola_user", "edit")
+    if ephemeral_database():
+        st.warning(
+            "Database user dan sesi login memakai SQLite di disk server sementara. Setiap kali server restart "
+            "atau redeploy (misalnya setelah git push), user tambahan dan sesi login hilang sehingga semua orang "
+            "harus login ulang. Isi `DATABASE_URL` (Postgres, mis. Neon/Supabase) di Secrets agar tersimpan permanen."
+        )
     flash = st.session_state.pop(FLASH_KEY, None)
     if flash:
         st.success(flash)

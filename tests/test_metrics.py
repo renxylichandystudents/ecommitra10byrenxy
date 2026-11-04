@@ -132,6 +132,18 @@ class CoverageAndAdsTest(unittest.TestCase):
         self.assertAlmostEqual(result["omzet_iklan"], 90_000.0)
         self.assertAlmostEqual(result["roas"], 9.0)
 
+    def test_ads_share_uses_product_sales_basis(self):
+        ads = pd.DataFrame([{"period": "2026-10-01", "product_code": "P1", "cost": 10_000.0, "ad_sales": 90_000.0}])
+        stock = pd.DataFrame({"product_code": ["P1"], "sku": ["100"]})
+        ledger = ledger_from_raw(RAW)
+        result = ads_metrics([ads], stock, ledger, "2026-10-01", "2026-10-31")
+        from src.core.metrics import net_sku_sales
+
+        basis = float(net_sku_sales(ledger, "2026-10-01", "2026-10-31")["sales"].sum())
+        self.assertAlmostEqual(result["sales_produk_bersih"], basis)
+        self.assertAlmostEqual(result["porsi_sales_iklan_pct"], result["omzet_iklan"] / basis * 100)
+        self.assertLessEqual(result["porsi_sales_iklan_pct"], 100.0)
+
 
 @unittest.skipUnless((LIBRARY / "2026-10.pkl").exists(), "data latih Oktober 2026 tidak tersedia")
 class October2026Test(unittest.TestCase):

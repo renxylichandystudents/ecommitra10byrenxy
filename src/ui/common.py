@@ -276,18 +276,18 @@ def apply_saved_period(orders: pd.DataFrame, *, prefix: str) -> tuple[pd.DataFra
 
 
 def exclude_toggle_card(*, key: str, removed_orders: int, removed_units: float) -> bool:
-    """Kartu toggle "Exclude return & batal" dengan badge status dan jumlah yang dikeluarkan."""
+    """Kartu toggle "Kecualikan batal & retur" dengan badge status dan jumlah yang dikeluarkan."""
     with st.container(border=True):
         left, right = st.columns([3, 2], vertical_alignment="center")
         with left:
-            value = st.toggle("Exclude return & batal", key=key)
-            st.caption("Mengurangi pesanan batal & return")
+            value = st.toggle("Kecualikan batal & retur", key=key)
+            st.caption("Mengurangi pesanan batal & unit retur")
         with right:
             if value:
                 st.markdown(badge("AKTIF · nilai bersih", "on"), unsafe_allow_html=True)
                 st.caption(f"Seluruh data latih: {fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur dikeluarkan dari prediksi")
             else:
-                st.markdown(badge("NONAKTIF · termasuk batal & return", "off"), unsafe_allow_html=True)
+                st.markdown(badge("NONAKTIF · termasuk batal & retur", "off"), unsafe_allow_html=True)
                 st.caption(f"Seluruh data latih: {fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur ikut dihitung di prediksi")
     return bool(value)
 

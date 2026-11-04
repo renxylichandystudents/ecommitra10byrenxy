@@ -14,8 +14,8 @@ import streamlit as st
 COOKIE_NAME = "mitra10_session"
 BOX_KEY = "auth-cookies"
 WAIT_KEY = "_auth-cookie-wait"
-WAIT_ROUNDS = 8
-WAIT_SECONDS = 0.35
+WAIT_ROUNDS = 12
+WAIT_SECONDS = 0.4
 
 try:
     from extra_streamlit_components.CookieManager import _component_func as _cookie_component

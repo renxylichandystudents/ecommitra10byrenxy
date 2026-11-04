@@ -257,7 +257,7 @@ def _flash_tab(table: pd.DataFrame, params: dict, today: date, user_root: Path) 
             )
     show_table(plan, kinds={"Harga saat ini": "money", "Harga flash sale": "money", "Diskon (%)": "pct", "Stok saat ini": "count", "Saran stok flash sale": "count"})
     left, right = st.columns(2)
-    if left.button("Submit rencana flash sale", type="primary", key="flash-submit"):
+    if left.button("Simpan rencana flash sale", type="primary", key="flash-submit"):
         folder = Path(user_root) / "flash_sale"
         folder.mkdir(parents=True, exist_ok=True)
         plan.to_csv(folder / f"rencana_{start.isoformat()}.csv", index=False)
