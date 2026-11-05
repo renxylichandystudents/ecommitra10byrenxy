@@ -61,7 +61,7 @@ def _strategy() -> None:
     for column, (name, text) in zip(cols, steps):
         column.markdown(
             f"<div style='border:1px solid #e2e8f0;border-radius:10px;padding:8px;min-height:190px'><b>{name}</b>"
-            f"<div style='font-size:.78rem;color:#475569;margin-top:4px'>{text}</div></div>",
+            f"<div style='font-size:var(--fs-xs);color:#475569;margin-top:4px'>{text}</div></div>",
             unsafe_allow_html=True,
         )
 
@@ -141,13 +141,6 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date, period: st
     )
     if table is not None and not table.empty:
         top = table.head(50)
-        demand = top["pred_harian"].astype(float)
-        lead = params.get("lead_time", {})
-        l_avg = float(lead.get("impor_rata_hari", 60))
-        l_max = float(lead.get("impor_maks_hari", 90))
-        ss_import = (l_max - l_avg) * demand
-        short = int(((demand * l_max) > (demand * l_avg + ss_import + 1e-9)).sum())
-        rows.append({"No": 2, "Komponen": "Safety stock multi-source", "Metode": "Stress test keterlambatan impor sampai Lmaks pada Top 50", "Target": "0% stockout", "Hasil": f"{fmt_pct(short / max(len(top), 1) * 100)} stockout", "Status": "Tercapai" if short == 0 else "Belum tercapai"})
         items = pd.DataFrame(
             {
                 "item_key": top["item_key"],
@@ -162,21 +155,21 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date, period: st
             ok = not plan.empty and "infeasible" not in status.lower()
         except Exception as exc:
             status, ok = f"gagal: {exc}", False
-        rows.append({"No": 3, "Komponen": "Inventory optimization", "Metode": "MILP Big-M pada Top 50 (PuLP, warm start)", "Target": "0% infeasible", "Hasil": status, "Status": "Tercapai" if ok else "Belum tercapai"})
+        rows.append({"No": 2, "Komponen": "Inventory optimization", "Metode": "MILP Big-M pada Top 50 (PuLP, warm start)", "Target": "0% infeasible", "Hasil": status, "Status": "Tercapai" if ok else "Belum tercapai"})
         errors, violations = 0, 0
         for _, row in top.iterrows():
             try:
                 facts = sku_facts(row, today=today)
                 steps = action_steps(evaluate_rules(facts), facts)
-                if facts.get("status_stok") in {"Kosong", "Kurang", "Tipis"} and any("naikkan" in s.lower() and "iklan" in s.lower() for s in steps):
+                if facts.get("status_stok") in {"Kosong", "Kurang"} and any("naikkan" in s.lower() and "iklan" in s.lower() for s in steps):
                     violations += 1
             except Exception:
                 errors += 1
-        rows.append({"No": 4, "Komponen": "Sistem pakar, NLP & SEO", "Metode": "Black-box pada Top 50 + uji unit", "Target": "100% berjalan, saran valid", "Hasil": f"{len(top) - errors}/{len(top)} berjalan, {violations} saran tidak valid", "Status": "Tercapai" if errors == 0 and violations == 0 else "Belum tercapai"})
+        rows.append({"No": 3, "Komponen": "Sistem pakar, NLP & SEO", "Metode": "Black-box pada Top 50 + uji unit", "Target": "100% berjalan, saran valid", "Hasil": f"{len(top) - errors}/{len(top)} berjalan, {violations} saran tidak valid", "Status": "Tercapai" if errors == 0 and violations == 0 else "Belum tercapai"})
         start = time.perf_counter()
         build_decision_table(table, period="bulan", today=today, horizon_days=30)
         elapsed = time.perf_counter() - start
-        rows.append({"No": 5, "Komponen": "Web performance", "Metode": f"Waktu bangun tabel keputusan {fmt_num(len(table))} SKU", "Target": "< 3 detik (dengan cache)", "Hasil": f"{fmt_num(elapsed, 2)} detik", "Status": "Tercapai" if elapsed < 3 else "Belum tercapai"})
+        rows.append({"No": 4, "Komponen": "Web performance", "Metode": f"Waktu bangun tabel keputusan {fmt_num(len(table))} SKU", "Target": "< 3 detik (dengan cache)", "Hasil": f"{fmt_num(elapsed, 2)} detik", "Status": "Tercapai" if elapsed < 3 else "Belum tercapai"})
     show_table(pd.DataFrame(rows))
     if results.get("top50") is not None:
         st.caption(f"Akurasi Top 50: {fmt_num(results['top50'], 1)} dari 50 SKU prediksi teratas masuk Top 50 aktual pada lipatan uji (rata-rata).")

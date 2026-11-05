@@ -14,8 +14,8 @@ from src.utils.format import excel_bytes as numeric_excel_bytes
 
 ID_MONTHS = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
 ID_MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
-STATUS_CLASS = {"Aman": "st-ok", "Tipis": "st-thin", "Kurang": "st-short", "Kosong": "st-empty", "di bawah SS": "st-thin"}
-STATUS_COLOR = {"Aman": "#15803d", "Tipis": "#a16207", "Kurang": "#b91c1c", "Kosong": "#b91c1c", "di bawah SS": "#a16207", "Tanpa data stok": "#64748b"}
+STATUS_CLASS = {"Aman": "st-ok", "Kurang": "st-short", "Kosong": "st-empty", "di bawah SS": "st-thin"}
+STATUS_COLOR = {"Aman": "#15803d", "Kurang": "#b91c1c", "Kosong": "#b91c1c", "di bawah SS": "#a16207", "Tanpa data stok": "#64748b"}
 UP_COLOR = "#1d4ed8"
 DOWN_COLOR = "#dc2626"
 EXTRA_BG = "#eff6ff"
@@ -95,7 +95,9 @@ def signed_delta(now: float, then: float | None, *, money: bool) -> tuple[str, s
 
 
 def status_key(status: object) -> str:
-    return str(status or "").split(" · ")[0]
+    key = str(status or "").split(" · ")[0]
+    # Run lama masih menyimpan "Tipis" (stok < prediksi + SS), kini termasuk Kurang.
+    return "Kurang" if key == "Tipis" else key
 
 
 def badge(text: str, tone: str = "neutral") -> str:
@@ -110,7 +112,7 @@ def badge(text: str, tone: str = "neutral") -> str:
     bg, fg = colors.get(tone, colors["neutral"])
     return (
         f"<span style='display:inline-block;padding:2px 10px;border-radius:999px;background:{bg};color:{fg};"
-        f"font-size:0.74rem;font-weight:700;letter-spacing:.02em'>{html.escape(text)}</span>"
+        f"font-size:var(--fs-xs);font-weight:700;letter-spacing:.02em'>{html.escape(text)}</span>"
     )
 
 
@@ -165,7 +167,7 @@ def cached_sku_coverage(frame: pd.DataFrame, start=None, end=None) -> dict:
 
 
 def section(title: str, kicker: str | None = None) -> None:
-    kicker_html = f"<div style='font-size:.72rem;font-weight:700;color:#64748b;letter-spacing:.08em;text-transform:uppercase'>{html.escape(kicker)}</div>" if kicker else ""
+    kicker_html = f"<div style='font-size:var(--fs-xs);font-weight:700;color:#64748b;letter-spacing:.08em;text-transform:uppercase'>{html.escape(kicker)}</div>" if kicker else ""
     st.markdown(f"{kicker_html}<div class='section-title'>{html.escape(title)}</div>", unsafe_allow_html=True)
 
 
@@ -293,7 +295,7 @@ def exclude_toggle_card(*, key: str, removed_orders: int, removed_units: float) 
 
 
 def default_note(used_default: bool) -> str:
-    return f"<span style='font-size:.72rem;color:#94a3b8'>· {DEFAULT_NOTE}</span>" if used_default else ""
+    return f"<span style='font-size:var(--fs-xs);color:#94a3b8'>· {DEFAULT_NOTE}</span>" if used_default else ""
 
 
 def lttb(x: np.ndarray, y: np.ndarray, threshold: int = 400) -> tuple[np.ndarray, np.ndarray]:
@@ -345,7 +347,7 @@ def sku_cards(rows: list[dict], *, key: str) -> None:
         title = html.escape(str(row.get("produk") or "-"))
         meta = " · ".join(html.escape(str(v)) for v in (row.get("sku"), row.get("varian")) if v and str(v).lower() != "nan")
         status = str(row.get("status") or "")
-        tone = {"Aman": "on", "Tipis": "warn", "Kurang": "bad", "Kosong": "bad"}.get(status_key(status), "neutral")
+        tone = {"Aman": "on", "Kurang": "bad", "Kosong": "bad"}.get(status_key(status), "neutral")
         tag = f" {badge(status_key(status), tone)}" if status else ""
         nums = "".join(f"<div>{html.escape(str(label))}: <b>{html.escape(str(value))}</b></div>" for label, value in row.get("nums", []))
         parts.append(f"<div class='sku-card'><div class='sku-title'>{title}</div><div class='sku-meta'>{meta}{tag}</div><div class='sku-nums'>{nums}</div></div>")

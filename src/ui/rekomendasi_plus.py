@@ -12,6 +12,7 @@ import streamlit as st
 
 from src.core import ads_plan, promo_calendar, ranking_score
 from src.core import margin as margin_core
+from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date
 from src.core.product_features import features_from_description, hook_for
 from src.core.promo import momentum_14d, product_label, promo_eligible
@@ -53,7 +54,7 @@ def _candidates(table: pd.DataFrame, data: FeatureData, margin_min: float, roas_
         daily = cost_month / ads_plan.DAYS
         curve = ads_plan.default_curve(daily, roas_now)
         stok = float(row["stok"]) if bool(row.get("ada_data_stok", False)) else 0.0
-        extra_units = stok - float(row["m_qty"]) - float(row["ss"])
+        extra_units = stok - stock_need(row)
         price = float(row.get("harga_bersih", 0) or 0)
         cap = ads_plan.unit_cap_to_cost(curve, daily, extra_units, price) if extra_units > 0 else 0.0
         cand = ads_plan.Candidate(sku, _label(row), margin_pct, daily, curve, cap, decision, reasons)
@@ -163,7 +164,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
     total = product_total + group
     g2.markdown(
         "<div class='stat-card'><div class='readable-metric-label'>Rincian budget</div>"
-        f"<div style='font-size:.9rem'>Iklan produk {fmt_idr(product_total)} + iklan grup {fmt_idr(group)} = <b>{fmt_idr(total)}</b><br>"
+        f"<div style='font-size:var(--fs-base)'>Iklan produk {fmt_idr(product_total)} + iklan grup {fmt_idr(group)} = <b>{fmt_idr(total)}</b><br>"
         f"Budget strategi {html.escape(choice)} {fmt_idr(strategy_budget)} · sisa <b>{fmt_idr(strategy_budget - total)}</b></div></div>",
         unsafe_allow_html=True,
     )
@@ -292,7 +293,7 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
         by_day.setdefault(pd.Timestamp(row["tanggal"]).date(), []).append(row.to_dict())
     head = st.columns(7)
     for column, name in zip(head, WEEKDAYS):
-        column.markdown(f"<div style='text-align:center;font-size:.75rem;color:#64748b;font-weight:700'>{name}</div>", unsafe_allow_html=True)
+        column.markdown(f"<div style='text-align:center;font-size:var(--fs-xs);color:#64748b;font-weight:700'>{name}</div>", unsafe_allow_html=True)
     picked = st.session_state.get("expo-day")
     for week in promo_calendar.month_grid(year, month):
         cols = st.columns(7)
@@ -307,13 +308,13 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
                     st.session_state["expo-day"] = day.isoformat()
                     st.rerun()
                 lines = "".join(
-                    f"<div style='font-size:.68rem;line-height:1.3;margin-top:3px;word-break:break-word'><b>{html.escape(str(item['kanal']))}</b><br>{html.escape(str(item['label']))}</div>"
+                    f"<div style='font-size:var(--fs-xs);line-height:1.3;margin-top:3px;word-break:break-word'><b>{html.escape(str(item['kanal']))}</b><br>{html.escape(str(item['label']))}</div>"
                     for item in items
                 )
                 special = next((item.get("spesial") for item in items if item.get("spesial")), "")
                 if special:
-                    lines = f"<div style='font-size:.66rem;color:#b45309;font-weight:700'>{html.escape(special)}</div>" + lines
-                st.markdown(lines or "<div style='font-size:.68rem;color:#cbd5e1'>–</div>", unsafe_allow_html=True)
+                    lines = f"<div style='font-size:var(--fs-xs);color:#b45309;font-weight:700'>{html.escape(special)}</div>" + lines
+                st.markdown(lines or "<div style='font-size:var(--fs-xs);color:#cbd5e1'>–</div>", unsafe_allow_html=True)
     if picked:
         _exposure_detail(by_day.get(date.fromisoformat(picked), []), date.fromisoformat(picked), frames)
     b1, b2 = st.columns(2)

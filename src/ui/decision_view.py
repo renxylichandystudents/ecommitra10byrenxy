@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 _TABLE = components.declare_component("decision_table", path=str(ROOT / "components" / "top50_table"))
 SS_DEFINITION_TOP = (
     "Safety stock (SS) = stok cadangan agar produk tidak kosong. "
-    "SS = Z × σ permintaan harian × √lead time; untuk barang impor ditambah (lead time maks − lead time rata-rata) × permintaan harian."
+    "SS = Z × σ permintaan harian × √lead time lokal, dibulatkan ke atas."
 )
 
 
@@ -225,7 +225,7 @@ def safety_stock_box(table: pd.DataFrame, *, period: str, today: date, definitio
             )
             if summary["sku_tanpa_stok_data"]:
                 body += f"<br><span style='color:#64748b'>{fmt_num(summary['sku_tanpa_stok_data'])} SKU belum ada data stok</span>"
-            card(column, group.label, f"<div style='font-size:.95rem;font-weight:600;line-height:1.6'>{body}</div>", tone="extra" if group.extra else None)
+            card(column, group.label, f"<div style='font-size:var(--fs-base);font-weight:600;line-height:1.6'>{body}</div>", tone="extra" if group.extra else None)
         if used_default:
             st.caption("Lead time memakai asumsi default dari Pengaturan bisnis.")
 
@@ -237,13 +237,15 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
     for group in groups:
         p = group.prefix
         act = actuals.get(p, {})
+        end = pd.Timestamp(today) + pd.Timedelta(days=group.days - 1)
+        span = fmt_date(today, short=True) if group.days == 1 else f"{fmt_date(today, short=True)} – {fmt_date(end.date(), short=True)}"
         qty_act = float(act.get("qty", 0.0))
         sales_act = float(act.get("sales", 0.0))
         share_base = float(act.get("store_sales", 0.0))
         share = sales_act / share_base * 100 if share_base > 0 else np.nan
         rows.append(
             {
-                "Periode": group.label,
+                "Periode": f"{group.label} · {span}",
                 "Actual pembanding": act.get("label", "-"),
                 "QTY actual": fmt_qty(qty_act),
                 "Sales volume actual": fmt_idr(sales_act),
@@ -255,9 +257,8 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
     frame = pd.DataFrame(rows)
     header = "".join(f"<th>{c}</th>" for c in frame.columns)
     body = ""
-    for _, r in frame.iterrows():
-        extra = r["Periode"] not in {g.label for g in groups if not g.extra}
-        style = " style='background:#eff6ff'" if extra else ""
+    for group, (_, r) in zip(groups, frame.iterrows()):
+        style = " style='background:#eff6ff'" if group.extra else ""
         body += f"<tr{style}>" + "".join(f"<td>{r[c]}</td>" for c in frame.columns) + "</tr>"
     st.markdown(
         "<div class='sheet-scroll'><table style='width:100%'><thead><tr>" + header + "</tr></thead><tbody>" + body + "</tbody></table></div>",
@@ -265,7 +266,10 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
     )
     extra = next((g.label for g in groups if g.extra), None)
     extra_text = f"; {extra} = {extra.lower()} terakhir s.d. kemarin" if extra else ""
-    st.caption(f"Actual hari = hari terakhir yang ada transaksi; actual bulan = bulan penuh terakhir{extra_text}. Kontribusi = sales Top 50 ÷ sales seluruh toko pada rentang yang sama.")
+    st.caption(
+        f"Actual hari = hari penuh terakhir sebelum hari ini (hari ini masih berjalan); actual bulan = bulan penuh terakhir{extra_text}. "
+        "Kontribusi = sales Top 50 ÷ sales seluruh toko pada rentang actual yang sama."
+    )
 
 
 def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, start: date, end: date, total: float) -> pd.DataFrame:

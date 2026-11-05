@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date, fmt_date_short
 from src.core.pred_actual import STATUS_ORDER, daily_comparison, lost_sales_from_stock
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
@@ -58,7 +59,7 @@ def show_prediction_checklist(
     f1, f2, f3 = st.columns([2.2, 1.4, 1.4])
     query = f1.text_input("Cari SKU atau nama produk", placeholder="Cari SKU atau nama produk..", key="chk-search")
     labels = f2.multiselect("Label", options=label_options, key="chk-labels", placeholder="Pilih")
-    statuses = f3.multiselect("Status stok", options=["Aman", "Tipis", "Kurang", "Kosong", "Tanpa data stok"], key="chk-status", placeholder="Pilih")
+    statuses = f3.multiselect("Status stok", options=["Aman", "Kurang", "Kosong", "Tanpa data stok"], key="chk-status", placeholder="Pilih")
     work = table
     needle = " ".join(str(query or "").lower().split())
     if needle:
@@ -151,7 +152,7 @@ def _explain_card(row, *, pred_label, actual_label, month_qty, last_day, day_qty
     title = " · ".join(p for p in (str(row["sku"]), str(row["product_name"]), variant) if p and p.lower() != "nan")
     known = bool(row.get("ada_data_stok", False))
     stok = float(row["stok"]) if known else None
-    need = float(row["m_qty"]) + float(row["ss"])
+    need = stock_need(row)
     restock = max(0.0, need - stok) if known else None
     habis = stock_out_date(stok, float(row["pred_harian"]), today) if known else None
     po = data.po.get(str(row["sku"]))

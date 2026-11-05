@@ -10,7 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.core.decision_table import PERIOD_LABELS
+from src.core.decision_table import PERIOD_LABELS, stock_shortage
 from src.core.expert_system import FISHBONE_CATEGORIES, evaluate_rules, fishbone, sku_facts, swot, work_guide
 from src.core.optimization import monte_carlo_stock_scenarios
 from src.core.preprocessing import promo_flag
@@ -41,7 +41,7 @@ SECTIONS = (
 def _chip(text: str) -> str:
     return (
         "<span style='display:inline-block;margin:2px 6px 2px 0;padding:3px 10px;border-radius:999px;"
-        f"background:#f1f5f9;color:#334155;font-size:.76rem;font-weight:600'>{html.escape(text)}</span>"
+        f"background:#f1f5f9;color:#334155;font-size:var(--fs-xs);font-weight:600'>{html.escape(text)}</span>"
     )
 
 
@@ -58,7 +58,7 @@ def _top_advices(table: pd.DataFrame, today: date, limit: int = 8) -> pd.DataFra
     for _, row in table.head(50).iterrows():
         facts = sku_facts(row, today=today)
         advices = evaluate_rules(facts)
-        short = facts.get("status_stok") in {"Kosong", "Kurang", "Tipis"}
+        short = facts.get("status_stok") in {"Kosong", "Kurang"}
         for advice in advices:
             if short and advice.action == "iklan" and advice.rule_id != "iklan_boros":
                 continue
@@ -181,7 +181,8 @@ def show_report(
     ads = ads_metrics(frames.ads, frames.stock, orders_all, report_lo, report_hi)
     ad_result = ads["result"]
     ad_cost, ad_sales, roas = ads["biaya_iklan"], ads["omzet_iklan"], ads["roas"]
-    short_top = int(top["m_status"].map(status_key).isin({"Kurang", "Kosong"}).sum()) if not top.empty and "m_status" in top.columns else 0
+    shortage = stock_shortage(top)
+    short_top = shortage["kurang"]
     cancel_rate = float(facts["tingkat_batal"] * 100)
     reasons = _cancel_reasons(report_all)
     unpaid = int(facts["belum_bayar"])
@@ -199,12 +200,15 @@ def show_report(
                 metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
                 card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"target {fmt_idr(target)}" if target > 0 else None)
                 metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
-                card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint=f"status Kurang/Kosong · {pred_label}")
+                short_hint = f"stok di bawah {pred_label} + SS · {fmt_num(shortage['kosong'])} kosong (stok 0)"
+                if shortage["tanpa_data"]:
+                    short_hint += f" · {fmt_num(shortage['tanpa_data'])} tanpa data stok"
+                card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint=short_hint)
                 gap = month_pred - target
                 target_line = f"- {pred_label} {fmt_idr(month_pred)} {'di atas' if gap >= 0 else 'di bawah'} target sebesar {fmt_idr(abs(gap))}.\n" if target > 0 else ""
                 st.markdown(
                     target_line
-                    + f"- {short_top} SKU Top 50 stoknya belum menutup kebutuhan (prediksi + safety stock): prioritas restock sebelum menambah iklan.\n"
+                    + f"- {short_top} SKU Top 50 stoknya di bawah {pred_label} + safety stock ({shortage['kosong']} di antaranya stok 0): prioritas restock sebelum menambah iklan.\n"
                     f"- Tingkat batal {fmt_pct(cancel_rate)}; {unpaid} pesanan batal karena belum bayar bisa dikejar lewat chat."
                 )
                 if not records.empty:
@@ -236,8 +240,8 @@ def show_report(
                     st.write("Data stok belum tersedia.")
                 else:
                     counts = top["m_status"].map(status_key).value_counts()
-                    cols = st.columns(5)
-                    for column, name in zip(cols, ("Aman", "Tipis", "Kurang", "Kosong", "Tanpa data stok")):
+                    cols = st.columns(4)
+                    for column, name in zip(cols, ("Aman", "Kurang", "Kosong", "Tanpa data stok")):
                         card(column, name, fmt_num(int(counts.get(name, 0))), hint="SKU Top 50")
                     sigma_map = stock.set_index("item_key")["sigma_qty"].to_dict() if isinstance(stock, pd.DataFrame) and "sigma_qty" in stock.columns else {}
                     lead = params.get("lead_time", {})

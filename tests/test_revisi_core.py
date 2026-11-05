@@ -274,3 +274,26 @@ class PeriodLabelTests(unittest.TestCase):
         self.assertEqual(last_full_month(date(2026, 10, 27)), (date(2026, 9, 1), date(2026, 9, 30)))
         self.assertFalse(same_target(date(2026, 10, 31), "bulan", date(2026, 11, 1), "bulan"))
         self.assertTrue(same_target(date(2026, 11, 2), "bulan", date(2026, 11, 3), "bulan"))
+
+
+class PeriodRankTests(unittest.TestCase):
+    def test_period_filter_keeps_all_predicted_skus(self) -> None:
+        from src.ranking import rank_for_period
+
+        orders = pd.DataFrame(
+            {
+                "item_key": ["A", "A", "B", "C", "C", "C"],
+                "item_label": list("AABCCC"), "product_name": list("AABCCC"), "variation": "", "sku": list("AABCCC"),
+                "qty": [5, 5, 1, 3, 3, 3],
+                "sales": [50, 50, 900, 30, 30, 30],
+                "order_id": ["1", "2", "3", "4", "5", "6"],
+                "order_time": pd.to_datetime(["2026-10-01", "2026-11-05", "2026-11-05", "2026-10-02", "2026-10-03", "2026-10-04"]),
+            }
+        )
+        period = orders.loc[orders["order_time"] >= "2026-11-05"]
+        by_qty = rank_for_period(orders, period, "qty")
+        self.assertEqual(by_qty["item_key"].tolist(), ["A", "B", "C"])
+        self.assertEqual(by_qty["qty_total"].tolist(), [5, 1, 0])
+        by_sales = rank_for_period(orders, period, "sales")
+        self.assertEqual(by_sales["item_key"].tolist(), ["B", "A", "C"])
+        self.assertEqual(by_sales["peringkat"].tolist(), [1, 2, 3])

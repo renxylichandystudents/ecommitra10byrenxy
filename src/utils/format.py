@@ -214,6 +214,24 @@ def input_rupiah(label: str, value: int | float, key: str, *, help: str | None =
     return parse_rupiah(text)
 
 
+def input_angka(label: str, value: int | float, key: str, *, lo: int = 0, hi: int | None = None, help: str | None = None) -> int:
+    """text_input bilangan bulat bertitik ribuan ("100.000"), dibatasi lo..hi."""
+    import streamlit as st
+
+    def _clamp(number: int) -> int:
+        number = max(lo, number)
+        return min(hi, number) if hi is not None else number
+
+    if key not in st.session_state:
+        st.session_state[key] = angka(_clamp(int(value or 0)))
+
+    def _reformat() -> None:
+        st.session_state[key] = angka(_clamp(parse_rupiah(st.session_state.get(key))))
+
+    text = st.text_input(label, key=key, on_change=_reformat, help=help)
+    return _clamp(parse_rupiah(text))
+
+
 def _excel_ready(frame: pd.DataFrame) -> pd.DataFrame:
     clean = frame.copy()
     for column in clean.columns:

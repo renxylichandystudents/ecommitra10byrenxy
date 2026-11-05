@@ -109,7 +109,7 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
 def _keyword_chips(text: str) -> str:
     words = [w.strip() for w in str(text or "").split(",") if w.strip()]
     return "".join(
-        f"<span style='display:inline-block;margin:2px 4px 2px 0;padding:2px 10px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:.78rem'>{html.escape(w)}</span>"
+        f"<span style='display:inline-block;margin:2px 4px 2px 0;padding:2px 10px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:var(--fs-xs)'>{html.escape(w)}</span>"
         for w in words
     )
 
@@ -138,14 +138,14 @@ def _description_html(text: str) -> str:
         else:
             parts.append(f"<p style='margin:.2rem 0'>{html.escape(line)}</p>")
     flush()
-    return "<div style='font-size:.86rem;line-height:1.5'>" + "".join(parts) + "</div>"
+    return "<div style='font-size:var(--fs-sm);line-height:1.5'>" + "".join(parts) + "</div>"
 
 
 def _name_detail(item: pd.Series) -> None:
     with st.container(border=True):
-        st.markdown(f"<div style='font-size:.75rem;color:#64748b'>Nama saat ini · skor {html.escape(str(item['Status skor']))} ({item['Poin skor']}/8)</div>"
-                    f"<div style='font-size:.85rem'>{html.escape(str(item['Nama produk saat ini']))}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div style='font-size:.75rem;color:#64748b;margin-top:.5rem'>Nama rekomendasi · skor {html.escape(str(item['Skor nama baru']))}</div>"
+        st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b'>Nama saat ini · skor {html.escape(str(item['Status skor']))} ({item['Poin skor']}/8)</div>"
+                    f"<div style='font-size:var(--fs-sm)'>{html.escape(str(item['Nama produk saat ini']))}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b;margin-top:.5rem'>Nama rekomendasi · skor {html.escape(str(item['Skor nama baru']))}</div>"
                     f"<div style='font-weight:700'>{html.escape(str(item['Rekomendasi nama baru']))}</div>", unsafe_allow_html=True)
         st.markdown(_keyword_chips(item["Kata kunci utama"]) + _keyword_chips(item["Kata kunci pendukung"]), unsafe_allow_html=True)
         checks = item["Kriteria"] if isinstance(item["Kriteria"], dict) else {}
@@ -250,7 +250,7 @@ def _flash_tab(table: pd.DataFrame, params: dict, today: date, user_root: Path) 
         cols = st.columns(7)
         for column, day in zip(cols, week):
             part = plan.loc[plan["Tanggal"] == day]
-            items = "".join(f"<div style='font-size:.72rem;line-height:1.3;margin-top:3px'>• {html.escape(str(name)[:38])}</div>" for name in part["Produk"])
+            items = "".join(f"<div style='font-size:var(--fs-xs);line-height:1.3;margin-top:3px'>• {html.escape(str(name)[:38])}</div>" for name in part["Produk"])
             column.markdown(
                 f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:120px'><b>{fmt_date(day, short=True)}</b>{items}</div>",
                 unsafe_allow_html=True,

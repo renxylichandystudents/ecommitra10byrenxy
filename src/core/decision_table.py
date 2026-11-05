@@ -28,6 +28,11 @@ class PeriodGroup:
     extra: bool
 
 
+def whole_units(qty):
+    """Bulatkan ke bawah ke unit utuh; toleransi kecil agar 1017 × 30 / 30 tidak jatuh menjadi 1016."""
+    return np.floor(np.asarray(qty, dtype=float) + 1e-6) if np.ndim(qty) else float(np.floor(float(qty) + 1e-6))
+
+
 def period_groups(period: str, today: date) -> list[PeriodGroup]:
     """Hari ini dan jendela prediksi bulan selalu ada. Periode tambahan hanya untuk Kuartal/Semester/Tahun."""
     ref = pd.Timestamp(today).normalize()
@@ -147,22 +152,17 @@ def build_decision_table(
 
     for group in period_groups(period, today):
         p = group.prefix
-        if p == "m":
-            qty = out["pred_harian"] * group.days
-            sales = qty * out["harga_bersih"]
-            future_need = qty
-        elif p == "p":
+        if p == "p":
             qty = pred_qty.astype(float)
             sales = pred_sales.astype(float)
-            future_need = qty
         else:
-            qty = out["pred_harian"].astype(float)
+            # Unit pecahan tidak bisa terjual: QTY dibulatkan ke bawah, sales = QTY bulat × harga bersih.
+            qty = whole_units(out["pred_harian"] * (group.days if p == "m" else 1))
             sales = qty * out["harga_bersih"]
-            future_need = qty
         out[f"{p}_qty"] = np.rint(qty)
         out[f"{p}_sales"] = np.rint(sales)
         out[f"{p}_ss"] = out["ss"]
-        out[f"{p}_butuh"] = np.ceil(future_need + out["ss"])
+        out[f"{p}_butuh"] = out[f"{p}_qty"] + out["ss"]
         stok = out["stok"]
         out[f"{p}_stok"] = stok
         out[f"{p}_selisih"] = stok - out[f"{p}_butuh"]
@@ -192,15 +192,16 @@ def build_decision_table(
 def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today: date) -> dict[str, dict[str, float]]:
     """Actual Top 50 dan seluruh toko per kelompok periode (untuk matriks Ringkasan total Top 50).
 
-    Hari = tanggal terakhir yang ada transaksi (≤ hari ini); bulan = bulan penuh terakhir
-    ("Aktual Okt 2026"); periode tambahan = 3/6/12 bulan terakhir s.d. kemarin.
+    Hari = hari penuh terakhir sebelum hari ini (hari ini masih berjalan, sama dengan kartu Dashboard);
+    bulan = bulan penuh terakhir ("Aktual Okt 2026"); periode tambahan = 3/6/12 bulan terakhir s.d. kemarin.
     """
     out: dict[str, dict[str, float]] = {}
     if orders is None or orders.empty:
         return out
     ref = pd.Timestamp(today).normalize()
     days = pd.to_datetime(orders["order_time"], errors="coerce").dt.normalize()
-    last_day = min(days.max(), ref)
+    full_days = days[days < ref]
+    last_day = full_days.max() if full_days.notna().any() else ref - pd.Timedelta(days=1)
     in_top = orders["item_key"].astype(str).isin(set(keys))
     month_lo, month_hi = last_full_month(last_day.date())
     spans = {"d": (last_day, last_day + pd.Timedelta(days=1)), "m": (pd.Timestamp(month_lo), pd.Timestamp(month_hi) + pd.Timedelta(days=1))}
@@ -230,6 +231,28 @@ def lama_kosong_text(row: pd.Series) -> str:
         months = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
         since_text = f", sejak {stamp.day} {months[stamp.month - 1]}"
     return f"{int(days)} hari{since_text}"
+
+
+def stock_need(row, prefix: str = "m") -> float:
+    """Kebutuhan stok satu SKU = prediksi (unit utuh) + SS, angka yang sama dengan dasar label status."""
+    value = row.get(f"{prefix}_butuh")
+    if value is not None and pd.notna(value):
+        return float(value)
+    return float(row.get(f"{prefix}_qty", 0) or 0) + float(row.get("ss", 0) or 0)
+
+
+def stock_shortage(table: pd.DataFrame, prefix: str = "m") -> dict[str, int]:
+    """Hitungan dari label status yang sama dengan tabel: Kurang (stok < prediksi + SS) termasuk Kosong (stok 0)."""
+    if table is None or table.empty or f"{prefix}_status" not in table.columns:
+        return {"kurang": 0, "kosong": 0, "di_bawah_ss": 0, "tanpa_data": 0}
+    status = table[f"{prefix}_status"].astype(str).str.split(" · ").str[0].replace({"Tipis": "Kurang"})
+    below = table["di_bawah_ss"].astype(bool) if "di_bawah_ss" in table.columns else pd.Series(False, index=table.index)
+    return {
+        "kurang": int(status.isin({"Kurang", "Kosong"}).sum()),
+        "kosong": int(status.eq("Kosong").sum()),
+        "di_bawah_ss": int(below.sum()),
+        "tanpa_data": int(status.eq("Tanpa data stok").sum()),
+    }
 
 
 def safety_stock_summary(table: pd.DataFrame, prefix: str = "m") -> dict[str, float]:

@@ -88,7 +88,8 @@ def analysis_markup(
         status = status_key(row.get(f"{p}_status"))
         if bool(row.get("ada_data_stok", False)):
             gap = float(row[f"{p}_selisih"])
-            stock_text = f"<span style='color:{STATUS_COLOR.get(status, '#334155')};font-weight:700'>{fmt_qty(row['stok'])} · {'+' if gap >= 0 else '−'}{fmt_qty(abs(gap))} ({fmt_pct(float(row[f'{p}_pct']) * 100, 0, signed=True)}) · {status}</span>"
+            below = " · di bawah SS" if "di bawah SS" in str(row.get(f"{p}_status", "")) else ""
+            stock_text = f"<span style='color:{STATUS_COLOR.get(status, '#334155')};font-weight:700'>{fmt_qty(row['stok'])} · {'+' if gap >= 0 else '−'}{fmt_qty(abs(gap))} ({fmt_pct(float(row[f'{p}_pct']) * 100, 0, signed=True)}) · {status}{below}</span>"
         else:
             stock_text = "belum ada data stok"
         style = " style='background:#eff6ff'" if group.extra else ""
@@ -124,14 +125,18 @@ def analysis_markup(
     # 4. Iklan
     cost = float(row.get("biaya_iklan", 0) or 0)
     ad_sales = float(row.get("omzet_iklan", 0) or 0)
-    sales_total = float(row.get("sales_total", 0) or 0)
+    # Pembagi = sales SKU pada periode laporan iklan yang sama, bukan saringan Periode penjualan.
+    sales_in_ad_period = float(row.get("sales_sku", 0) or 0)
     if cost > 0 or ad_sales > 0:
         roas = ad_sales / cost if cost > 0 else float("nan")
         acos = cost / ad_sales * 100 if ad_sales > 0 else float("nan")
-        share = ad_sales / sales_total * 100 if sales_total > 0 else float("nan")
+        share = ad_sales / sales_in_ad_period * 100 if sales_in_ad_period > 0 else float("nan")
         block4 = (
             f"<p class='insight-copy'>Biaya <b>{fmt_idr(cost)}</b> · Omzet iklan <b>{fmt_idr(ad_sales)}</b> · "
-            f"ROAS <b>{fmt_num(roas, 1)}</b> · ACoS (biaya ÷ omzet iklan) <b>{fmt_pct(acos)}</b> · Porsi sales dari iklan <b>{fmt_pct(min(share, 100) if np.isfinite(share) else share)}</b></p>"
+            f"ROAS <b>{fmt_num(roas, 1)}</b> · ACoS (biaya ÷ omzet iklan) <b>{fmt_pct(acos)}</b> · "
+            f"Porsi sales dari iklan <b>{fmt_pct(share) if np.isfinite(share) else '-'}</b>"
+            + (f" dari sales SKU {fmt_idr(sales_in_ad_period)} pada periode laporan iklan" if sales_in_ad_period > 0 else "")
+            + "</p>"
         )
     else:
         block4 = "<p class='insight-copy'>SKU ini tidak tercatat di laporan iklan (atau Kode produk belum terpetakan ke SKU).</p>"
@@ -144,6 +149,9 @@ def analysis_markup(
     if brief:
         for factor in brief.get("factors", [])[:4]:
             label = str(factor.get("label", ""))
+            # Tren penjualan sudah dari fakta tren_pct (pesanan s.d. kemarin); versi data latih tidak ditampilkan dobel.
+            if label.startswith("Laku 4 minggu") and np.isfinite(facts.get("tren_pct", np.nan)):
+                continue
             if factor.get("tone") == "up" and label not in up:
                 up.append(label)
             elif factor.get("tone") == "down" and label not in down:

@@ -15,11 +15,11 @@ import pandas as pd
 from src.core.naming import category_label
 from src.core.preprocessing import promo_flag
 
-SHORT_STATUSES = {"Kosong", "Kurang", "Tipis"}
+SHORT_STATUSES = {"Kosong", "Kurang"}
 
 
 def _status(row: pd.Series, prefix: str = "m") -> str:
-    return str(row.get(f"{prefix}_status", "")).split(" · ")[0]
+    return str(row.get(f"{prefix}_status", "")).split(" · ")[0].replace("Tipis", "Kurang")
 
 
 def demand_days(orders: pd.DataFrame | None, start: date, end: date, *, limit: int = 8) -> list[date]:

@@ -93,10 +93,19 @@ def sku_facts(row: pd.Series, *, prefix: str = "m", today: date | None = None) -
     ad_sales = float(row.get("omzet_iklan", 0) or 0)
     sold_ads = float(row.get("terjual_iklan", 0) or 0)
     lead = float(row.get("lead_time", 7) or 7)
+    cover = float(row.get("hari_cukup")) if pd.notna(row.get("hari_cukup")) else np.nan
+    if not np.isfinite(cover):
+        deadline_text = "segera" if np.isnan(cover) else "sebelum kebutuhan bulan ini berjalan"
+    elif cover <= lead:
+        out_day = ref + timedelta(days=int(cover))
+        deadline_text = f"hari ini juga, karena stok diperkirakan habis {_fmt(out_day)} sebelum barang tiba (lead time {_fmt(lead)} hari)"
+    else:
+        deadline_text = f"paling lambat {_fmt(ref + timedelta(days=int(min(cover, 365)) - int(lead)))}"
     return {
+        "batas_teks": deadline_text,
         "abc": row.get("abc", ""),
         "xyz": row.get("xyz", ""),
-        "status_stok": str(row.get(f"{prefix}_status", "")).split(" · ")[0],
+        "status_stok": str(row.get(f"{prefix}_status", "")).split(" · ")[0].replace("Tipis", "Kurang"),
         "di_bawah_ss": bool(row.get("di_bawah_ss", False)),
         "selisih_pct": float(row.get(f"{prefix}_pct", 0) or 0) * 100,
         "kekurangan": max(gap, 0.0) if not np.isnan(gap) else np.nan,
@@ -149,7 +158,7 @@ def drivers_and_risks(facts: dict, row: pd.Series) -> tuple[list[str], list[str]
         (up if trend > 0 else down).append(f"Penjualan 28 hari terakhir {'naik' if trend > 0 else 'turun'} {abs(trend):.0f}% dibanding 28 hari sebelumnya")
     roas = facts.get("roas")
     if roas is not None and not np.isnan(roas):
-        (up if roas >= 6 else down).append(f"ROAS iklan {roas:.1f}")
+        (up if roas >= 6 else down).append(f"ROAS iklan {_fmt(round(float(roas), 1))}")
     if facts.get("label_terlaris"):
         up.append("Masuk 10 besar QTY dan sales (Terlaris)")
     if str(row.get("abc", "")) == "A":
@@ -159,12 +168,12 @@ def drivers_and_risks(facts: dict, row: pd.Series) -> tuple[list[str], list[str]
     elif str(row.get("xyz", "")) == "Z":
         down.append("Permintaan sporadis (kelas Z), mudah meleset")
     status = facts.get("status_stok")
-    if status in {"Kosong", "Kurang", "Tipis"}:
-        down.append(f"Stok {status.lower()}: kurang {_fmt(facts.get('kekurangan'))} unit dari kebutuhan")
+    if status in {"Kosong", "Kurang"}:
+        down.append(f"Stok {status.lower()}: butuh tambahan {_fmt(facts.get('kekurangan'))} unit")
     elif status == "Aman":
         up.append(f"Stok aman untuk {_fmt(facts.get('hari_cukup'))} hari")
     if facts.get("batal_pct", 0) > 10:
-        down.append(f"Tingkat batal {facts['batal_pct']:.0f}%")
+        down.append(f"Tingkat batal semua alasan {facts['batal_pct']:.0f}%")
     gap = facts.get("harga_vs_kompetitor_pct")
     if gap is not None and not np.isnan(gap):
         (down if gap > 5 else up).append(f"Harga {abs(gap):.0f}% {'di atas' if gap > 0 else 'di bawah'} kompetitor")
@@ -177,10 +186,13 @@ def drivers_and_risks(facts: dict, row: pd.Series) -> tuple[list[str], list[str]
 
 def action_steps(advices: list[Advice], facts: dict, *, max_steps: int = 3) -> list[str]:
     """Maks. 3 langkah terukur. Iklan tidak dinaikkan bila stok < kebutuhan."""
-    stock_short = facts.get("status_stok") in {"Kosong", "Kurang", "Tipis"}
+    stock_short = facts.get("status_stok") in {"Kosong", "Kurang"}
     steps = []
     for advice in advices:
         if stock_short and advice.action == "iklan" and advice.rule_id != "iklan_boros":
+            continue
+        # Butuh = prediksi + SS, jadi stok di bawah SS selalu juga Kurang; restock sebesar kekurangan sudah melewati SS dan ROP.
+        if stock_short and advice.rule_id == "di_bawah_ss":
             continue
         if advice.text not in steps:
             steps.append(advice.text)
@@ -208,7 +220,7 @@ def swot(context: dict) -> dict[str, list[str]]:
         (w if cancel > 5 else s).append(f"Tingkat batal {cancel:.1f}% dari pesanan")
     short = context.get("top50_short")
     if short:
-        w.append(f"{short} SKU Top 50 stoknya kurang dari kebutuhan")
+        w.append(f"{short} SKU Top 50 stoknya di bawah prediksi + safety stock")
     unpaid = context.get("unpaid_orders")
     if unpaid:
         o.append(f"{unpaid} pesanan batal karena belum bayar bisa dikejar lewat chat pengingat")

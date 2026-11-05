@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import html
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from src.core import warehouse
 from src.core.access import ROLE_LABELS, setting_tabs
-from src.core.fmt import fmt_date, fmt_date_short
+from src.core.decision_table import stock_shortage
+from src.core.fmt import fmt_date
+from src.core.periods import prediction_window, short_date
 from src.core.promo import promo_eligible
 from src.core.restock import restock_priority
-from src.ui.common import badge, card, download_excel, fmt_num, sku_cards
+from src.ui.common import badge, card, download_excel, fmt_num, sku_cards, status_key
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table
 
@@ -22,10 +24,10 @@ STEP = 10
 
 def status_badges(frame: pd.DataFrame, column: str = "Status") -> pd.DataFrame:
     """Status sebagai label berikon agar terbaca seperti badge di st.dataframe."""
-    icons = {"Kosong": "🔴 Kosong", "Kurang": "🟠 Kurang", "Aman": "🟢 Aman", "Tipis": "🟡 Tipis", "Tanpa data stok": "⚪ Tanpa data stok"}
+    icons = {"Kosong": "🔴 Kosong", "Kurang": "🟠 Kurang", "Aman": "🟢 Aman", "Tanpa data stok": "⚪ Tanpa data stok"}
     out = frame.copy()
     if column in out.columns:
-        out[column] = out[column].map(lambda v: icons.get(str(v).split(" · ")[0], str(v)))
+        out[column] = out[column].map(lambda v: icons.get(status_key(v), str(v)))
     return out
 
 
@@ -51,13 +53,28 @@ def capacity_summary(features, table: pd.DataFrame) -> tuple[str, str]:
     return (f"{fmt_num(pct, 1)}%" if pd.notna(pct) else "–"), note
 
 
-def last_actual(orders: pd.DataFrame | None, keys: list[str]) -> tuple[float, date | None]:
+def last_actual(orders: pd.DataFrame | None, keys: list[str], today: date) -> tuple[float, date | None]:
+    """QTY Top 50 pada hari penuh terakhir sebelum `today`; hari ini masih berjalan sehingga tidak dipakai."""
     if orders is None or orders.empty:
         return 0.0, None
     days = pd.to_datetime(orders["order_time"], errors="coerce").dt.date
-    last = days.max()
+    full = days[days < today]
+    if full.empty:
+        return 0.0, None
+    last = full.max()
     part = orders.loc[(days == last) & orders["item_key"].astype(str).isin(set(keys))]
     return float(part["qty"].sum()), last
+
+
+def actual_hint(predicted: float, actual: float, day: date | None, today: date) -> str:
+    if day is None:
+        return "Belum ada transaksi hari penuh"
+    when = "kemarin" if day == today - timedelta(days=1) else "transaksi terakhir"
+    text = f"Aktual {when} ({short_date(day)}): {fmt_num(actual)}"
+    if actual > 0:
+        gap = (predicted - actual) / actual * 100
+        text += f" · selisih {'+' if gap >= 0 else '−'}{fmt_num(abs(gap), 1)}%"
+    return text
 
 
 def show_priority_dashboard(
@@ -69,7 +86,9 @@ def show_priority_dashboard(
     data: FeatureData,
     role: str,
     window_label: str,
+    window_start: date,
     fresh_period: bool,
+    metric: str = "qty",
 ) -> None:
     st.markdown("<div class='section-title'>Dashboard prioritas</div>", unsafe_allow_html=True)
     if table is None or table.empty:
@@ -77,42 +96,50 @@ def show_priority_dashboard(
         return
     top = table.head(50)
     keys = top["item_key"].astype(str).tolist()
-    actual_qty, actual_day = last_actual(orders, keys)
-    known = top["ada_data_stok"].astype(bool)
-    stok = top["stok"].fillna(0)
-    need = top["m_qty"] + top["ss"]
-    short = known & (stok < need)
-    below_ss = known & (stok < top["ss"])
-    out_1d = known & ((stok <= 0) | (stok < top["pred_harian"]))
+    actual_qty, actual_day = last_actual(orders, keys, today)
+    predicted_today = float(top["d_qty"].sum())
+    shortage = stock_shortage(top)
     cols = st.columns(4)
     card(
         cols[0],
         "Prediksi QTY hari ini · Top 50",
-        fmt_num(top["d_qty"].sum()),
-        hint=f"Aktual {fmt_date(actual_day)}: {fmt_num(actual_qty)}" if actual_day else "Belum ada transaksi",
+        fmt_num(predicted_today),
+        hint=actual_hint(predicted_today, actual_qty, actual_day, today),
     )
     fresh = " " + badge("periode baru", "info") if fresh_period else ""
-    card(cols[1], f"Kebutuhan stok {window_label} · Top 50", fmt_num(need.sum()) + fresh, hint="Prediksi + safety stock")
-    card(cols[2], "SKU Top 50 stok kurang", fmt_num(short.sum()), hint=f"{fmt_num(below_ss.sum())} di bawah SS · {fmt_num(out_1d.sum())} habis ≤ 1 hari")
+    lo, hi = prediction_window("bulan", window_start)
+    card(
+        cols[1],
+        f"Kebutuhan stok {window_label} · Top 50",
+        fmt_num(top["m_butuh"].sum()) + fresh,
+        hint=f"Prediksi (unit utuh) + safety stock · {short_date(lo)} – {short_date(hi)}",
+    )
+    gaps = [f"{fmt_num(shortage['kosong'])} kosong (stok 0)", f"{fmt_num(shortage['di_bawah_ss'])} di bawah SS"]
+    if shortage["tanpa_data"]:
+        gaps.append(f"{fmt_num(shortage['tanpa_data'])} tanpa data stok")
+    card(cols[2], "SKU Top 50 stok kurang", fmt_num(shortage["kurang"]), hint="Stok di bawah prediksi + SS · " + " · ".join(gaps))
     cap_value, cap_note = capacity_summary(features, table)
     card(cols[3], "Kapasitas DC", cap_value, hint=cap_note)
 
-    priority = restock_priority(table, today, po=data.po)
+    priority = restock_priority(top, today, po=data.po)
+    basis = "Sales volume" if metric == "sales" else "QTY terjual"
     left, right = st.columns([3, 1.25], gap="medium")
     with left:
-        st.markdown("**Kebutuhan restock prioritas**")
-        st.caption("Restock = max(0, prediksi + SS − stok DC). Stok habis = hari ini + stok ÷ prediksi harian. Urut stok habis paling cepat, lalu restock terbesar.")
+        st.markdown(f"**Kebutuhan restock prioritas · Top 50 {basis}**")
+        st.caption(
+            f"SKU = Top 50 menurut {basis} (kolom Peringkat); angka prediksi QTY sama untuk kedua parameter. "
+            "Restock = max(0, prediksi + SS − stok DC). Stok habis = hari ini + stok ÷ prediksi harian. Urut stok habis paling cepat, lalu restock terbesar."
+        )
         if priority.empty:
-            st.info("Data stok belum diunggah, jadi kebutuhan restock belum bisa dihitung.")
+            st.info("Data stok Top 50 belum diunggah, jadi kebutuhan restock belum bisa dihitung.")
         else:
             limit = int(st.session_state.get("dash-limit", STEP))
-            shown = priority.head(limit).copy()
-            shown["Stok habis"] = shown["Stok habis"].map(lambda d: fmt_date_short(d) if d else "–")
-            display = status_badges(shown.rename(columns={"sku": "SKU"}).drop(columns=[c for c in shown.columns if c.startswith("_")]))
+            view = restock_view(priority)
+            display = status_badges(view.head(limit))
             if not display["Inbound"].astype(str).str.strip().any():
                 display = display.drop(columns="Inbound")
             with st.container(key="desktop-dash-restock"):
-                show_table(display, kinds={"Stok DC": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small")})
+                show_table(display, kinds={"Peringkat": "count", "Stok DC": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small")})
             sku_cards(
                 [
                     {
@@ -120,9 +147,9 @@ def show_priority_dashboard(
                         "produk": r.get("Produk"),
                         "varian": r.get("Varian"),
                         "status": r.get("Status"),
-                        "nums": [("Stok DC", fmt_num(r.get("Stok DC"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))],
+                        "nums": [("Peringkat", fmt_num(r.get("Peringkat"))), ("Stok DC", fmt_num(r.get("Stok DC"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))],
                     }
-                    for r in shown.rename(columns={"sku": "SKU"}).to_dict("records")
+                    for r in view.head(limit).to_dict("records")
                 ],
                 key="dash-restock",
             )
@@ -131,9 +158,18 @@ def show_priority_dashboard(
                 st.session_state["dash-limit"] = limit + STEP
                 st.rerun()
             with b2:
-                download_excel(priority.drop(columns=[c for c in priority.columns if c.startswith("_")]), "restock_prioritas.xlsx", key="xl-dash-restock")
+                download_excel(view, "restock_prioritas.xlsx", key="xl-dash-restock")
     with right:
         _insight_cards(table, priority, data, role)
+
+
+def restock_view(priority: pd.DataFrame) -> pd.DataFrame:
+    out = priority.rename(columns={"sku": "SKU"}).copy()
+    out["Stok habis"] = [
+        short_date(day) if day else ("Tidak habis · prediksi 0" if rate <= 0 else "–")
+        for day, rate in zip(out["Stok habis"], out["_pred_harian"])
+    ]
+    return out[["Peringkat", "SKU", "Produk", "Varian", "Stok DC", "Prediksi", "SS", "Restock", "Stok habis", "Status", "Inbound"]]
 
 
 def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureData, role: str) -> None:
@@ -141,7 +177,7 @@ def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureDat
     if not priority.empty:
         empty = int((priority["Status"] == "Kosong").sum())
         total = float(priority["Restock"].sum())
-        lines.append(f"<b>{fmt_num(empty)}</b> SKU kosong · total restock <b>{fmt_num(total)}</b> unit.")
+        lines.append(f"<b>{fmt_num(empty)}</b> SKU Top 50 kosong · total restock Top 50 <b>{fmt_num(total)}</b> unit.")
         first = priority.iloc[0]
         po = data.po.get(str(first["sku"]))
         if po:
@@ -157,13 +193,13 @@ def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureDat
             held += 0 if ok else 1
     if held:
         lines.append(f"<b>{fmt_num(held)}</b> SKU yang sedang beriklan sebaiknya ditahan (stok kurang, margin, atau batal tinggi).")
-    body = "".join(f"<div style='margin:.25rem 0;font-size:.86rem'>{line}</div>" for line in lines) or "<div class='field-hint'>Belum ada insight.</div>"
+    body = "".join(f"<div style='margin:.25rem 0;font-size:var(--fs-sm)'>{line}</div>" for line in lines) or "<div class='field-hint'>Belum ada insight.</div>"
     st.markdown(f"<div class='stat-card'><div class='readable-metric-label'>Insight</div>{body}</div>", unsafe_allow_html=True)
     if role in ("team_dc", "team_icmd"):
         tabs = [label for _slug, label, _menu in setting_tabs(role)]
         st.markdown(
             "<div class='stat-card' style='margin-top:.6rem'><div class='readable-metric-label'>Akses role Anda</div>"
-            f"<div style='font-size:.86rem'>{html.escape(ROLE_LABELS.get(role, role))}: Ringkasan & Prediksi (lihat), "
+            f"<div style='font-size:var(--fs-sm)'>{html.escape(ROLE_LABELS.get(role, role))}: Ringkasan & Prediksi (lihat), "
             f"Setting › {html.escape(', '.join(tabs))}.</div></div>",
             unsafe_allow_html=True,
         )

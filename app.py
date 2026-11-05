@@ -51,7 +51,7 @@ from src.aggregate import (
 )
 from src.core.config import changed_from_default, default_params, load_params, save_params
 from src.core.consolidation import consolidation_summary
-from src.core.decision_table import PERIOD_LABELS, build_decision_table, lama_kosong_text, period_actuals, period_groups
+from src.core.decision_table import PERIOD_LABELS, build_decision_table, lama_kosong_text, period_actuals, period_groups, whole_units
 from src.core.enrich import StoreFrames, enrich_catalog, load_store_frames, zero_since_map
 from src.core.performance import clean_performance, perf_number
 from src.core.pipeline import (
@@ -66,7 +66,7 @@ from src.core.labels import LABEL_ICONS
 from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, exclude_toggle_card, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
-from src.core.periods import format_period_label, month_year, prediction_window, same_target, same_day_last_month
+from src.core.periods import format_period_label, month_year, prediction_window, same_target, same_day_last_month, window_days
 from src.ui.confirm import confirm_action
 from src.ui.evaluasi import show_evaluation
 from src.ui.laporan import show_report
@@ -91,7 +91,7 @@ from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
 from src.core.userspace import deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
-from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar
+from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar, account_menu
 from auth.ui import logout as auth_logout
 from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_RESULT, PAGE_SETTING, apply_route, route_from_state, sync_route
 from src.core.promo import drop_excluded
@@ -134,7 +134,7 @@ from src.ingest import (
     load_shopee_report,
     order_month_keys,
 )
-from src.ranking import combine_forecasts, model_leaderboard, rank_from_orders
+from src.ranking import combine_forecasts, model_leaderboard, rank_for_period, rank_from_orders
 from src.stock import recommend_stock
 
 st.set_page_config(
@@ -259,9 +259,37 @@ st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    /* Satu skala ukuran huruf untuk seluruh aplikasi; jangan menulis font-size angka langsung. */
+    :root {
+        --fs-xs: 0.75rem;
+        --fs-sm: 0.85rem;
+        --fs-base: 0.95rem;
+        --fs-lg: 1.1rem;
+        --fs-xl: 1.35rem;
+        --fs-2xl: 1.6rem;
+        --fs-display: 2.4rem;
+    }
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li,
+    [data-testid="stAlertContainer"] p,
+    [data-testid="stExpander"] summary p,
+    [data-testid="stTab"] p,
+    [data-testid="stButton"] button p,
+    [data-testid="stDownloadButton"] button p,
+    [data-testid="stPopover"] button p,
+    [data-testid="stCheckbox"] label p,
+    [data-testid="stRadio"] label p { font-size: var(--fs-base); }
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p,
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stMetricLabel"] p { font-size: var(--fs-sm); }
+    [data-testid="stHeading"] h1 { font-size: var(--fs-2xl); }
+    [data-testid="stHeading"] h2 { font-size: var(--fs-xl); }
+    [data-testid="stHeading"] h3,
+    [data-testid="stHeading"] h4 { font-size: var(--fs-lg); }
     [data-testid="stMetricValue"],
     [data-testid="stMetricValue"] > div {
-        font-size: 1.35rem !important;
+        font-size: var(--fs-xl) !important;
         line-height: 1.25 !important;
         white-space: normal !important;
         overflow: visible !important;
@@ -288,7 +316,7 @@ st.markdown(
     }
     .stat-card.calm { border-top-color: #1b3da6; }
     .readable-metric-label {
-        font-size: 0.78rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.04em;
         text-transform: uppercase;
@@ -297,7 +325,7 @@ st.markdown(
         margin: 0 0 0.45rem 0;
     }
     .readable-metric-value {
-        font-size: 1.32rem;
+        font-size: var(--fs-xl);
         font-weight: 800;
         letter-spacing: -0.03em;
         line-height: 1.25;
@@ -306,12 +334,12 @@ st.markdown(
         word-break: break-word;
     }
     .readable-metric-value.compact {
-        font-size: 1.12rem;
+        font-size: var(--fs-lg);
         line-height: 1.35;
         letter-spacing: -0.02em;
     }
     .metric-hint {
-        font-size: 0.8rem;
+        font-size: var(--fs-sm);
         font-weight: 500;
         line-height: 1.4;
         color: #64748b;
@@ -320,14 +348,14 @@ st.markdown(
         border-top: 1px solid #eef1f6;
     }
     .period-name {
-        font-size: 1.32rem;
+        font-size: var(--fs-xl);
         font-weight: 800;
         letter-spacing: -0.03em;
         line-height: 1.25;
         color: #0f172a;
     }
     .period-dates {
-        font-size: 0.95rem;
+        font-size: var(--fs-base);
         line-height: 1.5;
         color: #334155;
         margin-top: 0.4rem;
@@ -336,7 +364,7 @@ st.markdown(
         margin: 0.95rem 0 0.2rem;
     }
     .report-kicker {
-        font-size: 0.75rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.12em;
         text-transform: uppercase;
@@ -347,7 +375,7 @@ st.markdown(
         display: block;
         width: 100%;
         box-sizing: border-box;
-        font-size: 1.55rem;
+        font-size: var(--fs-2xl);
         font-weight: 800;
         letter-spacing: -0.03em;
         line-height: 1.4;
@@ -359,7 +387,7 @@ st.markdown(
         white-space: normal;
     }
     .report-body {
-        font-size: 1rem;
+        font-size: var(--fs-base);
         line-height: 1.55;
         color: #1e293b;
         margin: 0.15rem 0 0.7rem;
@@ -380,7 +408,7 @@ st.markdown(
         border-color: #bbf7d0;
     }
     .slide-note-label {
-        font-size: 0.78rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.04em;
         text-transform: uppercase;
@@ -432,7 +460,7 @@ st.markdown(
         display: block;
         width: 100%;
         box-sizing: border-box;
-        font-size: 1.02rem;
+        font-size: var(--fs-base);
         font-weight: 800;
         letter-spacing: -0.02em;
         line-height: 1.4;
@@ -446,7 +474,7 @@ st.markdown(
     .section-title.tight { margin-top: 0.35rem; }
     .section-body,
     .field-hint {
-        font-size: 0.86rem;
+        font-size: var(--fs-sm);
         line-height: 1.45;
         color: #64748b;
         max-width: 62rem;
@@ -472,7 +500,7 @@ st.markdown(
         white-space: normal;
     }
     .side-section {
-        font-size: 0.78rem;
+        font-size: var(--fs-xs);
         font-weight: 800;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -490,16 +518,16 @@ st.markdown(
         margin-bottom: -0.15rem;
     }
     section[data-testid="stSidebar"] [data-testid="stCheckbox"] label p {
-        font-size: 0.92rem;
+        font-size: var(--fs-base);
     }
     .side-note {
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         line-height: 1.35;
         color: #475569;
         margin: 0.1rem 0 0.55rem 0;
     }
     .side-warn {
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         line-height: 1.35;
         color: #9a3412;
         background: #fff7ed;
@@ -508,7 +536,7 @@ st.markdown(
         margin: 0.1rem 0 0.7rem 0;
     }
     .side-low {
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         line-height: 1.35;
         color: #1e3a8a;
         background: #eff6ff;
@@ -517,7 +545,7 @@ st.markdown(
         margin: 0.1rem 0 0.7rem 0;
     }
     .side-best {
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         line-height: 1.35;
         color: #14532d;
         background: #f0fdf4;
@@ -532,10 +560,10 @@ st.markdown(
         white-space: normal !important;
         overflow: visible !important;
         text-overflow: unset !important;
-        font-size: 0.95rem !important;
+        font-size: var(--fs-base) !important;
     }
     .upload-note {
-        font-size: 0.86rem;
+        font-size: var(--fs-sm);
         line-height: 1.4;
         white-space: normal;
         overflow: visible;
@@ -545,7 +573,7 @@ st.markdown(
         display: block;
         width: 100%;
         box-sizing: border-box;
-        font-size: 1.12rem;
+        font-size: var(--fs-lg);
         font-weight: 800;
         letter-spacing: -0.02em;
         line-height: 1.4;
@@ -581,7 +609,7 @@ st.markdown(
         border-spacing: 0;
         width: max-content;
         min-width: max(100%, 1100px);
-        font-size: 0.92rem;
+        font-size: var(--fs-base);
         color: #1f2937;
     }
     .sheet-scroll th,
@@ -619,12 +647,12 @@ st.markdown(
         line-height: 1.2;
     }
     .stock-arrow {
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         line-height: 1;
     }
     .stock-delta {
         margin-top: 0.12rem;
-        font-size: 0.72rem;
+        font-size: var(--fs-xs);
         line-height: 1.15;
         font-weight: 650;
         text-align: right;
@@ -643,7 +671,7 @@ st.markdown(
     }
     .metric-move,
     .cell-move {
-        font-size: 0.78rem;
+        font-size: var(--fs-xs);
         font-weight: 650;
         line-height: 1.25;
         margin-top: 0.12rem;
@@ -659,7 +687,7 @@ st.markdown(
     }
     .qty-safety {
         margin-top: 0.12rem;
-        font-size: 0.72rem;
+        font-size: var(--fs-xs);
         line-height: 1.15;
         font-weight: 500;
         color: #64748b;
@@ -712,7 +740,7 @@ st.markdown(
     .pin-kicker {
         display: block;
         margin-bottom: 0.12rem;
-        font-size: 0.68rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -755,7 +783,7 @@ st.markdown(
     [data-testid="stHorizontalBlock"] { gap: 0.65rem !important; align-items: stretch; }
     [data-testid="stCaptionContainer"] { margin: 0 0 0.1rem 0; }
     [data-testid="stCaptionContainer"] p {
-        font-size: 0.86rem !important;
+        font-size: var(--fs-sm) !important;
         line-height: 1.45 !important;
         color: #64748b !important;
         max-width: 62rem;
@@ -806,13 +834,13 @@ st.markdown(
     }
     [data-testid="stCheckbox"] { padding: 0.02rem 0.05rem 0.08rem; }
     [data-testid="stCheckbox"] label p {
-        font-size: 0.96rem;
+        font-size: var(--fs-base);
         line-height: 1.4;
         color: #1e293b;
     }
     [data-testid="stWidgetLabel"] p,
     [data-testid="stWidgetLabel"] label {
-        font-size: 0.92rem !important;
+        font-size: var(--fs-base) !important;
         font-weight: 650 !important;
         color: #334155 !important;
         line-height: 1.45 !important;
@@ -858,20 +886,20 @@ st.markdown(
     .stat-card { width: 100%; box-sizing: border-box; }
     .qty-board-head { margin: 0.2rem 0 0.8rem; }
     .qty-board-title {
-        font-size: 1.35rem;
+        font-size: var(--fs-xl);
         font-weight: 800;
         letter-spacing: -0.03em;
         color: #0f172a;
         margin: 0 0 0.25rem;
     }
-    .qty-board-copy { color: #64748b; font-size: 0.92rem; line-height: 1.45; margin: 0; }
+    .qty-board-copy { color: #64748b; font-size: var(--fs-base); line-height: 1.45; margin: 0; }
     .qty-line.extra { background: #eff6ff; border-radius: 8px; }
     .qty-track.stock-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: #fff7ed; border-radius: 8px; padding: 4px 6px; }
-    .stock-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.76rem; font-weight: 700; }
+    .stock-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 700; }
     .stock-chip.ok { background: #dcfce7; color: #166534; }
     .stock-chip.bad { background: #fee2e2; color: #991b1b; }
     .stock-chip.none { background: #f1f5f9; color: #475569; }
-    .insight-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 4px 0 8px; }
+    .insight-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); margin: 4px 0 8px; }
     .insight-table th, .insight-table td { border-bottom: 1px solid #e2e8f0; padding: 5px 8px; text-align: left; vertical-align: top; }
     .insight-table th { background: #f8fafc; font-weight: 700; color: #334155; }
     .movement-sheet .stock-col { background: #fff7ed; }
@@ -881,7 +909,7 @@ st.markdown(
         gap: 1.4rem;
         color: #334155;
         font-weight: 700;
-        font-size: 0.92rem;
+        font-size: var(--fs-base);
         margin: 0.85rem 0 0.2rem;
     }
     .qty-legend i {
@@ -897,15 +925,15 @@ st.markdown(
     .qty-legend .flat { background: #64748b; }
     .qty-card { padding: 0.95rem 0.15rem 1.05rem; }
     .qty-id { text-align: right; margin-bottom: 0.45rem; }
-    .qty-rank { font-weight: 800; color: #0f172a; font-size: 0.98rem; }
+    .qty-rank { font-weight: 800; color: #0f172a; font-size: var(--fs-base); }
     .qty-name { color: #1e293b; font-weight: 650; line-height: 1.4; margin-top: 0.12rem; }
-    .qty-var { color: #94a3b8; font-size: 0.84rem; margin-top: 0.08rem; }
+    .qty-var { color: #94a3b8; font-size: var(--fs-sm); margin-top: 0.08rem; }
     .qty-line { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.42rem; }
     .qty-metric {
         width: 7.6rem;
         flex: 0 0 7.6rem;
         color: #0f172a;
-        font-size: 0.8rem;
+        font-size: var(--fs-sm);
         font-weight: 800;
         line-height: 1.2;
     }
@@ -913,7 +941,7 @@ st.markdown(
     .qty-base small {
         display: block;
         color: #94a3b8;
-        font-size: 0.7rem;
+        font-size: var(--fs-xs);
         font-weight: 600;
         margin-top: 0.08rem;
     }
@@ -922,7 +950,7 @@ st.markdown(
     .qty-head-row .qty-base,
     .qty-head-row .qty-head-mid {
         color: #94a3b8;
-        font-size: 0.68rem;
+        font-size: var(--fs-xs);
         font-weight: 800;
         letter-spacing: 0.05em;
         text-transform: uppercase;
@@ -946,7 +974,7 @@ st.markdown(
         padding: 0 0.7rem;
         color: #ffffff;
         font-weight: 800;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         white-space: nowrap;
         box-sizing: border-box;
     }
@@ -959,7 +987,7 @@ st.markdown(
         text-align: right;
         color: #0f172a;
         font-weight: 800;
-        font-size: 0.9rem;
+        font-size: var(--fs-base);
         line-height: 1.2;
     }
     div[data-testid="stElementContainer"]:has(.qty-board-anchor) + div [data-testid="stButton"] button {
@@ -972,15 +1000,15 @@ st.markdown(
         background: #0f172a;
         color: #ffffff;
         border: none;
-        font-size: 0.84rem;
+        font-size: var(--fs-sm);
     }
     .insight-head { border-radius: 16px; padding: 1.05rem 1.15rem 0.95rem; color: #ffffff; margin-bottom: 0.9rem; }
     .insight-head.up { background: #1d4ed8; }
     .insight-head.down { background: #dc2626; }
     .insight-head.flat { background: #334155; }
-    .insight-kicker { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.85; }
-    .insight-title { font-size: 1.25rem; font-weight: 800; line-height: 1.35; margin-top: 0.3rem; }
-    .insight-meta { margin-top: 0.25rem; font-size: 0.88rem; opacity: 0.9; }
+    .insight-kicker { font-size: var(--fs-xs); font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.85; }
+    .insight-title { font-size: var(--fs-xl); font-weight: 800; line-height: 1.35; margin-top: 0.3rem; }
+    .insight-meta { margin-top: 0.25rem; font-size: var(--fs-sm); opacity: 0.9; }
     .insight-stat {
         border: 1px solid #bfdbfe;
         background: #eff6ff;
@@ -990,14 +1018,14 @@ st.markdown(
     }
     .insight-head.down + .insight-stat { border-color: #fecaca; background: #fef2f2; }
     .insight-head.flat + .insight-stat { border-color: #e2e8f0; background: #f8fafc; }
-    .insight-stat-label { color: #64748b; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
-    .insight-stat-value { font-size: 1.55rem; font-weight: 800; color: #1d4ed8; margin-top: 0.15rem; }
+    .insight-stat-label { color: #64748b; font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+    .insight-stat-value { font-size: var(--fs-2xl); font-weight: 800; color: #1d4ed8; margin-top: 0.15rem; }
     .insight-head.down + .insight-stat .insight-stat-value { color: #dc2626; }
     .insight-head.flat + .insight-stat .insight-stat-value { color: #334155; }
-    .insight-stat-value span { font-size: 1rem; font-weight: 700; }
-    .insight-stat-note { color: #475569; font-size: 0.88rem; line-height: 1.45; margin-top: 0.2rem; }
+    .insight-stat-value span { font-size: var(--fs-base); font-weight: 700; }
+    .insight-stat-note { color: #475569; font-size: var(--fs-sm); line-height: 1.45; margin-top: 0.2rem; }
     .insight-section {
-        font-size: 0.78rem;
+        font-size: var(--fs-xs);
         font-weight: 800;
         letter-spacing: 0.05em;
         text-transform: uppercase;
@@ -1008,7 +1036,7 @@ st.markdown(
     .insight-chip {
         border-radius: 999px;
         padding: 0.38rem 0.75rem;
-        font-size: 0.88rem;
+        font-size: var(--fs-sm);
         font-weight: 700;
         background: #ffffff;
     }
@@ -1023,11 +1051,11 @@ st.markdown(
         line-height: 1.55;
         margin: 0 0 0.45rem;
     }
-    .insight-note { color: #94a3b8; font-size: 0.8rem; line-height: 1.45; margin: 0.15rem 0 0; }
+    .insight-note { color: #94a3b8; font-size: var(--fs-sm); line-height: 1.45; margin: 0.15rem 0 0; }
     .insight-reco {
         margin: 0;
         color: #0f172a;
-        font-size: 1.02rem;
+        font-size: var(--fs-base);
         font-weight: 750;
         line-height: 1.5;
     }
@@ -1049,7 +1077,7 @@ st.markdown(
         border-radius: 999px;
         background: #0f172a;
         color: #ffffff;
-        font-size: 0.82rem;
+        font-size: var(--fs-sm);
         font-weight: 800;
         display: flex;
         align-items: center;
@@ -1073,7 +1101,7 @@ st.markdown(
         filter: none !important;
     }
     [data-testid="stDataFrame"] {
-        border: 1px solid #e7e9f2;
+        border: 1px solid #e2e8f0;
         border-radius: 12px;
         overflow: hidden;
         background: #ffffff;
@@ -1105,12 +1133,12 @@ st.markdown(
     .brand-card img { height: 52px; width: auto; display: block; }
     .brand-card.shopee img { height: 34px; }
     .brand-x {
-        font-size: 1.35rem;
+        font-size: var(--fs-xl);
         font-weight: 700;
         color: #94a3b8;
     }
     .home-kicker {
-        font-size: 0.78rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.14em;
         text-transform: uppercase;
@@ -1118,7 +1146,7 @@ st.markdown(
         margin-bottom: 0.45rem;
     }
     .home-title {
-        font-size: 2.55rem;
+        font-size: var(--fs-display);
         font-weight: 800;
         letter-spacing: -0.035em;
         line-height: 1.12;
@@ -1127,12 +1155,12 @@ st.markdown(
     }
     .home-lead {
         max-width: 42rem;
-        font-size: 1.08rem;
+        font-size: var(--fs-lg);
         line-height: 1.7;
         color: #334155;
     }
     .home-section {
-        font-size: 0.78rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.12em;
         text-transform: uppercase;
@@ -1145,7 +1173,7 @@ st.markdown(
         color: #c2410c;
         border-radius: 999px;
         padding: 0.22rem 0.65rem;
-        font-size: 0.75rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.03em;
         margin-bottom: 0.55rem;
@@ -1154,7 +1182,7 @@ st.markdown(
         display: block;
         width: 100%;
         box-sizing: border-box;
-        font-size: 1.45rem;
+        font-size: var(--fs-xl);
         font-weight: 800;
         letter-spacing: -0.03em;
         line-height: 1.35;
@@ -1167,7 +1195,7 @@ st.markdown(
     }
     .feature-copy {
         color: #334155;
-        font-size: 1.02rem;
+        font-size: var(--fs-base);
         line-height: 1.7;
         max-width: 46rem;
         margin: 0 0 1rem 0;
@@ -1185,20 +1213,20 @@ st.markdown(
     .feature-bar img { height: 36px; width: auto; display: block; }
     .feature-bar img.shopee-mark { height: 24px; }
     .feature-kicker {
-        font-size: 0.7rem;
+        font-size: var(--fs-xs);
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: #64748b;
     }
     .feature-name {
-        font-size: 1.15rem;
+        font-size: var(--fs-lg);
         font-weight: 800;
         letter-spacing: -0.02em;
         color: #0f172a;
         line-height: 1.2;
     }
-    .block-container:has(.feature-bar) { padding-top: 6.4rem !important; }
+    .block-container:has(.feature-bar) { padding-top: 4.8rem !important; }
     .block-container:has(.app-menu-label) { padding-top: 10.5rem !important; }
     .block-container:has(.period-name) { padding-top: 17.2rem !important; }
     div[data-testid="stHorizontalBlock"]:has(.feature-bar) {
@@ -1216,7 +1244,7 @@ st.markdown(
         box-shadow: none;
         padding: 0.15rem 0;
     }
-    div[data-testid="stHorizontalBlock"]:has(.feature-bar) [data-testid="stColumn"]:last-child button {
+    .st-key-hdr-beranda button {
         background: #0f172a !important;
         color: #ffffff !important;
         border: none !important;
@@ -1226,12 +1254,22 @@ st.markdown(
         letter-spacing: 0.01em;
         box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
     }
-    div[data-testid="stHorizontalBlock"]:has(.feature-bar) [data-testid="stColumn"]:last-child button:hover {
+    .st-key-hdr-beranda button:hover {
         background: #1e293b !important;
         color: #ffffff !important;
         transform: translateY(-1px);
     }
-    div[data-testid="stHorizontalBlock"]:has(.feature-bar) [data-testid="stColumn"]:not(:first-child):not(:last-child) button {
+    .st-key-hdr-account button {
+        background: #ffffff !important;
+        color: #0f172a !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 999px !important;
+        min-height: 2.65rem;
+        font-weight: 600;
+        box-shadow: none;
+    }
+    .st-key-hdr-account button:hover { background: #f8fafc !important; border-color: #cbd5e1 !important; }
+    .st-key-hdr-analisa button, .st-key-hdr-latih button, .st-key-hdr-setting button {
         background: #fff7f4 !important;
         color: #c2410c !important;
         border: 1px solid #fdba74 !important;
@@ -1240,7 +1278,7 @@ st.markdown(
         font-weight: 700;
         box-shadow: none;
     }
-    div[data-testid="stHorizontalBlock"]:has(.feature-bar) [data-testid="stColumn"]:not(:first-child):not(:last-child) button:hover {
+    .st-key-hdr-analisa button:hover, .st-key-hdr-latih button:hover, .st-key-hdr-setting button:hover {
         background: #ffedd5 !important;
         color: #9a3412 !important;
         transform: translateY(-1px);
@@ -1270,8 +1308,8 @@ st.markdown(
     [class*="st-key-mobile-"] { display: none !important; }
     .sku-card { border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; padding: .6rem .75rem; margin-bottom: .5rem; }
     .sku-card .sku-title { font-weight: 650; color: #0f172a; line-height: 1.3; }
-    .sku-card .sku-meta { font-size: .8rem; color: #64748b; margin: .15rem 0 .35rem; }
-    .sku-card .sku-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem .75rem; font-size: .85rem; }
+    .sku-card .sku-meta { font-size: var(--fs-sm); color: #64748b; margin: .15rem 0 .35rem; }
+    .sku-card .sku-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .25rem .75rem; font-size: var(--fs-sm); }
     .sku-card .sku-nums b { color: #0f172a; }
     @media (max-width: 767px) {
         [class*="st-key-mobile-"] { display: block !important; }
@@ -1342,12 +1380,13 @@ def days_in_calendar_month(day: date) -> int:
 
 
 def slice_forecast(pred_qty: float, pred_sales: float, safety: float, horizon_days: int, days: int) -> tuple[int, int, int]:
-    """Bagian prediksi untuk sejumlah hari. QTY dan sales lurus; SS berbasis lead time, sama di semua periode."""
+    """Bagian prediksi untuk sejumlah hari. QTY dibulatkan ke bawah ke unit utuh, sales = QTY × harga bersih;
+    SS berbasis lead time, sama di semua periode."""
     horizon = max(int(horizon_days), 1)
     span = max(int(days), 0)
-    share = span / horizon
-    qty = int(np.rint(float(pred_qty) * share))
-    sales = int(np.rint(float(pred_sales) * share))
+    qty = int(whole_units(float(pred_qty) * span / horizon))
+    price = float(pred_sales) / float(pred_qty) if float(pred_qty) > 0 else 0.0
+    sales = int(np.rint(qty * price))
     guard = int(np.rint(max(float(safety), 0.0))) if span else 0
     return qty, sales, max(qty + guard, 0)
 
@@ -1686,6 +1725,8 @@ def show_training_uploads() -> tuple[list[str], str | None]:
             elif _uploaded_size(files) > MAX_UPLOAD_BYTES:
                 load_error = "Total ukuran file melebihi 1 GB."
             else:
+                # Selama file diproses, sembunyikan sisa tampilan dari run sebelumnya agar halaman tidak tampil dobel.
+                st.markdown("<style>[data-stale='true']{display:none !important;}</style>", unsafe_allow_html=True)
                 outcome = _process_upload(store, selected_spec, files)
                 st.session_state[result_key] = outcome
                 if outcome["level"] == "success":
@@ -2193,7 +2234,7 @@ def _mobile_header(logo: str, title: str, analysis: bool, training: bool, settin
         left, right = st.columns([3, 1.4], vertical_alignment="center")
         left.markdown(
             f"<div style='display:flex;align-items:center;gap:.5rem'><img src='{logo}' alt='Mitra10' style='height:30px'>"
-            f"<b style='font-size:.95rem;color:#0f172a'>{html.escape(title)}</b></div>",
+            f"<b style='font-size:var(--fs-base);color:#0f172a'>{html.escape(title)}</b></div>",
             unsafe_allow_html=True,
         )
         with right.popover("☰ Akun", use_container_width=True):
@@ -2230,8 +2271,7 @@ def render_header() -> None:
     mitra, shopee = _logo_uri("mitra10.png"), _logo_uri("shopee.svg")
     title = "Setting" if on_setting else "Prediksi item terlaris"
     _mobile_header(mitra, title, show_analysis_button, show_training_button, show_setting_button)
-    user_bar(AUTH_USER)
-    columns = st.columns([4.3, 1.75, 1.85, 1.1, 1.2], vertical_alignment="center")
+    columns = st.columns([4.3, 1.75, 1.85, 1.1, 1.2, 1.45], vertical_alignment="center")
     columns[0].markdown(
         f"""
         <div class="feature-bar">
@@ -2253,6 +2293,8 @@ def render_header() -> None:
         _go(PAGE_SETTING)
     if columns[4].button("Beranda", key="hdr-beranda", type="primary" if page == PAGE_HOME else "secondary", use_container_width=True):
         _go(PAGE_HOME)
+    with columns[5].container(key="hdr-account"):
+        account_menu(AUTH_USER)
 
 
 def _checked_library_keys() -> list[str]:
@@ -2282,11 +2324,14 @@ def _orders_from_library(keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, s
 def show_prediction_inputs() -> None:
     """Halaman landasan prediksi. Terpisah dari hasil analisa."""
     require("data_latih", "edit")
-    notice = st.session_state.pop("input-error", None)
-    if notice:
-        st.error(notice)
-    if "analysis" in st.session_state:
-        st.caption("Hasil analisis sebelumnya tetap ada sampai analisis dijalankan lagi.")
+    # Pesan bersyarat diletakkan di satu wadah tetap, supaya posisi kotak upload tidak bergeser
+    # antar-rerun (pergeseran posisi membuat kotak upload lama tertinggal dan tampil dobel).
+    with st.container():
+        notice = st.session_state.pop("input-error", None)
+        if notice:
+            st.error(notice)
+        if "analysis" in st.session_state:
+            st.caption("Hasil analisis sebelumnya tetap ada sampai analisis dijalankan lagi.")
 
     upload_box = st.container(border=True)
     summary_box = st.container(border=True)
@@ -2496,7 +2541,7 @@ def safety_recommendation_html(rec, service: int, impact: dict | None, period: s
         tone, bg, word = "#1e40af", "#dbeafe", f"{service - rec.pct} poin di atas saran"
     else:
         tone, bg, word = "#991b1b", "#fee2e2", f"{rec.pct - service} poin di bawah saran"
-    default_txt = f" <span style='color:#64748b;font-size:.75rem'>· {DEFAULT_NOTE}</span>" if rec.used_default else ""
+    default_txt = f" <span style='color:#64748b;font-size:var(--fs-xs)'>· {DEFAULT_NOTE}</span>" if rec.used_default else ""
     basis = (
         f"Critical ratio {format_number(rec.critical_ratio * 100, 1)}% dari margin + biaya kehabisan vs biaya simpan "
         f"{PERIOD_LABELS[period].lower()}, disesuaikan porsi sales kelas A {format_number(rec.share_a * 100, 0)}% "
@@ -2514,7 +2559,7 @@ def safety_recommendation_html(rec, service: int, impact: dict | None, period: s
     else:
         lines.append(f"Risiko kehabisan per siklus ±{format_number(max(100 - service, 0), 0)}%. Jalankan analisis untuk melihat dampak unit dan rupiah.")
     return (
-        f"<div style='border-left:4px solid {tone};background:{bg};padding:10px 14px;border-radius:8px;color:#0f172a;font-size:.88rem;line-height:1.55'>"
+        f"<div style='border-left:4px solid {tone};background:{bg};padding:10px 14px;border-radius:8px;color:#0f172a;font-size:var(--fs-sm);line-height:1.55'>"
         + "<br>".join(lines)
         + "</div>"
     )
@@ -2772,6 +2817,28 @@ def _day_sold_map(orders: pd.DataFrame | None, day: date) -> dict[str, int] | No
     return {key: int(round(float(value))) for key, value in sold.items()}
 
 
+def _last_month_sold(orders: pd.DataFrame | None, as_of: date) -> tuple[str, dict[str, int], dict[str, float]] | None:
+    """QTY dan sales per SKU pada bulan penuh terakhir (dasar sama dengan Ringkasan total Top 50)."""
+    if not isinstance(orders, pd.DataFrame) or orders.empty or "order_time" not in orders.columns:
+        return None
+    stamps = pd.to_datetime(orders["order_time"], errors="coerce").dt.normalize()
+    full = stamps[stamps < pd.Timestamp(as_of)]
+    if full.notna().sum() == 0:
+        return None
+    lo, hi = last_full_month(full.max().date())
+    if pd.Timestamp(lo) < stamps.min():
+        return None
+    part = orders.loc[stamps.ge(pd.Timestamp(lo)) & stamps.le(pd.Timestamp(hi))]
+    keys = part["item_key"].astype(str)
+    qty = part.groupby(keys)["qty"].sum()
+    sales = part.groupby(keys)["sales"].sum() if "sales" in part.columns else pd.Series(dtype=float)
+    return (
+        format_period_label("aktual_bulan", lo),
+        {key: int(round(float(value))) for key, value in qty.items()},
+        {key: float(value) for key, value in sales.items()},
+    )
+
+
 def _signed_pct(value: float, decimals: int = 1) -> str:
     sign = "+" if value > 0 else "−" if value < 0 else ""
     return f"{sign}{format_number(abs(value), decimals)}%"
@@ -2964,6 +3031,8 @@ def explain_qty_gap(
     yesterday_pred: int | None = None,
     month_ago_pred: int | None = None,
     data_end: pd.Timestamp | None = None,
+    month_actual: int | None = None,
+    month_actual_label: str | None = None,
 ) -> dict:
     """Analisa satu SKU. Bagian terjual dari laporan, bagian prediksi dari Level terkini. Prediksi tidak dihitung ulang."""
     today = today or date.today()
@@ -2992,7 +3061,10 @@ def explain_qty_gap(
             else int(slice_forecast(predicted, 0, 0, horizon, 1)[0])
         )
     today_qty = int(today_qty)
-    direction, pill, gap, percent = _qty_pill(month_pred, actual)
+    # Prediksi 30 hari dibandingkan bulan penuh terakhir, bukan dengan saringan periode laporan yang panjangnya bisa beda.
+    compare = actual if month_actual is None else int(month_actual)
+    compare_label = resume_label if month_actual is None else str(month_actual_label or "bulan penuh terakhir")
+    direction, pill, gap, percent = _qty_pill(month_pred, compare)
     day_read = _forecast_read(yesterday_pred, yesterday_sold)
     ago_read = _forecast_read(month_ago_pred, month_ago_sold)
     safety = int(round(float(row["safety_stock"]))) if "safety_stock" in row and pd.notna(row["safety_stock"]) else 0
@@ -3205,13 +3277,13 @@ def explain_qty_gap(
     if month_sales > 0:
         month_pred_line += f", sales {format_idr(month_sales)}"
     month_pred_line += "."
-    if actual > 0 and gap != 0:
+    if compare > 0 and gap != 0:
         month_pred_line += (
-            f" Itu {format_qty(abs(gap))} unit {'di atas' if gap > 0 else 'di bawah'} yang sudah terjual pada {resume_label} "
+            f" Itu {format_qty(abs(gap))} unit {'di atas' if gap > 0 else 'di bawah'} yang terjual pada {compare_label} "
             f"({_signed_pct(percent or 0, 2)})."
         )
-    elif actual > 0:
-        month_pred_line += f" Sama dengan yang sudah terjual pada {resume_label}."
+    elif compare > 0:
+        month_pred_line += f" Sama dengan yang terjual pada {compare_label}."
     pred_lines.append(month_pred_line)
     pred_lines.append(_accuracy_line(f"kemarin ({_short_id_date(yesterday)})", yesterday_pred, yesterday_sold))
     pred_lines.append(_accuracy_line(m_name, month_ago_pred, month_ago_sold))
@@ -3366,9 +3438,15 @@ def explain_qty_gap(
         "turun": "Prediksi bulan di bawah terjual",
         "tetap": "Prediksi bulan sama dengan terjual",
     }
-    resume_short = resume_label if len(resume_label) <= 18 else "Periode laporan"
+    window_end = today + timedelta(days=window_days("bulan", today) - 1)
     bars = [
-        _bar_spec(format_period_label("prediksi", today), resume_short, month_pred, actual, "terjual"),
+        _bar_spec(
+            format_period_label("prediksi", today),
+            f"{_short_id_date(today)} – {_short_id_date(window_end)}",
+            month_pred,
+            compare,
+            compare_label if month_actual is not None else "terjual",
+        ),
         _bar_spec(format_period_label("aktual_hari", yesterday), "prediksi vs terjual", yesterday_pred, yesterday_sold, "terjual"),
         _bar_spec("Tanggal sama bulan lalu", m_name, month_ago_pred, month_ago_sold, "terjual"),
     ]
@@ -3386,7 +3464,8 @@ def explain_qty_gap(
         "gap": gap,
         "percent": percent,
         "predicted": month_pred,
-        "actual": actual,
+        "actual": compare,
+        "compare_label": compare_label,
         "kicker": titles[direction],
         "factors": factors,
         "sold_lines": sold_lines,
@@ -3440,7 +3519,7 @@ def _insight_markup(row: pd.Series, brief: dict) -> str:
         f"<div class='insight-stat-label'>Prediksi {html.escape(brief['month_label'])} dibanding terjual</div>"
         f"<div class='insight-stat-value'>{value}</div>"
         f"<div class='insight-stat-note'>Prediksi {html.escape(format_qty(brief['month_pred']))} unit. "
-        f"Terjual {html.escape(format_qty(brief['actual']))} unit pada {html.escape(brief['resume_label'])}.</div>"
+        f"Terjual {html.escape(format_qty(brief['actual']))} unit pada {html.escape(brief.get('compare_label', brief['resume_label']))}.</div>"
         "</div>"
         f"<div class='insight-chips'>{chips}</div>"
         "<div class='insight-section'>Yang sudah terjual (laporan)</div>"
@@ -3469,8 +3548,15 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
             p = group.prefix
             gap = float(row[f"{p}_selisih"])
             pct = float(row[f"{p}_pct"]) * 100
+            status = str(row.get(f"{p}_status") or ("Aman" if gap >= 0 else "Kurang"))
+            base, _, suffix = status.partition(" · ")
             tone = "ok" if gap >= 0 else "bad"
-            word = "aman" if gap >= 0 else f"kurang {format_qty(-gap)} ({format_number(abs(pct), 0)}%)"
+            if gap >= 0:
+                word = status
+            elif base == "Kosong":
+                word = f"Kosong · butuh {format_qty(float(row[f'{p}_butuh']))} unit"
+            else:
+                word = f"{base} {format_qty(-gap)} unit ({format_number(abs(pct), 0)}%)" + (f" · {suffix}" if suffix else "")
             parts.append(f"<span class='stock-chip {tone}'>{html.escape(group.label)}: {word}</span>")
         chips = "".join(parts)
     return (
@@ -3491,14 +3577,14 @@ def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, t
     if isinstance(item_orders, pd.DataFrame) and not item_orders.empty:
         days = pd.to_datetime(item_orders["order_time"]).dt.date
         sold_sales = [
-            float(row.get("sales_total", 0) or 0),
+            float(brief.get("month_actual_sales", row.get("sales_total", 0)) or 0),
             float(item_orders.loc[days == yesterday, "sales"].sum()),
             float(item_orders.loc[days == month_ago, "sales"].sum()),
         ]
     out = []
     for bar, pred_qty, sold in zip(brief["bars"], (brief.get("month_pred"), brief.get("yesterday_pred"), brief.get("month_ago_pred")), sold_sales):
         pred = None if pred_qty is None else int(round(float(pred_qty) * price))
-        spec = _bar_spec(bar["label"], bar["sub"], pred, None if sold is None else int(round(sold)), "terjual")
+        spec = _bar_spec(bar["label"], bar["sub"], pred, None if sold is None else int(round(sold)), bar.get("sold_sub") or "terjual")
         if pred is not None:
             spec["text"] = spec["text"].replace(format_qty(pred), format_idr(pred)) if spec["direction"] == "tetap" else spec["text"]
         spec["sold"] = "–" if sold is None else format_idr(sold)
@@ -3566,6 +3652,7 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
     )
 
 
+@st.fragment
 def show_qty_forecast_board(
     view: pd.DataFrame,
     *,
@@ -3593,6 +3680,7 @@ def show_qty_forecast_board(
     month_ago = _same_day_last_month(as_of)
     yesterday_map = _day_sold_map(orders, yesterday)
     month_ago_map = _day_sold_map(orders, month_ago)
+    last_month = _last_month_sold(orders, as_of)
     yesterday_pred_map: dict[str, int] | None = None
     month_ago_pred_map: dict[str, int] | None = None
     if isinstance(history, pd.DataFrame) and not history.empty:
@@ -3637,6 +3725,7 @@ def show_qty_forecast_board(
             as_of,
             yesterday_pred_map is None,
             month_ago_pred_map is None,
+            None if last_month is None else last_month[0],
         )
     )
     brief_cache = st.session_state.get("_qty-briefs")
@@ -3663,7 +3752,11 @@ def show_qty_forecast_board(
             yesterday_pred=None if yesterday_pred_map is None else yesterday_pred_map.get(key, 0),
             month_ago_pred=None if month_ago_pred_map is None else month_ago_pred_map.get(key, 0),
             data_end=data_end,
+            month_actual=None if last_month is None else last_month[1].get(key, 0),
+            month_actual_label=None if last_month is None else last_month[0],
         )
+        if last_month is not None:
+            briefs[key]["month_actual_sales"] = last_month[2].get(key, 0.0)
     st.session_state["_qty-briefs"] = (brief_key, briefs)
     counts = {"naik": 0, "turun": 0, "tetap": 0}
     for brief in briefs.values():
@@ -3727,7 +3820,6 @@ def show_qty_forecast_board(
         card_col.markdown(_qty_card_html(row, brief, bars, _stock_chip_row(enriched, period, as_of)), unsafe_allow_html=True)
         if action_col.button("Analisa", key=f"qty-insight-open-{key}", use_container_width=True):
             st.session_state["qty-insight-key"] = key
-            st.rerun()
     selected = str(st.session_state.get("qty-insight-key") or "")
     if selected and selected in briefs:
         enriched = decision_rows.get(selected)
@@ -4274,8 +4366,9 @@ def top_bestsellers(
     last_period,
     period: str,
     top_n: int | None = TOP_N,
+    period_orders: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    ranked = rank_from_orders(orders, metric)
+    ranked = rank_from_orders(orders, metric) if period_orders is None else rank_for_period(orders, period_orders, metric)
     if ranked.empty:
         return ranked
     view = ranked.copy() if top_n is None else ranked.head(top_n).copy()
@@ -6402,7 +6495,6 @@ def show_analysis_movement(
     if now_totals:
         all_sku = catalog if isinstance(catalog, pd.DataFrame) and not catalog.empty else None
         actual_qty, actual_day = actual_on_day(orders, focus_keys, yesterday)
-        ss_total = float(decision["ss"].sum()) if isinstance(decision, pd.DataFrame) and "ss" in decision.columns else 0.0
         for group in groups:
             qty_now, sales_now, need_now = now_totals[group.prefix]
             fresh = group.prefix != "d" and not same_target(yesterday, period_key, today, period_key)
@@ -6417,7 +6509,8 @@ def show_analysis_movement(
             main_then = None if then is None else int(then[1] if main_money else then[0])
             qty_label = "QTY terjual" if is_day else "QTY"
             day_tip = (
-                "Prediksi QTY hari ini = jumlah per SKU dari (prediksi QTY horizon ÷ jumlah hari horizon), dibulatkan per SKU. "
+                "Prediksi QTY hari ini = jumlah per SKU dari (prediksi QTY horizon ÷ jumlah hari horizon), dibulatkan ke bawah "
+                "per SKU karena unit pecahan tidak bisa terjual; sales = QTY bulat × harga bersih. "
                 "Ini laju harian rata-rata, bukan realisasi; tanggal mengikuti WIB (Asia/Jakarta). Hari ini masih berjalan, "
                 "jadi pembanding yang adil adalah aktual hari penuh terakhir (kemarin)."
             ) if is_day else ""
@@ -6446,16 +6539,8 @@ def show_analysis_movement(
                 tip=day_tip if main_money else "",
                 extra_html=actual_html if main_money else "",
             )
-            rounding = need_now - (qty_now + ss_total) if group.prefix != "m" else None
             need_tip = (
-                "Kebutuhan stok = jumlah per SKU dari ⌈prediksi permintaan yang belum terjadi + safety stock⌉. "
-                "Dibulatkan ke atas per SKU karena stok tidak bisa pecahan"
-                + (
-                    f"; selisih {format_qty(rounding)} unit dibanding prediksi bulat ({format_qty(qty_now)}) + SS ({format_qty(ss_total)}) "
-                    "berasal dari pembulatan ke atas itu."
-                    if rounding is not None and abs(rounding) >= 1
-                    else "."
-                )
+                "Kebutuhan stok = prediksi QTY (unit utuh, dibulatkan ke bawah) + safety stock, dijumlah per SKU."
                 + (f" Jendela prediksi bulan: {format_id_date(today)} – {format_id_date(prediction_window('bulan', today)[1])}." if group.prefix == "m" else "")
             )
             _prediction_card(
@@ -6924,7 +7009,7 @@ with PAGE_ROOT.container():
         st.markdown(
             "<div class='section-title'>Periode penjualan "
             "<span style='display:inline-block;margin-left:8px;padding:2px 10px;border-radius:999px;background:#dbeafe;color:#1e40af;"
-            "font-size:.72rem;font-weight:700;vertical-align:middle'>Data aktual · bukan prediksi</span></div>",
+            "font-size:var(--fs-xs);font-weight:700;vertical-align:middle'>Data aktual · bukan prediksi</span></div>",
             unsafe_allow_html=True,
         )
         sales_orders, resume_label, _picked_months = period_filter(orders, prefix="resume")
@@ -6934,7 +7019,7 @@ with PAGE_ROOT.container():
         resume_label = "seluruh data input"
 
     last_period = history["period_start"].max()
-    catalog = top_bestsellers(sales_orders, combined, stock, history, metric, last_period, period, top_n=None)
+    catalog = top_bestsellers(orders, combined, stock, history, metric, last_period, period, top_n=None, period_orders=sales_orders)
     FEATURES = get_features()
     EXCLUDED = excluded_skus(FEATURES)
     if isinstance(catalog, pd.DataFrame) and not catalog.empty and EXCLUDED:
@@ -7036,7 +7121,9 @@ with PAGE_ROOT.container():
                 data=FEATURE_DATA,
                 role=AUTH_USER.role,
                 window_label=format_period_label("prediksi", window_start),
+                window_start=window_start,
                 fresh_period=window_start.day == 1,
+                metric=metric,
                 )
         show_exclude_and_cards()
         if isinstance(stock, pd.DataFrame) and not shown.empty:
@@ -7129,7 +7216,7 @@ with PAGE_ROOT.container():
             f1, f2, f3, f4 = st.columns([2.2, 1.4, 1.4, 1])
             query = f1.text_input("Cari SKU atau nama produk", placeholder="Cari SKU atau nama produk..", key="pred-search")
             label_pick = f2.multiselect("Label", options=list(LABEL_ICONS), key="pred-labels", placeholder="Pilih")
-            status_pick = f3.multiselect("Status stok (bulan ini)", options=["Aman", "Tipis", "Kurang", "Kosong", "Tanpa data stok"], key="pred-status", placeholder="Pilih")
+            status_pick = f3.multiselect("Status stok (bulan ini)", options=["Aman", "Kurang", "Kosong", "Tanpa data stok"], key="pred-status", placeholder="Pilih")
             page_size = int(f4.selectbox("Tampilkan", options=[10, 50, 100, 200], index=1, key="pred-size"))
             work = enriched
             needle = " ".join(str(query or "").lower().split())

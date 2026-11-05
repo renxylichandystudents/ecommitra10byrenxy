@@ -96,6 +96,12 @@ def trend_pct(orders: pd.DataFrame, today: date) -> pd.DataFrame:
     """QTY 28 hari terakhir dibanding 28 hari sebelumnya per SKU."""
     if orders is None or orders.empty:
         return pd.DataFrame(columns=["item_key", "tren_pct"])
+    if "status" in orders.columns:
+        from src.ingest import cancelled_status_mask
+
+        orders = orders.loc[~cancelled_status_mask(orders["status"]).to_numpy(dtype=bool)]
+        if orders.empty:
+            return pd.DataFrame(columns=["item_key", "tren_pct"])
     end = min(pd.Timestamp(today).normalize(), pd.to_datetime(orders["order_time"]).max().normalize() + pd.Timedelta(days=1))
     days = pd.to_datetime(orders["order_time"]).dt.normalize()
     recent = orders.loc[days.ge(end - pd.Timedelta(days=28)) & days.lt(end)].groupby("item_key")["qty"].sum()
@@ -134,7 +140,7 @@ def enrich_catalog(
     if not ads.empty:
         key = table["sku"].fillna("").astype(str).str.strip()
         table = table.assign(_sku=key).merge(ads.rename(columns={"sku": "_sku"}), on="_sku", how="left").drop(columns="_sku")
-    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "omzet_iklan_shopee", "terjual_iklan", "keranjang"):
+    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "omzet_iklan_shopee", "terjual_iklan", "keranjang", "sales_sku"):
         if column not in table.columns:
             table[column] = 0.0
         table[column] = table[column].fillna(0.0)

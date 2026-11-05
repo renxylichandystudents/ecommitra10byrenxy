@@ -14,6 +14,8 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
+from src.core.decision_table import stock_need
+
 SEED_EXCLUDED = {"40030033": "Extra Packing Kayu Tambahan"}
 SERVICE_HINTS = ("packing", "bubble wrap", "biaya", "ongkir")
 CANCEL_LIMIT_PCT = 15.0
@@ -78,7 +80,7 @@ def promo_eligible(
     reasons: list[str] = []
     stok = row.get("stok")
     known = bool(row.get("ada_data_stok", stok is not None and not pd.isna(stok)))
-    need = float(row.get("m_qty", 0) or 0) + float(row.get("ss", 0) or 0)
+    need = stock_need(row)
     ss = float(row.get("ss", 0) or 0)
     limited = False
     if not known:

@@ -1,8 +1,8 @@
 """Rekomendasi ber-SKU dan tabel restock prioritas (Revisi Final 2C & 4A).
 
   restock    = max(0, prediksi_window + SS − stok_dc)
-  stok_habis = hari_ini + floor(stok_dc / prediksi_harian)   (≤ hari ini → "Segera"/Kosong)
-  status     = Kosong bila stok_habis ≤ hari ini; Kurang bila stok < prediksi + SS; selain itu Aman
+  stok_habis = hari_ini + floor(stok_dc / prediksi_harian)   (prediksi harian 0 → tidak habis)
+  status     = Kosong bila stok 0; Kurang bila stok < prediksi + SS; selain itu Aman
   pic        = restock lokal → Team DC; ada PO impor terbuka → Team IC/MD; harga/iklan → E-commerce
   prioritas  = 1: stok habis ≤ 3 hari atau Kosong; 2: margin minus / batal tinggi; 3: lainnya
 """
@@ -14,6 +14,8 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+
+from src.core.decision_table import stock_need
 
 RECORD_COLUMNS = ("prioritas", "tindakan", "sku", "nama", "varian", "stok", "kebutuhan", "restock", "tenggat", "pic", "alasan")
 CANCEL_HIGH_PCT = 15.0
@@ -50,7 +52,7 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
 
 def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None) -> pd.DataFrame:
     """Tabel "Kebutuhan restock prioritas". Urut stok habis naik, lalu restock turun."""
-    columns = ["sku", "Produk", "Varian", "Stok DC", "Prediksi", "SS", "Restock", "Stok habis", "Status", "Inbound", "_habis", "_pred_harian", "_sales_harian"]
+    columns = ["Peringkat", "sku", "Produk", "Varian", "Stok DC", "Prediksi", "SS", "Restock", "Stok habis", "Status", "Inbound", "_habis", "_pred_harian", "_sales_harian"]
     if table is None or table.empty:
         return pd.DataFrame(columns=columns)
     po = po or {}
@@ -63,17 +65,19 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
         pred = _num(row.get("m_qty"))
         ss = _num(row.get("ss"))
         daily = _num(row.get("pred_harian"))
-        restock = max(0.0, math.ceil(pred + ss - stok))
+        need = stock_need(row)
+        restock = max(0.0, math.ceil(need - stok))
         habis = stock_out_date(stok, daily, today)
-        if stok <= 0 or (habis is not None and habis <= today):
+        if stok <= 0:
             status = "Kosong"
-        elif stok < pred + ss:
+        elif stok < need:
             status = "Kurang"
         else:
             status = "Aman"
         inbound = po.get(str(row.get("sku")))
         rows.append(
             {
+                "Peringkat": row.get("peringkat"),
                 "sku": str(row.get("sku", "")),
                 "Produk": str(row.get("product_name", "")),
                 "Varian": str(row.get("variasi_tampil", "") or ""),
@@ -115,7 +119,7 @@ def recommendation_records(
         sku = str(row.get("sku", ""))
         known = bool(row.get("ada_data_stok", False))
         stok = _num(row.get("stok")) if known else None
-        need = _num(row.get("m_qty")) + _num(row.get("ss"))
+        need = stock_need(row)
         daily = _num(row.get("pred_harian"))
         restock = max(0.0, math.ceil(need - stok)) if known else None
         habis = stock_out_date(stok, daily, today) if known else None

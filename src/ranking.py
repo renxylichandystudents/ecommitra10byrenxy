@@ -40,6 +40,30 @@ def rank_from_orders(orders: pd.DataFrame, metric: str) -> pd.DataFrame:
     return unique_rank(stats, primary, [secondary, "n_orders", "last_order"])
 
 
+def rank_for_period(orders: pd.DataFrame, period_orders: pd.DataFrame | None, metric: str) -> pd.DataFrame:
+    """Semua SKU data latih (semua yang diprediksi), diurutkan menurut penjualan periode terpilih.
+
+    qty_total/sales_total/n_orders = aktual periode terpilih (0 bila tidak laku). SKU yang tidak laku
+    di periode itu tetap ikut di belakang, urut menurut seluruh data latih.
+    """
+    full = rank_from_orders(orders, metric)
+    if full.empty:
+        return full
+    full = full.rename(columns={"qty_total": "_qty_all", "sales_total": "_sales_all", "n_orders": "_orders_all", "peringkat": "_rank_all"})
+    if period_orders is not None and not period_orders.empty:
+        part = period_orders.groupby("item_key", as_index=False).agg(qty_total=("qty", "sum"), sales_total=("sales", "sum"), n_orders=("order_id", "nunique"))
+        full = full.merge(part, on="item_key", how="left")
+    for column in ("qty_total", "sales_total", "n_orders"):
+        if column not in full.columns:
+            full[column] = 0
+        full[column] = full[column].fillna(0)
+    primary = "qty_total" if metric == "qty" else "sales_total"
+    secondary = "sales_total" if metric == "qty" else "qty_total"
+    ordered = full.sort_values([primary, secondary, "_rank_all"], ascending=[False, False, True], kind="mergesort").copy()
+    ordered["peringkat"] = np.arange(1, len(ordered) + 1)
+    return ordered.drop(columns=["_qty_all", "_sales_all", "_orders_all", "_rank_all"]).reset_index(drop=True)
+
+
 def historical_bestsellers(history: pd.DataFrame, period: str, period_start, top_n: int = 10) -> pd.DataFrame:
     subset = history[history["period_start"] == period_start].copy()
     if subset.empty:

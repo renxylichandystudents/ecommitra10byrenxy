@@ -326,10 +326,11 @@ Hasil kerangka pengujian 4.9 (data lokal Jan–Okt 2026, periode Bulan, 440 SKU)
 | No | Komponen | Target | Hasil |
 |---|---|---|---|
 | 1 | Demand forecasting (walk-forward, MAPE agregat 7 hari) | ≤ 15% | 10,3% — tercapai |
-| 2 | Safety stock, stress test keterlambatan impor | 0% stockout | 0,0% — tercapai |
-| 3 | MILP restock Top 50 | 0% infeasible | Optimal — tercapai |
-| 4 | Sistem pakar, NLP & SEO | 100% berjalan | 50/50, 0 saran tidak valid — tercapai |
-| 5 | Tabel keputusan | < 3 detik (cache) | < 0,01 detik — tercapai |
+| 2 | MILP restock Top 50 | 0% infeasible | Optimal — tercapai |
+| 3 | Sistem pakar, NLP & SEO | 100% berjalan | 50/50, 0 saran tidak valid — tercapai |
+| 4 | Tabel keputusan | < 3 detik (cache) | < 0,01 detik — tercapai |
+
+Stress test keterlambatan impor dihapus: SS impor = (Lmaks − Lrata) × permintaan sehingga stok selalu cukup sampai Lmaks menurut definisi, dan katalog saat ini tanpa SKU impor.
 
 Catatan: MAPE per SKU tetap tinggi (±85–120%) karena penjualan bahan bangunan banyak yang sporadis; WAPE dan bias ditampilkan sebagai pendamping. MAPE agregat horizon 28–30 hari ±17–21%, di atas target 15%.
 

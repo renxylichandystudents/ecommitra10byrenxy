@@ -64,12 +64,8 @@ def inventory_status(current_stock: float, kebutuhan: float, safety_stock: float
         return "Kosong", below_ss
     if need <= 0:
         return ("di bawah SS" if below_ss else "Aman"), below_ss
-    gap = need - stock
-    if gap <= 0:
+    if stock >= need:
         return ("di bawah SS" if below_ss else "Aman"), below_ss
-    shortage_pct = gap / need
-    if shortage_pct <= 0.10:
-        return ("Tipis · di bawah SS" if below_ss else "Tipis"), below_ss
     return ("Kurang · di bawah SS" if below_ss else "Kurang"), below_ss
 
 

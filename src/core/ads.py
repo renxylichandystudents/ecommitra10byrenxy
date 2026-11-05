@@ -27,7 +27,7 @@ METRICS = {
     "products_sold": "terjual_iklan",
     "cart_adds": "keranjang",
 }
-SKU_COLUMNS = ["sku", *METRICS.values(), "omzet_iklan_shopee"]
+SKU_COLUMNS = ["sku", *METRICS.values(), "omzet_iklan_shopee", "sales_sku"]
 SUMMARY_CODES = {"", "-", "nan", "none", "null"}
 
 

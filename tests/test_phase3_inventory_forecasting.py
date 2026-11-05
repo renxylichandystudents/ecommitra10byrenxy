@@ -44,7 +44,7 @@ class InventoryFormulaTests(unittest.TestCase):
         )
         self.assertAlmostEqual(result.kebutuhan, result.forecast_qty + result.safety_stock)
         self.assertGreater(result.rop, result.safety_stock)
-        self.assertIn(result.status_stok.split(" · ")[0], {"Aman", "Tipis", "Kurang", "Kosong", "di bawah SS"})
+        self.assertIn(result.status_stok.split(" · ")[0], {"Aman", "Kurang", "Kosong", "di bawah SS"})
         self.assertGreater(result.hari_cukup, 0)
 
     def test_stock_zero_duration_from_snapshots(self) -> None:

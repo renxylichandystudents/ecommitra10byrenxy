@@ -309,7 +309,7 @@ def login_gate() -> User:
 def user_bar(user: User) -> None:
     info, pwd, admin, out = st.columns([6, 1.2, 1.2, 1])
     info.markdown(
-        f"<div class='user-bar' style='font-size:.85rem;color:#475569;padding-top:.45rem'>👤 <b>{html.escape(user.username)}</b> · {role_label(user.role)}</div>",
+        f"<div class='user-bar' style='font-size:var(--fs-sm);color:#475569;padding-top:.45rem'>👤 <b>{html.escape(user.username)}</b> · {role_label(user.role)}</div>",
         unsafe_allow_html=True,
     )
     if pwd.button("Ubah password", key="auth-pwd", use_container_width=True):
@@ -320,6 +320,24 @@ def user_bar(user: User) -> None:
         st.rerun()
     if out.button("Logout", key="auth-logout", use_container_width=True):
         logout()
+
+
+def account_menu(user: User) -> None:
+    """Tombol akun di kartu header: nama + role, berisi Ubah password, Kelola user, dan Logout."""
+    with st.popover(f"👤 {user.username}", use_container_width=True):
+        st.markdown(
+            f"<div class='user-bar' style='font-size:var(--fs-sm);color:#475569;margin-bottom:.35rem'>"
+            f"<b>{html.escape(user.username)}</b> · {role_label(user.role)}</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Ubah password", key="auth-pwd", use_container_width=True):
+            st.session_state[PAGE_KEY] = "password"
+            st.rerun()
+        if can(user.role, "kelola_user") and st.button("Kelola user", key="auth-users", use_container_width=True):
+            st.session_state[PAGE_KEY] = "users"
+            st.rerun()
+        if st.button("Logout", key="auth-logout", use_container_width=True):
+            logout()
 
 
 def _users_page(repo: UserRepository, user: User) -> None:

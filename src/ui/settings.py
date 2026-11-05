@@ -9,22 +9,28 @@ import streamlit as st
 
 from src.core.config import changed_from_default, default_params, save_params
 from src.ui.common import DEFAULT_NOTE
+from src.utils.format import input_angka
 
 FIELDS = (
     # (path, label, min, max, step, keterangan)
     ("lead_time.lokal_hari", "Lead time lokal (hari)", 0, 120, 1, "DC Cikupa ke pembeli, dipakai pada safety stock dan ROP."),
-    ("lead_time.lokal_sigma_hari", "Variasi lead time lokal (hari)", 0, 60, 1, "0 = lead time stabil. Di atas 0 memakai rumus SS umum."),
-    ("lead_time.impor_rata_hari", "Lead time impor rata-rata (hari)", 1, 365, 1, "Dipakai bila impor aktif."),
-    ("lead_time.impor_maks_hari", "Lead time impor maksimum (hari)", 1, 365, 1, "SS impor = (maks − rata-rata) × permintaan harian."),
     ("gudang.kapasitas_unit", "Kapasitas gudang (unit)", 0, 10_000_000, 100, "Batas optimasi pembelian."),
-    ("gudang.moq_unit", "MOQ pemasok (unit)", 1, 100_000, 1, "Jumlah minimum sekali pesan."),
-    ("gudang.biaya_simpan_pct_tahun", "Biaya simpan (% harga per tahun)", 0, 100, 1, "Biaya kelebihan stok pada rekomendasi safety stock."),
-    ("gudang.biaya_kehabisan_pct", "Biaya kehabisan stok (% harga)", 0, 200, 1, "Penalti kehilangan pembeli saat kosong."),
-    ("margin.hpp_pct_harga", "HPP (% harga jual bersih)", 1, 100, 1, "Modal yang tertahan di stok."),
     ("margin.margin_min_pct", "Margin minimum (%)", 0, 100, 1, "Batas bawah harga flash sale dan markdown."),
     ("target.sales_bulanan_rp", "Target sales bulanan (Rp)", 0, 100_000_000_000, 1_000_000, "0 = memakai prediksi sebagai target."),
     ("iklan.target_roas", "Target ROAS", 1, 100, 1, "Dipakai rekomendasi iklan."),
     ("iklan.budget_maks_rp", "Budget iklan maksimum (Rp)", 0, 10_000_000_000, 100_000, "Batas alokasi budget per periode."),
+)
+
+# Tidak tampil di form; selalu memakai nilai config/business_params.yaml.
+HIDDEN = (
+    "lead_time.lokal_sigma_hari",
+    "lead_time.impor_rata_hari",
+    "lead_time.impor_maks_hari",
+    "lead_time.impor_aktif",
+    "gudang.moq_unit",
+    "gudang.biaya_simpan_pct_tahun",
+    "gudang.biaya_kehabisan_pct",
+    "margin.hpp_pct_harga",
 )
 
 
@@ -33,6 +39,10 @@ def _get(params: dict, path: str):
     for part in path.split("."):
         current = current.get(part, {}) if isinstance(current, dict) else {}
     return current
+
+
+def _key(path: str, hi: int) -> str:
+    return f"bp-txt-{path}" if hi >= 10_000 else f"bp-{path}"
 
 
 def _set(params: dict, path: str, value) -> None:
@@ -53,10 +63,14 @@ def show_business_settings(params: dict, user_root: Path) -> dict:
             value = _get(params, path)
             note = "" if changed_from_default(params, path) else f" · {DEFAULT_NOTE}"
             with cols[index % 2]:
-                new = st.number_input(f"{label}{note}", min_value=lo, max_value=hi, value=int(value or 0), step=step, help=hint, key=f"bp-{path}")
+                if hi >= 10_000:
+                    new = input_angka(f"{label}{note}", value, key=_key(path, hi), lo=lo, hi=hi, help=hint)
+                else:
+                    new = st.number_input(f"{label}{note}", min_value=lo, max_value=hi, value=int(value or 0), step=step, help=hint, key=_key(path, hi))
             _set(draft, path, int(new))
-        impor = st.checkbox("Ada SKU impor (lead time panjang)", value=bool(_get(params, "lead_time.impor_aktif")), key="bp-impor")
-        _set(draft, "lead_time.impor_aktif", bool(impor))
+        defaults = default_params()
+        for path in HIDDEN:
+            _set(draft, path, _get(defaults, path))
         left, right = st.columns(2)
         if left.button("Simpan pengaturan", key="bp-save", type="primary"):
             save_params(draft, user_root)
@@ -65,8 +79,7 @@ def show_business_settings(params: dict, user_root: Path) -> dict:
         if right.button("Kembalikan ke default", key="bp-reset"):
             fresh = default_params()
             save_params(fresh, user_root)
-            for path, *_rest in FIELDS:
-                st.session_state.pop(f"bp-{path}", None)
-            st.session_state.pop("bp-impor", None)
+            for path, _label, _lo, hi, *_rest in FIELDS:
+                st.session_state.pop(_key(path, hi), None)
             st.rerun()
     return params

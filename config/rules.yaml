@@ -14,8 +14,8 @@ rules:
   - id: stok_kurang_tahan_iklan
     prioritas: 2
     jika:
-      - [status_stok, in, [Kurang, Tipis]]
-    maka: "Stok kurang {kekurangan} unit dari kebutuhan. Tunda kenaikan iklan, ajukan restock minimal {kekurangan} unit sebelum {batas_tanggal}."
+      - [status_stok, in, [Kurang]]
+    maka: "Stok kurang {kekurangan} unit dari kebutuhan. Tunda kenaikan iklan, ajukan restock minimal {kekurangan} unit {batas_teks}."
     aksi: stok
   - id: di_bawah_ss
     prioritas: 2

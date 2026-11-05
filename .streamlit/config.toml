@@ -7,3 +7,10 @@ maxUploadSize = 200
 
 [browser]
 gatherUsageStats = false
+
+# Tabel st.dataframe disamakan dengan tabel kustom di components/top50_table/index.html.
+[theme]
+base = "light"
+font = "Plus Jakarta Sans:https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap, sans-serif"
+dataframeHeaderBackgroundColor = "#f1f5f9"
+dataframeBorderColor = "#e2e8f0"
