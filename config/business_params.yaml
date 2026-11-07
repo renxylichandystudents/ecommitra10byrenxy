@@ -71,3 +71,7 @@ merek:
   - panasonic
   - broco
   - krisbow
+
+# Setelan data latih untuk setiap analisa baru (keputusan 7 Nov 2026: prediksi stok tanpa pesanan batal & retur).
+analisa:
+  kecualikan_batal_retur: true
