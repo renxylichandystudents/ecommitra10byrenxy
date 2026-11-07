@@ -75,7 +75,7 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
 
 def _excluded_tab(features, table: pd.DataFrame, username: str) -> None:
     st.markdown("**SKU dikecualikan**")
-    st.caption("SKU di sini keluar dari peringkat, safety stock, iklan, flash sale, dan exposure (filter di awal pipeline). Di tabel alokasi iklan tampil sebagai \"SKU jasa\".")
+    st.caption("SKU di sini keluar dari rank, safety stock, iklan, flash sale, dan exposure (filter di awal pipeline). Di tabel alokasi iklan tampil sebagai \"SKU jasa\".")
     frame = features.read("excluded_sku")
     if frame.empty:
         st.info("Belum ada SKU yang dikecualikan.")
@@ -92,7 +92,7 @@ def _excluded_tab(features, table: pd.DataFrame, username: str) -> None:
                     features.remove("excluded_sku", {"sku": sku}, username=username, action="hapus:sku_dikecualikan")
                     bump(st.session_state)
 
-                confirm_action("Hapus dari SKU dikecualikan?", f"SKU {html.escape(str(row['sku']))} akan kembali masuk peringkat dan rekomendasi.", _delete, confirm_label="Ya, hapus")
+                confirm_action("Hapus dari SKU dikecualikan?", f"SKU {html.escape(str(row['sku']))} akan kembali masuk rank dan rekomendasi.", _delete, confirm_label="Ya, hapus")
     with st.form("exc-add", clear_on_submit=True):
         a1, a2, a3 = st.columns([1.2, 3, 1])
         sku = a1.text_input("SKU")

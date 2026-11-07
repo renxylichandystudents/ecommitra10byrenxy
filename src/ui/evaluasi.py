@@ -18,7 +18,7 @@ from src.core.optimization import optimize_restock
 from src.core.libstatus import library_status
 from src.models.evaluate import HORIZON_LABELS, HORIZONS, MODEL_SEGMENT, PERIOD_TO_HORIZON, record_frame
 from src.utils.format import show_table
-from src.ui.common import ID_MONTHS_SHORT, download_excel, fmt_num, fmt_pct
+from src.ui.common import ID_MONTHS_SHORT, download_excel, explain, fmt_num, fmt_pct
 
 METRIC_COLUMNS = ("MAPE (%)", "MAPE agregat (%)", "WAPE (%)", "Bias (%)", "RMSE", "MAPE kelas A (%)", "MAPE kelas C (%)")
 UPLOAD_MENUS = (
@@ -114,11 +114,14 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date, period: st
         record = records[horizon]
         results["record"] = record
         results["folds"] = len(record.get("fold_dates") or [])
-        st.caption(
-            f"Walk-forward {len(record['fold_dates'])} lipatan, titik potong "
-            + ", ".join(_short_day(d) for d in record["fold_dates"])
-            + f"; {fmt_num(record['n_sku'])} SKU aktif. MAPE dihitung hanya pada titik aktual > 0; "
-            "WAPE = Σ|aktual − prediksi| / Σ aktual; bias = Σ(prediksi − aktual) / Σ aktual."
+        explain(
+            [
+                ("Uji", f"walk-forward {len(record['fold_dates'])} lipatan, titik potong " + ", ".join(_short_day(d) for d in record["fold_dates"])),
+                ("SKU aktif", fmt_num(record["n_sku"])),
+                ("MAPE", "hanya pada titik aktual > 0"),
+                ("WAPE", "Σ|aktual − prediksi| ÷ Σ aktual"),
+                ("Bias", "Σ(prediksi − aktual) ÷ Σ aktual"),
+            ]
         )
         frame = record_frame(record)
         show_table(frame, kinds={c: "dec" for c in METRIC_COLUMNS})
@@ -205,18 +208,25 @@ def _comparison(outcome, period: str) -> None:
         fig.add_hline(y=MAPE_TARGET_PCT, line_dash="dash", line_color="#a16207", annotation_text=f"Target {MAPE_TARGET_PCT:.0f}%")
     fig.update_layout(height=420, separators=",.", yaxis_title=metric, margin=dict(l=40, r=20, t=30, b=40), showlegend=False)
     st.plotly_chart(fig, use_container_width=True, key="eval-bar")
-    st.caption(
-        f"Angka grafik = tabel Hasil testing horizon yang sama. Oranye = {MODEL_SEGMENT} (model yang dipakai prediksi), "
-        "oranye muda = ensemble murni, abu-abu = Level terkini (metode lama), biru = model pembanding."
+    explain(
+        [
+            ("Oranye", f"{MODEL_SEGMENT} (model yang dipakai prediksi)"),
+            ("Oranye muda", "ensemble murni"),
+            ("Abu-abu", "Level terkini (metode lama)"),
+            ("Biru", "model pembanding"),
+            "Angka grafik = tabel Hasil testing horizon yang sama.",
+        ]
     )
 
 
 def _conclusion(outcome, results: dict, base_history: pd.DataFrame | None, period: str) -> None:
     records = _records(outcome)
-    st.info(
-        "Cara membaca: untuk keputusan stok, metrik utama adalah WAPE dan MAPE agregat toko, karena keduanya ditimbang "
-        "volume. MAPE per SKU dilaporkan sebagai pelengkap; nilainya tinggi karena banyak SKU bahan bangunan jarang laku "
-        "(permintaan kecil membuat persentase kesalahan membesar)."
+    explain(
+        [
+            ("Metrik utama keputusan stok", "WAPE dan MAPE agregat toko (ditimbang volume)"),
+            ("MAPE per SKU", "pelengkap; tinggi karena banyak SKU bahan bangunan jarang laku (permintaan kecil memperbesar persentase kesalahan)"),
+        ],
+        title="Cara membaca",
     )
     for name in HORIZONS:
         record = records.get(name)

@@ -162,6 +162,11 @@ def build_decision_table(
             sales = qty * out["harga_bersih"]
         out[f"{p}_qty"] = np.rint(qty)
         out[f"{p}_sales"] = np.rint(sales)
+        # Nilai harapan sebelum dibulatkan per SKU: dipakai untuk TOTAL banyak SKU. Pembulatan ke bawah per SKU
+        # membuat SKU yang laku < 1 unit/hari bernilai 0, sehingga total harian/bulanan toko jauh terlalu kecil.
+        days = group.days if p in {"d", "m"} else None
+        out[f"{p}_qty_exp"] = out["pred_harian"] * days if days else pred_qty.astype(float)
+        out[f"{p}_sales_exp"] = out[f"{p}_qty_exp"] * out["harga_bersih"].fillna(0.0) if days else pred_sales.astype(float)
         out[f"{p}_ss"] = out["ss"]
         out[f"{p}_butuh"] = out[f"{p}_qty"] + out["ss"]
         stok = out["stok"]

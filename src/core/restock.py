@@ -58,7 +58,7 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
 
 def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None) -> pd.DataFrame:
     """Tabel "Kebutuhan restock prioritas". Urut stok habis naik, lalu restock turun."""
-    columns = ["Peringkat", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "_habis", "_pred_harian", "_sales_harian"]
+    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "_habis", "_pred_harian", "_sales_harian"]
     if table is None or table.empty:
         return pd.DataFrame(columns=columns)
     po = po or {}
@@ -83,7 +83,7 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
         inbound = po.get(str(row.get("sku")))
         rows.append(
             {
-                "Peringkat": row.get("peringkat"),
+                "Rank": row.get("peringkat"),
                 "sku": str(row.get("sku", "")),
                 "Produk": str(row.get("product_name", "")),
                 "Varian": str(row.get("variasi_tampil", "") or ""),
@@ -105,7 +105,10 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
     frame = pd.DataFrame(rows, columns=columns)
     if frame.empty:
         return frame
-    return frame.sort_values(["_habis", "Restock"], ascending=[True, False]).reset_index(drop=True)
+    # Prioritas untuk user: Kosong → Kurang → Aman → tanpa data; lalu stok habis paling cepat, lalu restock terbesar.
+    order = {"Kosong": 0, "Kurang": 1, "Aman": 2}
+    frame["_prioritas"] = frame["Status"].map(lambda s: order.get(str(s).split(" · ")[0], 3))
+    return frame.sort_values(["_prioritas", "_habis", "Restock"], ascending=[True, True, False]).drop(columns="_prioritas").reset_index(drop=True)
 
 
 def recommendation_records(

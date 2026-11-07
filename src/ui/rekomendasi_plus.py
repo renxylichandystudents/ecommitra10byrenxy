@@ -16,7 +16,7 @@ from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date
 from src.core.product_features import features_from_description, hook_for
 from src.core.promo import momentum_14d, product_label, promo_eligible
-from src.ui.common import card, download_excel, fmt_idr, fmt_num
+from src.ui.common import card, download_excel, explain, fmt_idr, fmt_num
 from src.ui.feature_data import FeatureData, bump, product_frame
 from src.core.ads import roas_estimate
 from src.utils.format import input_rupiah, show_table, wrap_layout
@@ -96,7 +96,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
         bump(st.session_state)
         st.success("Target disimpan. Laporan memakai target ini.")
         st.rerun()
-    predicted = float(table["m_sales"].sum())
+    predicted = float(table["m_sales_exp"].sum() if "m_sales_exp" in table.columns else table["m_sales"].sum())
     if target <= 0:
         st.info(f"Isi target sales bersih untuk menghitung strategi. Prediksi sales semua SKU pada jendela ini {fmt_idr(predicted)}.")
         return
@@ -119,16 +119,22 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
     view["Rentang omzet (p10–p90)"] = view["Rentang omzet (p10–p90)"].map(lambda v: f"{fmt_idr(v[0])} – {fmt_idr(v[1])}")
     view["Rentang ROAS"] = view["Rentang ROAS"].map(lambda v: f"{fmt_num(v[0], 1)} – {fmt_num(v[1], 1)}" if np.isfinite(v[0]) else "–")
     show_table(view, kinds={"Budget tambahan": "money", "Omzet tambahan (p50)": "money", "ROAS tambahan": "dec", "% target": "pct", "Margin strategi (%)": "pct"})
-    st.caption(
-        "Tambahan budget hanya diberikan ke SKU yang masih untung: tiap Rp 1 iklan tambahan harus kembali minimal Rp 1 margin "
-        f"(ROAS marginal × margin ≥ 1), dan maksimal {fmt_num(ads_plan.EXTRA_MULTIPLE, 0)}× budget saat ini per SKU."
+    explain(
+        [
+            ("Tambahan budget", "hanya untuk SKU yang masih untung: Rp 1 iklan tambahan kembali minimal Rp 1 margin (ROAS marginal × margin ≥ 1)"),
+            ("Batas per SKU", f"maksimal {fmt_num(ads_plan.EXTRA_MULTIPLE, 0)}× budget saat ini"),
+            ("Budget saat ini", "biaya iklan per hari (dari laporan iklan) × 30"),
+            ("ROAS dasar", "60% ROAS 30 hari terakhir + 40% ROAS 90 hari (riwayat iklan)"),
+        ]
     )
     with st.expander("Metode perhitungan"):
-        st.caption(
-            "Kurva respons per SKU: omzet iklan harian = a · ln(1 + biaya harian / b). Laporan iklan Shopee yang diunggah berupa total per periode "
-            "(bukan harian), sehingga belum ada SKU dengan ≥ 20 hari berbiaya untuk di-fit; kurva memakai titik biaya & ROAS saat ini (b = biaya harian). "
-            "Alokasi greedy per Rp 500.000/bulan ke ROAS marginal × margin tertinggi, berhenti di titik impas. "
-            "Rentang = persentil 10–90 dari 200× bootstrap residual."
+        explain(
+            [
+                ("Kurva respons", "omzet iklan harian = a · ln(1 + biaya harian ÷ b), titik awal = biaya & ROAS saat ini"),
+                ("Alokasi", "bertahap Rp 500.000/bulan ke ROAS marginal × margin tertinggi, berhenti di titik impas"),
+                ("Rentang", "persentil 10–90 dari 200× bootstrap residual"),
+                ("Catatan data", "laporan iklan Shopee berupa total per periode (bukan harian), jadi kurva belum di-fit per SKU"),
+            ]
         )
     if not known.empty and not known["known_margin"].any():
         st.caption(f"Komponen biaya belum diunggah (Setting › Kalkulator biaya): margin semua SKU memakai margin minimum {fmt_num(margin_min, 1)}%.")
@@ -235,10 +241,14 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date) -> N
             skipped.append({"SKU · produk · varian": _label(row), "Alasan": "Kuota ≤ 0 setelah SS dan kebutuhan 7 hari"})
             continue
         candidates.append({"sku": sku, "label": _label(row), "kuota": quota, "kuota_setelah_po": quota_po, "harga": price, "harga_flash": flash, "skor": float(row["m_sales"])})
-    st.caption(
-        "Diskon awal 10%, tidak di bawah harga impas. Slot 2 jam di tanggal kembar, gajian (25), dan Harbolnas; maks. 2 SKU per slot; "
-        "SKU yang sama tidak dua kali dalam 7 hari. Hanya SKU dengan stok sisa (setelah SS dan kebutuhan 7 hari) yang dijadwalkan.",
-        help="Kuota = min(stok − SS − prediksi harian × 7, 10% prediksi jendela). Daftar SKU yang tidak dijadwalkan beserta alasannya ada di bawah tabel.",
+    explain(
+        [
+            ("Diskon", "awal 10%, tidak di bawah harga impas"),
+            ("Slot", "2 jam di tanggal kembar, gajian (25), dan Harbolnas; maks. 2 SKU per slot"),
+            ("Jeda", "SKU yang sama tidak dua kali dalam 7 hari"),
+            ("Kuota", "min(stok − SS − prediksi harian × 7, 10% prediksi jendela); hanya SKU dengan stok sisa yang dijadwalkan"),
+            "SKU yang tidak dijadwalkan dan alasannya ada di bawah tabel.",
+        ]
     )
     po_eta = {sku: po["eta"] for sku, po in data.po.items() if po.get("eta")}
     schedule = promo_calendar.schedule_flash(pd.DataFrame(candidates, columns=["sku", "label", "kuota", "kuota_setelah_po", "harga", "harga_flash", "skor"]), today, po_eta=po_eta)
@@ -443,9 +453,9 @@ def show_ranking(table: pd.DataFrame, *, features, frames, username: str, can_ed
         changes = ranking_score.brand_changes(portal)
         kategori = st.selectbox("Kategori", sorted(changes["kategori"].astype(str).unique()), key="brand-cat")
         part = changes.loc[changes["kategori"].astype(str) == kategori].rename(
-            columns={"brand": "Brand", "peringkat": "Peringkat", "pangsa": "Pangsa (%)", "perubahan_peringkat": "Perubahan peringkat", "perubahan_pangsa": "Perubahan pangsa (poin)"}
+            columns={"brand": "Brand", "peringkat": "Rank", "pangsa": "Pangsa (%)", "perubahan_peringkat": "Perubahan peringkat", "perubahan_pangsa": "Perubahan pangsa (poin)"}
         )
-        show_table(part[[c for c in ("Brand", "Peringkat", "Pangsa (%)", "Perubahan peringkat", "Perubahan pangsa (poin)") if c in part.columns]])
+        show_table(part[[c for c in ("Brand", "Rank", "Pangsa (%)", "Perubahan peringkat", "Perubahan pangsa (poin)") if c in part.columns]])
     st.markdown("**Skor kesiapan ranking · Top 50 SKU**")
     st.caption("Shopee tidak memublikasikan bobot algoritma; skor ini indikator internal. Faktor tanpa data di sistem (atribut, video, ulasan berfoto, Gratis Ongkir) bernilai 0 dan ditandai –.")
     if table is None or table.empty:

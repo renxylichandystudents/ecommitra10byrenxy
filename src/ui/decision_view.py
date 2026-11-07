@@ -14,9 +14,10 @@ from plotly.subplots import make_subplots
 
 from src.core.periods import prediction_window
 from src.core.decision_table import lama_kosong_text, period_groups, safety_stock_summary
-from src.core.labels import LABEL_ICONS, LABEL_LEGEND
+from src.core.labels import LABEL_ICONS
 from src.forecast import forecast_calendar
 from src.ui.common import (
+    explain,
     DOWN_COLOR,
     STATUS_CLASS,
     UP_COLOR,
@@ -79,7 +80,7 @@ def table_parts(
     main_label = "QTY" if metric == "qty" else "Sales"
     columns: list[dict] = [
         {"id": "pick", "label": "Grafik", "pin": True, "width": 64},
-        {"id": "rank", "label": "Peringkat", "pin": True, "width": 86, "kind": "num", "sort": True},
+        {"id": "rank", "label": "Rank", "pin": True, "width": 86, "kind": "num", "sort": True},
         {"id": "sku", "label": "SKU", "pin": True, "width": 116, "sort": True},
         {"id": "name", "label": "Produk", "pin": True, "width": 290, "kind": "name", "sort": True},
         {"id": "variance", "label": "Varian", "width": 160, "kind": "name", "sort": True},
@@ -117,7 +118,7 @@ def table_parts(
         }
         totals["sold"] = totals.get("sold", 0.0) + sold_value
         export = {
-            "Peringkat": int(row["peringkat"]),
+            "Rank": int(row["peringkat"]),
             "SKU": cells["sku"]["t"],
             "Produk": cells["name"]["t"],
             "Varian": cells["variance"]["t"],
@@ -207,14 +208,29 @@ def show_decision_table(
 
 
 def label_legend() -> None:
-    st.markdown(f"<div class='field-hint'>{LABEL_LEGEND}</div>", unsafe_allow_html=True)
+    explain(
+        [
+            ("🏆 Terlaris", "10 besar QTY dan sales sekaligus"),
+            ("👁 Populer", "10% teratas dilihat"),
+            ("👆 Paling diminati", "10% teratas klik/CTR"),
+            ("⚠ Perlu perhatian", "batal > 15% atau > 2× median toko"),
+            "Dilihat/klik berasal dari laporan iklan; produk tanpa iklan tidak mendapat label Populer/Paling diminati.",
+        ],
+        title="Label",
+    )
 
 
 def safety_stock_box(table: pd.DataFrame, *, period: str, today: date, definition: str, used_default: bool, scope: str = "Top 50") -> None:
     groups = period_groups(period, today)
     with st.container(border=True):
         st.markdown(f"**Analisa safety stock · {scope} ({fmt_num(len(table))} SKU)**")
-        st.caption(definition + " Total SS sama di setiap periode karena SS dihitung dari lead time, bukan dari panjang periode.")
+        explain(
+            [
+                ("Safety stock (SS)", "stok cadangan agar produk tidak kosong saat permintaan atau pengiriman meleset"),
+                ("Rumus", "Z × σ permintaan harian × √lead time, dibulatkan ke atas"),
+                ("Sama di setiap periode", "SS dihitung dari lead time, bukan dari panjang periode"),
+            ]
+        )
         cols = st.columns(len(groups))
         for column, group in zip(cols, groups):
             summary = safety_stock_summary(table, group.prefix)
@@ -249,8 +265,8 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
                 "Actual pembanding": act.get("label", "-"),
                 "QTY actual": fmt_qty(qty_act),
                 "Sales value actual": fmt_idr(sales_act),
-                "Prediksi QTY": fmt_qty(view[f"{p}_qty"].sum()),
-                "Prediksi sales value": fmt_idr(view[f"{p}_sales"].sum()),
+                "Prediksi QTY": fmt_qty(round(view[f"{p}_qty_exp"].sum() if f"{p}_qty_exp" in view.columns else view[f"{p}_qty"].sum())),
+                "Prediksi sales value": fmt_idr(view[f"{p}_sales_exp"].sum() if f"{p}_sales_exp" in view.columns else view[f"{p}_sales"].sum()),
                 "Kontribusi sales Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)}" if share_base > 0 else "-",
             }
         )
@@ -266,9 +282,14 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
     )
     extra = next((g.label for g in groups if g.extra), None)
     extra_text = f"; {extra} = {extra.lower()} terakhir s.d. kemarin" if extra else ""
-    st.caption(
-        f"Actual hari = hari penuh terakhir sebelum hari ini (hari ini masih berjalan); actual bulan = bulan penuh terakhir{extra_text}. "
-        "Kontribusi = sales Top 50 ÷ sales seluruh toko pada rentang actual yang sama."
+    explain(
+        [
+            ("Actual hari", "hari penuh terakhir sebelum hari ini (hari ini masih berjalan)"),
+            ("Actual bulan", "bulan penuh terakhir" + (f"; {extra_text.lstrip('; ')}" if extra_text else "")),
+            ("Sales", "Harga setelah diskon × QTY, sesuai setelan Kecualikan batal & retur analisa ini"),
+            ("Kontribusi", "sales Top 50 ÷ sales seluruh toko pada rentang actual yang sama (dasar sales yang sama)"),
+            ("Beda dengan kartu Sales bersih", "kartu itu memakai Total Pembayaran per pesanan (setelah voucher, termasuk ongkir)"),
+        ]
     )
 
 

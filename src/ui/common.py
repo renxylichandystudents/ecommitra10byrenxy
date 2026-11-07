@@ -15,7 +15,7 @@ from src.utils.format import excel_bytes as numeric_excel_bytes
 ID_MONTHS = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
 ID_MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 STATUS_CLASS = {"Aman": "st-ok", "Kurang": "st-short", "Kosong": "st-empty", "di bawah SS": "st-thin"}
-STATUS_COLOR = {"Aman": "#15803d", "Kurang": "#b91c1c", "Kosong": "#b91c1c", "di bawah SS": "#a16207", "Tanpa data stok": "#64748b"}
+STATUS_COLOR = {"Aman": "#15803d", "Kurang": "#a16207", "Kosong": "#b91c1c", "di bawah SS": "#a16207", "Tanpa data stok": "#64748b"}
 UP_COLOR = "#1d4ed8"
 DOWN_COLOR = "#dc2626"
 EXTRA_BG = "#eff6ff"
@@ -299,6 +299,39 @@ def exclude_toggle_card(*, key: str, removed_orders: int, removed_units: float) 
     return bool(value)
 
 
+def exclude_status_card(active: bool, *, removed_orders: int, removed_units: float) -> None:
+    """Keterangan (bukan saklar) setelan "Kecualikan batal & retur" analisa yang sedang dibuka."""
+    with st.container(border=True):
+        left, right = st.columns([3, 2], vertical_alignment="center")
+        with left:
+            st.markdown("**Kecualikan batal & retur**")
+            st.caption("Setelan analisa ini. Ubah di Ubah data latih, lalu jalankan analisa.")
+        with right:
+            if active:
+                st.markdown(badge("AKTIF · nilai bersih", "on"), unsafe_allow_html=True)
+                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur tidak dihitung")
+            else:
+                st.markdown(badge("NONAKTIF · termasuk batal & retur", "off"), unsafe_allow_html=True)
+                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur ikut dihitung")
+
+
+def explain(items, *, title: str | None = None, target=None) -> None:
+    """Penjelasan singkat per poin, bukan paragraf bersambung.
+
+    items: list berisi "teks" atau (istilah, arti). Ditampilkan sebagai daftar kecil abu-abu."""
+    rows = []
+    for item in items:
+        if not item:
+            continue
+        if isinstance(item, (tuple, list)):
+            term, meaning = item
+            rows.append(f"<li><b>{html.escape(str(term))}</b> — {html.escape(str(meaning))}</li>")
+        else:
+            rows.append(f"<li>{html.escape(str(item))}</li>")
+    head = f"<div class='explain-title'>{html.escape(title)}</div>" if title else ""
+    (target or st).markdown(f"<div class='explain'>{head}<ul>{''.join(rows)}</ul></div>", unsafe_allow_html=True)
+
+
 def default_note(used_default: bool) -> str:
     return f"<span style='font-size:var(--fs-xs);color:#94a3b8'>· {DEFAULT_NOTE}</span>" if used_default else ""
 
@@ -352,7 +385,7 @@ def sku_cards(rows: list[dict], *, key: str) -> None:
         title = html.escape(str(row.get("produk") or "-"))
         meta = " · ".join(html.escape(str(v)) for v in (row.get("sku"), row.get("varian")) if v and str(v).lower() != "nan")
         status = str(row.get("status") or "")
-        tone = {"Aman": "on", "Kurang": "bad", "Kosong": "bad"}.get(status_key(status), "neutral")
+        tone = {"Aman": "on", "Kurang": "warn", "Kosong": "bad"}.get(status_key(status), "neutral")
         tag = f" {badge(status_key(status), tone)}" if status else ""
         nums = "".join(f"<div>{html.escape(str(label))}: <b>{html.escape(str(value))}</b></div>" for label, value in row.get("nums", []))
         parts.append(f"<div class='sku-card'><div class='sku-title'>{title}</div><div class='sku-meta'>{meta}{tag}</div><div class='sku-nums'>{nums}</div></div>")

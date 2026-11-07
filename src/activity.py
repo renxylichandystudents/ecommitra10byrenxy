@@ -217,7 +217,7 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
     empty_status = pd.DataFrame(columns=["Status pesanan", "No. Pesanan", "Kontribusi"])
     empty_sku = pd.DataFrame(
         columns=[
-            "Peringkat",
+            "Rank",
             "SKU",
             "Produk",
             "Varian",
@@ -303,7 +303,7 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
         return summary, status_table.reset_index(drop=True), empty_sku
     sheet = pd.DataFrame(
         {
-            "Peringkat": np.arange(1, len(grouped) + 1),
+            "Rank": np.arange(1, len(grouped) + 1),
             "SKU": grouped["sku"].where(grouped["sku"].ne(""), "Tanpa SKU"),
             "Produk": grouped["product_name"].where(grouped["product_name"].ne(""), "Tanpa nama"),
             "Varian": grouped["variation"].where(grouped["variation"].ne(""), "Tanpa variasi"),

@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_toggle_card, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -904,6 +904,7 @@ st.markdown(
     .stock-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 700; }
     .stock-chip.ok { background: #dcfce7; color: #166534; }
     .stock-chip.bad { background: #fee2e2; color: #991b1b; }
+    .stock-chip.warn { background: #fef9c3; color: #854d0e; }
     .stock-chip.none { background: #f1f5f9; color: #475569; }
     .insight-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); margin: 4px 0 8px; }
     .insight-table th, .insight-table td { border-bottom: 1px solid #e2e8f0; padding: 5px 8px; text-align: left; vertical-align: top; }
@@ -1196,6 +1197,11 @@ st.markdown(
         color: #0f172a;
         margin: 0 0 0.7rem;
     }
+    .explain { font-size: var(--fs-sm); color: #64748b; line-height: 1.5; margin: 0.15rem 0 0.6rem; }
+    .explain .explain-title { font-weight: 700; color: #475569; margin-bottom: 0.15rem; }
+    .explain ul { margin: 0; padding-left: 1.1rem; }
+    .explain li { margin: 0.1rem 0; }
+    .explain b { color: #334155; font-weight: 650; }
     .home-lead {
         max-width: none;
         font-size: var(--fs-lg);
@@ -1955,19 +1961,16 @@ def show_match_diagnostics(store, stamp: float) -> None:
     st.markdown("**1. SKU transaksi cocok stok**")
     if tx:
         miss = tx["sku_total"] - tx["sku_cocok"]
-        st.markdown(
-            f"Dari **{format_number(tx['sku_total'], 0)}** SKU unik yang pernah terjual di Data transaksi, "
-            f"**{format_number(tx['sku_cocok'], 0)}** ada di Data stok Site 10037 (daftar produk Shopee yang diunggah), "
-            f"**{format_number(miss, 0)}** tidak ada. Angka kartu dihitung per SKU, bukan per penjualan: "
-            f"SKU yang cocok mewakili **{format_number(tx['qty_cocok_pct'], 1)}%** QTY dan **{format_number(tx['sales_cocok_pct'], 1)}%** Sales value transaksi."
-        )
-        st.markdown(
-            f"SKU yang tidak cocok menurut terakhir terjual: {format_number(tx['miss_30'], 0)} SKU dalam 30 hari terakhir, "
-            f"{format_number(tx['miss_90'], 0)} SKU 31–90 hari lalu, {format_number(tx['miss_lama'], 0)} SKU lebih dari 90 hari lalu. "
-            f"{format_number(tx['miss_di_dc'], 0)} di antaranya masih ada di stok Site 10062/10036, artinya barangnya ada di Mitra10 "
-            "tetapi tidak (lagi) tercantum di daftar produk Shopee: produk dihapus/diarsipkan, SKU variasi diganti, atau salah ketik Nomor Referensi SKU. "
-            + (f"{format_number(tx['baris_tanpa_sku'], 0)} baris transaksi tanpa SKU tidak dihitung. " if tx["baris_tanpa_sku"] else "")
-            + f"Sebaliknya, {format_number(tx['stok_tanpa_transaksi'], 0)} dari {format_number(tx['sku_stok'], 0)} SKU di Data stok belum pernah terjual."
+        explain(
+            [
+                ("Arti", "persentase SKU yang pernah terjual dan juga ada di Data stok Site 10037 (daftar produk Shopee)"),
+                ("Hasil", f"{format_number(tx['sku_cocok'], 0)} dari {format_number(tx['sku_total'], 0)} SKU cocok; {format_number(miss, 0)} tidak"),
+                ("Bobot penjualan", f"SKU yang cocok mewakili {format_number(tx['qty_cocok_pct'], 1)}% QTY dan {format_number(tx['sales_cocok_pct'], 1)}% Sales value"),
+                ("Terakhir terjual (yang tidak cocok)", f"{format_number(tx['miss_30'], 0)} SKU ≤ 30 hari · {format_number(tx['miss_90'], 0)} SKU 31–90 hari · {format_number(tx['miss_lama'], 0)} SKU > 90 hari"),
+                ("Masih ada di DC", f"{format_number(tx['miss_di_dc'], 0)} SKU ada di Site 10062/10036 → barang ada, listing Shopee hilang/diarsipkan/ganti SKU"),
+                (f"{format_number(tx['baris_tanpa_sku'], 0)} baris transaksi tanpa SKU", "tidak dihitung") if tx["baris_tanpa_sku"] else None,
+                ("Sebaliknya", f"{format_number(tx['stok_tanpa_transaksi'], 0)} dari {format_number(tx['sku_stok'], 0)} SKU di Data stok belum pernah terjual"),
+            ]
         )
         lo, hi = diag.get("tx_period", (None, None))
         period_text = f"{fmt_date_short(lo)} – {fmt_date_short(hi)}" if lo is not None and pd.notna(lo) else "-"
@@ -1988,19 +1991,15 @@ def show_match_diagnostics(store, stamp: float) -> None:
     st.markdown("**2. Produk iklan terpetakan**")
     if ads:
         miss = ads["kode_total"] - ads["kode_cocok"]
-        st.markdown(
-            f"Laporan iklan (otomatis, grup, keseluruhan) memakai **Kode Produk** Shopee, bukan SKU. Kode itu diterjemahkan ke SKU lewat "
-            f"Data stok Site 10037 (kolom Kode Produk ↔ SKU, {format_number(ads['kode_di_stok'], 0)} kode). "
-            f"Dari **{format_number(ads['kode_total'], 0)}** kode produk unik di laporan iklan, **{format_number(ads['kode_cocok'], 0)}** "
-            f"ditemukan, **{format_number(miss, 0)}** tidak. Dihitung per biaya, iklan yang terpetakan mewakili "
-            f"**{format_number(ads['biaya_cocok_pct'], 1)}%** biaya iklan; biaya iklan yang tidak terpetakan {format_idr(ads['biaya_miss'])}."
-        )
-        st.markdown(
-            "Penyebab umum: produk yang diiklankan sudah dihapus/diarsipkan dari toko sehingga tidak ada di ekspor Data stok terbaru, "
-            "atau iklan pada periode lama untuk produk yang kemudian diganti listing-nya."
-            + (f" {format_number(ads['baris_tanpa_kode'], 0)} baris tanpa Kode Produk adalah baris ringkasan pengaturan iklan (Iklan Produk Otomatis, kepala grup iklan) "
-               "yang rinciannya ada di laporan otomatis dan grup, jadi tidak dihitung dua kali." if ads["baris_tanpa_kode"] else "")
-            + " Biaya iklan yang tidak terpetakan tidak masuk ke ROAS per SKU."
+        explain(
+            [
+                ("Arti", "persentase Kode Produk di laporan iklan yang bisa diterjemahkan ke SKU lewat Data stok Site 10037"),
+                ("Hasil", f"{format_number(ads['kode_cocok'], 0)} dari {format_number(ads['kode_total'], 0)} kode ditemukan; {format_number(miss, 0)} tidak"),
+                ("Bobot biaya", f"kode yang terpetakan mewakili {format_number(ads['biaya_cocok_pct'], 1)}% biaya iklan; yang tidak {format_idr(ads['biaya_miss'])}"),
+                ("Penyebab umum", "produk yang diiklankan sudah dihapus/diarsipkan dari toko atau listing-nya diganti"),
+                ("Baris tanpa Kode Produk", f"{format_number(ads['baris_tanpa_kode'], 0)} baris ringkasan pengaturan iklan (Otomatis, kepala grup) — rinciannya ada di laporan otomatis & grup") if ads["baris_tanpa_kode"] else None,
+                ("Dampak", "biaya & omzet kode yang tidak terpetakan tidak masuk ROAS per SKU"),
+            ]
         )
         lo, hi = diag.get("ads_period", (None, None))
         period_text = f"{fmt_date_short(lo)} – {fmt_date_short(hi)}" if lo is not None and pd.notna(lo) else "-"
@@ -2020,12 +2019,14 @@ def show_match_diagnostics(store, stamp: float) -> None:
     st.markdown("**3. Snapshot stok**")
     snaps = diag.get("snapshots")
     if snaps is not None and not snaps.empty:
-        st.markdown(
-            f"Snapshot = satu kali unggahan Data stok Site 10037. Stok tidak ditimpa: setiap Simpan disimpan sebagai potret stok pada jam itu, "
-            f"jadi angka **{format_number(len(snaps), 0)}** berarti file stok Site 10037 sudah disimpan {format_number(len(snaps), 0)} kali. "
-            "Analisa memakai snapshot terbaru untuk stok saat ini, dan rangkaian snapshot untuk menghitung lama kosong (sejak kapan stok 0). "
-            "Makin rutin diunggah (misalnya harian atau mingguan), makin akurat lama kosong. Unggahan dua kali di hari yang sama tetap dihitung dua snapshot. "
-            "Stok Site 10062/10036 tidak ikut dihitung di kartu ini."
+        explain(
+            [
+                ("Snapshot", "satu kali Simpan Data stok Site 10037; stok tidak ditimpa, tiap unggahan jadi potret stok jam itu"),
+                ("Nilai saat ini", f"{format_number(len(snaps), 0)} kali unggahan (dua kali di hari yang sama tetap dihitung dua)"),
+                ("Dipakai untuk", "stok saat ini (snapshot terbaru) dan lama kosong (sejak kapan stok 0)"),
+                ("Saran", "unggah rutin (harian/mingguan) agar lama kosong akurat"),
+                "Stok Site 10062/10036 tidak dihitung di kartu ini.",
+            ]
         )
         show_table(snaps, kinds={"Jumlah SKU": "count", "SKU stok 0": "count"})
 
@@ -2124,11 +2125,15 @@ def show_homepage() -> None:
             st.rerun()
         if may_run:
             nxt = last_run_settings()
-            st.caption(
-                f"Jalankan analisa memakai: periode {PERIOD_LABELS.get(nxt['period'], nxt['period'])} · "
-                f"{'QTY terjual' if nxt['metric'] == 'qty' else 'Sales value'} · SS {nxt['service']}% · "
-                f"kecualikan batal & retur: {'Ya' if nxt['exclude'] else 'Tidak'} · {len(nxt['keys'])} bulan data latih. "
-                "Ubah lewat Ubah data latih."
+            explain(
+                [
+                    ("Periode", PERIOD_LABELS.get(nxt["period"], nxt["period"])),
+                    ("Parameter", "QTY terjual" if nxt["metric"] == "qty" else "Sales value"),
+                    ("Safety stock", f"{nxt['service']}%"),
+                    ("Kecualikan batal & retur", "Ya" if nxt["exclude"] else "Tidak"),
+                    ("Data latih", f"{len(nxt['keys'])} bulan"),
+                ],
+                title="Jalankan analisa memakai (ubah lewat Ubah data latih):",
             )
         if may_run and train_col.button("Ubah data latih", use_container_width=True, key="home-train"):
             st.session_state["active-feature"] = FEATURE_ID
@@ -2209,8 +2214,7 @@ def request_analysis_run(*, period: str, metric: str, service: int, keys, exclud
     st.session_state["saved-source-key"] = "library:" + ",".join(keys)
     st.session_state["active-library-keys"] = keys
     # Analisa memakai setelan data latih yang diminta, bukan posisi saklar tampilan dari analisa yang terakhir dibuka.
-    st.session_state["exclude-return-batal"] = bool(exclude)
-    st.session_state["exclude_applied"] = bool(exclude)
+    st.session_state["run-exclude"] = bool(exclude)
     st.session_state["analysis-config"] = {
         "training_months": len(keys) if training_months is None else training_months,
         "period": period,
@@ -2280,14 +2284,13 @@ def open_saved_run(run_id: int, *, navigate: bool = True) -> bool:
     st.session_state["movement-asof"] = dict(movement_cache) if isinstance(movement_cache, dict) else {}
     st.session_state["active-run"] = (record.id, tuple(st.session_state["movement-asof"]))
     keys = tuple(result.get("library_keys") or ())
-    exclude = bool(result.get("exclude_return_cancel", record.exclude_batal_retur))
+    result["exclude_return_cancel"] = bool(result.get("exclude_return_cancel", record.exclude_batal_retur))
     st.session_state["analysis"] = result
     st.session_state["saved-period"] = str(result.get("period", record.periode))
     st.session_state["saved-metric"] = str(result.get("metric", record.parameter))
     st.session_state["saved-service"] = int(result.get("service", record.safety_stock))
     st.session_state["saved-source-key"] = str(result.get("source_key") or "library:" + ",".join(keys))
     st.session_state["active-library-keys"] = keys
-    st.session_state["exclude-return-batal"] = exclude  # tampilan hasil mengikuti analisa yang dibuka
     st.session_state["editing-input"] = False
     st.session_state["run-origin"] = {"id": record.id, "run_at": record.run_at, "run_by": record.run_by}
     if navigate:
@@ -2442,10 +2445,14 @@ def show_run_history() -> None:
                     _delete,
                     confirm_label="Ya, hapus",
                 )
-    st.caption(
-        "Riwayat lebih dari 90 hari dihapus otomatis. Buka memuat hasil tersimpan tanpa menghitung ulang. "
-        "Sidik data berubah setiap ada unggahan baru (termasuk stok, iklan, DC). Analisa dengan sidik data, periode, parameter, SS, dan "
-        "tanggal yang sama menghasilkan Prediksi/hari yang sama; tanda ⚠️ muncul bila berbeda."
+    explain(
+        [
+            ("Buka", "memuat hasil tersimpan tanpa menghitung ulang"),
+            ("Sidik data", "berubah setiap ada unggahan baru (transaksi, stok, iklan, DC)"),
+            ("Prediksi/hari", "total prediksi QTY per hari semua SKU; analisa dengan sidik data, setelan, dan tanggal sama harus bernilai sama"),
+            ("⚠️", "muncul bila analisa yang seharusnya sama berbeda lebih dari 0,5%"),
+            "Riwayat lebih dari 90 hari dihapus otomatis.",
+        ]
     )
 
 
@@ -2809,8 +2816,8 @@ def show_prediction_inputs() -> None:
             options=["qty", "sales"],
             format_func=lambda key: "QTY terjual" if key == "qty" else "Sales value",
             captions=[
-                "Peringkat dan prediksi dibaca dari jumlah unit terjual. Cocok untuk keputusan stok.",
-                "Peringkat dan prediksi dibaca dari nilai rupiah. Cocok untuk target omzet dan iklan.",
+                "Rank dan prediksi dibaca dari jumlah unit terjual. Cocok untuk keputusan stok.",
+                "Rank dan prediksi dibaca dari nilai rupiah. Cocok untuk target omzet dan iklan.",
             ],
             horizontal=True,
             key="rank-metric",
@@ -3911,7 +3918,7 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
             pct = float(row[f"{p}_pct"]) * 100
             status = str(row.get(f"{p}_status") or ("Aman" if gap >= 0 else "Kurang"))
             base, _, suffix = status.partition(" · ")
-            tone = "ok" if gap >= 0 else "bad"
+            tone = "ok" if gap >= 0 else ("bad" if base == "Kosong" else "warn")
             if gap >= 0:
                 word = status
             elif base == "Kosong":
@@ -4447,8 +4454,8 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
 
 
 ISSUE_COLUMNS = {
-    "Retur": ["Peringkat", "SKU", "Produk", "Varian", "Qty retur", "Nominal retur", "Alasan retur"],
-    "Batal": ["Peringkat", "SKU", "Produk", "Varian", "Qty batal", "Invoice batal", "Nominal batal", "Alasan batal"],
+    "Retur": ["Rank", "SKU", "Produk", "Varian", "Qty retur", "Nominal retur", "Alasan retur"],
+    "Batal": ["Rank", "SKU", "Produk", "Varian", "Qty batal", "Invoice batal", "Nominal batal", "Alasan batal"],
 }
 ISSUE_TITLES = {
     "Retur": "Hanya kolom retur. Diurutkan dari qty retur terbesar.",
@@ -4515,13 +4522,13 @@ def _one_row_per_sku(shown: pd.DataFrame, issue_kind: str) -> pd.DataFrame:
     order = [c for c in order if c in merged.columns]
     if order:
         merged = merged.sort_values(order + ["SKU"], ascending=[False] * len(order) + [True], kind="mergesort")
-    merged.insert(0, "Peringkat", 0)
+    merged.insert(0, "Rank", 0)
     columns = [c for c in shown.columns if c in merged.columns]
     return merged.loc[:, columns].reset_index(drop=True)
 
 @st.cache_data(show_spinner=False, max_entries=64)
 def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str, ...], all_reasons: tuple[str, ...]) -> tuple[pd.DataFrame, int]:
-    """Tabel SKU retur/batal sesuai filter jenis + alasan, dengan peringkat ulang dan baris Total."""
+    """Tabel SKU retur/batal sesuai filter jenis + alasan, dengan rank ulang dan baris Total."""
     kind_sheet = _issue_kind_sheet(sku_sheet, issue_kind)
     if kind_sheet.empty or not all_reasons:
         shown = kind_sheet
@@ -4538,7 +4545,7 @@ def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str,
     if shown.empty:
         return shown, 0
     sums = [c for c in ISSUE_SUMS if c in shown.columns]
-    shown["Peringkat"] = [str(n) for n in range(1, len(shown) + 1)]
+    shown["Rank"] = [str(n) for n in range(1, len(shown) + 1)]
     shown = append_total_row(shown, "SKU", sums)
     for column in sums:
         shown[column] = pd.to_numeric(shown[column], errors="coerce")
@@ -4641,10 +4648,12 @@ def show_folder_menu() -> None:
     """Daftar data tersimpan menurut bulan dan tahun, plus riwayat impor."""
     saved = list_months()
     st.subheader("Folder data")
-    st.caption(
-        "Data yang sudah diimpor tersimpan di sini. Bulan yang dipakai sebagai data latih dipilih di halaman "
-        "Ubah data latih (Periode analisa data latih). Untuk data transaksi, file baru yang memuat bulan yang sama "
-        "mengganti isi bulan itu di folder ini dengan isi file baru."
+    explain(
+        [
+            "Data yang sudah diimpor tersimpan di sini.",
+            ("Data latih", "bulan yang dipakai dipilih di Ubah data latih › Periode analisa data latih"),
+            ("Unggah ulang transaksi", "file baru yang memuat bulan yang sama menggantikan isi bulan itu"),
+        ]
     )
     if not saved:
         st.write("Belum ada data tersimpan.")
@@ -4943,7 +4952,7 @@ def leaderboard_frame(view: pd.DataFrame, period: str) -> pd.DataFrame:
             "SKU": view["sku"].map(lambda value: _clean_product_piece(value, "Tanpa SKU")),
             "Produk": view["product_name"].map(lambda value: _clean_product_piece(value, "Tanpa nama")),
             "Varian": view["variasi_tampil"].map(lambda value: _clean_product_piece(value, "Tanpa variasi")),
-            "Peringkat": view["peringkat"].astype(int),
+            "Rank": view["peringkat"].astype(int),
             "QTY terjual": view["qty_total"].astype(int),
             "Sales value": view["sales_total"].round().astype(int),
             "Prediksi sales hari ini": view["pred_sales_hari"].astype(int) if "pred_sales_hari" in view.columns else 0,
@@ -5863,7 +5872,7 @@ def top50_table_parts(
     )
     columns: list[dict] = [
         {"id": "pick", "label": "Grafik", "pin": True, "width": 64},
-        {"id": "rank", "label": "Peringkat", "pin": True, "width": 92, "kind": "num", "sort": True},
+        {"id": "rank", "label": "Rank", "pin": True, "width": 92, "kind": "num", "sort": True},
         {"id": "sku", "label": "SKU", "kicker": "Produk", "pin": True, "width": 116, "sort": True},
         {"id": "name", "label": "Produk", "kicker": "Produk", "pin": True, "width": 280, "kind": "name", "sort": True},
         {"id": "variance", "label": "Varian", "width": 170, "kind": "name", "sort": True},
@@ -5900,8 +5909,11 @@ def top50_table_parts(
             "p_safety": safety_now,
             "p_stock": float(row["stok_disarankan"]),
         }
+        expected = {}
         for prefix, days in (("d", 1), ("m", month_days)):
             qty, sales, stock = slice_forecast(qty_now, sales_now, safety_now, horizon, days)
+            expected[f"{prefix}_qty"] = qty_now * days / horizon
+            expected[f"{prefix}_sales"] = sales_now * days / horizon
             values[f"{prefix}_qty"] = qty
             values[f"{prefix}_sales"] = sales
             values[f"{prefix}_safety"] = max(stock - qty, 0)
@@ -5936,7 +5948,7 @@ def top50_table_parts(
             },
         }
         export = {
-            "Peringkat": int(row["peringkat"]),
+            "Rank": int(row["peringkat"]),
             "SKU": cells["sku"]["t"],
             "Produk": cells["name"]["t"],
             "Varian": cells["variance"]["t"],
@@ -5950,7 +5962,8 @@ def top50_table_parts(
                 cell["d"], cell["dc"] = _move_cell(value, then_values[name], money=money)
                 then_totals[name] = then_totals.get(name, 0.0) + float(then_values[name])
             cells[name] = cell
-            totals[name] = totals.get(name, 0.0) + value
+            # Total memakai nilai harapan untuk QTY/sales harian & bulanan (pembulatan per SKU membuat SKU lambat laku = 0).
+            totals[name] = totals.get(name, 0.0) + float(expected.get(name, value))
             label = f"{column['group']} - {column['label']}"
             export[label] = int(round(value))
             if name in then_values:
@@ -5961,7 +5974,7 @@ def top50_table_parts(
     total: dict[str, dict] = {
         "name": {"t": "Total", "s": f"{len(rows)} item"},
     }
-    total_export = {"Peringkat": "", "SKU": "", "Produk": "Total", "Varian": ""}
+    total_export = {"Rank": "", "SKU": "", "Produk": "Total", "Varian": ""}
     for column in columns[5:]:
         name = column["id"]
         money = name.endswith("sales")
@@ -6036,7 +6049,7 @@ def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
         if not pd.api.types.is_numeric_dtype(frame[column]):
             continue
         if roomy:
-            width = 120 if column == "Peringkat" else 200
+            width = 120 if column == "Rank" else 200
             config[column] = st.column_config.NumberColumn(column, format="localized", step=1, width=width)
         else:
             config[column] = st.column_config.NumberColumn(column, format="localized", step=1)
@@ -6198,8 +6211,8 @@ def filter_resume_orders(
                 st.session_state["train-exclude"] = training_exclude()
             st.checkbox("Kecualikan batal & retur", key="train-exclude", on_change=lambda: save_training_exclude(bool(st.session_state.get("train-exclude"))))
             st.markdown(
-                "<div class='field-hint'>Setelan data latih untuk setiap analisa baru (tersimpan). Mengurangi pesanan batal dan unit retur "
-                "pada data latih, sehingga prediksi memakai permintaan bersih. Membuka analisa lama tidak mengubah setelan ini.</div>",
+                "<div class='field-hint'>Setelan tersimpan untuk setiap analisa baru.<br>• Aktif: pesanan batal & unit retur tidak ikut dilatih (permintaan bersih).<br>"
+                "• Membuka analisa lama tidak mengubah setelan ini.</div>",
                 unsafe_allow_html=True,
             )
         st.session_state[years_state] = checked_years
@@ -6382,10 +6395,18 @@ def _prediction_totals(frame: pd.DataFrame | None) -> tuple[int, int, int, int]:
     needed = {"pred_sales_hari", "stok_hari", "pred_sales_bulan", "stok_bulan"}
     if not needed <= set(frame.columns):
         return 0, 0, 0, 0
+    # Sales = nilai harapan (prediksi sales × hari ÷ horizon) agar SKU yang laku < 1 unit/hari tidak hilang dari total.
+    horizon = frame["slice_horizon_days"].clip(lower=1) if "slice_horizon_days" in frame.columns else None
+    if horizon is not None and "pred_sales" in frame.columns:
+        month = frame["slice_month_days"] if "slice_month_days" in frame.columns else 30
+        sales_day = float((frame["pred_sales"] / horizon).sum())
+        sales_month = float((frame["pred_sales"] * month / horizon).sum())
+    else:
+        sales_day, sales_month = float(frame["pred_sales_hari"].sum()), float(frame["pred_sales_bulan"].sum())
     return (
-        int(frame["pred_sales_hari"].sum()),
+        int(round(sales_day)),
         int(frame["stok_hari"].sum()),
-        int(frame["pred_sales_bulan"].sum()),
+        int(round(sales_month)),
         int(frame["stok_bulan"].sum()),
     )
 
@@ -6761,49 +6782,83 @@ def _render_movement_board(
     if not records:
         return pd.DataFrame()
 
-    def stock_cell(key: str, prefix: str, tag: str = "td") -> str:
-        row = decision.get(key)
+    month_label = format_period_label("prediksi", today)
+    g_day, g_month, g_sold = "Prediksi hari ini", month_label, "Penjualan"
+    g_stock = "Stok"
+    columns = [
+        {"id": "rank", "label": "Rank", "pin": True, "width": 76, "kind": "num", "sort": True},
+        {"id": "sku", "label": "SKU", "pin": True, "width": 112, "sort": True},
+        {"id": "name", "label": "Produk", "pin": True, "width": 260, "kind": "name", "sort": True},
+        {"id": "variance", "label": "Varian", "width": 150, "kind": "name", "sort": True},
+        {"id": "d_sales", "label": "Sales", "group": g_day, "kind": "num", "sort": True},
+        {"id": "d_qty", "label": "QTY · SS", "group": g_day, "kind": "num", "sort": True},
+        {"id": "m_sales", "label": "Sales", "group": g_month, "kind": "num", "sort": True},
+        {"id": "m_qty", "label": "QTY · SS", "group": g_month, "kind": "num", "sort": True},
+        {"id": "stok_d", "label": "Site 10037 · hari ini", "group": g_stock, "kind": "num", "sort": True},
+        {"id": "stok_m", "label": f"Site 10037 · {month_year(today)}", "group": g_stock, "kind": "num", "sort": True},
+        {"id": "stok_10062", "label": "Site 10062", "group": g_stock, "kind": "num", "sort": True},
+        {"id": "stok_10036", "label": "Site 10036", "group": g_stock, "kind": "num", "sort": True},
+        {"id": "ambil_dc", "label": "Ambil dari DC", "group": g_stock, "width": 220, "kind": "name", "sort": True},
+        {"id": "kosong", "label": "Lama kosong", "group": g_stock, "width": 120, "sort": True},
+        {"id": "sold_sales", "label": "Sales", "group": g_sold, "kind": "num", "sort": True},
+        {"id": "sold_qty", "label": "QTY", "group": g_sold, "kind": "num", "sort": True},
+    ]
+
+    def money_cell(value: float, now: float | None = None, then: float | None = None) -> dict:
+        cell = {"v": float(value), "t": format_idr(value)}
+        if now is not None and then is not None:
+            cell["d"], cell["dc"] = _move_cell(now, then, money=True)
+        return cell
+
+    def qty_cell(value: float, safety: float | None, now: float | None = None, then: float | None = None) -> dict:
+        cell = {"v": float(value), "t": format_qty(value)}
+        if safety is not None:
+            cell["s"] = f"Safety stock {format_qty(safety)}"
+        if now is not None and then is not None:
+            cell["d"], cell["dc"] = _move_cell(now, then, money=False)
+        return cell
+
+    def stock_cell(row, prefix: str) -> dict:
         if row is None or not bool(row.get("ada_data_stok", False)):
-            return f"<{tag} class='num stock-col'><div>-</div><div class='qty-safety'>belum ada data stok</div></{tag}>"
+            return {"v": -1, "t": "–", "s": "belum ada data stok"}
         gap = float(row[f"{prefix}_selisih"])
         status = str(row[f"{prefix}_status"]).split(" · ")[0]
-        tone = "up" if gap >= 0 else "down"
         sign = "+" if gap > 0 else ("−" if gap < 0 else "")
-        return (
-            f"<{tag} class='num stock-col'><div>{html.escape(format_qty(float(row['stok'])))}</div>"
-            f"<div class='cell-move {tone}'>{sign}{html.escape(format_qty(abs(gap)))} · {html.escape(status)}</div></{tag}>"
-        )
+        return {"v": float(row["stok"]), "t": format_qty(float(row["stok"])), "d": f"{sign}{format_qty(abs(gap))} · {status}", "dc": "up" if gap >= 0 else "down"}
 
-    def empty_cell(key: str) -> str:
-        row = decision.get(key)
-        text = lama_kosong_text(row) if row is not None else "-"
-        return f"<td class='stock-col'>{html.escape(text)}</td>"
+    def dc_cell(row, code: str) -> dict:
+        value = None if row is None else row.get(f"stok_{code}")
+        if value is None or pd.isna(value):
+            return {"v": -1, "t": "–"}
+        return {"v": float(value), "t": format_qty(float(value))}
 
-    body = []
-    export_rows = []
+    rows, export_rows = [], []
     for item in records:
-        body.append(
-            "<tr>"
-            f"<td class='num pin pin-no'>{item['rank']}</td>"
-            f"<td class='pin pin-sku'>{html.escape(item['sku'])}</td>"
-            f"<td class='wrap-name pin pin-name'>{html.escape(item['product'])}</td>"
-            f"<td>{html.escape(item['variance'])}</td>"
-            f"{_sales_cell(item['sales_day'], item['sales_day_now'], item['sales_day_then'])}"
-            f"{_qty_cell(item['qty_day'], item['safety_day'], item['qty_day_now'], item['qty_day_then'])}"
-            f"{_sales_cell(item['sales_month'], item['sales_month_now'], item['sales_month_then'])}"
-            f"{_qty_cell(item['qty_month'], item['safety_month'], item['qty_month_now'], item['qty_month_then'])}"
-            f"{stock_cell(item['key'], 'd')}"
-            f"{stock_cell(item['key'], 'm')}"
-            f"{empty_cell(item['key'])}"
-            f"{_sales_cell(item['sold_sales'])}"
-            f"{_qty_cell(item['sold_qty'], None)}"
-            "</tr>"
-        )
         row = decision.get(item["key"])
         has_stock = row is not None and bool(row.get("ada_data_stok", False))
+        transfer = str(row.get("sumber_restock") or "") if row is not None else ""
+        cells = {
+            "rank": {"v": item["rank"], "t": format_number(item["rank"], 0)},
+            "sku": {"v": item["sku"], "t": item["sku"]},
+            "name": {"v": item["product"], "t": item["product"]},
+            "variance": {"v": item["variance"], "t": item["variance"]},
+            "d_sales": money_cell(item["sales_day"], item["sales_day_now"], item["sales_day_then"]),
+            "d_qty": qty_cell(item["qty_day"], item["safety_day"], item["qty_day_now"], item["qty_day_then"]),
+            "m_sales": money_cell(item["sales_month"], item["sales_month_now"], item["sales_month_then"]),
+            "m_qty": qty_cell(item["qty_month"], item["safety_month"], item["qty_month_now"], item["qty_month_then"]),
+            "stok_d": stock_cell(row, "d"),
+            "stok_m": stock_cell(row, "m"),
+            "stok_10062": dc_cell(row, "10062"),
+            "stok_10036": dc_cell(row, "10036"),
+            "ambil_dc": {"v": transfer, "t": transfer or "–"},
+            "kosong": {"v": lama_kosong_text(row) if row is not None else "-", "t": lama_kosong_text(row) if row is not None else "-"},
+            "sold_sales": money_cell(item["sold_sales"]),
+            "sold_qty": qty_cell(item["sold_qty"], None),
+        }
+        rows.append({"key": item["key"], "cells": cells})
         export_rows.append(
             {
-                "Peringkat": item["rank"],
+                "Rank": item["rank"],
                 "SKU": item["sku"],
                 "Produk": item["product"],
                 "Varian": item["variance"],
@@ -6822,57 +6877,35 @@ def _render_movement_board(
                 "Stok Site 10037": float(row["stok"]) if has_stock else None,
                 "Selisih stok hari ini": float(row["d_selisih"]) if has_stock else None,
                 "Selisih stok bulan ini": float(row["m_selisih"]) if has_stock else None,
+                "Stok Site 10062": dc_cell(row, "10062")["v"] if dc_cell(row, "10062")["v"] >= 0 else None,
+                "Stok Site 10036": dc_cell(row, "10036")["v"] if dc_cell(row, "10036")["v"] >= 0 else None,
+                "Ambil dari DC": transfer,
                 "Lama kosong": lama_kosong_text(row) if row is not None else "-",
             }
         )
 
-    def _total(key: str) -> int:
+    def total(key: str) -> int:
         return sum(int(item[key]) for item in records)
 
     stock_total = sum(float(decision[item["key"]]["stok"]) for item in records if item["key"] in decision and bool(decision[item["key"]].get("ada_data_stok", False)))
-    total_row = (
-        "<tr class='sheet-total'>"
-        "<th class='pin pin-no'></th>"
-        "<th class='pin pin-sku'></th>"
-        "<th class='pin pin-name'>Total"
-        f"<div class='qty-safety'>{len(records)} item bergerak</div></th>"
-        "<th></th>"
-        f"{_sales_cell(_total('sales_day'), _total('sales_day_now'), _total('sales_day_then'), tag='th')}"
-        f"{_qty_cell(_total('qty_day'), _total('safety_day'), _total('qty_day_now'), _total('qty_day_then'), tag='th')}"
-        f"{_sales_cell(_total('sales_month'), _total('sales_month_now'), _total('sales_month_then'), tag='th')}"
-        f"{_qty_cell(_total('qty_month'), _total('safety_month'), _total('qty_month_now'), _total('qty_month_then'), tag='th')}"
-        f"<th class='num stock-col'>{html.escape(format_qty(stock_total))}</th>"
-        f"<th class='num stock-col'>{html.escape(format_qty(stock_total))}</th>"
-        "<th class='stock-col'></th>"
-        f"{_sales_cell(_total('sold_sales'), tag='th')}"
-        f"{_qty_cell(_total('sold_qty'), None, tag='th')}"
-        "</tr>"
-    )
-    header = (
-        "<tr>"
-        "<th class='pin pin-no' rowspan='2'>Peringkat</th>"
-        "<th class='pin pin-sku' rowspan='2'>SKU</th>"
-        "<th class='pin pin-name' rowspan='2'>Produk</th>"
-        "<th rowspan='2'>Varian</th>"
-        "<th class='group-head' colspan='2'>Prediksi hari ini</th>"
-        f"<th class='group-head' colspan='2'>{html.escape(format_period_label('prediksi', today))}</th>"
-        "<th class='stock-col' rowspan='2'>Stok Site 10037 · hari ini</th>"
-        f"<th class='stock-col' rowspan='2'>Stok Site 10037 · {html.escape(month_year(today))}</th>"
-        "<th class='stock-col' rowspan='2'>Lama kosong</th>"
-        "<th class='group-head' colspan='2'>Penjualan</th>"
-        "</tr>"
-        "<tr>"
-        "<th class='num'>Sales</th><th class='num'>QTY · SS</th>"
-        "<th class='num'>Sales</th><th class='num'>QTY · SS</th>"
-        "<th class='num'>Sales</th><th class='num'>QTY</th>"
-        "</tr>"
-        f"{total_row}"
-    )
-    st.markdown(
-        "<div class='sheet-scroll movement-sheet' style='max-height:70vh;width:100%;max-width:100%;overflow:scroll;display:block;'>"
-        f"<table><thead>{header}</thead><tbody>{''.join(body)}</tbody></table></div>",
-        unsafe_allow_html=True,
-    )
+    dc_totals = {
+        code: sum(float(decision[item["key"]].get(f"stok_{code}") or 0) for item in records if item["key"] in decision and pd.notna(decision[item["key"]].get(f"stok_{code}")))
+        for code in ("10062", "10036")
+    }
+    total_row = {
+        "name": {"t": "Total", "s": f"{len(records)} item bergerak"},
+        "d_sales": money_cell(total("sales_day"), total("sales_day_now"), total("sales_day_then")),
+        "d_qty": qty_cell(total("qty_day"), total("safety_day"), total("qty_day_now"), total("qty_day_then")),
+        "m_sales": money_cell(total("sales_month"), total("sales_month_now"), total("sales_month_then")),
+        "m_qty": qty_cell(total("qty_month"), total("safety_month"), total("qty_month_now"), total("qty_month_then")),
+        "stok_d": {"t": format_qty(stock_total)},
+        "stok_m": {"t": format_qty(stock_total)},
+        "stok_10062": {"t": format_qty(dc_totals["10062"])},
+        "stok_10036": {"t": format_qty(dc_totals["10036"])},
+        "sold_sales": money_cell(total("sold_sales")),
+        "sold_qty": qty_cell(total("sold_qty"), None),
+    }
+    _TOP50_TABLE(columns=columns, rows=rows, total=total_row, selected="", height=620, sort="", key="movement-top50", default="")
     return pd.DataFrame(export_rows)
 
 
@@ -6888,8 +6921,13 @@ def _period_totals(frame: pd.DataFrame | None, keys: list[str], *, period: str, 
 
 
 def _group_totals(table: pd.DataFrame, period: str, day: date) -> dict[str, tuple[float, float, float]]:
+    """Total banyak SKU memakai nilai harapan (sebelum dibulatkan per SKU), lihat decision_table."""
+    def col(name: str, prefix: str) -> pd.Series:
+        exp = f"{prefix}_{name}_exp"
+        return table[exp] if exp in table.columns else table[f"{prefix}_{name}"]
+
     return {
-        g.prefix: (float(table[f"{g.prefix}_qty"].sum()), float(table[f"{g.prefix}_sales"].sum()), float(table[f"{g.prefix}_butuh"].sum()))
+        g.prefix: (float(col("qty", g.prefix).sum()), float(col("sales", g.prefix).sum()), float(table[f"{g.prefix}_butuh"].sum()))
         for g in period_groups(period, day)
     }
 
@@ -6931,12 +6969,13 @@ def show_analysis_movement(
     # Pembanding harus SKU yang sama dengan kartu (Top 50), bukan seluruh katalog.
     prior = _period_totals(prior_frame, list(focus_keys) or keys, period=period_key, day=today, orders=orders)
     st.markdown("<div class='section-title'>Pergerakan dari analisa sebelumnya</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='field-hint'>Parameter {'QTY terjual' if metric == 'qty' else 'Sales value'} · "
-        f"safety stock {int(current_meta.get('service', service) or 0)}% · dibanding prediksi kemarin, "
-        f"{html.escape(format_id_date(yesterday))}, untuk {format_number(len(focus_keys))} SKU Top 50 yang sama "
-        "(dihitung ulang dari data latih s.d. sehari sebelumnya dengan parameter yang sama).</div>",
-        unsafe_allow_html=True,
+    explain(
+        [
+            ("Setelan", f"{'QTY terjual' if metric == 'qty' else 'Sales value'} · safety stock {int(current_meta.get('service', service) or 0)}%"),
+            ("Pembanding", f"prediksi kemarin ({format_id_date(yesterday)}) untuk {format_number(len(focus_keys))} SKU Top 50 yang sama"),
+            ("Cara hitung pembanding", "data latih s.d. sehari sebelumnya, parameter sama"),
+            ("Total banyak SKU", "dijumlah dari nilai harapan sebelum dibulatkan per SKU"),
+        ]
     )
     if now_totals:
         all_sku = catalog if isinstance(catalog, pd.DataFrame) and not catalog.empty else None
@@ -6997,7 +7036,8 @@ def show_analysis_movement(
                 tip=need_tip,
             )
             if all_sku is not None and group.prefix in {"d", "m"} and f"{group.prefix}_sales" in all_sku.columns:
-                total_sales = float(all_sku[f"{group.prefix}_sales"].sum())
+                exp_col = f"{group.prefix}_sales_exp"
+                total_sales = float(all_sku[exp_col].sum() if exp_col in all_sku.columns else all_sku[f"{group.prefix}_sales"].sum())
                 cards[3].markdown(
                     "<div class='stat-card'>"
                     f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
@@ -7008,10 +7048,14 @@ def show_analysis_movement(
                 )
 
     st.markdown("<div class='section-title'>Pergerakan Top 50</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='field-hint'>SKU Top 50 yang prediksinya bergerak pada rentang tanggal yang dipilih. "
-        "Urutan: perubahan prediksi QTY terbesar (naik atau turun) lebih dulu, lalu peringkat. Angka kecil di sel Prediksi = gerak.</div>",
-        unsafe_allow_html=True,
+    explain(
+        [
+            "SKU Top 50 yang prediksinya berubah pada rentang tanggal yang dipilih.",
+            ("Urutan", "perubahan prediksi QTY terbesar (naik/turun) lebih dulu, lalu Rank"),
+            ("Angka kecil di sel", "besar perubahan: ▲ naik, ▼ turun"),
+            ("Stok Site 10062 / 10036 · Ambil dari DC", "bila stok Site 10037 kurang, cek apakah DC bisa memenuhi sebelum PO"),
+            ("Kolom", "klik judul untuk mengurutkan, geser judul untuk memindah, tarik tepi judul untuk mengubah lebar"),
+        ]
     )
     if "movement-date-from" not in st.session_state:
         st.session_state["movement-date-from"] = yesterday
@@ -7153,21 +7197,21 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
     month_days = days_in_calendar_month(day)
     month_end = date(day.year, day.month, month_days)
     st.markdown("<div class='section-title'>Prediksi hari ini dan bulan ini</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='field-hint'>"
-        f"Prediksi {html.escape(PERIOD_SPECS[period].label)} adalah {format_number(horizon)} hari dari {html.escape(format_id_date(day))}, rumus prediksi tidak diubah. "
-        f"Prediksi sales hari ini = prediksi sales periode itu dibagi {format_number(horizon)}. "
-        f"Prediksi sales bulan ini = bagian {format_number(month_days)} hari, {html.escape(format_id_date(day))} sampai {html.escape(format_id_date(month_end))}. "
-        "Stok disarankan hari ini = prediksi QTY 1 hari + safety stock 1 hari. "
-        f"Stok disarankan bulan ini memakai {format_number(month_days)} hari. Safety mengikuti akar jumlah hari, bukan dibagi rata. "
-        "Di bawah stok hari ini, selisih terhadap analisa tanggal pembanding: biru naik, merah turun, tanda - bila sama.</div>",
-        unsafe_allow_html=True,
+    explain(
+        [
+            ("Prediksi " + PERIOD_SPECS[period].label, f"{format_number(horizon)} hari mulai {format_id_date(day)}"),
+            ("Sales hari ini", f"prediksi sales periode ÷ {format_number(horizon)}"),
+            ("Sales bulan ini", f"bagian {format_number(month_days)} hari, {format_id_date(day)} – {format_id_date(month_end)}"),
+            ("Stok disarankan", "prediksi QTY + safety stock pada jumlah hari yang sama"),
+            ("Warna selisih", "biru naik, merah turun, tanda – bila sama dengan analisa pembanding"),
+        ]
     )
     if ready is None or ready.empty:
         st.write("Belum ada SKU pada periode penjualan ini.")
         return
     cards = st.columns(4)
-    show_metric(cards[0], "Prediksi sales hari ini", format_idr(float(ready["pred_sales_hari"].sum())), hint=f"1 hari dari prediksi {PERIOD_SPECS[period].label}.")
+    day_sales = float((ready["pred_sales"] / ready["slice_horizon_days"].clip(lower=1)).sum()) if {"pred_sales", "slice_horizon_days"} <= set(ready.columns) else float(ready["pred_sales_hari"].sum())
+    show_metric(cards[0], "Prediksi sales hari ini", format_idr(day_sales), hint=f"1 hari dari prediksi {PERIOD_SPECS[period].label}.")
     show_metric(
         cards[1],
         "Prediksi sales bulan ini",
@@ -7281,10 +7325,12 @@ with PAGE_ROOT.container(key="page-root"):
     if sheet not in allowed_sheets(AUTH_USER.role, APP_SHEETS):
         sheet = "Ringkasan"
         st.session_state["active-sheet"] = sheet
-    if "exclude-return-batal" not in st.session_state:
-        st.session_state["exclude-return-batal"] = bool(st.session_state.get("exclude_applied", False))
-    exclude_return_cancel = bool(st.session_state.get("exclude-return-batal", False))
-    st.session_state["exclude_applied"] = exclude_return_cancel
+    # Satu sumber: analisa yang sedang dibuka (atau setelan analisa yang baru diminta). Bukan kunci widget,
+    # karena Streamlit menghapus nilai widget yang tidak tampil saat pindah halaman → angka berganti-ganti.
+    if run:
+        exclude_return_cancel = bool(st.session_state.get("run-exclude", training_exclude()))
+    else:
+        exclude_return_cancel = bool((st.session_state.get("analysis") or {}).get("exclude_return_cancel", training_exclude()))
     if "analysis" in st.session_state and not run:
         sheet = show_app_menu()
         if sheet not in allowed_sheets(AUTH_USER.role, APP_SHEETS):
@@ -7545,7 +7591,7 @@ with PAGE_ROOT.container(key="page-root"):
 
     def show_exclude_and_cards() -> None:
         removed_orders, removed_units = removed_counts(orders_raw)
-        exclude_toggle_card(key="exclude-return-batal", removed_orders=removed_orders, removed_units=removed_units)
+        exclude_status_card(exclude_return_cancel, removed_orders=removed_orders, removed_units=removed_units)
         start, end = period_bounds(sales_orders)
         facts = show_performance_cards(start, end, resume_label)
         if period != "bulan":

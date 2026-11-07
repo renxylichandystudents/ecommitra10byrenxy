@@ -21,7 +21,7 @@ from src.core.metrics import ads_metrics
 from src.core.periods import format_period_label, last_full_month
 from src.core.restock import recommendation_records, records_display
 from src.utils.format import show_table
-from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key
+from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, explain, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key
 
 ALL_SECTIONS = "Semua bagian (untuk dibaca berurutan / dicetak)"
 SECTIONS = (
@@ -168,9 +168,12 @@ def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, 
         fig.add_scatter(x=[labels[-1]], y=[month_pred / 1e9], name=pred_label, mode="markers+text", marker=dict(color="#ee4d2d", size=14, symbol="diamond"), text=[fmt_idr_short(month_pred)], textposition="top center")
     fig.update_layout(height=440, separators=",.", legend=dict(orientation="h", y=-0.22), yaxis_title="Miliar rupiah", margin=dict(l=40, r=20, t=30, b=40))
     st.plotly_chart(fig, use_container_width=True, key="report-trend")
-    st.caption(
-        f"{basis} = Harga setelah diskon × QTY{' (tanpa batal & retur)' if exclude else ' (termasuk pesanan batal, karena saklar Kecualikan batal & retur nonaktif)'}; "
-        "dasar ini sama dengan prediksi. Sales bersih = Total Pembayaran per pesanan dikurangi batal & retur, sama dengan kartu Ringkasan eksekutif."
+    explain(
+        [
+            (basis, "Harga setelah diskon × QTY" + (" (tanpa batal & retur)" if exclude else " (termasuk pesanan batal)") + "; dasar yang sama dengan prediksi"),
+            ("Sales bersih", "Total Pembayaran per pesanan dikurangi batal & retur; sama dengan kartu Ringkasan eksekutif"),
+            ("Kenapa berbeda", "Total Pembayaran sudah dipotong voucher dan termasuk ongkir, sedangkan sales produk tidak"),
+        ]
     )
     if len(full) >= 2:
         last, before = float(full.iloc[-1]), float(full.iloc[-2])
@@ -239,7 +242,8 @@ def show_report(
 
     saved_target = getattr(data, "target", None) or {}
     target = float(saved_target.get("target_sales_bersih", 0) or 0)
-    month_pred = float(table["m_sales"].sum()) if table is not None and not table.empty and "m_sales" in table.columns else 0.0
+    month_col = "m_sales_exp" if table is not None and "m_sales_exp" in table.columns else "m_sales"
+    month_pred = float(table[month_col].sum()) if table is not None and not table.empty and month_col in table.columns else 0.0
     pred_label = format_period_label("prediksi", window_start)
     records = _records(table, today, data)
 
@@ -302,7 +306,7 @@ def show_report(
                 elif section == SECTIONS[2]:
                     cols = ["peringkat", "sku", "product_name", "qty_total", "sales_total", "m_qty", "m_sales", "label_text"]
                     view = top[[c for c in cols if c in top.columns]].head(20).rename(
-                        columns={"peringkat": "Peringkat", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": f"{pred_label} · QTY", "m_sales": f"{pred_label} · sales", "label_text": "Label"}
+                        columns={"peringkat": "Rank", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": f"{pred_label} · QTY", "m_sales": f"{pred_label} · sales", "label_text": "Label"}
                     )
                     show_table(view)
                     download_excel(view, "laporan_terlaris.xlsx", key="xl-report-top")
@@ -361,12 +365,13 @@ def show_report(
                     covered = int(ads.get("hari_iklan", 0) or 0)
                     if 0 < covered < period_days:
                         st.caption(f"Laporan iklan tersimpan hanya mencakup {covered} dari {period_days} hari periode ini; biaya dan omzet iklan di atas hanya untuk {covered} hari tersebut.")
-                    st.caption(
-                        "Biaya, omzet, dan ROAS = Semua Laporan Iklan (all iklan) Shopee pada periode laporan; laporan yang rentangnya "
-                        "hanya sebagian masuk periode diambil per hari (prorata). Rincian per SKU = laporan iklan otomatis + grup + iklan "
-                        "satu produk, dibagi ke varian menurut sales varian. Porsi sales dari iklan = omzet iklan Shopee ÷ sales produk "
-                        "bersih (Harga Setelah Diskon × QTY, tanpa batal, dikurangi retur); omzet Shopee termasuk belanja produk lain "
-                        "setelah klik iklan, jadi porsinya bisa tinggi."
+                    explain(
+                        [
+                            ("Biaya, omzet, ROAS", "Semua Laporan Iklan (all iklan) Shopee pada periode laporan"),
+                            ("Laporan sebagian masuk periode", "diambil per hari (prorata)"),
+                            ("Rincian per SKU", "iklan otomatis + grup + iklan satu produk, dibagi ke varian menurut sales varian"),
+                            ("Porsi sales dari iklan", "omzet iklan Shopee ÷ sales produk bersih; bisa tinggi karena omzet Shopee termasuk belanja produk lain setelah klik"),
+                        ]
                     )
                     if ad_cost <= 0:
                         st.caption("Laporan iklan belum diunggah, belum terpetakan ke SKU, atau tidak ada pada periode laporan.")

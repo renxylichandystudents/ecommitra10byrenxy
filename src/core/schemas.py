@@ -161,7 +161,7 @@ DESCRIPTION_ALIASES = {
 }
 
 COMPETITOR_ALIASES = {
-    "rank": _alias("Ranking", "Peringkat"),
+    "rank": _alias("Ranking", "Peringkat", "Rank"),
     "rank_change": _alias("Change of Rank", "Perubahan Peringkat"),
     "own_shop": _alias("Toko sendiri"),
     "shop_name": _alias("Nama Toko", "Toko", "Shop Name", "Seller"),

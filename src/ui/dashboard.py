@@ -15,16 +15,17 @@ from src.core.fmt import fmt_date
 from src.core.periods import prediction_window, short_date
 from src.core.promo import promo_eligible
 from src.core.restock import restock_priority
-from src.ui.common import badge, card, download_excel, fmt_num, sku_cards, status_key
+from src.ui.common import badge, card, download_excel, explain, fmt_num, sku_cards, status_key
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table
 
 STEP = 10
+RESTOCK_STEP = 5
 
 
 def status_badges(frame: pd.DataFrame, column: str = "Status") -> pd.DataFrame:
     """Status sebagai label berikon agar terbaca seperti badge di st.dataframe."""
-    icons = {"Kosong": "🔴 Kosong", "Kurang": "🟠 Kurang", "Aman": "🟢 Aman", "Tanpa data stok": "⚪ Tanpa data stok"}
+    icons = {"Kosong": "🔴 Kosong", "Kurang": "🟡 Kurang", "Aman": "🟢 Aman", "Tanpa data stok": "⚪ Tanpa data stok"}
     out = frame.copy()
     if column in out.columns:
         out[column] = out[column].map(lambda v: icons.get(status_key(v), str(v)))
@@ -97,7 +98,7 @@ def show_priority_dashboard(
     top = table.head(50)
     keys = top["item_key"].astype(str).tolist()
     actual_qty, actual_day = last_actual(orders, keys, today)
-    predicted_today = float(top["d_qty"].sum())
+    predicted_today = float(top["d_qty_exp"].sum()) if "d_qty_exp" in top.columns else float(top["d_qty"].sum())
     shortage = stock_shortage(top)
     cols = st.columns(4)
     card(
@@ -127,14 +128,19 @@ def show_priority_dashboard(
     _insight_cards(table, priority, data, role)
     with st.container():
         st.markdown(f"**Kebutuhan restock prioritas · Top 50 {basis}**")
-        st.caption(
-            f"SKU = Top 50 menurut {basis} (kolom Peringkat); angka prediksi QTY sama untuk kedua parameter. "
-            "Restock = max(0, prediksi + SS − stok Site 10037). Ambil dari DC = restock dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier. Stok habis = hari ini + stok ÷ prediksi harian. Urut stok habis paling cepat, lalu restock terbesar."
+        explain(
+            [
+                ("SKU", f"Top 50 menurut {basis} (kolom Rank)"),
+                ("Restock", "prediksi + SS − stok Site 10037 (minimal 0)"),
+                ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier"),
+                ("Stok habis", "hari ini + stok ÷ prediksi harian"),
+                ("Urutan", "🔴 Kosong → 🟡 Kurang → 🟢 Aman, lalu stok habis paling cepat, lalu restock terbesar"),
+            ]
         )
         if priority.empty:
             st.info("Data stok Top 50 belum diunggah, jadi kebutuhan restock belum bisa dihitung.")
         else:
-            limit = int(st.session_state.get("dash-limit", STEP))
+            limit = int(st.session_state.get("dash-limit", RESTOCK_STEP))
             view = restock_view(priority)
             display = status_badges(view.head(limit))
             if not display["Inbound"].astype(str).str.strip().any():
@@ -145,7 +151,7 @@ def show_priority_dashboard(
             if not display["Ambil dari DC"].astype(str).str.strip().any():
                 display = display.drop(columns="Ambil dari DC")
             with st.container(key="desktop-dash-restock"):
-                show_table(display, kinds={"Peringkat": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small"), "Ambil dari DC": st.column_config.TextColumn(width="large")})
+                show_table(display, kinds={"Rank": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small"), "Ambil dari DC": st.column_config.TextColumn(width="large")})
             sku_cards(
                 [
                     {
@@ -153,15 +159,15 @@ def show_priority_dashboard(
                         "produk": r.get("Produk"),
                         "varian": r.get("Varian"),
                         "status": r.get("Status"),
-                        "nums": [("Peringkat", fmt_num(r.get("Peringkat"))), ("Stok Site 10037", fmt_num(r.get("Stok Site 10037"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))] + ([("Ambil dari DC", r.get("Ambil dari DC"))] if r.get("Ambil dari DC") else []),
+                        "nums": [("Rank", fmt_num(r.get("Rank"))), ("Stok Site 10037", fmt_num(r.get("Stok Site 10037"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))] + ([("Ambil dari DC", r.get("Ambil dari DC"))] if r.get("Ambil dari DC") else []),
                     }
                     for r in view.head(limit).to_dict("records")
                 ],
                 key="dash-restock",
             )
             b1, b2 = st.columns([1, 1])
-            if limit < len(priority) and b1.button("Muat 10 SKU lagi", key="dash-more"):
-                st.session_state["dash-limit"] = limit + STEP
+            if limit < len(priority) and b1.button(f"Muat {min(RESTOCK_STEP, len(priority) - limit)} SKU lagi (sisa {len(priority) - limit})", key="dash-more"):
+                st.session_state["dash-limit"] = limit + RESTOCK_STEP
                 st.rerun()
             with b2:
                 download_excel(view, "restock_prioritas.xlsx", key="xl-dash-restock")
@@ -173,7 +179,7 @@ def restock_view(priority: pd.DataFrame) -> pd.DataFrame:
         short_date(day) if day else ("Tidak habis · prediksi 0" if rate <= 0 else "–")
         for day, rate in zip(out["Stok habis"], out["_pred_harian"])
     ]
-    return out[["Peringkat", "SKU", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Ambil dari DC", "Stok Site 10062", "Stok Site 10036", "Stok habis", "Status", "Inbound"]]
+    return out[["Rank", "SKU", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Ambil dari DC", "Stok Site 10062", "Stok Site 10036", "Stok habis", "Status", "Inbound"]]
 
 
 def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureData, role: str) -> None:

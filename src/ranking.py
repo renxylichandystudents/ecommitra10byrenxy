@@ -7,7 +7,7 @@ from src.aggregate import period_label
 
 
 def unique_rank(frame: pd.DataFrame, primary: str, tie_breaks: list[str]) -> pd.DataFrame:
-    """Peringkat 1..n tanpa angka kembar. Seri dipecah dari kolom cadangan, lalu item_key."""
+    """Rank 1..n tanpa angka kembar. Seri dipecah dari kolom cadangan, lalu item_key."""
     ordered = frame.sort_values(
         [primary, *tie_breaks, "item_key"],
         ascending=[False, *([False] * len(tie_breaks)), True],
@@ -18,7 +18,7 @@ def unique_rank(frame: pd.DataFrame, primary: str, tie_breaks: list[str]) -> pd.
 
 
 def rank_from_orders(orders: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """Peringkat terlaris dari seluruh baris laporan, bukan hanya periode terakhir.
+    """Rank terlaris dari seluruh baris laporan, bukan hanya periode terakhir.
 
     Urutan utama adalah qty atau omzet tertinggi. Jika nilainya sama, pemecah seri
     memakai metrik satunya, jumlah pesanan, lalu waktu pesanan terbaru.

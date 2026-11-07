@@ -16,7 +16,7 @@ import streamlit as st
 from src.core.nlp_competitor import build_name_recommendations, clean_text, description_summary
 from src.core.recommendations import ads_plan, flash_sale_plan, flash_sale_template
 from src.core.segmentation import association_rules
-from src.ui.common import button_tabs, card, download_excel, fmt_date, fmt_idr, fmt_num
+from src.ui.common import button_tabs, card, download_excel, explain, fmt_date, fmt_idr, fmt_num
 from src.utils.format import input_rupiah, show_table
 
 STATUS_TONES = {"Poor": "#fee2e2", "Standard": "#fef9c3", "Excellence": "#dcfce7"}
@@ -63,7 +63,7 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
         return recs
     if frames.competitors.empty:
         st.caption("Data Produk kompetitor belum diunggah: kata kunci dibaca dari nama produk sendiri.")
-    st.caption(f"Dinilai {fmt_num(len(recs))} SKU teratas menurut peringkat (maks. {NAME_LIMIT}).", help=f"Metode: {note}")
+    st.caption(f"Dinilai {fmt_num(len(recs))} SKU teratas menurut rank (maks. {NAME_LIMIT}).", help=f"Metode: {note}")
     counts = recs["Status skor"].value_counts()
     current = st.session_state.get("name-filter", "Semua")
     cols = st.columns(4)
@@ -203,9 +203,11 @@ def _ads_tab(table: pd.DataFrame, orders: pd.DataFrame, params: dict, today: dat
     view = st.radio("Jenis rekomendasi", ADS_VIEWS, horizontal=True, key="ads-view", label_visibility="collapsed")
     if summary:
         _ads_cards(plan, view, target)
-        st.caption(
-            f"Total dialokasikan {fmt_idr(summary['budget'])} dari {fmt_idr(summary['budget_input'])} "
-            f"({fmt_num(summary['item_diiklankan'])} SKU). Sisa tidak dialokasikan bila permintaan atau stok di atas SS tidak cukup menyerap budget."
+        explain(
+            [
+                ("Dialokasikan", f"{fmt_idr(summary['budget'])} dari {fmt_idr(summary['budget_input'])} ({fmt_num(summary['item_diiklankan'])} SKU)"),
+                ("Sisa budget", "tidak dialokasikan bila permintaan atau stok di atas SS tidak cukup menyerapnya"),
+            ]
         )
         if summary.get("tanggal"):
             st.caption("Tanggal permintaan tinggi: " + ", ".join(fmt_date(d, short=True) for d in summary["tanggal"]))

@@ -87,7 +87,7 @@ def normalize_brand_portal(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]
 
 
 def brand_changes(portal: pd.DataFrame) -> pd.DataFrame:
-    """Peringkat & pangsa periode terbaru + perubahan vs periode sebelumnya per (kategori, brand)."""
+    """Rank & pangsa periode terbaru + perubahan vs periode sebelumnya per (kategori, brand)."""
     if portal is None or portal.empty:
         return pd.DataFrame()
     periods = sorted(portal["periode"].astype(str).unique())
