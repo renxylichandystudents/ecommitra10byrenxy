@@ -119,12 +119,13 @@ def show_priority_dashboard(
         gaps.append(f"{fmt_num(shortage['tanpa_data'])} tanpa data stok")
     card(cols[2], "SKU Top 50 stok kurang", fmt_num(shortage["kurang"]), hint="Stok di bawah prediksi + SS · " + " · ".join(gaps))
     cap_value, cap_note = capacity_summary(features, table)
-    card(cols[3], "Kapasitas DC", cap_value, hint=cap_note)
+    card(cols[3], "Kapasitas DC", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
 
     priority = restock_priority(top, today, po=data.po)
     basis = "Sales volume" if metric == "sales" else "QTY terjual"
-    left, right = st.columns([3, 1.25], gap="medium")
-    with left:
+    # Insight di atas, tabel restock selebar penuh agar kolom Produk/Varian tidak terpotong.
+    _insight_cards(table, priority, data, role)
+    with st.container():
         st.markdown(f"**Kebutuhan restock prioritas · Top 50 {basis}**")
         st.caption(
             f"SKU = Top 50 menurut {basis} (kolom Peringkat); angka prediksi QTY sama untuk kedua parameter. "
@@ -159,8 +160,6 @@ def show_priority_dashboard(
                 st.rerun()
             with b2:
                 download_excel(view, "restock_prioritas.xlsx", key="xl-dash-restock")
-    with right:
-        _insight_cards(table, priority, data, role)
 
 
 def restock_view(priority: pd.DataFrame) -> pd.DataFrame:

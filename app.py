@@ -1086,6 +1086,26 @@ st.markdown(
     [data-testid="stSidebarCollapsedControl"] {
         display: none !important;
     }
+    /* Indikator memuat: muncul otomatis saat skrip berjalan > 0,6 detik (pindah menu, buka riwayat). */
+    @keyframes mitra-load-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes mitra-load-bar { 0% { background-position: 0% 0; } 100% { background-position: 200% 0; } }
+    .stApp[data-test-script-state="running"]::before {
+        content: "";
+        position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 2000;
+        background: linear-gradient(90deg, #ee4d2d, #f6a58f, #1b3da6, #ee4d2d);
+        background-size: 200% 100%;
+        opacity: 0;
+        animation: mitra-load-in .2s ease .6s forwards, mitra-load-bar 1.2s linear infinite;
+    }
+    .stApp[data-test-script-state="running"]::after {
+        content: "Memuat data…";
+        position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); z-index: 2000;
+        background: #0f172a; color: #ffffff; padding: .45rem 1rem; border-radius: 999px;
+        font-size: var(--fs-sm); box-shadow: 0 6px 18px rgba(15, 23, 42, .25);
+        opacity: 0;
+        animation: mitra-load-in .2s ease .6s forwards;
+        pointer-events: none;
+    }
     /* Pop-up (menu akun, pilihan dropdown) selalu di atas header yang dipaku (z-index 40) dan pelindungnya. */
     div[data-baseweb="popover"],
     div[data-testid="stPopoverBody"] { z-index: 1000 !important; }
@@ -1328,7 +1348,29 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+# Pengukur waktu per tahap (hanya super user, buka dengan ?debug=waktu) untuk mencari bagian yang lambat.
+_T0 = time.perf_counter()
+TIMINGS: list[tuple[str, float]] = []
+
+
+def _tick(label: str) -> None:
+    TIMINGS.append((label, time.perf_counter()))
+
+
+def show_timings() -> None:
+    if str(st.query_params.get("debug", "")) != "waktu" or getattr(AUTH_USER, "role", "") != "super_user":
+        return
+    rows, last = [], _T0
+    for label, stamp in TIMINGS:
+        rows.append({"Tahap": label, "Detik": round(stamp - last, 2)})
+        last = stamp
+    rows.append({"Tahap": "TOTAL", "Detik": round(time.perf_counter() - _T0, 2)})
+    with st.expander("Waktu proses (debug)", expanded=True):
+        st.dataframe(pd.DataFrame(rows), hide_index=True)
+
 AUTH_USER = login_gate()
+_tick("login")
 get_features()
 
 TOP_N = 50
@@ -3662,6 +3704,9 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
     )
 
 
+QTY_BOARD_STEP = 10
+
+
 @st.fragment
 def show_qty_forecast_board(
     view: pd.DataFrame,
@@ -3792,7 +3837,8 @@ def show_qty_forecast_board(
     for column, name, label in filters:
         if column.button(label, key=f"qty-board-filter-{name}", type="primary" if current == name else "secondary", use_container_width=True):
             st.session_state["qty-board-direction"] = name
-            st.rerun()
+            st.session_state["qty-board-limit"] = QTY_BOARD_STEP
+            st.rerun(scope="fragment")
     st.markdown(
         "<div class='qty-legend'><span><i class='up'></i>Naik</span><span><i class='down'></i>Turun</span><span><i class='flat'></i>Tetap</span></div>"
         f"<p class='qty-board-copy'>{counts['naik']} naik · {counts['turun']} turun · {counts['tetap']} tetap pada baris {html.escape(format_period_label('prediksi', as_of))}.</p>",
@@ -3817,7 +3863,10 @@ def show_qty_forecast_board(
         shown_rows.append(row)
     if not shown_rows:
         st.info("Tidak ada SKU pada saringan ini.")
-    for row in shown_rows:
+    # Kartu ditampilkan bertahap (10 dulu) agar halaman Ringkasan tidak setinggi 23 layar.
+    limit = int(st.session_state.get("qty-board-limit", QTY_BOARD_STEP))
+    total_rows = len(shown_rows)
+    for row in shown_rows[:limit]:
         key = str(row["item_key"])
         brief = briefs[key]
         st.markdown("<div class='qty-row-anchor'></div>", unsafe_allow_html=True)
@@ -3831,6 +3880,12 @@ def show_qty_forecast_board(
         card_col.markdown(_qty_card_html(row, brief, bars, _stock_chip_row(enriched, period, as_of)), unsafe_allow_html=True)
         if action_col.button("Analisa", key=f"qty-insight-open-{key}", use_container_width=True):
             st.session_state["qty-insight-key"] = key
+    if total_rows > limit:
+        more_col, info_col = st.columns([1, 3], vertical_alignment="center")
+        if more_col.button(f"Muat {min(QTY_BOARD_STEP, total_rows - limit)} SKU lagi", key="qty-board-more", use_container_width=True):
+            st.session_state["qty-board-limit"] = limit + QTY_BOARD_STEP
+            st.rerun(scope="fragment")
+        info_col.caption(f"Menampilkan {format_number(limit)} dari {format_number(total_rows)} SKU. Gunakan pencarian untuk langsung ke satu SKU.")
     selected = str(st.session_state.get("qty-insight-key") or "")
     if selected and selected in briefs:
         enriched = decision_rows.get(selected)
@@ -6813,6 +6868,7 @@ if (
     ROUTE_CHANGED = sync_route(st.session_state, st.query_params, allowed_sheets(AUTH_USER.role, APP_SHEETS)) or ROUTE_CHANGED
 
 render_header()
+_tick("header")
 
 # Satu wadah isi halaman: saat pindah halaman/menu dikosongkan dulu, jadi blok lama tidak tampil dobel/pudar.
 PAGE_ROOT = st.empty()
@@ -6861,6 +6917,7 @@ with PAGE_ROOT.container(key="page-root"):
         st.info(f"Menampilkan hasil analisa {run_stamp_text(origin['run_at'])} oleh {origin['run_by']}.")
 
     orders_raw, source_raw, source_key, period, sidebar_metric, service = restore_prediction_context()
+    _tick("konteks")
     run = bool(st.session_state.pop("pending-run", False))
     load_error = None
 
@@ -7078,6 +7135,7 @@ with PAGE_ROOT.container(key="page-root"):
 
     last_period = history["period_start"].max()
     catalog = top_bestsellers(orders, combined, stock, history, metric, last_period, period, top_n=None, period_orders=sales_orders)
+    _tick("peringkat")
     FEATURES = get_features()
     EXCLUDED = excluded_skus(FEATURES)
     if isinstance(catalog, pd.DataFrame) and not catalog.empty and EXCLUDED:
@@ -7096,6 +7154,7 @@ with PAGE_ROOT.container(key="page-root"):
         frames=frames,
         params=params,
     )
+    _tick("katalog diperkaya")
     shown = enriched.head(TOP_N).reset_index(drop=True) if isinstance(enriched, pd.DataFrame) else pd.DataFrame()
     katalog_run = st.session_state.pop("_run-save-katalog", None)
     if katalog_run and isinstance(enriched, pd.DataFrame) and not enriched.empty:
@@ -7119,6 +7178,7 @@ with PAGE_ROOT.container(key="page-root"):
         periode=f"{window_start.year:04d}-{window_start.month:02d}",
         stamp=str(stored.get("run_id") or ""),
     )
+    _tick("data fitur")
 
 
     def show_performance_cards(start, end, label: str, *, tone: str | None = None) -> dict:
@@ -7169,6 +7229,7 @@ with PAGE_ROOT.container(key="page-root"):
 
     require_role(SHEET_PERMISSIONS.get(sheet, "ringkasan"))
 
+    _tick("persiapan menu")
     if sheet == "Ringkasan":
         with dashboard_slot:
             show_priority_dashboard(
@@ -7369,4 +7430,6 @@ with PAGE_ROOT.container(key="page-root"):
             is_super=AUTH_USER.role == "super_user",
         )
 
+    _tick(f"menu {sheet}")
     persist_run_caches()
+    show_timings()
