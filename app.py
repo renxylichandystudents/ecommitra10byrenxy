@@ -5889,6 +5889,16 @@ def scroll_table(frame: pd.DataFrame, *, max_height: int | None = 680, format_nu
 
 
 MOVEMENT_STEP = 5
+
+
+def _ss_params(params: dict, service: int) -> dict:
+    """Parameter yang ditampilkan di kotak Analisa safety stock (sama dengan yang dipakai recommend_stock)."""
+    lead = params.get("lead_time", {}) if isinstance(params, dict) else {}
+    impor = bool(lead.get("impor_aktif", False))
+    days = float(lead.get("impor_rata_hari", 60) if impor else lead.get("lokal_hari", 7))
+    return {"service": int(service), "lead_days": days, "import_mode": impor}
+
+
 _TOP50_TABLE = components.declare_component("top50_table", path=str(ROOT / "components" / "top50_table"))
 
 
@@ -7789,7 +7799,7 @@ with PAGE_ROOT.container(key="page-root"):
                 filename="top50_item_terlaris.xlsx",
                 step=5,
             )
-            safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default)
+            safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, **_ss_params(params, applied_service))
             if picked:
                 show_sku_detail(shown, picked, key=f"top50-chart-{picked}")
             else:
@@ -7847,7 +7857,7 @@ with PAGE_ROOT.container(key="page-root"):
                     filename="prediksi_semua_produk.xlsx",
                     height=720,
                 )
-                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, scope="Semua produk sesuai saringan")
+                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, scope="Semua produk sesuai saringan", **_ss_params(params, applied_service))
                 if picked:
                     show_sku_detail(page_view, picked, key=f"allpred-chart-{picked}")
 

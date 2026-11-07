@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
 from src.core.periods import prediction_window
-from src.core.decision_table import lama_kosong_text, period_groups, safety_stock_summary
+from src.core.decision_table import lama_kosong_text, period_groups
 from src.core.labels import LABEL_ICONS
 from src.forecast import forecast_calendar
 from src.ui.common import (
@@ -233,30 +233,90 @@ def label_legend() -> None:
     )
 
 
-def safety_stock_box(table: pd.DataFrame, *, period: str, today: date, definition: str, used_default: bool, scope: str = "Top 50") -> None:
+def safety_stock_box(
+    table: pd.DataFrame,
+    *,
+    period: str,
+    today: date,
+    definition: str,
+    used_default: bool,
+    scope: str = "Top 50",
+    service: int | None = None,
+    lead_days: float | None = None,
+    import_mode: bool = False,
+) -> None:
+    """Analisa safety stock: parameter + angka yang tidak tergantung periode sekali saja, lalu satu tabel per periode."""
+    del definition
     groups = period_groups(period, today)
+    known = table["ada_data_stok"].astype(bool) if "ada_data_stok" in table.columns else pd.Series(False, index=table.index)
+    stok = pd.to_numeric(table.get("stok", 0), errors="coerce").fillna(0.0)
+    ss = pd.to_numeric(table.get("ss", 0), errors="coerce").fillna(0.0)
+    below_ss = known & (stok < ss)
+    empty = known & (stok <= 0)
     with st.container(border=True):
         st.markdown(f"**Analisa safety stock · {scope} ({fmt_num(len(table))} SKU)**")
+        z = None
+        if service:
+            from src.core.inventory import service_level_to_z
+
+            z = service_level_to_z(float(service))
+        if import_mode:
+            formula = f"(lead time maks − rata-rata) × permintaan harian; lead time rata-rata {fmt_num(lead_days or 0)} hari"
+        else:
+            formula = (
+                f"Z × σ permintaan harian × √lead time = {fmt_num(z, 2) if z is not None else 'Z'} × σ × √{fmt_num(lead_days or 0)} hari, dibulatkan ke atas per SKU"
+            )
+        cols = st.columns(4)
+        card(cols[0], "Service level", f"{fmt_num(service or 0)}%", hint=f"Z = {fmt_num(z, 2)}" if z is not None else "")
+        card(cols[1], "Lead time", f"{fmt_num(lead_days or 0)} hari", hint="asumsi default Pengaturan bisnis" if used_default else "dari Pengaturan bisnis")
+        card(cols[2], "Total SS", f"{fmt_qty(ss.sum())} unit", hint=f"rata-rata {fmt_qty(ss.mean() if len(ss) else 0)} unit per SKU · sama di setiap periode")
+        card(
+            cols[3],
+            "SKU stok di bawah SS",
+            fmt_num(int(below_ss.sum())),
+            hint=f"termasuk {fmt_num(int(empty.sum()))} kosong · berisiko habis sebelum barang baru datang"
+            + (f" · {fmt_num(int((~known).sum()))} tanpa data stok" if int((~known).sum()) else ""),
+            tone=None,
+        )
+        rows = []
+        for group in groups:
+            p = group.prefix
+            if f"{p}_butuh" not in table.columns:
+                continue
+            qty = pd.to_numeric(table[f"{p}_qty"], errors="coerce").fillna(0.0)
+            need = pd.to_numeric(table[f"{p}_butuh"], errors="coerce").fillna(0.0)
+            short = known & (stok < need)
+            gap = (need - stok).clip(lower=0).where(known, 0.0)
+            dc_text = "–"
+            if p == "m" and "kurang_setelah_dc" in table.columns:
+                rest = pd.to_numeric(table["kurang_setelah_dc"], errors="coerce").fillna(0.0).where(known, 0.0)
+                from_dc = (gap - rest).clip(lower=0)
+                dc_text = f"{fmt_qty(from_dc.sum())} dari DC · {fmt_qty(rest.sum())} PO"
+            style = " style='background:#eff6ff'" if group.extra else ""
+            rows.append(
+                f"<tr{style}><td>{group.label}</td><td>{fmt_qty(qty.sum())}</td><td>{fmt_qty(ss.sum())}</td>"
+                f"<td><b>{fmt_qty(need.sum())}</b></td><td>{fmt_qty(stok.where(known, 0).sum())}</td>"
+                f"<td><b>{fmt_num(int(short.sum()))}</b> SKU</td><td>{fmt_qty(gap.sum())} unit</td><td>{dc_text}</td></tr>"
+            )
+        header = (
+            "<tr><th>Periode</th><th>Prediksi QTY (unit utuh)</th><th>+ SS</th><th>= Kebutuhan</th><th>Stok Site 10037</th>"
+            "<th>SKU stok &lt; kebutuhan</th><th>Total kekurangan</th><th>Dipenuhi dari</th></tr>"
+        )
+        st.markdown(
+            "<div class='sheet-scroll'><table class='insight-table' style='width:100%'>" + header + "".join(rows) + "</table></div>",
+            unsafe_allow_html=True,
+        )
         explain(
             [
-                ("Safety stock (SS)", "stok cadangan agar produk tidak kosong saat permintaan atau pengiriman meleset"),
-                ("Rumus", "Z × σ permintaan harian × √lead time, dibulatkan ke atas"),
-                ("Sama di setiap periode", "SS dihitung dari lead time, bukan dari panjang periode"),
+                ("Safety stock (SS)", "stok cadangan agar tidak kosong saat permintaan atau pengiriman meleset dari perkiraan"),
+                ("Rumus", formula),
+                ("σ permintaan harian", "simpangan penjualan harian terhadap tren model; SKU yang penjualannya naik-turun tajam mendapat SS lebih besar"),
+                ("Sama di setiap periode", "SS hanya menutup risiko selama lead time, jadi tidak bertambah walau periodenya lebih panjang"),
+                ("Kebutuhan", "prediksi QTY periode + SS; SKU disebut kurang bila stok Site 10037 di bawah angka ini"),
+                ("Stok di bawah SS", "lebih mendesak dari sekadar kurang: stok bahkan tidak cukup untuk cadangan, prioritaskan transfer dari DC / PO"),
+                ("Dipenuhi dari", "kekurangan bulan dipenuhi dulu dari Site 10062, lalu Site 10036; sisanya PO ke supplier"),
             ]
         )
-        cols = st.columns(len(groups))
-        for column, group in zip(cols, groups):
-            summary = safety_stock_summary(table, group.prefix)
-            body = (
-                f"Total SS <b>{fmt_qty(summary['total_ss'])}</b> unit<br>"
-                f"SKU stok &lt; prediksi + SS: <b>{fmt_num(summary['sku_kurang_butuh'])}</b><br>"
-                f"SKU stok &lt; SS: <b>{fmt_num(summary['sku_di_bawah_ss'])}</b>"
-            )
-            if summary["sku_tanpa_stok_data"]:
-                body += f"<br><span style='color:#64748b'>{fmt_num(summary['sku_tanpa_stok_data'])} SKU belum ada data stok</span>"
-            card(column, group.label, f"<div style='font-size:var(--fs-base);font-weight:600;line-height:1.6'>{body}</div>", tone="extra" if group.extra else None)
-        if used_default:
-            st.caption("Lead time memakai asumsi default dari Pengaturan bisnis.")
 
 
 def top50_matrix(
