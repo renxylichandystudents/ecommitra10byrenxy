@@ -122,6 +122,62 @@ def _report_month(orders: pd.DataFrame, features, run_id: int, username: str, ca
     return part, names[pick]
 
 
+
+def _month_label(stamp: pd.Timestamp) -> str:
+    return f"{ID_MONTHS[stamp.month - 1][:3]} {stamp.year}"
+
+
+def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, month_pred: float, pred_label: str, exclude: bool) -> None:
+    """Tren bulanan dengan dua dasar yang jelas dan bulan berjalan ditandai (tidak ikut moving average)."""
+    times = pd.to_datetime(orders["order_time"])
+    monthly = orders.assign(m=times.dt.to_period("M").dt.to_timestamp()).groupby("m")["sales"].sum()
+    if monthly.empty:
+        st.write("Belum ada transaksi.")
+        return
+    data_end = times.max().normalize()
+    month_end = (data_end + pd.offsets.MonthEnd(0)).normalize()
+    partial = data_end < month_end  # bulan terakhir belum penuh
+    full = monthly.iloc[:-1] if partial else monthly
+    ma = full.rolling(3, min_periods=1).mean()
+    bersih = {}
+    if isinstance(orders_all, pd.DataFrame) and not orders_all.empty:
+        for stamp in monthly.index:
+            end = min((stamp + pd.offsets.MonthEnd(0)).normalize(), data_end)
+            bersih[stamp] = float(cached_order_metrics(orders_all, stamp.date(), end.date(), exclude)["sales_bersih"])
+    labels = [_month_label(m) for m in monthly.index]
+    if partial:
+        labels[-1] = f"{labels[-1]} (s.d. {data_end.day} {ID_MONTHS[data_end.month - 1][:3]})"
+    colors = ["#1b3da6"] * len(monthly)
+    patterns = [""] * len(monthly)
+    if partial:
+        colors[-1], patterns[-1] = "#93a5d8", "/"
+    basis = "Sales produk (dasar prediksi)"
+    fig = go.Figure()
+    fig.add_bar(
+        x=labels, y=monthly.values / 1e9, name=basis, marker=dict(color=colors, pattern=dict(shape=patterns)),
+        text=[fmt_idr_short(v) for v in monthly.values], textposition="outside", hovertext=[fmt_idr_short(v) for v in monthly.values], hoverinfo="x+text",
+    )
+    fig.add_scatter(x=labels[: len(ma)], y=ma.values / 1e9, name="Moving average 3 bulan (bulan penuh)", mode="lines+markers", line=dict(color="#0f766e"))
+    if bersih:
+        fig.add_scatter(x=labels, y=[bersih[m] / 1e9 for m in monthly.index], name="Sales bersih (kartu Ringkasan)", mode="lines+markers", line=dict(color="#64748b", dash="dot"))
+    if month_pred > 0:
+        fig.add_scatter(x=[labels[-1]], y=[month_pred / 1e9], name=pred_label, mode="markers+text", marker=dict(color="#ee4d2d", size=14, symbol="diamond"), text=[fmt_idr_short(month_pred)], textposition="top center")
+    fig.update_layout(height=440, separators=",.", legend=dict(orientation="h", y=-0.22), yaxis_title="Miliar rupiah", margin=dict(l=40, r=20, t=30, b=40))
+    st.plotly_chart(fig, use_container_width=True, key="report-trend")
+    st.caption(
+        f"{basis} = Harga setelah diskon × QTY{' (tanpa batal & retur)' if exclude else ' (termasuk pesanan batal, karena saklar Kecualikan batal & retur nonaktif)'}; "
+        "dasar ini sama dengan prediksi. Sales bersih = Total Pembayaran per pesanan dikurangi batal & retur, sama dengan kartu Ringkasan eksekutif."
+    )
+    if len(full) >= 2:
+        last, before = float(full.iloc[-1]), float(full.iloc[-2])
+        change = (last - before) / before * 100 if before > 0 else float("nan")
+        st.caption(
+            f"Bulan penuh terakhir ({_month_label(full.index[-1])}) {fmt_idr(last)} vs {_month_label(full.index[-2])} {fmt_idr(before)}"
+            + (f" ({fmt_pct(change, 1, signed=True)})." if np.isfinite(change) else ".")
+            + (f" {labels[-1]} belum penuh, tidak dibandingkan." if partial else "")
+        )
+
+
 def show_report(
     table: pd.DataFrame,
     *,
@@ -215,19 +271,7 @@ def show_report(
                     st.markdown("**Rekomendasi utama**")
                     show_table(records_display(records.head(5)), kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"})
             elif section == SECTIONS[1]:
-                monthly = orders.assign(m=pd.to_datetime(orders["order_time"]).dt.to_period("M").dt.to_timestamp()).groupby("m")["sales"].sum()
-                ma = monthly.rolling(3, min_periods=1).mean()
-                fig = go.Figure()
-                fig.add_bar(x=monthly.index, y=monthly.values, name="Sales aktual", marker_color="#1b3da6", text=[fmt_idr_short(v) for v in monthly.values], textposition="outside", hovertemplate="%{x|%b %Y}<br>%{text}<extra></extra>")
-                fig.add_scatter(x=ma.index, y=ma.values, name="Moving average 3 bulan", mode="lines+markers", line=dict(color="#0f766e"))
-                if month_pred > 0:
-                    this_month = pd.Timestamp(today).to_period("M").to_timestamp()
-                    fig.add_scatter(x=[this_month], y=[month_pred], name=pred_label, mode="markers+text", marker=dict(color="#ee4d2d", size=14, symbol="diamond"), text=[fmt_idr_short(month_pred)], textposition="top center")
-                fig.update_layout(height=420, legend=dict(orientation="h", y=-0.2), yaxis_title="Rupiah", margin=dict(l=40, r=20, t=30, b=40))
-                st.plotly_chart(fig, use_container_width=True, key="report-trend")
-                if len(monthly) >= 2:
-                    last, before = float(monthly.iloc[-1]), float(monthly.iloc[-2])
-                    st.caption(f"Bulan terakhir {fmt_idr(last)} vs bulan sebelumnya {fmt_idr(before)}. Bulan berjalan masih terpotong sampai data terakhir.")
+                _show_trend(orders, orders_all, today=today, month_pred=month_pred, pred_label=pred_label, exclude=exclude)
             elif section == SECTIONS[2]:
                 cols = ["peringkat", "sku", "product_name", "qty_total", "sales_total", "m_qty", "m_sales", "label_text"]
                 view = top[[c for c in cols if c in top.columns]].head(20).rename(

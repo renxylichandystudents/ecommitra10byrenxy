@@ -6534,12 +6534,14 @@ def show_analysis_movement(
     if isinstance(decision, pd.DataFrame) and not decision.empty:
         now_totals = _group_totals(decision, period_key, today)
     prior_frame = _movement_frame(yesterday, **frame_args)
-    prior = _period_totals(prior_frame, keys, period=period_key, day=today, orders=orders)
-    st.markdown("<div class='section-title'>Pergerakan dari analisis sebelumnya</div>", unsafe_allow_html=True)
+    # Pembanding harus SKU yang sama dengan kartu (Top 50), bukan seluruh katalog.
+    prior = _period_totals(prior_frame, list(focus_keys) or keys, period=period_key, day=today, orders=orders)
+    st.markdown("<div class='section-title'>Pergerakan dari analisa sebelumnya</div>", unsafe_allow_html=True)
     st.markdown(
         f"<div class='field-hint'>Parameter {'QTY terjual' if metric == 'qty' else 'Sales volume'} · "
         f"safety stock {int(current_meta.get('service', service) or 0)}% · dibanding prediksi kemarin, "
-        f"{html.escape(format_id_date(yesterday))}.</div>",
+        f"{html.escape(format_id_date(yesterday))}, untuk {format_number(len(focus_keys))} SKU Top 50 yang sama "
+        "(dihitung ulang dari data latih s.d. sehari sebelumnya dengan parameter yang sama).</div>",
         unsafe_allow_html=True,
     )
     if now_totals:

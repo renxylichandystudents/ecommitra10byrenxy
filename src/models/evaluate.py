@@ -312,7 +312,7 @@ def record_frame(record: dict) -> pd.DataFrame:
                 "MAPE kelas A (%)": classes.get("A"),
                 "MAPE kelas C (%)": classes.get("C"),
                 "Top 50 tepat": info.get("top50_tepat"),
-                "Bobot ensemble": info.get("bobot_ensemble"),
+                "Bobot ensemble": info.get("bobot_ensemble") if info.get("bobot_ensemble") is not None else np.nan,
             }
         )
     frame = pd.DataFrame(rows)
