@@ -900,7 +900,9 @@ st.markdown(
     }
     .qty-board-copy { color: #64748b; font-size: var(--fs-base); line-height: 1.45; margin: 0; }
     .qty-line.extra { background: #eff6ff; border-radius: 8px; }
-    .qty-track.stock-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: #fff7ed; border-radius: 8px; padding: 4px 6px; }
+    .qty-track.stock-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: #fff7ed; border-radius: 8px; padding: 5px 6px; height: auto; min-height: 1.85rem; overflow: visible; }
+    .qty-track.stock-row.dc { background: #f0f9ff; }
+    .stock-chip.info { background: #dbeafe; color: #1e3a8a; }
     .stock-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 700; }
     .stock-chip.ok { background: #dcfce7; color: #166534; }
     .stock-chip.bad { background: #fee2e2; color: #991b1b; }
@@ -3292,6 +3294,8 @@ def _bar_spec(
     predicted: int | None,
     sold: int | None,
     sold_sub: str,
+    *,
+    money: bool = False,
 ) -> dict:
     """Satu batang. Kiri parameter, tengah prediksi dengan arah dan persen, kanan QTY terjual."""
     if predicted is None:
@@ -3310,13 +3314,22 @@ def _bar_spec(
             "label": label,
             "sub": sub,
             "direction": "tetap",
-            "text": format_qty(predicted),
+            "text": f"Prediksi {format_idr(predicted) if money else format_qty(predicted)}",
             "width": 100.0,
             "sold": "–",
             "sold_sub": "belum ada di laporan",
         }
     sold = int(sold)
-    direction, text, _gap, _percent = _qty_pill(predicted, sold)
+    direction, _text, _gap, percent = _qty_pill(predicted, sold)
+    value = format_idr(predicted) if money else format_qty(predicted)
+    # Teks dibaca: "▲ Prediksi 1.169 · 5,7% di atas terjual" (bukan angka + persen saja).
+    if direction == "tetap":
+        text = f"– Prediksi {value} · sama dengan terjual"
+    elif percent is None:
+        text = f"{'▲' if direction == 'naik' else '▼'} Prediksi {value} · terjual 0"
+    else:
+        where = "di atas" if direction == "naik" else "di bawah"
+        text = f"{'▲' if direction == 'naik' else '▼'} Prediksi {value} · {format_number(abs(percent), 1)}% {where} terjual"
     peak = max(predicted, sold, 1)
     return {
         "label": label,
@@ -3933,6 +3946,35 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
         f"<div class='qty-track stock-row'>{chips}</div>"
         f"<div class='qty-base'>{stock_text}<small>unit</small></div>"
         "</div>"
+        + _dc_chip_row(row)
+    )
+
+
+def _dc_chip_row(row: pd.Series | None) -> str:
+    """Baris Stok DC: Site 10062 (DC Cikupa) dan Site 10036 (DC Cipeucang) + rencana ambil bila Site 10037 kurang."""
+    if row is None:
+        return ""
+    chips, total, known = [], 0.0, False
+    for code, name in (("10062", "DC Cikupa"), ("10036", "DC Cipeucang")):
+        value = row.get(f"stok_{code}")
+        if value is None or pd.isna(value):
+            chips.append(f"<span class='stock-chip none'>Site {code} · {name}: belum ada data</span>")
+            continue
+        known = True
+        value = float(value)
+        total += value
+        tone = "ok" if value > 0 else "none"
+        chips.append(f"<span class='stock-chip {tone}'>Site {code} · {name}: {format_qty(value)} unit</span>")
+    plan = str(row.get("sumber_restock") or "").strip()
+    if plan:
+        tone = "bad" if "PO" in plan and not plan.startswith("Ambil") else ("warn" if "PO" in plan else "info")
+        chips.append(f"<span class='stock-chip {tone}'>Rencana: {html.escape(plan)}</span>")
+    return (
+        "<div class='qty-line'>"
+        "<div class='qty-metric'>Stok DC<small>Site 10062 · 10036</small></div>"
+        f"<div class='qty-track stock-row dc'>{''.join(chips)}</div>"
+        f"<div class='qty-base'>{format_qty(total) if known else '–'}<small>unit di DC</small></div>"
+        "</div>"
     )
 
 
@@ -3952,9 +3994,7 @@ def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, t
     out = []
     for bar, pred_qty, sold in zip(brief["bars"], (brief.get("month_pred"), brief.get("yesterday_pred"), brief.get("month_ago_pred")), sold_sales):
         pred = None if pred_qty is None else int(round(float(pred_qty) * price))
-        spec = _bar_spec(bar["label"], bar["sub"], pred, None if sold is None else int(round(sold)), bar.get("sold_sub") or "terjual")
-        if pred is not None:
-            spec["text"] = spec["text"].replace(format_qty(pred), format_idr(pred)) if spec["direction"] == "tetap" else spec["text"]
+        spec = _bar_spec(bar["label"], bar["sub"], pred, None if sold is None else int(round(sold)), bar.get("sold_sub") or "terjual", money=True)
         spec["sold"] = "–" if sold is None else format_idr(sold)
         out.append(spec)
     return out
@@ -3975,7 +4015,7 @@ def _extra_period_bar(row: pd.Series | None, period: str, item_orders: pd.DataFr
         sold = float(part["qty" if metric == "qty" else "sales"].sum())
     pred = float(row["p_qty"] if metric == "qty" else row["p_sales"])
     label = PERIOD_LABELS[period]
-    spec = _bar_spec(label, f"sisa {now_label} s.d. {format_id_date(end)}", int(round(pred)), None if sold is None else int(round(sold)), f"aktual {prev_label}")
+    spec = _bar_spec(label, f"sisa {now_label} s.d. {format_id_date(end)}", int(round(pred)), None if sold is None else int(round(sold)), f"aktual {prev_label}", money=metric == "sales")
     if metric == "sales":
         spec["sold"] = "–" if sold is None else format_idr(sold)
     spec["extra"] = True
@@ -4014,7 +4054,7 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
         f"<div class='qty-var'>Varian {variance}</div>"
         "</div>"
         "<div class='qty-line qty-head-row'>"
-        "<div class='qty-metric'>Periode</div><div class='qty-head-mid'>Prediksi</div><div class='qty-base'>Terjual</div>"
+        "<div class='qty-metric'>Periode</div><div class='qty-head-mid'>Prediksi (batang) vs terjual</div><div class='qty-base'>Terjual</div>"
         "</div>"
         f"{''.join(lines)}"
         f"{stock_row}"
@@ -4022,7 +4062,7 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
     )
 
 
-QTY_BOARD_STEP = 10
+QTY_BOARD_STEP = 5
 
 
 @st.fragment
@@ -4157,6 +4197,20 @@ def show_qty_forecast_board(
             st.session_state["qty-board-direction"] = name
             st.session_state["qty-board-limit"] = QTY_BOARD_STEP
             st.rerun(scope="fragment")
+    unit_word = "unit" if metric == "qty" else "Rp"
+    explain(
+        [
+            ("Cara baca satu kartu", "tiap baris membandingkan PREDIKSI (batang, tengah) dengan yang TERJUAL (angka kanan) pada periode di kiri"),
+            (f"Baris {format_period_label('prediksi', as_of)}", "prediksi periode berjalan dibanding terjual bulan penuh terakhir; naik = permintaan diperkirakan lebih tinggi dari bulan lalu"),
+            (f"Baris {format_period_label('aktual_hari', as_of - timedelta(days=1))}", "prediksi untuk kemarin dibanding yang benar-benar terjual kemarin (cek ketepatan model)"),
+            ("Baris Tanggal sama bulan lalu", "sama, untuk tanggal yang sama bulan lalu"),
+            ("Warna & panjang batang", f"🟢 prediksi di atas terjual · 🔴 di bawah terjual · ⚪ sama; batang penuh = prediksi ≥ terjual, batang pendek = prediksi lebih kecil ({unit_word})"),
+            ("Stok Site 10037", "stok toko dibanding kebutuhan (prediksi + SS) per periode: hijau Aman, kuning Kurang, merah Kosong"),
+            ("Stok DC", "stok Site 10062 (DC Cikupa) dan 10036 (DC Cipeucang); bila Site 10037 kurang, Rencana menunjukkan berapa yang bisa diambil dari DC sebelum PO"),
+            ("Analisa", "klik untuk rincian per SKU: prediksi vs stok, stok DC & rencana transfer, iklan, dan langkah kerja"),
+        ],
+        title="Cara membaca",
+    )
     st.markdown(
         "<div class='qty-legend'><span><i class='up'></i>Naik</span><span><i class='down'></i>Turun</span><span><i class='flat'></i>Tetap</span></div>"
         f"<p class='qty-board-copy'>{counts['naik']} naik · {counts['turun']} turun · {counts['tetap']} tetap pada baris {html.escape(format_period_label('prediksi', as_of))}.</p>",
@@ -4181,7 +4235,7 @@ def show_qty_forecast_board(
         shown_rows.append(row)
     if not shown_rows:
         st.info("Tidak ada SKU pada saringan ini.")
-    # Kartu ditampilkan bertahap (10 dulu) agar halaman Ringkasan tidak setinggi 23 layar.
+    # Kartu ditampilkan bertahap (5 Rank teratas dulu) agar halaman Ringkasan tidak setinggi 23 layar.
     limit = int(st.session_state.get("qty-board-limit", QTY_BOARD_STEP))
     total_rows = len(shown_rows)
     for row in shown_rows[:limit]:
@@ -4200,7 +4254,7 @@ def show_qty_forecast_board(
             st.session_state["qty-insight-key"] = key
     if total_rows > limit:
         more_col, info_col = st.columns([1, 3], vertical_alignment="center")
-        if more_col.button(f"Muat {min(QTY_BOARD_STEP, total_rows - limit)} SKU lagi", key="qty-board-more", use_container_width=True):
+        if more_col.button(f"Muat {min(QTY_BOARD_STEP, total_rows - limit)} SKU lagi (sisa {total_rows - limit})", key="qty-board-more", use_container_width=True):
             st.session_state["qty-board-limit"] = limit + QTY_BOARD_STEP
             st.rerun(scope="fragment")
         info_col.caption(f"Menampilkan {format_number(limit)} dari {format_number(total_rows)} SKU. Gunakan pencarian untuk langsung ke satu SKU.")

@@ -61,6 +61,62 @@ def _block(title: str, body: str) -> str:
     return f"<div class='insight-section'>{html.escape(title)}</div>{body}"
 
 
+def _take_text(value) -> str:
+    if value is None or pd.isna(value):
+        return "–"
+    return f"{fmt_qty(float(value))} unit"
+
+
+def _dc_block(row: pd.Series) -> str:
+    """Keberadaan stok di Site 10062 (DC Cikupa) dan 10036 (DC Cipeucang) serta rencana pemenuhan Site 10037."""
+    sites = (("10062", "DC Cikupa"), ("10036", "DC Cipeucang"))
+    values = {}
+    for code, _name in sites:
+        value = row.get(f"stok_{code}")
+        values[code] = None if value is None or pd.isna(value) else float(value)
+    if all(value is None for value in values.values()):
+        return "<p class='insight-copy'>Stok DC belum diunggah. Unggah menu Stok DC Cikupa (Site 10062) dan Stok DC Cipeucang (Site 10036) agar rencana transfer terhitung.</p>"
+    body = "".join(
+        f"<tr><td>Site {code} · {name}</td><td>{'belum ada data' if values[code] is None else fmt_qty(values[code]) + ' unit'}</td>"
+        f"<td>{_take_text(row.get(f'ambil_{code}'))}</td></tr>"
+        for code, name in sites
+    )
+    table = f"<table class='insight-table'><tr><th>Lokasi</th><th>Stok tersedia</th><th>Diambil untuk Site 10037</th></tr>{body}</table>"
+    has_store = bool(row.get("ada_data_stok", False))
+    need = float(row.get("m_butuh", 0) or 0)
+    store = float(row.get("stok", 0) or 0) if has_store else 0.0
+    shortfall = max(0.0, need - store) if has_store else 0.0
+    rest = row.get("kurang_setelah_dc")
+    rest = 0.0 if rest is None or pd.isna(rest) else float(rest)
+    dc_total = sum(value or 0.0 for value in values.values())
+    if not has_store:
+        verdict = "Stok Site 10037 belum ada, jadi kebutuhan transfer belum bisa dihitung."
+    elif shortfall <= 0:
+        verdict = (
+            f"Site 10037 cukup untuk kebutuhan bulan ({fmt_qty(store)} ≥ {fmt_qty(need)} unit); stok DC {fmt_qty(dc_total)} unit menjadi cadangan."
+        )
+    elif rest <= 0:
+        verdict = (
+            f"Site 10037 kurang {fmt_qty(shortfall)} unit dari kebutuhan {fmt_qty(need)} unit. "
+            f"Seluruh kekurangan bisa dipenuhi dari DC, jadi tidak perlu PO: lakukan transfer sekarang agar tidak kosong."
+        )
+    elif rest < shortfall:
+        verdict = (
+            f"Site 10037 kurang {fmt_qty(shortfall)} unit. DC hanya bisa menutup {fmt_qty(shortfall - rest)} unit; "
+            f"sisa {fmt_qty(rest)} unit perlu PO ke supplier. Transfer dulu bagian dari DC, lalu buat PO untuk sisanya."
+        )
+    else:
+        verdict = (
+            f"Site 10037 kurang {fmt_qty(shortfall)} unit dan kedua DC kosong, jadi seluruhnya perlu PO ke supplier."
+        )
+    plan = str(row.get("sumber_restock") or "").strip()
+    return (
+        "<p class='insight-copy'><b>Stok DC</b> (urutan ambil: Site 10062 dulu karena satu kawasan dengan Site 10037, lalu Site 10036)</p>"
+        + table
+        + f"<p class='insight-copy'>{html.escape(verdict)}" + (f" Rencana: <b>{html.escape(plan)}</b>." if plan else "") + "</p>"
+    )
+
+
 def analysis_markup(
     row: pd.Series,
     *,
@@ -111,6 +167,7 @@ def analysis_markup(
     )
     if not bool(row.get("ada_data_stok", False)):
         block2 = "<p class='insight-copy'>Data stok belum diunggah. Unggah menu Data stok Site 10037 agar hari cukup dan lama kosong terhitung.</p>"
+    block2 += _dc_block(row)
     # 3. Performa toko
     if performance:
         block3 = (
@@ -166,7 +223,7 @@ def analysis_markup(
     return (
         head
         + _block("1. Prediksi per periode vs stok", block1)
-        + _block("2. Kesehatan stok", block2)
+        + _block("2. Kesehatan stok dan stok DC", block2)
         + _block("3. Performa toko", block3)
         + _block("4. Iklan", block4)
         + _block("Analisa dua sisi", two_sides)
