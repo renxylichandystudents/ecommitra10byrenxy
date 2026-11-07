@@ -1,7 +1,7 @@
 """Perbandingan model pada salinan uji.
 
 Regresi mengukur permintaan harian. Klasifikasi mengukur risiko pesanan batal.
-Pemenang uji hanya penanda di dasbor. Prediksi stok produksi tetap Level terkini.
+Pemenang uji hanya penanda di dasbor. Prediksi stok produksi tetap dari pipeline Ensemble (cadangan: Level terkini).
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def benchmark_daily_demand(history: pd.DataFrame, method: str = "iqr") -> tuple[
     table = _mark_winner(pd.DataFrame(rows), "RMSE", higher_better=False)
     note = (
         f"Uji regresi memakai {hold} hari terakhir sebagai ujian, setelah {clipped} lonjakan harian dipotong. "
-        "Pemenang dipilih dari RMSE terendah. Angka ini tidak mengganti Level terkini pada prediksi stok."
+        "Pemenang dipilih dari RMSE terendah. Angka ini tidak mengganti model prediksi stok."
     )
     winner = table.loc[table["Peran"].eq("Pemenang uji"), "R²"]
     if not winner.empty and pd.notna(winner.iloc[0]) and float(winner.iloc[0]) < 0:

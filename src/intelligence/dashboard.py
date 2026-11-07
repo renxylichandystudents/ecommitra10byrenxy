@@ -34,7 +34,7 @@ def show_intelligence_dashboard(orders: pd.DataFrame, history: pd.DataFrame) -> 
     st.subheader("I. Uji model pada salinan data")
     st.caption(
         "Regresi, pohon, tetangga terdekat, dan gradient boosting diuji di sini untuk bukti tesis. "
-        "Pemenang uji tidak mengganti Level terkini pada menu Prediksi & stok."
+        "Pemenang uji tidak mengganti model prediksi stok (Ensemble / Level terkini)."
     )
     method_label = st.radio(
         "Reduksi noise pada salinan uji",

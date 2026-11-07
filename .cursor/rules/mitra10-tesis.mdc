@@ -15,3 +15,9 @@ Domainnya ritel bahan bangunan di Shopee: permintaan sering mengikuti proyek ren
 Bahasa antarmuka tetap Indonesia dan bisa dibaca manajer, bukan hanya pembaca akademik. Saat menjelaskan hasil, hubungkan angka ke keputusan (beli stok, budget iklan, listing, chat bayar) dan sebut bukti modelnya bila relevan untuk tesis.
 
 Jangan mengubah rumus prediksi, safety stock, atau data yang sudah dikunci kecuali pengguna meminta perubahan itu secara eksplisit.
+
+## Alur kerja repo
+
+- `main` adalah satu-satunya versi acuan. Mulai setiap sesi dengan `git pull origin main`; jangan melanjutkan branch atau PR lama.
+- Baca `docs/STATUS.md` untuk kondisi terbaru, lalu perbarui file itu setiap kali menyelesaikan perubahan berarti.
+- Push ke `main` langsung men-deploy ulang Streamlit Community Cloud, jadi jalankan `python -m pytest -q` sebelum push.

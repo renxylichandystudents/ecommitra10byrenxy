@@ -14,7 +14,7 @@ from src.core.decision_table import build_decision_table, period_groups, safety_
 from src.core.ensemble import MODEL_ENSEMBLE, MODEL_LEVEL, build_demand_matrix, model_forecasts
 from src.core.evaluation import MAPE_TARGET_PCT, mape, walk_forward, wape
 from src.core.expert_system import action_steps, evaluate_rules, fishbone, sku_facts, swot
-from src.core.inventory import service_level_to_z, safety_stock_import, stock_zero_duration
+from src.core.inventory import safety_stock_import, stock_zero_duration
 from src.core.labels import ads_by_sku, product_labels
 from src.core.nlp_competitor import build_name_recommendations, clean_text, score_name, synthesize_title
 from src.core.optimization import optimize_restock

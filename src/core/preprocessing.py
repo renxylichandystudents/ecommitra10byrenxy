@@ -4,7 +4,6 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 from sklearn.impute import KNNImputer, SimpleImputer
 from sklearn.preprocessing import MinMaxScaler, StandardScaler

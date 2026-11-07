@@ -83,7 +83,7 @@ Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL
 
 - Semua halaman berada di balik login. Password di-hash bcrypt, minimal 8 karakter. 5× salah password → tunggu 5 menit.
 - User baru dan user yang di-reset wajib ganti password saat login berikutnya.
-- Hak akses ada di satu tempat: `auth/permissions.py` (Super user, E-commerce specialist, IC, Gudang).
+- Hak akses ada di satu tempat: matriks `src/core/access.py` (Super user, E-commerce specialist, Team DC, Team IC/MD); `auth/permissions.py` hanya membacanya.
 - Sesi login bertahan 12 jam sejak aktivitas terakhir (atur lewat secret `SESSION_TTL_HOURS`): refresh, tab baru, dan tombol back browser tidak meminta login lagi. Cookie `mitra10_session` hanya berisi token acak; di database hanya disimpan hash token-nya (tabel `sessions`). Logout, nonaktifkan user, atau reset password menghapus sesi tersebut.
 - Alamat halaman ada di URL (`?page=beranda`, `?page=data-latih`, `?page=analisa&tab=prediksi`, `?page=kelola-user`), jadi back/forward browser berpindah antarhalaman aplikasi.
 
@@ -99,4 +99,4 @@ Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL
 
 - Setiap `git push origin main` otomatis memperbarui aplikasi.
 - Bila build gagal, buka **Manage app** → log di kanan bawah untuk melihat paket yang gagal.
-- Prophet, SHAP, dan LSTM sengaja tidak dipasang agar build ringan. Aplikasi memakai cadangan otomatis (ensemble MA28 + ES + GBM, permutation importance).
+- `requirements.txt` memasang XGBoost, LightGBM, Prophet, dan SHAP. Bila salah satunya gagal dimuat di server, aplikasi otomatis memakai cadangan (HistGradientBoosting scikit-learn, permutation importance) dan menulis model yang dilewati di menu **Evaluasi model**. LSTM dan Sentence-BERT tidak dipasang karena butuh torch yang melebihi batas Streamlit Community Cloud.

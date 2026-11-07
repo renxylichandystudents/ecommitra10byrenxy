@@ -26,22 +26,16 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.intelligence.dashboard import show_intelligence_dashboard
 from src.activity import (
-    ACTIVITY_GRAINS,
-    activity_period_label,
     activity_report,
     append_total_row,
     cancel_contribution,
     focus_summary,
     ledger_from_raw,
-    period_options,
     scope_ledger,
-    slice_period,
     unpaid_buyer_table,
 )
 from src.aggregate import (
-    HORIZON_DAYS,
     PERIOD_OPTIONS,
     PERIOD_SPECS,
     aggregate_item_periods,
@@ -49,7 +43,7 @@ from src.aggregate import (
     period_label,
     period_start,
 )
-from src.core.config import changed_from_default, default_params, load_params, save_params
+from src.core.config import changed_from_default, load_params
 from src.core.consolidation import consolidation_summary
 from src.core.decision_table import PERIOD_LABELS, build_decision_table, lama_kosong_text, period_actuals, period_groups, whole_units
 from src.core.enrich import StoreFrames, enrich_catalog, load_store_frames, zero_since_map
@@ -66,7 +60,7 @@ from src.core.labels import LABEL_ICONS
 from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, exclude_toggle_card, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
-from src.core.periods import format_period_label, month_year, prediction_window, same_target, same_day_last_month, window_days
+from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
 from src.ui.confirm import confirm_action
 from src.ui.evaluasi import show_evaluation
 from src.ui.laporan import show_report
@@ -80,7 +74,6 @@ from src.ui.decision_view import (
     top50_matrix,
 )
 from src.ui.settings import show_business_settings
-from src.core.inventory import stock_zero_duration
 from src.core.schemas import SOURCE_SPECS, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
@@ -91,7 +84,7 @@ from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
 from src.core.userspace import deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
-from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, user_bar, account_menu
+from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, account_menu
 from auth.ui import logout as auth_logout
 from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_RESULT, PAGE_SETTING, apply_route, route_from_state, sync_route
 from src.core.promo import drop_excluded
@@ -125,16 +118,15 @@ from src.library import (
     store_upload,
     year_of,
 )
-from src.movement import compare_runs, frame_from_stock, list_runs, load_run, record_run, setup_notes
+from src.movement import compare_runs, frame_from_stock, record_run
 from src.ingest import (
     _is_cancelled_status,
     cancelled_status_mask,
     clean_order_frame,
-    clean_sku_columns,
     load_shopee_report,
     order_month_keys,
 )
-from src.ranking import combine_forecasts, model_leaderboard, rank_for_period, rank_from_orders
+from src.ranking import combine_forecasts, rank_for_period, rank_from_orders
 from src.stock import recommend_stock
 
 st.set_page_config(
@@ -3015,6 +3007,12 @@ def _accuracy_line(name: str, predicted: int | None, sold: int | None) -> str:
     return text + f" Prediksi {_signed_pct(gap / sold * 100)} {way} realisasi."
 
 
+def active_forecast_model() -> str:
+    """Nama model prediksi yang dipakai hasil analisa aktif: Ensemble bila bobotnya ada, selain itu Level terkini."""
+    analysis = st.session_state.get("analysis") or {}
+    return "Ensemble" if isinstance(analysis, dict) and analysis.get("ensemble_weights") else "Level terkini"
+
+
 def explain_qty_gap(
     row: pd.Series,
     history: pd.DataFrame | None,
@@ -3034,11 +3032,10 @@ def explain_qty_gap(
     month_actual: int | None = None,
     month_actual_label: str | None = None,
 ) -> dict:
-    """Analisa satu SKU. Bagian terjual dari laporan, bagian prediksi dari Level terkini. Prediksi tidak dihitung ulang."""
+    """Analisa satu SKU. Bagian terjual dari laporan, bagian prediksi dari hasil analisa yang dikunci. Prediksi tidak dihitung ulang."""
     today = today or date.today()
     yesterday = today - timedelta(days=1)
     month_ago = _same_day_last_month(today)
-    y_name = f"kemarin ({_short_id_date(yesterday)})"
     m_name = _short_id_date(month_ago)
     month_label = month_year(today)
     key = str(row["item_key"])
@@ -3271,7 +3268,7 @@ def explain_qty_gap(
     if leak_bits:
         sold_lines.append(" ".join(leak_bits))
 
-    # Bagian 2: yang diprediksi. Angka Level terkini yang sudah dikunci.
+    # Bagian 2: yang diprediksi. Angka hasil analisa (Ensemble atau Level terkini) yang sudah dikunci.
     pred_lines: list[str] = []
     month_pred_line = f"Prediksi {month_label}: {format_qty(month_pred)} unit"
     if month_sales > 0:
@@ -3432,7 +3429,8 @@ def explain_qty_gap(
             f"Batal {format_number(cancel_share * 100, 1)}%. Kalau menembus 12%, hentikan penambahan iklan.",
         )
 
-    footnote = "Bagian terjual dibaca dari laporan transaksi. Bagian prediksi memakai Level terkini yang sudah dikunci, tidak dihitung ulang."
+    model_label = active_forecast_model()
+    footnote = f"Bagian terjual dibaca dari laporan transaksi. Bagian prediksi memakai {model_label} yang sudah dikunci, tidak dihitung ulang."
     titles = {
         "naik": "Prediksi bulan di atas terjual",
         "turun": "Prediksi bulan di bawah terjual",
@@ -3473,6 +3471,7 @@ def explain_qty_gap(
         "recommendation": recommendation,
         "steps": steps,
         "footnote": footnote,
+        "model_label": model_label,
         "resume_label": resume_label,
         "period_text": period_text,
         "safety": safety,
@@ -3524,7 +3523,7 @@ def _insight_markup(row: pd.Series, brief: dict) -> str:
         f"<div class='insight-chips'>{chips}</div>"
         "<div class='insight-section'>Yang sudah terjual (laporan)</div>"
         f"{sold}"
-        "<div class='insight-section'>Yang diprediksi (Level terkini)</div>"
+        f"<div class='insight-section'>Yang diprediksi ({html.escape(brief.get('model_label', active_forecast_model()))})</div>"
         f"{pred}"
         f"<p class='insight-note'>{html.escape(brief['footnote'])}</p>"
         "<div class='insight-section'>Keputusan</div>"
@@ -3726,6 +3725,7 @@ def show_qty_forecast_board(
             yesterday_pred_map is None,
             month_ago_pred_map is None,
             None if last_month is None else last_month[0],
+            active_forecast_model(),
         )
     )
     brief_cache = st.session_state.get("_qty-briefs")
@@ -5958,7 +5958,7 @@ def _history_before(history: pd.DataFrame | None, as_of: date) -> pd.DataFrame:
 
 
 def _forecast_stock_as_of(history: pd.DataFrame | None, as_of: date, period: str, service: int) -> pd.DataFrame:
-    """Prediksi Level terkini pada satu tanggal, dari data latih sebelum tanggal itu. Rumus tidak diubah."""
+    """Prediksi (Level terkini → ensemble dengan bobot tersimpan) pada satu tanggal, dari data latih sebelum tanggal itu. Rumus tidak diubah."""
     trimmed = _history_before(history, as_of)
     if trimmed.empty:
         return frame_from_stock(None)
@@ -6071,7 +6071,7 @@ def _movement_frame(
     cached = cache.get(key)
     if isinstance(cached, pd.DataFrame):
         return cached.copy()
-    with st.spinner(f"Menghitung prediksi {format_id_date(as_of)} dari data latih. Rumus Level terkini tidak diubah."):
+    with st.spinner(f"Menghitung prediksi {format_id_date(as_of)} dari data latih. Rumus prediksi tidak diubah."):
         frame = _forecast_stock_as_of(history, as_of, period, service)
     cache[key] = frame.copy()
     while len(cache) > 8:
@@ -6700,7 +6700,7 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
     st.markdown("<div class='section-title'>Prediksi hari ini dan bulan ini</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='field-hint'>"
-        f"Prediksi {html.escape(PERIOD_SPECS[period].label)} adalah {format_number(horizon)} hari dari {html.escape(format_id_date(day))}, rumus Level terkini tidak diubah. "
+        f"Prediksi {html.escape(PERIOD_SPECS[period].label)} adalah {format_number(horizon)} hari dari {html.escape(format_id_date(day))}, rumus prediksi tidak diubah. "
         f"Prediksi sales hari ini = prediksi sales periode itu dibagi {format_number(horizon)}. "
         f"Prediksi sales bulan ini = bagian {format_number(month_days)} hari, {html.escape(format_id_date(day))} sampai {html.escape(format_id_date(month_end))}. "
         "Stok disarankan hari ini = prediksi QTY 1 hari + safety stock 1 hari. "
