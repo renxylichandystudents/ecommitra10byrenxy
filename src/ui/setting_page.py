@@ -56,7 +56,7 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
     if picked == "sku-dikecualikan":
         _excluded_tab(features, table, username)
     elif picked == "kalkulator-biaya":
-        _calculator_tab(features, table, data, username, today)
+        _calculator_tab(features, table, data, username, today, user_root=user_root)
     elif picked == "laporan-margin":
         _margin_report_tab(table, data, orders, today)
     elif picked == "kapasitas-gudang":
@@ -122,7 +122,7 @@ def _excluded_tab(features, table: pd.DataFrame, username: str) -> None:
 # ---------------------------------------------------------------- Kalkulator biaya
 
 
-def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: str, today: date) -> None:
+def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: str, today: date, *, user_root: Path | None = None) -> None:
     st.markdown("**Kalkulator biaya** · simulasi tidak menyimpan")
     st.caption("Harga jual = harga data produk terkini. Margin = harga × (1 − komisi − layanan − transaksi) − HPP − packing − iklan per unit − voucher − ongkir penjual.")
     products = product_frame(table)
@@ -154,10 +154,19 @@ def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: 
     ongkir = float(input_rupiah("Ongkir penjual", int(comp.ongkir_penjual), key=f"calc-ong-{sku}"))
     sim = margin_core.Components(hpp=hpp, komisi_pct=komisi, layanan_pct=layanan, transaksi_pct=transaksi, packing=packing, voucher=voucher, ongkir_penjual=ongkir)
     value, pct = margin_core.unit_margin(price, sim, iklan)
+    from src.core.config import load_params
+
+    margin_min = float(load_params(user_root).get("margin", {}).get("margin_min_pct", 8) or 8)
     cols = st.columns(3)
-    card(cols[0], "Margin per unit", fmt_idr(value), hint=fmt_pct(pct, 1))
-    card(cols[1], "Harga minimal margin 8%", fmt_idr(margin_core.harga_minimal(sim, iklan, 8.0)))
-    card(cols[2], "Harga minimal margin 0%", fmt_idr(margin_core.harga_minimal(sim, iklan, 0.0)))
+    if hpp <= 0:
+        # Tanpa HPP, "margin" hanya harga dikurangi biaya platform: menyesatkan bila ditampilkan sebagai margin.
+        card(cols[0], "Margin per unit", "HPP belum diisi", hint="Isi HPP untuk menghitung margin")
+        card(cols[1], f"Harga minimal margin {fmt_num(margin_min, 0)}%", "–", hint="Butuh HPP")
+        card(cols[2], "Harga minimal margin 0%", "–", hint="Butuh HPP")
+    else:
+        card(cols[0], "Margin per unit", fmt_idr(value), hint=fmt_pct(pct, 1))
+        card(cols[1], f"Harga minimal margin {fmt_num(margin_min, 0)}%", fmt_idr(margin_core.harga_minimal(sim, iklan, margin_min)), hint="Margin minimum dari Pengaturan bisnis")
+        card(cols[2], "Harga minimal margin 0%", fmt_idr(margin_core.harga_minimal(sim, iklan, 0.0)))
     show_table(margin_core.breakdown(price, sim, iklan), kinds={"Rp per unit": "money", "% harga": "pct"})
 
     st.markdown("**Unggah komponen biaya** (berperiode: baris baru menutup periode baris lama)")

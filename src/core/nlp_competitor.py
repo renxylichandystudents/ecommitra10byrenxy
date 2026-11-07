@@ -371,13 +371,20 @@ def score_name(name: str, primary_keywords: list[str], brands: list[str], *, min
     return NameScore(label, points, checks, reasons)
 
 
+# Kode tipe/model (FSA0089, LT809, YKF-403): huruf lalu angka. Dipertahankan di judul karena dicari pembeli.
+MODEL_CODE = re.compile(r"[a-z]{1,5}-?\d{2,}[a-z0-9-]*")
+WARRANTY = re.compile(r"garansi\s+\d+\s*(?:tahun|thn|bulan|bln)", re.IGNORECASE)
+
+
 def _title_case(text: str) -> str:
-    keep_upper = {"pvc", "upvc", "ppr", "hpl", "mdf", "spc", "led", "sni", "ac", "dc"}
+    keep_upper = {"pvc", "upvc", "ppr", "hpl", "mdf", "spc", "led", "sni", "ac", "dc", "wc", "sus304", "abs", "pp"}
     out = []
     for word in text.split():
         low = word.lower()
         if low in keep_upper:
             out.append(low.upper())
+        elif MODEL_CODE.fullmatch(low):
+            out.append(word.upper())
         elif SIZE_PATTERN.fullmatch(word) or any(ch.isdigit() for ch in word):
             out.append(word)
         else:
@@ -386,7 +393,8 @@ def _title_case(text: str) -> str:
 
 
 def synthesize_title(name: str, variation: str, primary: list[str], brands: list[str], *, max_len: int) -> str:
-    """[Brand] + [Jenis Produk] + [Material/Ukuran] + [Keunggulan Utama]."""
+    """[Brand] + [Jenis Produk] + [Kode tipe] + [Material/Ukuran] + [Keunggulan Utama] + [Garansi]."""
+    name, _packing = extract_packing_tag(name)  # "[INCLUDE PACKING KAYU]" bukan material produk
     low = clean_text(name)
     brand = _brand(name, brands)
     material = next((m for m in MATERIALS if re.search(rf"\b{m}\b", low)), "")
@@ -394,10 +402,14 @@ def synthesize_title(name: str, variation: str, primary: list[str], brands: list
     size = size_match.group(0) if size_match else ""
     usage = next((hint for hint in USAGE_HINTS if hint in low), "")
     used = {brand.lower(), material, size.lower(), usage}
+    model = next((w for w in tokens(name) if MODEL_CODE.fullmatch(w) and not SIZE_PATTERN.fullmatch(w) and not w.startswith("sus")), "")
+    warranty_match = WARRANTY.search(str(name))
+    warranty = warranty_match.group(0) if warranty_match else ""
+    used |= {model}
     product_words = [w for w in tokens(name) if w not in used and w not in brand.lower().split() and not SIZE_PATTERN.fullmatch(w)]
     product_type = " ".join(product_words[:4])
     keyword = next((k for k in primary if k not in low), "")
-    parts = [brand, product_type, material, size, usage, keyword]
+    parts = [brand, product_type, model, material, size, usage, keyword, warranty]
     title = _title_case(" ".join(part for part in parts if part))
     seen: set[str] = set()
     deduped = []
