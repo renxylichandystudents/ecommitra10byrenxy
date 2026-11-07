@@ -2166,12 +2166,15 @@ def save_training_exclude(value: bool) -> None:
 
 def last_run_settings() -> dict:
     """Landasan analisa terakhir; bila belum ada, semua bulan tersimpan dengan parameter bawaan."""
-    period = str(st.session_state.get("saved-period", "bulan"))
+    # Sesi baru (mis. setelah reboot) mengikuti analisa terakhir, bukan nilai bawaan, agar hasilnya tidak bergeser.
+    latest = _latest_ready_run() if "saved-period" not in st.session_state else None
+    period = str(st.session_state.get("saved-period", latest.periode if latest else "bulan"))
     keys = tuple(st.session_state.get("active-library-keys") or ()) or tuple(item["key"] for item in list_months())
+    default_service = int(latest.safety_stock) if latest else recommended_service_level(period, current_params()).pct
     return {
         "period": period,
-        "metric": str(st.session_state.get("saved-metric", "qty")),
-        "service": int(st.session_state.get("saved-service", recommended_service_level(period, current_params()).pct)),
+        "metric": str(st.session_state.get("saved-metric", latest.parameter if latest else "qty")),
+        "service": int(st.session_state.get("saved-service", default_service)),
         "keys": keys,
         "exclude": training_exclude(),
     }
