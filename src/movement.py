@@ -230,7 +230,7 @@ def setup_notes(current: dict, previous: dict) -> list[str]:
         after_label = after.label if after else str(current.get("period", ""))
         notes.append(f"Periode prediksi berubah dari {before_label} menjadi {after_label}.")
     if str(current.get("metric", "qty")) != str(previous.get("metric", "qty")):
-        names = {"qty": "QTY terjual", "sales": "Sales volume"}
+        names = {"qty": "QTY terjual", "sales": "Sales value"}
         notes.append(
             "Parameter peringkat berubah dari "
             f"{names.get(str(previous.get('metric')), 'sebelumnya')} "

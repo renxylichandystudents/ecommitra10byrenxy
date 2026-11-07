@@ -74,11 +74,11 @@ class ExcelMemoTest(unittest.TestCase):
     def test_same_frame_returns_same_bytes(self):
         from src.utils.format import excel_bytes
 
-        frame = pd.DataFrame({"SKU": ["A", "B"], "Sales volume": [1000.0, 2000.0]})
+        frame = pd.DataFrame({"SKU": ["A", "B"], "Sales value": [1000.0, 2000.0]})
         first = excel_bytes(frame)
         self.assertIs(excel_bytes(frame.copy()), first)
         changed = frame.copy()
-        changed.loc[0, "Sales volume"] = 1500.0
+        changed.loc[0, "Sales value"] = 1500.0
         self.assertIsNot(excel_bytes(changed), first)
 
 

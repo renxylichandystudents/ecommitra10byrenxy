@@ -440,7 +440,7 @@ def unpaid_buyer_table(
         "Produk",
         "Varian",
         "QTY",
-        "Sales volume",
+        "Sales value",
     ]
     empty = pd.DataFrame(columns=columns)
     if source is None or source.empty:
@@ -527,7 +527,7 @@ def unpaid_buyer_table(
                     "Produk": product,
                     "Varian": variation,
                     "QTY": int(round(float(record.qty))),
-                    "Sales volume": int(round(float(record.line_sales))),
+                    "Sales value": int(round(float(record.line_sales))),
                 }
             )
     if not rows:

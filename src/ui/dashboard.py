@@ -122,7 +122,7 @@ def show_priority_dashboard(
     card(cols[3], "Kapasitas DC", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
 
     priority = restock_priority(top, today, po=data.po)
-    basis = "Sales volume" if metric == "sales" else "QTY terjual"
+    basis = "Sales value" if metric == "sales" else "QTY terjual"
     # Insight di atas, tabel restock selebar penuh agar kolom Produk/Varian tidak terpotong.
     _insight_cards(table, priority, data, role)
     with st.container():

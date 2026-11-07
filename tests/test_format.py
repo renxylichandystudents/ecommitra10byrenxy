@@ -56,7 +56,7 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(parse_rupiah(None), 0)
 
     def test_column_kind(self):
-        self.assertEqual(column_kind("Sales volume"), "money")
+        self.assertEqual(column_kind("Sales value"), "money")
         self.assertEqual(column_kind("Biaya iklan"), "money")
         self.assertEqual(column_kind("Kontribusi invoice"), "pct")
         self.assertEqual(column_kind("ROAS"), "dec")

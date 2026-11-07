@@ -18,7 +18,7 @@ from src.core.product_features import features_from_description, hook_for
 from src.core.promo import momentum_14d, product_label, promo_eligible
 from src.ui.common import card, download_excel, fmt_idr, fmt_num
 from src.ui.feature_data import FeatureData, bump, product_frame
-from src.utils.format import input_rupiah, show_table
+from src.utils.format import input_rupiah, show_table, wrap_row_height
 
 STEP = 20
 CANDIDATE_LIMIT = 300
@@ -155,6 +155,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
     page = alloc.head(limit)
     edited = st.data_editor(
         page.drop(columns="_sku"),
+        row_height=wrap_row_height(page.drop(columns="_sku")),
         hide_index=True,
         use_container_width=True,
         disabled=["SKU · produk · varian", "Keputusan", "Budget saat ini / bulan", "ROAS marginal"],
@@ -333,7 +334,7 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
                 # Nama produk dipotong 3 baris (nama lengkap di tooltip dan di detail saat tanggal diklik).
                 lines = "".join(
                     f"<div style='font-size:var(--fs-xs);line-height:1.3;margin-top:3px;word-break:break-word'><b>{html.escape(str(item['kanal']))}</b>"
-                    f"<div title='{html.escape(str(item['label']))}' style='display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden'>"
+                    f"<div title='{html.escape(str(item['label']))}' style='overflow-wrap:anywhere'>"
                     f"{html.escape(str(item['label']))}</div></div>"
                     for item in items
                 )

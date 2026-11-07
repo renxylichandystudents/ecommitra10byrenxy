@@ -18,7 +18,7 @@ from src.core.restock import stock_out_date
 from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct, sku_cards, status_key
 from src.ui.dashboard import status_badges
 from src.ui.feature_data import FeatureData
-from src.utils.format import show_table
+from src.utils.format import show_table, table_height, wrap_row_height
 
 STEP = 20
 
@@ -98,8 +98,10 @@ def show_prediction_checklist(
         frame = frame.drop(columns="Ambil dari DC")
     shown = status_badges(frame, "Status stok")
     editor_box = st.container(key="desktop-chk-editor")
+    row_px = wrap_row_height(shown.drop(columns="_key"))
     edited = editor_box.data_editor(
         shown.drop(columns="_key"),
+        row_height=row_px,
         hide_index=True,
         use_container_width=True,
         disabled=[c for c in shown.columns if c not in ("Pilih", "_key")],
@@ -115,7 +117,7 @@ def show_prediction_checklist(
             "Status stok": st.column_config.TextColumn(width="small"),
         },
         key=f"chk-editor-{limit}-{needle}-{'|'.join(labels)}-{'|'.join(statuses)}",
-        height=min(38 + 35 * len(shown), 720),
+        height=table_height(len(shown), 720, row_px),
     )
     keys_on_page = set(frame["_key"])
     picked = (picked_before - keys_on_page) | set(frame.loc[edited["Pilih"].to_numpy(), "_key"])

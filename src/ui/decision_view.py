@@ -248,9 +248,9 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
                 "Periode": f"{group.label} · {span}",
                 "Actual pembanding": act.get("label", "-"),
                 "QTY actual": fmt_qty(qty_act),
-                "Sales volume actual": fmt_idr(sales_act),
+                "Sales value actual": fmt_idr(sales_act),
                 "Prediksi QTY": fmt_qty(view[f"{p}_qty"].sum()),
-                "Prediksi sales volume": fmt_idr(view[f"{p}_sales"].sum()),
+                "Prediksi sales value": fmt_idr(view[f"{p}_sales"].sum()),
                 "Kontribusi sales Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)}" if share_base > 0 else "-",
             }
         )

@@ -78,7 +78,7 @@ from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, sou
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
 from src.utils.format import excel_bytes as numeric_excel_bytes
-from src.utils.format import ROW_PX, drop_blank_rows, help_columns, show_table, style_frame, table_height
+from src.utils.format import drop_blank_rows, help_columns, show_table, style_frame, table_height, wrap_row_height
 from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
@@ -932,7 +932,7 @@ st.markdown(
     .qty-card { padding: 0.95rem 0.15rem 1.05rem; }
     .qty-id { text-align: left; margin-bottom: 0.45rem; }
     .qty-rank { font-weight: 800; color: #0f172a; font-size: var(--fs-base); }
-    .qty-name { color: #1e293b; font-weight: 650; line-height: 1.4; margin-top: 0.12rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .qty-name { color: #1e293b; font-weight: 650; line-height: 1.4; margin-top: 0.12rem; overflow-wrap: anywhere; }
     .qty-var { color: #94a3b8; font-size: var(--fs-sm); margin-top: 0.08rem; }
     .qty-line { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.42rem; }
     .qty-metric {
@@ -1416,7 +1416,7 @@ get_features()
 TOP_N = 50
 METRIC_LABELS = {
     "qty": "QTY terjual",
-    "sales": "Sales volume",
+    "sales": "Sales value",
 }
 ID_MONTHS = (
     "Januari",
@@ -2184,7 +2184,7 @@ def show_run_history() -> None:
             cells[0].markdown(f"{run_stamp_text(record.run_at)}{mark}")
             cells[1].markdown(html.escape(record.run_by))
             cells[2].markdown(PERIOD_LABELS.get(record.periode, record.periode))
-            cells[3].markdown("QTY terjual" if record.parameter == "qty" else "Sales volume")
+            cells[3].markdown("QTY terjual" if record.parameter == "qty" else "Sales value")
             cells[4].markdown(f"{record.safety_stock}%")
             until = data_until.get(int(record.id))
             cells[5].markdown(fmt_date_short(until) if until else "<span style='color:#94a3b8'>tidak tercatat</span>", unsafe_allow_html=True)
@@ -2576,7 +2576,7 @@ def show_prediction_inputs() -> None:
         sidebar_metric = st.radio(
             "Parameter",
             options=["qty", "sales"],
-            format_func=lambda key: "QTY terjual" if key == "qty" else "Sales volume",
+            format_func=lambda key: "QTY terjual" if key == "qty" else "Sales value",
             captions=[
                 "Peringkat dan prediksi dibaca dari jumlah unit terjual. Cocok untuk keputusan stok.",
                 "Peringkat dan prediksi dibaca dari nilai rupiah. Cocok untuk target omzet dan iklan.",
@@ -2627,7 +2627,7 @@ def show_prediction_inputs() -> None:
         summary_col.markdown(
             "<div class='field-hint'>"
             f"<b>Data latih</b> {training_months} bulan · <b>Periode</b> {PERIOD_LABELS[period]} · "
-            f"<b>Safety stock</b> {service}% · <b>Parameter</b> {'QTY terjual' if sidebar_metric == 'qty' else 'Sales volume'}"
+            f"<b>Safety stock</b> {service}% · <b>Parameter</b> {'QTY terjual' if sidebar_metric == 'qty' else 'Sales value'}"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -3699,7 +3699,7 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
 
 
 def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, today: date) -> list[dict]:
-    """Versi Rupiah dari batang QTY untuk parameter Sales volume (prediksi × harga bersih 4 minggu)."""
+    """Versi Rupiah dari batang QTY untuk parameter Sales value (prediksi × harga bersih 4 minggu)."""
     price = float(row.get("harga_bersih", 0) or 0)
     yesterday = today - timedelta(days=1)
     month_ago = _same_day_last_month(today)
@@ -3834,7 +3834,7 @@ def show_qty_forecast_board(
         keys = set(view["item_key"].astype(str))
         scoped = orders.loc[orders["item_key"].astype(str).isin(keys)]
         groups = {str(key): part for key, part in scoped.groupby(scoped["item_key"].astype(str))}
-    board_title = "Prediksi QTY terjual" if metric == "qty" else "Prediksi sales volume"
+    board_title = "Prediksi QTY terjual" if metric == "qty" else "Prediksi sales value"
     st.markdown(
         f"<div class='qty-board-head'><div class='qty-board-title'>{board_title}</div></div>",
         unsafe_allow_html=True,
@@ -4133,7 +4133,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     resume_row = st.columns(4)
     show_metric(resume_row[0], "Jumlah pesanan", format_number(summary["orders"]), hint=order_hint)
     show_metric(resume_row[1], "Produk / varian", format_number(sku_shown), hint=sku_hint)
-    show_metric(resume_row[2], "Sales bruto" if select_all else "Sales volume", format_idr(summary["sales_volume"]), hint=sales_hint)
+    show_metric(resume_row[2], "Sales bruto" if select_all else "Sales value", format_idr(summary["sales_volume"]), hint=sales_hint)
     show_metric(resume_row[3], "QTY terjual", format_qty(qty_shown))
     row_two = st.columns(4)
     metric_card(row_two[0], "pesanan_batal", format_number(summary["invoice_cancel"]))
@@ -4195,19 +4195,19 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     else:
         buyers = int((unpaid["No"].astype(str) != "").sum())
         st.caption(f"{format_number(buyers)} akun · {format_number(unpaid['No. Pesanan'].nunique())} pesanan belum dibayar. Pembeli yang punya pesanan terbayar untuk SKU yang sama pada periode ini tidak dimasukkan.")
-        unpaid_view = append_total_row(unpaid, "Nama akun pembeli", ["QTY", "Sales volume"])
-        for column in ("QTY", "Sales volume"):
+        unpaid_view = append_total_row(unpaid, "Nama akun pembeli", ["QTY", "Sales value"])
+        for column in ("QTY", "Sales value"):
             unpaid_view[column] = pd.to_numeric(unpaid_view[column], errors="coerce")
         group_no = unpaid_view["No"].astype(str).replace("", np.nan).ffill().fillna("0")
         shade = group_no.map(lambda value: int(value) % 2 == 0 if str(value).isdigit() else False)
-        styled = style_frame(unpaid_view, kinds={"QTY": "count", "Sales volume": "money"}).apply(
+        styled = style_frame(unpaid_view, kinds={"QTY": "count", "Sales value": "money"}).apply(
             lambda row: [
                 "font-weight:700" if str(row["Nama akun pembeli"]) == "Total" else ("background-color:#f8fafc" if shade.iloc[row.name] else "")
             ]
             * len(row),
             axis=1,
         )
-        st.dataframe(styled, height=table_height(len(unpaid_view)), row_height=ROW_PX, hide_index=True, use_container_width=True)
+        st.dataframe(styled, height=table_height(len(unpaid_view), 720, wrap_row_height(unpaid_view)), row_height=wrap_row_height(unpaid_view), hide_index=True, use_container_width=True)
         offer_excel(unpaid_view, "pembeli_belum_bayar.xlsx")
     show_sku_issue_section(sku_sheet, selected_label)
 
@@ -4525,8 +4525,8 @@ def safety_analysis(
         return css, f"{headline}<br>{pending}"
     if metric == "sales":
         figures = (
-            f"Pada {impact['items']} item terlaris menurut sales volume: "
-            f"prediksi sales volume {format_idr(impact['pred_sales'])} "
+            f"Pada {impact['items']} item terlaris menurut sales value: "
+            f"prediksi sales value {format_idr(impact['pred_sales'])} "
             f"({format_number(impact['pred_qty'])} unit), "
             f"stok prediksi {format_idr(impact['stok_sales'])} "
             f"({format_number(impact['stok'])} unit)."
@@ -4542,7 +4542,7 @@ def safety_analysis(
         f"prediksi QTY {format_number(impact['pred_qty'])} unit, "
         f"safety stock {format_number(impact['buffer'])} unit, "
         f"stok disarankan {format_number(impact['stok'])} unit, "
-        f"prediksi sales volume {format_idr(impact['pred_sales'])}."
+        f"prediksi sales value {format_idr(impact['pred_sales'])}."
     )
     if level != suggested:
         figures += (
@@ -4631,12 +4631,12 @@ def top_bestsellers(
 TABLE_SORTS = {
     "qty_desc": ("qty_total", False, "QTY terjual, terbesar dulu"),
     "qty_asc": ("qty_total", True, "QTY terjual, terkecil dulu"),
-    "sales_desc": ("sales_total", False, "Sales volume, terbesar dulu"),
-    "sales_asc": ("sales_total", True, "Sales volume, terkecil dulu"),
+    "sales_desc": ("sales_total", False, "Sales value, terbesar dulu"),
+    "sales_asc": ("sales_total", True, "Sales value, terkecil dulu"),
     "pred_qty_desc": ("pred_qty", False, "Prediksi QTY, terbesar dulu"),
     "pred_qty_asc": ("pred_qty", True, "Prediksi QTY, terkecil dulu"),
-    "pred_sales_desc": ("pred_sales", False, "Prediksi sales volume, terbesar dulu"),
-    "pred_sales_asc": ("pred_sales", True, "Prediksi sales volume, terkecil dulu"),
+    "pred_sales_desc": ("pred_sales", False, "Prediksi sales value, terbesar dulu"),
+    "pred_sales_asc": ("pred_sales", True, "Prediksi sales value, terkecil dulu"),
     "stok_desc": ("stok_disarankan", False, "Stok disarankan, terbesar dulu"),
     "stok_asc": ("stok_disarankan", True, "Stok disarankan, terkecil dulu"),
 }
@@ -4711,12 +4711,12 @@ def leaderboard_frame(view: pd.DataFrame, period: str) -> pd.DataFrame:
             "Varian": view["variasi_tampil"].map(lambda value: _clean_product_piece(value, "Tanpa variasi")),
             "Peringkat": view["peringkat"].astype(int),
             "QTY terjual": view["qty_total"].astype(int),
-            "Sales volume": view["sales_total"].round().astype(int),
+            "Sales value": view["sales_total"].round().astype(int),
             "Prediksi sales hari ini": view["pred_sales_hari"].astype(int) if "pred_sales_hari" in view.columns else 0,
             f"Prediksi sales bulan ini ({month_days} hari)": view["pred_sales_bulan"].astype(int) if "pred_sales_bulan" in view.columns else 0,
             "Stok disarankan bulan ini": view["stok_bulan"].astype(int) if "stok_bulan" in view.columns else view["stok_disarankan"].astype(int),
             f"Prediksi QTY ({period_name})": view["pred_qty"].astype(int),
-            f"Prediksi sales volume ({period_name})": view["pred_sales"].round().astype(int),
+            f"Prediksi sales value ({period_name})": view["pred_sales"].round().astype(int),
             f"Safety stock ({period_name})": view["safety_stock"].astype(int),
             f"Stok disarankan ({period_name})": view["stok_disarankan"].astype(int),
         }
@@ -5157,7 +5157,7 @@ def sales_qty_chart(
     qty: np.ndarray,
     title: str,
 ) -> go.Figure:
-    """Batang sales volume dan garis QTY pada sumbu kanan."""
+    """Batang sales value dan garis QTY pada sumbu kanan."""
     sales_series = np.asarray(sales, dtype=float)
     qty_series = np.asarray(qty, dtype=float)
     fig = go.Figure()
@@ -5168,7 +5168,7 @@ def sales_qty_chart(
     qty_hover = [format_number(value, 0) for value in qty_series]
     fig.add_trace(
         go.Bar(
-            name="Sales volume",
+            name="Sales value",
             x=list(labels),
             y=sales_series,
             marker_color="#F58518",
@@ -5207,7 +5207,7 @@ def sales_qty_chart(
     qty_upper = max(qty_peak * 1.48, (qty_ticks[-1] * 1.2) if qty_ticks else qty_peak)
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        yaxis_title="Sales volume (Rp)",
+        yaxis_title="Sales value (Rp)",
         yaxis2=dict(
             title=dict(text="QTY", font=dict(size=14, color="#1e3a8a")),
             overlaying="y",
@@ -5262,8 +5262,8 @@ def sales_drop_note(
 def daily_actual_chart(scope_orders: pd.DataFrame, scope_label: str, value: str) -> go.Figure:
     del scope_label
     money = value == "sales"
-    title = "Sales volume actual per hari" if money else "QTY actual per hari"
-    axis = "Sales volume (Rp)" if money else "QTY"
+    title = "Sales value actual per hari" if money else "QTY actual per hari"
+    axis = "Sales value (Rp)" if money else "QTY"
     fig = go.Figure()
     if scope_orders.empty:
         fig.update_layout(title=title)
@@ -5485,7 +5485,7 @@ def ranked_horizontal_chart(view: pd.DataFrame, value_col: str, title: str) -> g
     )
     fig.update_layout(
         title=dict(text=title, font=dict(size=16)),
-        xaxis_title="Sales volume (Rp)" if money else "QTY",
+        xaxis_title="Sales value (Rp)" if money else "QTY",
         yaxis_title="",
     )
     fig.update_yaxes(automargin=True, tickfont=dict(size=12, color="#1f2937"))
@@ -6697,7 +6697,7 @@ def show_analysis_movement(
     prior = _period_totals(prior_frame, list(focus_keys) or keys, period=period_key, day=today, orders=orders)
     st.markdown("<div class='section-title'>Pergerakan dari analisa sebelumnya</div>", unsafe_allow_html=True)
     st.markdown(
-        f"<div class='field-hint'>Parameter {'QTY terjual' if metric == 'qty' else 'Sales volume'} · "
+        f"<div class='field-hint'>Parameter {'QTY terjual' if metric == 'qty' else 'Sales value'} · "
         f"safety stock {int(current_meta.get('service', service) or 0)}% · dibanding prediksi kemarin, "
         f"{html.escape(format_id_date(yesterday))}, untuk {format_number(len(focus_keys))} SKU Top 50 yang sama "
         "(dihitung ulang dari data latih s.d. sehari sebelumnya dengan parameter yang sama).</div>",
@@ -6892,7 +6892,7 @@ def enriched_catalog(
 
 
 def priority_top10(view: pd.DataFrame) -> pd.DataFrame:
-    """Sepuluh SKU yang QTY terjual dan sales volume-nya sama-sama besar."""
+    """Sepuluh SKU yang QTY terjual dan sales value-nya sama-sama besar."""
     if view is None or view.empty:
         return view.iloc[0:0].copy() if isinstance(view, pd.DataFrame) else pd.DataFrame()
     work = view.loc[(view["qty_total"] > 0) & (view["sales_total"] > 0)].copy()
@@ -6948,7 +6948,7 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
     )
     top = priority_top10(ready)
     if top.empty:
-        st.write("Belum ada SKU yang punya QTY terjual dan sales volume sekaligus.")
+        st.write("Belum ada SKU yang punya QTY terjual dan sales value sekaligus.")
         return
     display = leaderboard_frame(top, period)
     scroll_table(display, max_height=520)
@@ -7059,7 +7059,7 @@ with PAGE_ROOT.container(key="page-root"):
             stored_meta = st.session_state.get("analysis", {})
             shown_period = str(stored_meta.get("period", period))
             shown_start, shown_end, _shown_text = forecast_window(shown_period, today)
-            shown_metric = "QTY terjual" if stored_meta.get("metric", sidebar_metric) == "qty" else "Sales volume"
+            shown_metric = "QTY terjual" if stored_meta.get("metric", sidebar_metric) == "qty" else "Sales value"
             date_col, period_col = st.columns([1, 2.2])
             show_metric(date_col, "Tanggal hari ini", format_id_date(today))
             period_col.markdown(

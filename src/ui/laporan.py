@@ -221,7 +221,7 @@ def show_report(
     st.markdown(
         _chip(f"Periode prediksi: {PERIOD_LABELS[period]}")
         + _chip(f"Prediksi: {fmt_date(window_start, short=True)} – {fmt_date(window_end)}")
-        + _chip(f"Parameter: {'QTY terjual' if metric == 'qty' else 'Sales volume'}")
+        + _chip(f"Parameter: {'QTY terjual' if metric == 'qty' else 'Sales value'}")
         + _chip(f"Safety stock: {service}%")
         + _chip("Kecualikan batal & retur: aktif" if exclude else "Kecualikan batal & retur: nonaktif"),
         unsafe_allow_html=True,

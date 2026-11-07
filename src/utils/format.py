@@ -112,8 +112,34 @@ def formatter_for(kind: str, series: pd.Series):
     return angka if integral else desimal
 
 
-def table_height(rows: int, max_height: int = 600) -> int:
-    return int(min(max_height, (max(int(rows), 0) + 1) * ROW_PX + 3))
+def table_height(rows: int, max_height: int = 600, row_px: int = ROW_PX) -> int:
+    rows = max(int(rows), 0)
+    return int(min(max(max_height, row_px * 2 + ROW_PX), ROW_PX + rows * row_px + 3))
+
+
+WRAP_CHARS = 42  # perkiraan huruf per baris pada kolom teks lebar
+LINE_PX = 21
+
+
+def wrap_row_height(frame: pd.DataFrame) -> int:
+    """Tinggi baris agar teks panjang tampil utuh (dibungkus), bukan terpotong "…".
+
+    st.dataframe (Streamlit 1.50) hanya membungkus teks bila row_height > 64 px, jadi tabel berisi
+    teks panjang mendapat 3–6 baris teks per sel; tabel angka tetap ROW_PX.
+    """
+    if frame is None or frame.empty:
+        return ROW_PX
+    longest = 0
+    for column in frame.columns:
+        series = frame[column]
+        if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+            continue
+        sample = series.head(300).astype(str)
+        longest = max(longest, int(sample.str.len().max() or 0))
+    if longest <= WRAP_CHARS:
+        return ROW_PX
+    lines = min(6, max(3, -(-longest // WRAP_CHARS)))
+    return lines * LINE_PX + 4
 
 
 BLANK_CELLS = {"", "-", "–", "—", "nan", "none", "nat", "<na>"}
@@ -206,10 +232,13 @@ def show_table(
     config = dict(column_config or {})
     preformatted = [name for name, cfg in config.items() if _has_own_format(cfg)]
     data = style_frame(frame, kinds=kinds, skip=preformatted, bold_label=bold_label) if styled else frame
+    row_px = kwargs.pop("row_height", None) or wrap_row_height(frame)
+    if row_px > ROW_PX:
+        max_height = max(max_height, 720)
     return st.dataframe(
         data,
-        height=table_height(len(frame), max_height),
-        row_height=ROW_PX,
+        height=table_height(len(frame), max_height, row_px),
+        row_height=row_px,
         hide_index=kwargs.pop("hide_index", True),
         use_container_width=kwargs.pop("use_container_width", True),
         column_config=config or None,
