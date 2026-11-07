@@ -116,6 +116,11 @@ def badge(text: str, tone: str = "neutral") -> str:
     )
 
 
+def _keep_rp(value: str) -> str:
+    """ "Rp" tidak terpisah baris dari angkanya di kartu sempit."""
+    return str(value).replace("Rp ", "Rp&nbsp;")
+
+
 def card(column, label: str, value: str, *, hint: str | None = None, tone: str | None = None) -> None:
     style = ""
     if tone == "extra":
@@ -125,7 +130,7 @@ def card(column, label: str, value: str, *, hint: str | None = None, tone: str |
     hint_html = f"<div class='metric-hint'>{hint}</div>" if hint else ""
     column.markdown(
         f"<div class='stat-card' style='{style}'><div class='readable-metric-label'>{html.escape(label)}</div>"
-        f"<div class='readable-metric-value'>{value}</div>{hint_html}</div>",
+        f"<div class='readable-metric-value'>{_keep_rp(value)}</div>{hint_html}</div>",
         unsafe_allow_html=True,
     )
 
@@ -145,7 +150,7 @@ def metric_card(column, key: str, value: str, *, hint: str | None = None, tone: 
     hint_html = f"<div class='metric-hint'>{hint}</div>" if hint else ""
     column.markdown(
         f"<div class='stat-card' style='{style}'><div class='readable-metric-label'>{name}{info}</div>"
-        f"<div class='readable-metric-value'>{value}</div>{hint_html}</div>",
+        f"<div class='readable-metric-value'>{_keep_rp(value)}</div>{hint_html}</div>",
         unsafe_allow_html=True,
     )
 

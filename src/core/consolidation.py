@@ -22,6 +22,17 @@ def _date_range(frame: pd.DataFrame, fields: tuple[str, ...]) -> str:
     return "-"
 
 
+def _shopee_header(spec, name: str) -> str:
+    """Nama kolom internal (order_id) → nama kolom di laporan Shopee (No. Pesanan) untuk tampilan."""
+    aliases = spec.aliases.get(name) or ()
+    if not aliases:
+        return name
+    label = " ".join(word.capitalize() if not word.isupper() else word for word in str(aliases[0]).split())
+    for short in ("Sku", "Id", "Roas", "Ctr", "Gmv", "Dc"):
+        label = label.replace(short, short.upper()) if label.split().count(short) else label
+    return label
+
+
 def _source_summary_row(source_key: str, frame: pd.DataFrame) -> dict[str, object]:
     spec = SOURCE_SPECS[source_key]
     report = validation_report(frame, spec)
@@ -30,8 +41,8 @@ def _source_summary_row(source_key: str, frame: pd.DataFrame) -> dict[str, objec
         "Status": report["status"],
         "Cakupan tanggal": _date_range(frame, spec.date_fields),
         "Jumlah baris": int(len(frame)),
-        "Kolom wajib terbaca": ", ".join(report["found_required"]) or "-",
-        "Kolom wajib hilang": ", ".join(report["missing_required"]) or "-",
+        "Kolom wajib terbaca": ", ".join(_shopee_header(spec, name) for name in report["found_required"]) or "-",
+        "Kolom wajib hilang": ", ".join(_shopee_header(spec, name) for name in report["missing_required"]) or "-",
         "Kegunaan": spec.utility,
     }
 

@@ -231,7 +231,11 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date) -> N
             skipped.append({"SKU · produk · varian": _label(row), "Alasan": "Kuota ≤ 0 setelah SS dan kebutuhan 7 hari"})
             continue
         candidates.append({"sku": sku, "label": _label(row), "kuota": quota, "kuota_setelah_po": quota_po, "harga": price, "harga_flash": flash, "skor": float(row["m_sales"])})
-    st.caption("Diskon awal 10%; harga flash tidak di bawah harga minimal margin 0. Kuota = min(stok − SS − prediksi harian × 7, 10% prediksi jendela). Slot 2 jam di tanggal kembar, gajian (25), dan Harbolnas; maks. 2 SKU per slot; SKU sama tidak dua kali dalam 7 hari.")
+    st.caption(
+        "Diskon awal 10%, tidak di bawah harga impas. Slot 2 jam di tanggal kembar, gajian (25), dan Harbolnas; maks. 2 SKU per slot; "
+        "SKU yang sama tidak dua kali dalam 7 hari. Hanya SKU dengan stok sisa (setelah SS dan kebutuhan 7 hari) yang dijadwalkan.",
+        help="Kuota = min(stok − SS − prediksi harian × 7, 10% prediksi jendela). Daftar SKU yang tidak dijadwalkan beserta alasannya ada di bawah tabel.",
+    )
     po_eta = {sku: po["eta"] for sku, po in data.po.items() if po.get("eta")}
     schedule = promo_calendar.schedule_flash(pd.DataFrame(candidates, columns=["sku", "label", "kuota", "kuota_setelah_po", "harga", "harga_flash", "skor"]), today, po_eta=po_eta)
     if schedule.empty:
@@ -303,7 +307,10 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
         plan = promo_calendar.exposure_calendar(_ranked_for_exposure(table, data, orders, today), year, month, slots=slots)
         source = "Usulan sistem"
     st.markdown(f"**{_month_name(month)} {year}** · {source}")
-    st.caption("Prioritas = prediksi sales jendela × margin × (1 + momentum 14 hari). Tanggal round(k × jarak) mulai tanggal 3, maks. 2 SKU per hari, SKU sama berjarak ≥ 5 hari; tanggal spesial diisi SKU prioritas tertinggi. Kanal bergilir per kategori.")
+    st.caption(
+        "Maks. 2 SKU per hari; SKU yang sama berjarak minimal 5 hari; tanggal spesial diisi SKU prioritas tertinggi. Klik tanggal untuk detail.",
+        help="Prioritas = prediksi sales jendela × margin × (1 + momentum 14 hari). Tanggal round(k × jarak) mulai tanggal 3. Kanal bergilir per kategori.",
+    )
     by_day: dict[date, list[dict]] = {}
     for _, row in plan.iterrows():
         by_day.setdefault(pd.Timestamp(row["tanggal"]).date(), []).append(row.to_dict())
@@ -323,8 +330,11 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
                 if st.button(f"{day.day}{mark}", key=f"expo-d-{day.isoformat()}", use_container_width=True, type="primary" if picked == day.isoformat() else "secondary", disabled=not items):
                     st.session_state["expo-day"] = day.isoformat()
                     st.rerun()
+                # Nama produk dipotong 3 baris (nama lengkap di tooltip dan di detail saat tanggal diklik).
                 lines = "".join(
-                    f"<div style='font-size:var(--fs-xs);line-height:1.3;margin-top:3px;word-break:break-word'><b>{html.escape(str(item['kanal']))}</b><br>{html.escape(str(item['label']))}</div>"
+                    f"<div style='font-size:var(--fs-xs);line-height:1.3;margin-top:3px;word-break:break-word'><b>{html.escape(str(item['kanal']))}</b>"
+                    f"<div title='{html.escape(str(item['label']))}' style='display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden'>"
+                    f"{html.escape(str(item['label']))}</div></div>"
                     for item in items
                 )
                 special = next((item.get("spesial") for item in items if item.get("spesial")), "")
@@ -450,8 +460,13 @@ def show_ranking(table: pd.DataFrame, *, features, frames, username: str, can_ed
         item["Langkah prioritas"] = ", ".join(ranking_score.priority_steps(scores, float(row.get("sales_total", 0) or 0)))
         rows.append(item)
     frame = pd.DataFrame(rows)
+    # Kolom faktor yang seluruhnya "–" (belum ada data) disembunyikan dari tampilan; tetap ada di unduhan Excel.
+    empty_cols = [c for c in frame.columns if c not in {"SKU", "Produk", "Varian", "Skor", "Langkah prioritas"} and frame[c].astype(str).eq("–").all()]
+    shown = frame.drop(columns=empty_cols)
+    if empty_cols:
+        st.caption("Belum ada datanya, jadi tidak ditampilkan: " + ", ".join(empty_cols) + ".")
     limit = int(st.session_state.get("rank-limit", STEP))
-    show_table(frame.head(limit), column_config={"Langkah prioritas": st.column_config.TextColumn(width="large")})
+    show_table(shown.head(limit), column_config={"Langkah prioritas": st.column_config.TextColumn(width="large")})
     if limit < len(frame) and st.button("Muat 20 SKU lagi", key="rank-more"):
         st.session_state["rank-limit"] = limit + STEP
         st.rerun()
