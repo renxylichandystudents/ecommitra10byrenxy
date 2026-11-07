@@ -5834,6 +5834,7 @@ def scroll_table(frame: pd.DataFrame, *, max_height: int | None = 680, format_nu
     )
 
 
+MOVEMENT_STEP = 5
 _TOP50_TABLE = components.declare_component("top50_table", path=str(ROOT / "components" / "top50_table"))
 
 
@@ -6781,9 +6782,22 @@ def _render_movement_board(
             }
         )
     records = [item for item in records if _prediction_moved(item)]
-    records.sort(key=lambda item: (-abs(item["move_qty"]), item["rank"], item["sku"]))
     if not records:
         return pd.DataFrame()
+    # Prioritas omzet: besar perubahan prediksi bulan dalam sales value (Rp) dan QTY, keduanya diskalakan 0–1
+    # terhadap perubahan terbesar lalu dirata-rata; seri dipecah oleh perubahan hari ini lalu Rank.
+    def _scaled(values: list[float]) -> list[float]:
+        top = max(values) if values else 0.0
+        return [value / top if top > 0 else 0.0 for value in values]
+
+    sales_moves = _scaled([abs(item["sales_month_now"] - item["sales_month_then"]) for item in records])
+    qty_moves = _scaled([abs(item["qty_month_now"] - item["qty_month_then"]) for item in records])
+    day_sales = _scaled([abs(item["sales_day_now"] - item["sales_day_then"]) for item in records])
+    day_qty = _scaled([abs(item["qty_day_now"] - item["qty_day_then"]) for item in records])
+    for item, a, b, c, d in zip(records, sales_moves, qty_moves, day_sales, day_qty):
+        item["_impact"] = 0.5 * a + 0.5 * b
+        item["_impact_day"] = 0.5 * c + 0.5 * d
+    records.sort(key=lambda item: (-item["_impact"], -item["_impact_day"], item["rank"], item["sku"]))
 
     month_label = format_period_label("prediksi", today)
     g_day, g_month, g_sold = "Prediksi hari ini", month_label, "Penjualan"
@@ -6908,7 +6922,15 @@ def _render_movement_board(
         "sold_sales": money_cell(total("sold_sales")),
         "sold_qty": qty_cell(total("sold_qty"), None),
     }
-    _TOP50_TABLE(columns=columns, rows=rows, total=total_row, selected="", height=620, sort="", key="movement-top50", default="")
+    limit = max(MOVEMENT_STEP, int(st.session_state.get("movement-limit", MOVEMENT_STEP)))
+    shown = rows[:limit]
+    _TOP50_TABLE(columns=columns, rows=shown, total=total_row, selected="", height=620, sort="", key="movement-top50", default="")
+    rest = len(rows) - len(shown)
+    if rest > 0:
+        more_col, _gap = st.columns([1, 3])
+        if more_col.button(f"Muat {min(MOVEMENT_STEP, rest)} SKU lagi (sisa {rest})", key="movement-more", use_container_width=True):
+            st.session_state["movement-limit"] = limit + MOVEMENT_STEP
+            st.rerun()
     return pd.DataFrame(export_rows)
 
 
@@ -7054,7 +7076,8 @@ def show_analysis_movement(
     explain(
         [
             "SKU Top 50 yang prediksinya berubah pada rentang tanggal yang dipilih.",
-            ("Urutan", "perubahan prediksi QTY terbesar (naik/turun) lebih dulu, lalu Rank"),
+            ("Urutan", "dampak ke omzet terbesar lebih dulu: gabungan besar perubahan prediksi bulan dalam sales value (Rp) dan QTY, naik maupun turun"),
+            ("Tampilan", "5 SKU teratas; klik Muat SKU lagi untuk menambah 5 baris. Unduh Excel berisi semua SKU"),
             ("Angka kecil di sel", "besar perubahan: ▲ naik, ▼ turun"),
             ("Stok Site 10062 / 10036 · Ambil dari DC", "bila stok Site 10037 kurang, cek apakah DC bisa memenuhi sebelum PO"),
             ("Kolom", "klik judul untuk mengurutkan, geser judul untuk memindah, tarik tepi judul untuk mengubah lebar"),
@@ -7072,6 +7095,9 @@ def show_analysis_movement(
     end_day = _as_date(
         pick_end.date_input("Sampai", min_value=earliest, max_value=today, format="DD/MM/YYYY", key="movement-date-to")
     ) or today
+    if st.session_state.get("movement-limit-for") != (start_day, end_day):
+        st.session_state["movement-limit-for"] = (start_day, end_day)
+        st.session_state["movement-limit"] = MOVEMENT_STEP
     locked = frame_from_stock(stock)
     start_frame = _movement_frame(start_day, **frame_args)
     end_frame = locked if end_day == today else _movement_frame(end_day, **frame_args)
