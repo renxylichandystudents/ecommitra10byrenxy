@@ -49,6 +49,7 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 ## Revisi 7 Nov malam
 
 - Periode Kuartal/Semester/Tahun mengikuti kalender (Kuartal I–IV = Jan–Mar … Okt–Des, Semester 1 = Jan–Jun, Semester 2 = Jul–Des); jendela prediksi = hari ini s.d. akhir periode kalender; pembanding = periode kalender sebelumnya. Bulan tetap 30 hari ke depan. `src/core/periods.py`.
+- **Akar prediksi berubah-ubah (terbukti di data live 6 Nov):** saklar "Kecualikan batal & retur" ikut berpindah saat membuka analisa lama, lalu Jalankan analisa berikutnya mewarisinya (11:32 OFF = 427 unit/hari, 11:50 ON = 341 unit/hari, sidik data sama). Sekarang setelan data latih disimpan di Pengaturan bisnis (`analisa.kecualikan_batal_retur`), dipakai semua analisa baru, dan ditampilkan di Beranda; membuka analisa lama hanya mengubah tampilan.
 - Konsistensi prediksi: diuji 4 kali (2× jalankan, 2× buka) dan di 2 proses dengan PYTHONHASHSEED berbeda → identik (830 SKU). Ditambah seed tetap + LightGBM deterministic, TZ selalu WIB, dan kolom Sidik data + Prediksi/hari di Riwayat analisa (⚠️ bila analisa dengan data/parameter/tanggal sama berbeda).
 - Deskripsi selebar halaman (max-width seragam), tinggi baris tabel hanya naik bila teks > 90 huruf.
 - Menu upload dikelompokkan (Penjualan, Iklan, Stok, Produk); "✓ Siap" hanya untuk menu yang diunggah & disimpan di sesi ini, lainnya "tersimpan dd/mm/yyyy".

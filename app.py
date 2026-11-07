@@ -43,7 +43,7 @@ from src.aggregate import (
     period_label,
     period_start,
 )
-from src.core.config import changed_from_default, load_params
+from src.core.config import changed_from_default, load_params, save_params
 from src.core.consolidation import consolidation_summary
 from src.core.decision_table import PERIOD_LABELS, build_decision_table, lama_kosong_text, period_actuals, period_groups, whole_units
 from src.core.enrich import StoreFrames, enrich_catalog, load_store_frames, zero_since_map
@@ -2108,6 +2108,14 @@ def show_homepage() -> None:
         if may_run and run_col.button("Jalankan analisa", type="primary", use_container_width=True, key="home-run"):
             request_analysis_run(**last_run_settings())
             st.rerun()
+        if may_run:
+            nxt = last_run_settings()
+            st.caption(
+                f"Jalankan analisa memakai: periode {PERIOD_LABELS.get(nxt['period'], nxt['period'])} · "
+                f"{'QTY terjual' if nxt['metric'] == 'qty' else 'Sales value'} · SS {nxt['service']}% · "
+                f"kecualikan batal & retur: {'Ya' if nxt['exclude'] else 'Tidak'} · {len(nxt['keys'])} bulan data latih. "
+                "Ubah lewat Ubah data latih."
+            )
         if may_run and train_col.button("Ubah data latih", use_container_width=True, key="home-train"):
             st.session_state["active-feature"] = FEATURE_ID
             st.session_state["editing-input"] = True
@@ -2137,6 +2145,25 @@ def current_data_hash(keys) -> str:
     return value
 
 
+def training_exclude() -> bool:
+    """Setelan data latih "Kecualikan batal & retur" untuk analisa BARU: tersimpan di Pengaturan bisnis,
+    tidak ikut berubah saat membuka analisa lama atau menggeser saklar tampilan di halaman hasil."""
+    saved = (current_params().get("analisa") or {}).get("kecualikan_batal_retur")
+    if saved is not None:
+        return bool(saved)
+    latest = _latest_ready_run()
+    return bool(latest.exclude_batal_retur) if latest is not None else False
+
+
+def save_training_exclude(value: bool) -> None:
+    params = load_params(USER_ROOT)
+    section = dict(params.get("analisa") or {})
+    if section.get("kecualikan_batal_retur") == bool(value):
+        return
+    section["kecualikan_batal_retur"] = bool(value)
+    save_params({**params, "analisa": section}, USER_ROOT)
+
+
 def last_run_settings() -> dict:
     """Landasan analisa terakhir; bila belum ada, semua bulan tersimpan dengan parameter bawaan."""
     period = str(st.session_state.get("saved-period", "bulan"))
@@ -2146,7 +2173,7 @@ def last_run_settings() -> dict:
         "metric": str(st.session_state.get("saved-metric", "qty")),
         "service": int(st.session_state.get("saved-service", recommended_service_level(period, current_params()).pct)),
         "keys": keys,
-        "exclude": bool(st.session_state.get("exclude-return-batal", st.session_state.get("exclude_applied", False))),
+        "exclude": training_exclude(),
     }
 
 
@@ -2164,6 +2191,9 @@ def request_analysis_run(*, period: str, metric: str, service: int, keys, exclud
     st.session_state["saved-service"] = int(service)
     st.session_state["saved-source-key"] = "library:" + ",".join(keys)
     st.session_state["active-library-keys"] = keys
+    # Analisa memakai setelan data latih yang diminta, bukan posisi saklar tampilan dari analisa yang terakhir dibuka.
+    st.session_state["exclude-return-batal"] = bool(exclude)
+    st.session_state["exclude_applied"] = bool(exclude)
     st.session_state["analysis-config"] = {
         "training_months": len(keys) if training_months is None else training_months,
         "period": period,
@@ -2240,8 +2270,7 @@ def open_saved_run(run_id: int, *, navigate: bool = True) -> bool:
     st.session_state["saved-service"] = int(result.get("service", record.safety_stock))
     st.session_state["saved-source-key"] = str(result.get("source_key") or "library:" + ",".join(keys))
     st.session_state["active-library-keys"] = keys
-    st.session_state["exclude-return-batal"] = exclude
-    st.session_state["exclude_applied"] = exclude
+    st.session_state["exclude-return-batal"] = exclude  # tampilan hasil mengikuti analisa yang dibuka
     st.session_state["editing-input"] = False
     st.session_state["run-origin"] = {"id": record.id, "run_at": record.run_at, "run_by": record.run_by}
     if navigate:
@@ -2343,7 +2372,7 @@ def show_run_history() -> None:
     for record in runs:
         if record.id in totals:
             key = (record.data_hash, record.periode, record.parameter, record.safety_stock, record.exclude_batal_retur, str(record.run_at)[:10])
-            groups.setdefault(key, set()).add(int(round(totals[record.id])))
+            groups.setdefault(key, set()).add(float(totals[record.id]))
     widths = [1.5, 0.9, 0.8, 0.95, 0.5, 0.9, 0.75, 1.0, 0.75, 0.75] + ([0.75] if can_delete else [])
     headers = ["Tanggal & jam", "Oleh", "Periode", "Parameter", "SS", "Data s.d.", "Sidik data", "Prediksi/hari", "Status", ""] + ([""] if can_delete else [])
     with st.container(border=True, height=min(80 + 46 * len(runs), 520), key="run-history"):
@@ -2355,14 +2384,16 @@ def show_run_history() -> None:
             cells[0].markdown(f"{run_stamp_text(record.run_at)}{mark}")
             cells[1].markdown(html.escape(record.run_by))
             cells[2].markdown(PERIOD_LABELS.get(record.periode, record.periode))
-            cells[3].markdown("QTY terjual" if record.parameter == "qty" else "Sales value")
+            cells[3].markdown(("QTY terjual" if record.parameter == "qty" else "Sales value") + (" · tanpa batal/retur" if record.exclude_batal_retur else ""))
             cells[4].markdown(f"{record.safety_stock}%")
             until = data_until.get(int(record.id))
             cells[5].markdown(fmt_date_short(until) if until else "<span style='color:#94a3b8'>tidak tercatat</span>", unsafe_allow_html=True)
             cells[6].markdown(f"<code>{html.escape(str(record.data_hash or '')[:6]) or '–'}</code>", unsafe_allow_html=True, help="6 karakter pertama sidik isi data latih. Sama = data latih identik.")
             total = totals.get(record.id)
             key = (record.data_hash, record.periode, record.parameter, record.safety_stock, record.exclude_batal_retur, str(record.run_at)[:10])
-            differs = total is not None and len(groups.get(key, set())) > 1
+            values = groups.get(key, set())
+            # Beda > 0,5% dianggap tidak konsisten (pembulatan kecil antar-versi diabaikan).
+            differs = total is not None and len(values) > 1 and (max(values) - min(values)) > 0.005 * max(max(values), 1.0)
             cells[7].markdown(
                 ("–" if total is None else f"{format_number(total, 0)} unit") + (" ⚠️" if differs else ""),
                 help=("Total prediksi QTY per hari (semua SKU). " + ("Berbeda dengan analisa lain yang data, parameter, dan tanggalnya sama." if differs else "Analisa dengan sidik data, parameter, dan tanggal yang sama harus bernilai sama.")),
@@ -2823,7 +2854,7 @@ def show_prediction_inputs() -> None:
                 metric=sidebar_metric,
                 service=int(service),
                 keys=st.session_state.get("active-library-keys", tuple()),
-                exclude=bool(st.session_state.get("exclude-return-batal", st.session_state.get("exclude_applied", False))),
+                exclude=bool(st.session_state.get("train-exclude", training_exclude())),
                 training_months=training_months,
                 service_recommended=rec.pct,
             )
@@ -6145,11 +6176,12 @@ def filter_resume_orders(
         if start > end:
             start, end = end, start
         if show_exclude:
-            if "exclude-return-batal" not in st.session_state:
-                st.session_state["exclude-return-batal"] = bool(st.session_state.get("exclude_applied", False))
-            st.checkbox("Kecualikan batal & retur", key="exclude-return-batal")
+            if "train-exclude" not in st.session_state:
+                st.session_state["train-exclude"] = training_exclude()
+            st.checkbox("Kecualikan batal & retur", key="train-exclude", on_change=lambda: save_training_exclude(bool(st.session_state.get("train-exclude"))))
             st.markdown(
-                "<div class='field-hint'>Mengurangi pesanan batal dan unit retur pada angka penjualan, Top 50, dan Prediksi & stok.</div>",
+                "<div class='field-hint'>Setelan data latih untuk setiap analisa baru (tersimpan). Mengurangi pesanan batal dan unit retur "
+                "pada data latih, sehingga prediksi memakai permintaan bersih. Membuka analisa lama tidak mengubah setelan ini.</div>",
                 unsafe_allow_html=True,
             )
         st.session_state[years_state] = checked_years
