@@ -488,7 +488,8 @@ def sku_charts(
     def stock_projection(pred_series: np.ndarray, base: float) -> tuple[np.ndarray, str | None]:
         mask = np.array([d >= pd.Timestamp(today) for d in days]) if len(pred_series) == len(days) else np.ones(len(pred_series), bool)
         cumulative = np.cumsum(np.where(mask, pred_series, 0.0))
-        line = base - cumulative
+        # Stok snapshot berlaku mulai hari ini: hari sebelumnya tidak digambar (bukan stok historis).
+        line = np.where(mask, base - cumulative, np.nan)
         out = next((i for i, v in enumerate(line) if mask[i] and v <= 0), None)
         return line, out
 
@@ -505,19 +506,7 @@ def sku_charts(
             _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah"),
             use_container_width=True, key=f"{key}-sales",
         )
-    chips = st.columns(4)
-    card(chips[0], "Terjual bulan ini", f"{fmt_qty(sold.sum())} unit", hint=fmt_idr(sold_sales.sum()))
-    card(chips[1], "Prediksi bulan ini", f"{fmt_qty(row['m_qty'])} unit", hint=fmt_idr(row["m_sales"]))
-    card(chips[2], "Safety stock", f"{fmt_qty(ss)} unit", hint=fmt_idr(ss * price))
-    if has_stock:
-        gap = float(row["m_selisih"])
-        card(chips[3], "Stok Site 10037", f"{fmt_qty(stok)} unit", hint=(f"kurang {fmt_qty(-gap)} unit" if gap < 0 else f"lebih {fmt_qty(gap)} unit") + " dari kebutuhan", tone="stock")
-        dc_parts = [f"Site {code}: {fmt_qty(row[f'stok_{code}'])} unit" for code in ("10062", "10036") if pd.notna(row.get(f"stok_{code}", np.nan))]
-        transfer = str(row.get("sumber_restock") or "")
-        if dc_parts or transfer:
-            st.caption("Stok DC · " + " · ".join(dc_parts) + (f" — {transfer}" if transfer else ""))
-    else:
-        card(chips[3], "Stok Site 10037", "-", hint="Unggah Data stok Site 10037 untuk proyeksi sisa stok", tone="stock")
+    _sku_summary(row, today=today, month_end=month_end, sold=sold, sold_sales=sold_sales, pred=pred, pred_sales=pred_sales, qty_line=qty_line, days=days)
 
     if period == "bulan":
         return
@@ -556,6 +545,139 @@ def sku_charts(
     if has_stock:
         gap = float(row["p_selisih"])
         card(chips[2], "Stok vs kebutuhan", (f"kurang {fmt_qty(-gap)}" if gap < 0 else f"lebih {fmt_qty(gap)}") + " unit", tone="stock")
+
+
+def _sku_summary(
+    row: pd.Series,
+    *,
+    today: date,
+    month_end: date,
+    sold: pd.Series,
+    sold_sales: pd.Series,
+    pred: pd.Series,
+    pred_sales: pd.Series,
+    qty_line: np.ndarray | None,
+    days: pd.DatetimeIndex,
+) -> None:
+    """Kartu di bawah grafik SKU: penjualan, prediksi, stok Site 10037/10062/10036, rencana, dan catatan analisa."""
+    month_start = date(today.year, today.month, 1)
+    yesterday = (pd.Timestamp(today) - pd.Timedelta(days=1)).date()
+    sold_days = max((today - month_start).days, 0)
+    window_lo, window_hi = prediction_window("bulan", today)
+    price = float(row.get("harga_bersih", 0) or 0)
+    ss = float(row.get("ss", 0) or 0)
+    daily_pred = float(row.get("pred_harian", 0) or 0)
+    sold_qty, sold_val = float(sold.sum()), float(sold_sales.sum())
+    rest_qty, rest_val = float(pred.sum()), float(pred_sales.sum())
+    month_name = fmt_date(month_start, short=True).split(" ")[1]
+
+    # Baris 1: penjualan dan prediksi
+    cols = st.columns(4)
+    sold_span = f"1–{fmt_date(yesterday, short=True)}" if sold_days else "belum ada hari penuh"
+    card(
+        cols[0],
+        f"Terjual {sold_span}",
+        f"{fmt_qty(sold_qty)} unit",
+        hint=f"{fmt_idr(sold_val)} · rata-rata {fmt_num(sold_qty / sold_days, 1) if sold_days else '0'} unit/hari",
+    )
+    card(
+        cols[1],
+        f"Prediksi sisa {month_name} ({fmt_date(today, short=True)}–{fmt_date(month_end, short=True)})",
+        f"{fmt_num(rest_qty, 1)} unit",
+        hint=f"{fmt_idr(rest_val)} · perkiraan total {month_name}: {fmt_num(sold_qty + rest_qty, 1)} unit ({fmt_idr(sold_val + rest_val)})",
+    )
+    card(
+        cols[2],
+        f"Prediksi {fmt_date(window_lo, short=True)} – {fmt_date(window_hi, short=True)}",
+        f"{fmt_qty(row['m_qty'])} unit",
+        hint=f"{fmt_idr(row['m_sales'])} · {fmt_num(daily_pred, 2)} unit/hari · dasar kebutuhan stok",
+    )
+    card(
+        cols[3],
+        "Safety stock",
+        f"{fmt_qty(ss)} unit",
+        hint=f"nilai {fmt_idr(ss * price)} · harga bersih {fmt_idr(price)}/unit",
+    )
+
+    # Baris 2: stok per lokasi dan rencana
+    has_stock = bool(row.get("ada_data_stok", False))
+    stok = float(row["stok"]) if has_stock else 0.0
+    need = float(row.get("m_butuh", 0) or 0)
+    cols = st.columns(4)
+    if has_stock:
+        gap = stok - need
+        card(
+            cols[0],
+            "Stok Site 10037 (toko)",
+            f"{fmt_qty(stok)} unit",
+            hint=f"kebutuhan {fmt_qty(need)} (prediksi {fmt_qty(row['m_qty'])} + SS {fmt_qty(ss)}) · "
+            + (f"kurang {fmt_qty(-gap)} unit" if gap < 0 else f"lebih {fmt_qty(gap)} unit"),
+            tone="stock",
+        )
+    else:
+        card(cols[0], "Stok Site 10037 (toko)", "-", hint="Unggah Data stok Site 10037 untuk proyeksi sisa stok", tone="stock")
+    for column, code, name in ((cols[1], "10062", "DC Cikupa"), (cols[2], "10036", "DC Cipeucang")):
+        value = row.get(f"stok_{code}")
+        if value is None or pd.isna(value):
+            card(column, f"Stok Site {code} ({name})", "-", hint=f"Unggah Stok {name}", tone="stock")
+            continue
+        take = row.get(f"ambil_{code}")
+        take = 0.0 if take is None or pd.isna(take) else float(take)
+        cover = float(value) / daily_pred if daily_pred > 0 else float("inf")
+        cover_text = "cukup lama (prediksi 0)" if not np.isfinite(cover) else f"cukup ±{fmt_num(cover, 0)} hari penjualan"
+        card(
+            column,
+            f"Stok Site {code} ({name})",
+            f"{fmt_qty(float(value))} unit",
+            hint=(f"diambil {fmt_qty(take)} unit untuk Site 10037 · " if take > 0 else "") + cover_text,
+            tone="stock",
+        )
+    plan = str(row.get("sumber_restock") or "").strip()
+    rest = row.get("kurang_setelah_dc")
+    rest = 0.0 if rest is None or pd.isna(rest) else float(rest)
+    if not has_stock:
+        plan_value, plan_hint = "-", "butuh data stok Site 10037"
+    elif not plan:
+        plan_value, plan_hint = "Tidak perlu", "stok Site 10037 menutup kebutuhan 30 hari"
+    elif rest <= 0:
+        plan_value, plan_hint = "Transfer DC", plan
+    elif plan.startswith("Ambil"):
+        plan_value, plan_hint = "Transfer + PO", plan
+    else:
+        plan_value, plan_hint = "PO supplier", plan
+    card(cols[3], "Rencana restock", plan_value, hint=plan_hint, tone="stock")
+
+    # Catatan analisa
+    notes = []
+    if has_stock:
+        cover_days = stok / daily_pred if daily_pred > 0 else float("inf")
+        if np.isfinite(cover_days):
+            out_day = pd.Timestamp(today) + pd.Timedelta(days=int(cover_days))
+            notes.append(("Stok Site 10037 cukup", f"±{fmt_num(cover_days, 0)} hari, perkiraan habis {fmt_date(out_day.date())}"))
+        else:
+            notes.append(("Stok Site 10037 cukup", "tidak habis pada laju prediksi sekarang (prediksi 0)"))
+        below = None
+        if qty_line is not None:
+            below = next((days[i] for i, v in enumerate(qty_line) if np.isfinite(v) and v < ss), None)
+        if stok < ss:
+            notes.append(("Di bawah SS", "sudah sekarang: segera transfer / PO"))
+        elif below is not None:
+            notes.append(("Turun di bawah SS", f"sekitar {fmt_date(below.date())}; transfer sebaiknya tiba sebelum tanggal ini"))
+        rop = row.get("rop")
+        if rop is not None and pd.notna(rop):
+            notes.append(("Titik pesan ulang (ROP)", f"{fmt_qty(rop)} unit = prediksi harian × lead time + SS; " + ("stok sudah di bawah ROP, pesan sekarang" if stok <= float(rop) else "pesan saat stok menyentuh angka ini")))
+    if sold_days and daily_pred > 0:
+        actual_rate = sold_qty / sold_days
+        diff = (daily_pred - actual_rate) / actual_rate * 100 if actual_rate > 0 else None
+        notes.append(
+            (
+                "Laju prediksi vs aktual",
+                f"{fmt_num(daily_pred, 2)} vs {fmt_num(actual_rate, 2)} unit/hari bulan ini"
+                + (f" ({'+' if diff >= 0 else '−'}{fmt_num(abs(diff), 0)}%)" if diff is not None else ""),
+            )
+        )
+    notes.append(("Grafik", "batang biru = terjual s.d. kemarin, merah = prediksi harian mulai hari ini; garis oranye = stok Site 10037 dikurangi prediksi kumulatif, garis putus = SS"))
+    explain(notes, title="Catatan analisa")
 
 
 def direction_html(value: float) -> str:
