@@ -1915,7 +1915,6 @@ def show_training_summary() -> None:
             show_metric(c1, "SKU transaksi cocok stok", f"{format_number(metrics['sku_transaksi_cocok_stok_pct'], 1)}%")
             show_metric(c2, "Produk iklan terpetakan", f"{format_number(metrics['produk_iklan_terpetakan_sku_pct'], 1)}%")
             show_metric(c3, "Snapshot stok", format_number(metrics["snapshot_stok"], 0))
-            show_table(consolidated)
         with st.expander("Rincian: kenapa angka kecocokan tidak 100%?", expanded=False):
             show_match_diagnostics(store, stamp)
     except Exception as exc:  # noqa: BLE001 - summary is informative, not blocking
