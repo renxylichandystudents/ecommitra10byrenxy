@@ -1353,6 +1353,8 @@ st.markdown(
         .st-key-mobile-header [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center; min-height: 56px; max-height: 56px; }
         .st-key-mobile-header [data-testid="stColumn"] { min-width: 0 !important; width: auto !important; flex: 1 1 auto !important; }
         .st-key-mobile-header img { height: 30px; }
+        /* HP: tanpa ruang kosong besar di atas header (padding bawaan Streamlit 6rem). */
+        [data-testid="stMainBlockContainer"] { padding-top: 0.75rem !important; }
         /* Riwayat analisa di HP: baris tetap mendatar dan bisa digeser, bukan ditumpuk per kolom. */
         .st-key-run-history { overflow-x: auto !important; }
         .st-key-run-history [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; min-width: 760px; }
@@ -2190,7 +2192,7 @@ def pin_app_header() -> None:
         const pin = () => {
           const doc = parent.document;
           const root = doc.querySelector('[data-testid="stMainBlockContainer"]');
-          const bar = doc.querySelector('.feature-bar');
+          const bar = root ? root.querySelector('.feature-bar') : null;
           const main = doc.querySelector('[data-testid="stMain"]');
           const existing = doc.getElementById('mitra-header-shield');
           const unpin = (el) => {
@@ -2210,10 +2212,12 @@ def pin_app_header() -> None:
             if (!block) return node.closest('[data-testid="stElementContainer"]');
             return block.closest('[data-testid="stLayoutWrapper"]') || block;
           };
-          const menuLabel = doc.querySelector('.app-menu-label');
+          const menuLabel = root.querySelector('.app-menu-label');
           const menuHost = menuLabel ? menuLabel.closest('[data-testid="stElementContainer"]') : null;
           const menu = menuHost ? menuHost.nextElementSibling : null;
-          const pieces = [rowOf(doc.querySelector('.user-bar')), rowOf(bar), menu, rowOf(doc.querySelector('.period-name'))].filter((el, index, list) => el && el.isConnected && list.indexOf(el) === index);
+          // Hanya header + menu yang dipaku; kartu tanggal/periode ikut tergulung agar ruang baca lebih lega.
+          // Cari di area halaman saja: isi pop-up akun (juga berkelas .user-bar) tidak boleh ikut dipaku.
+          const pieces = [rowOf(root.querySelector('.user-bar')), rowOf(bar), menu].filter((el, index, list) => el && el.isConnected && list.indexOf(el) === index);
           if (!pieces.length || !pieces[0].parentElement) return;
           const page = pieces[0].parentElement;
           const box = root.getBoundingClientRect();

@@ -23,7 +23,7 @@ from src.ui.common import ID_MONTHS_SHORT, download_excel, fmt_num, fmt_pct
 METRIC_COLUMNS = ("MAPE (%)", "MAPE agregat (%)", "WAPE (%)", "Bias (%)", "RMSE", "MAPE kelas A (%)", "MAPE kelas C (%)")
 UPLOAD_MENUS = (
     "Transaksi",
-    "Performance produk",
+    "Performa toko",
     "Iklan produk otomatis",
     "Iklan produk grup",
     "Keseluruhan iklan",
@@ -66,13 +66,16 @@ def _strategy() -> None:
         ("Sistem pakar", "Aturan JIKA–MAKA di config/rules.yaml: stok, iklan, batal, listing, tren; maksimal 3 langkah terukur, iklan tidak dinaikkan bila stok kurang."),
         ("Rekomendasi", "Nama & deskripsi (NLP kompetitor), iklan, flash sale, exposure, laporan & panduan kerja."),
     )
-    cols = st.columns(len(steps))
-    for column, (name, text) in zip(cols, steps):
-        column.markdown(
-            f"<div style='border:1px solid #e2e8f0;border-radius:10px;padding:8px;min-height:190px'><b>{name}</b>"
-            f"<div style='font-size:var(--fs-xs);color:#475569;margin-top:4px'>{text}</div></div>",
-            unsafe_allow_html=True,
-        )
+    # Dua baris (4 + 3 kartu) agar teks tidak terjepit di 7 kolom sempit.
+    for start in range(0, len(steps), 4):
+        cols = st.columns(4)
+        for column, (index, (name, text)) in zip(cols, enumerate(steps[start : start + 4], start=start + 1)):
+            column.markdown(
+                f"<div style='border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;height:100%;min-height:150px'>"
+                f"<b>{index}. {name}</b>"
+                f"<div style='font-size:var(--fs-sm);color:#475569;margin-top:4px;line-height:1.45'>{text}</div></div>",
+                unsafe_allow_html=True,
+            )
 
 
 def _modeling(outcome, period: str, *, is_super: bool = False) -> None:
@@ -194,7 +197,7 @@ def _comparison(outcome, period: str) -> None:
         st.info("Perbandingan model membutuhkan hasil walk-forward.")
         return
     frame = record_frame(records[horizon])
-    metric = st.selectbox("Metrik", ["MAPE (%)", "WAPE (%)", "MAPE agregat (%)", "Bias (%)", "RMSE"], key="eval-metric")
+    metric = st.selectbox("Metrik", ["WAPE (%)", "MAPE agregat (%)", "MAPE (%)", "Bias (%)", "RMSE"], key="eval-metric")
     part = frame.dropna(subset=[metric]).sort_values(metric)
     colors = ["#ee4d2d" if m == MODEL_SEGMENT else ("#f6a58f" if m == MODEL_ENSEMBLE else ("#64748b" if m == MODEL_LEVEL else "#1b3da6")) for m in part["Model"]]
     fig = go.Figure(go.Bar(x=part["Model"], y=part[metric], marker_color=colors, text=[fmt_num(v, 2) for v in part[metric]], textposition="outside", name=metric, hovertemplate="%{x}<br>" + metric + ": %{y:.2f}<extra></extra>"))
@@ -210,6 +213,11 @@ def _comparison(outcome, period: str) -> None:
 
 def _conclusion(outcome, results: dict, base_history: pd.DataFrame | None, period: str) -> None:
     records = _records(outcome)
+    st.info(
+        "Cara membaca: untuk keputusan stok, metrik utama adalah WAPE dan MAPE agregat toko, karena keduanya ditimbang "
+        "volume. MAPE per SKU dilaporkan sebagai pelengkap; nilainya tinggi karena banyak SKU bahan bangunan jarang laku "
+        "(permintaan kecil membuat persentase kesalahan membesar)."
+    )
     for name in HORIZONS:
         record = records.get(name)
         if record and record.get("kesimpulan"):

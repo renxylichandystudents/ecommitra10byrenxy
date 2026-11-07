@@ -304,9 +304,10 @@ def record_frame(record: dict) -> pd.DataFrame:
         rows.append(
             {
                 "Model": info["label"],
-                "MAPE (%)": info["mape"],
-                "MAPE agregat (%)": info["mape_agregat"],
+                # Urutan: metrik utama untuk keputusan stok (WAPE, MAPE agregat) lebih dulu, MAPE per SKU sebagai pelengkap.
                 "WAPE (%)": info["wape"],
+                "MAPE agregat (%)": info["mape_agregat"],
+                "MAPE (%)": info["mape"],
                 "Bias (%)": info["bias"],
                 "RMSE": info["rmse"],
                 "MAPE kelas A (%)": classes.get("A"),
