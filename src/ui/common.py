@@ -196,6 +196,22 @@ def month_label(key: str) -> str:
     return f"{ID_MONTHS[int(month) - 1]} {year}"
 
 
+def _kept(key: str, default=None):
+    """Nilai widget yang tetap ada walau widget tidak dirender (Streamlit menghapus kunci widget saat pindah halaman)."""
+    if key in st.session_state:
+        return st.session_state[key]
+    return st.session_state.get(f"_keep::{key}", default)
+
+
+def _restore(key: str, default) -> None:
+    if key not in st.session_state:
+        st.session_state[key] = st.session_state.get(f"_keep::{key}", default)
+
+
+def _keep(key: str, value) -> None:
+    st.session_state[f"_keep::{key}"] = value
+
+
 def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -> tuple[pd.DataFrame, str, list[str]]:
     """Filter periode penjualan bersama: checkbox tahun, grid bulan 4 kolom, tanggal mulai/selesai terkunci.
 
@@ -214,18 +230,20 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
     checked_years = []
     for index, year in enumerate(years):
         widget = f"{prefix}-y-{year}"
-        if widget not in st.session_state:
-            st.session_state[widget] = year == years[-1]
-        if year_cols[index].checkbox(year, key=widget):
+        _restore(widget, year == years[-1])
+        on = year_cols[index].checkbox(year, key=widget)
+        _keep(widget, bool(on))
+        if on:
             checked_years.append(year)
     year_months = [key for key in months if key[:4] in checked_years]
     selected: list[str] = []
     grid = st.columns(4 if not compact else 6)
     for index, key in enumerate(year_months):
         widget = f"{prefix}-m-{key}"
-        if widget not in st.session_state:
-            st.session_state[widget] = key == year_months[-1]
-        if grid[index % len(grid)].checkbox(month_label(key), key=widget):
+        _restore(widget, key == year_months[-1])
+        on = grid[index % len(grid)].checkbox(month_label(key), key=widget)
+        _keep(widget, bool(on))
+        if on:
             selected.append(key)
     if not selected:
         st.warning("Centang minimal satu tahun dan satu bulan penjualan.")
@@ -239,9 +257,18 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
         st.session_state[start_key] = lo
         st.session_state[end_key] = hi
         st.session_state[stamp_key] = (lo, hi)
+    else:
+        # Kunci tanggal hilang setelah membuka halaman lain: pulihkan pilihan terakhir, bukan tanggal hari ini.
+        for widget, fallback in ((start_key, lo), (end_key, hi)):
+            _restore(widget, fallback)
+            value = st.session_state.get(widget)
+            if not isinstance(value, date) or value < lo or value > hi:
+                st.session_state[widget] = fallback
     c1, c2 = st.columns(2)
     start = c1.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key, format="DD/MM/YYYY")
     end = c2.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key, format="DD/MM/YYYY")
+    _keep(start_key, start)
+    _keep(end_key, end)
     if start > end:
         start, end = end, start
     days = pd.to_datetime(work["order_time"]).dt.normalize()
@@ -265,14 +292,14 @@ def apply_saved_period(orders: pd.DataFrame, *, prefix: str) -> tuple[pd.DataFra
     months = sorted(work["_month"].unique())
     if not months:
         return work.iloc[0:0].drop(columns="_month"), ""
-    selected = [key for key in months if st.session_state.get(f"{prefix}-m-{key}") and st.session_state.get(f"{prefix}-y-{key[:4]}")]
+    selected = [key for key in months if _kept(f"{prefix}-m-{key}") and _kept(f"{prefix}-y-{key[:4]}")]
     if not selected:
         selected = [months[-1]]
     part = work.loc[work["_month"].isin(selected)]
     lo = pd.Timestamp(part["order_time"].min()).date()
     hi = pd.Timestamp(part["order_time"].max()).date()
-    start = st.session_state.get(f"{prefix}-start", lo)
-    end = st.session_state.get(f"{prefix}-end", hi)
+    start = _kept(f"{prefix}-start", lo) or lo
+    end = _kept(f"{prefix}-end", hi) or hi
     start = min(max(start, lo), hi)
     end = min(max(end, lo), hi)
     days = pd.to_datetime(part["order_time"]).dt.normalize()
