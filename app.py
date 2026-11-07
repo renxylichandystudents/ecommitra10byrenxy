@@ -1116,6 +1116,13 @@ st.markdown(
         animation: mitra-load-in .2s ease .6s forwards;
         pointer-events: none;
     }
+    /* Cetak laporan (Laporan › Semua bagian › Cetak / Simpan PDF): tanpa header yang dipaku dan tombol. */
+    @media print {
+        #mitra-header-shield, [data-testid="stHeader"], [data-testid="stToolbar"], iframe { display: none !important; }
+        [style*="position: fixed"] { position: static !important; }
+        [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
+        .stApp::before, .stApp::after { display: none !important; }
+    }
     /* Judul kolom Riwayat analisa tetap terlihat saat daftar di-scroll. */
     .st-key-run-history > :first-child {
         position: sticky; top: 0; z-index: 3;
@@ -4016,7 +4023,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             "sekali tiap No. Pesanan"
         )
         order_hint = "Unik, semua status"
-        sku_hint = "Selain pesanan batal"
+        sku_hint = "Selain pesanan batal; SKU yang hanya diretur tetap dihitung (beda dengan SKU terjual bersih di Ringkasan)"
     elif not picked:
         filtered = period_view.iloc[0:0]
         sales_hint = "Centang minimal satu status pesanan"

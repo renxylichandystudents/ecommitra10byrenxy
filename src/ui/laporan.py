@@ -23,6 +23,7 @@ from src.core.restock import recommendation_records, records_display
 from src.utils.format import show_table
 from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key
 
+ALL_SECTIONS = "Semua bagian (untuk dibaca berurutan / dicetak)"
 SECTIONS = (
     "1. Ringkasan eksekutif",
     "2. Tren penjualan",
@@ -181,6 +182,20 @@ def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, 
         )
 
 
+
+def _print_button() -> None:
+    """Tombol cetak: membuka dialog cetak browser (pilih "Simpan sebagai PDF")."""
+    import streamlit.components.v1 as components
+
+    components.html(
+        "<button onclick='window.parent.print()' style='width:100%;padding:.5rem .75rem;border-radius:10px;"
+        "border:1px solid #ee4d2d;background:#fff;color:#ee4d2d;font:600 14px sans-serif;cursor:pointer'>"
+        "Cetak / Simpan PDF</button>",
+        height=48,
+    )
+    st.caption("Di dialog cetak, pilih \"Simpan sebagai PDF\".")
+
+
 def show_report(
     table: pd.DataFrame,
     *,
@@ -249,186 +264,194 @@ def show_report(
     nav, body = st.columns([1, 4])
     with nav:
         st.markdown("**Daftar isi**")
-        section = st.radio("Daftar isi", SECTIONS, key="report-section", label_visibility="collapsed")
+        options = (ALL_SECTIONS,) + SECTIONS
+        current = st.session_state.get("report-section")
+        section = st.radio(
+            "Daftar isi", options, index=options.index(current) if current in options else 1, key="report-section", label_visibility="collapsed"
+        )
+        if section == ALL_SECTIONS:
+            _print_button()
+    chosen = SECTIONS if section == ALL_SECTIONS else (section,)
     with body:
-        st.markdown(f"### {section}")
-        st.caption(f"Periode laporan: {report_label}")
-        try:
-            if section == SECTIONS[0]:
-                cols = st.columns(4)
-                metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
-                window_text = f"{fmt_date(window_start, short=True)} – {fmt_date(window_end, short=True)}"
-                card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"{window_text} · target {fmt_idr(target)}" if target > 0 else window_text)
-                metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
-                short_hint = f"stok di bawah {pred_label} + SS · {fmt_num(shortage['kosong'])} kosong (stok 0)"
-                if shortage["tanpa_data"]:
-                    short_hint += f" · {fmt_num(shortage['tanpa_data'])} tanpa data stok"
-                card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint=short_hint)
-                gap = month_pred - target
-                target_line = f"- {pred_label} {fmt_idr(month_pred)} {'di atas' if gap >= 0 else 'di bawah'} target sebesar {fmt_idr(abs(gap))}.\n" if target > 0 else ""
-                st.markdown(
-                    target_line
-                    + f"- {short_top} SKU Top 50 stoknya di bawah {pred_label} + safety stock ({shortage['kosong']} di antaranya stok 0): prioritas restock sebelum menambah iklan.\n"
-                    f"- Tingkat batal {fmt_pct(cancel_rate)}; {unpaid} pesanan batal karena belum bayar bisa dikejar lewat chat."
-                )
-                if not records.empty:
-                    st.markdown("**Rekomendasi utama**")
-                    show_table(records_display(records.head(5)), kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"})
-            elif section == SECTIONS[1]:
-                _show_trend(orders, orders_all, today=today, month_pred=month_pred, pred_label=pred_label, exclude=exclude)
-            elif section == SECTIONS[2]:
-                cols = ["peringkat", "sku", "product_name", "qty_total", "sales_total", "m_qty", "m_sales", "label_text"]
-                view = top[[c for c in cols if c in top.columns]].head(20).rename(
-                    columns={"peringkat": "Peringkat", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": f"{pred_label} · QTY", "m_sales": f"{pred_label} · sales", "label_text": "Label"}
-                )
-                show_table(view)
-                download_excel(view, "laporan_terlaris.xlsx", key="xl-report-top")
-            elif section == SECTIONS[3]:
-                if top.empty or "m_status" not in top.columns:
-                    st.write("Data stok belum tersedia.")
-                else:
-                    counts = top["m_status"].map(status_key).value_counts()
+        for section in chosen:
+            st.markdown(f"### {section}")
+            st.caption(f"Periode laporan: {report_label}")
+            try:
+                if section == SECTIONS[0]:
                     cols = st.columns(4)
-                    for column, name in zip(cols, ("Aman", "Kurang", "Kosong", "Tanpa data stok")):
-                        card(column, name, fmt_num(int(counts.get(name, 0))), hint="SKU Top 50")
-                    sigma_map = stock.set_index("item_key")["sigma_qty"].to_dict() if isinstance(stock, pd.DataFrame) and "sigma_qty" in stock.columns else {}
-                    lead = params.get("lead_time", {})
-                    rows = []
-                    for _, row in top.head(10).iterrows():
-                        mc = monte_carlo_stock_scenarios(
-                            demand_mean=float(row["pred_harian"]),
-                            demand_sigma=float(sigma_map.get(row["item_key"], row["pred_harian"] * 0.5)),
-                            lead_time_mean=float(lead.get("lokal_hari", 7)),
-                            lead_time_sigma=float(lead.get("lokal_sigma_hari", 0) or 0),
-                            current_stock=float(row["stok"]) if bool(row.get("ada_data_stok", False)) else 0.0,
-                            safety_stock=float(row["ss"]),
-                        )
-                        pick = mc.set_index("Skenario")
-                        rows.append(
-                            {
-                                "SKU": row["sku"],
-                                "Produk": row["product_name"],
-                                "Stok": row["stok"] if bool(row.get("ada_data_stok", False)) else None,
-                                "SS": row["ss"],
-                                "ROP": row["rop"],
-                                "Restock moderat": round(pick.loc["Moderat", "Restock disarankan"]),
-                                "Restock pesimistis": round(pick.loc["Pesimistis", "Restock disarankan"]),
-                                "Risiko stockout (%)": round(pick.loc["Moderat", "Risiko stockout"], 1),
-                            }
-                        )
-                    frame = pd.DataFrame(rows)
-                    st.markdown("**Skenario Monte Carlo (1.000 simulasi permintaan × lead time) untuk 10 SKU teratas**")
-                    show_table(frame, kinds={"SS": "count", "ROP": "count"})
-                    st.caption("ROP = permintaan harian × lead time + SS. Pesan ulang saat stok menyentuh ROP; restock pesimistis = kebutuhan kuantil 90%.")
-                    download_excel(frame, "laporan_stok_monte_carlo.xlsx", key="xl-report-mc")
-            elif section == SECTIONS[4]:
-                product_sales = float(ads["sales_produk_bersih"])
-                share = float(ads["porsi_sales_iklan_pct"])
-                warnings, notes = ad_validation(ad_result, product_sales)
-                for message in warnings:
-                    st.warning(message)
-                cols = st.columns(4)
-                metric_card(cols[0], "biaya_iklan", fmt_idr(ad_cost))
-                metric_card(cols[1], "omzet_iklan", fmt_idr(ad_sales))
-                metric_card(cols[2], "roas", fmt_num(roas, 1))
-                card(cols[3], "Porsi sales dari iklan", fmt_pct(share), hint=f"dari sales produk bersih {fmt_idr(product_sales)}")
-                for message in notes:
-                    st.caption(message)
-                st.caption(
-                    "Porsi sales dari iklan = omzet iklan ÷ sales produk bersih (Harga Setelah Diskon × QTY, tanpa pesanan batal, "
-                    "dikurangi retur). Dasar ini sama dengan batas omzet iklan per SKU. Sales bersih di kartu Ringkasan memakai "
-                    "Total Pembayaran per pesanan (setelah voucher/koin, ditambah ongkir), jadi nilainya bisa berbeda."
-                )
-                if ad_cost <= 0:
-                    st.caption("Laporan iklan belum diunggah, belum terpetakan ke SKU, atau tidak ada pada periode laporan.")
-                else:
-                    ads = ad_result.per_sku.loc[ad_result.per_sku["biaya_iklan"] > 0].merge(table[["sku", "product_name", "m_status"]].drop_duplicates("sku"), on="sku", how="left")
-                    ads = ads[["sku", "product_name", "biaya_iklan", "omzet_iklan", "m_status"]].copy()
-                    ads["ROAS"] = ads["omzet_iklan"] / ads["biaya_iklan"]
-                    ads = ads.sort_values("biaya_iklan", ascending=False).head(20)
-                    show_table(ads.rename(columns={"sku": "SKU", "product_name": "Produk", "biaya_iklan": "Biaya", "omzet_iklan": "Omzet iklan", "m_status": "Status stok"}))
-            elif section == SECTIONS[5]:
-                # Ikut periode laporan: 28 hari yang berakhir di hari terakhir periode laporan.
-                perf_end = (report_hi + pd.Timedelta(days=1)).date()
-                perf = store_performance(frames.performance, perf_end)
-                if not perf:
-                    st.write("Data performa toko belum diunggah.")
-                else:
-                    span_text = f"28 hari s.d. {fmt_date(report_hi.date(), short=True)}"
-                    st.caption(f"Performa toko {span_text}, dibanding 28 hari sebelumnya.")
+                    metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
+                    window_text = f"{fmt_date(window_start, short=True)} – {fmt_date(window_end, short=True)}"
+                    card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"{window_text} · target {fmt_idr(target)}" if target > 0 else window_text)
+                    metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
+                    short_hint = f"stok di bawah {pred_label} + SS · {fmt_num(shortage['kosong'])} kosong (stok 0)"
+                    if shortage["tanpa_data"]:
+                        short_hint += f" · {fmt_num(shortage['tanpa_data'])} tanpa data stok"
+                    card(cols[3], "Top 50 stok kurang", fmt_num(short_top), hint=short_hint)
+                    gap = month_pred - target
+                    target_line = f"- {pred_label} {fmt_idr(month_pred)} {'di atas' if gap >= 0 else 'di bawah'} target sebesar {fmt_idr(abs(gap))}.\n" if target > 0 else ""
+                    st.markdown(
+                        target_line
+                        + f"- {short_top} SKU Top 50 stoknya di bawah {pred_label} + safety stock ({shortage['kosong']} di antaranya stok 0): prioritas restock sebelum menambah iklan.\n"
+                        f"- Tingkat batal {fmt_pct(cancel_rate)}; {unpaid} pesanan batal karena belum bayar bisa dikejar lewat chat."
+                    )
+                    if not records.empty:
+                        st.markdown("**Rekomendasi utama**")
+                        show_table(records_display(records.head(5)), kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"})
+                elif section == SECTIONS[1]:
+                    _show_trend(orders, orders_all, today=today, month_pred=month_pred, pred_label=pred_label, exclude=exclude)
+                elif section == SECTIONS[2]:
+                    cols = ["peringkat", "sku", "product_name", "qty_total", "sales_total", "m_qty", "m_sales", "label_text"]
+                    view = top[[c for c in cols if c in top.columns]].head(20).rename(
+                        columns={"peringkat": "Peringkat", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": f"{pred_label} · QTY", "m_sales": f"{pred_label} · sales", "label_text": "Label"}
+                    )
+                    show_table(view)
+                    download_excel(view, "laporan_terlaris.xlsx", key="xl-report-top")
+                elif section == SECTIONS[3]:
+                    if top.empty or "m_status" not in top.columns:
+                        st.write("Data stok belum tersedia.")
+                    else:
+                        counts = top["m_status"].map(status_key).value_counts()
+                        cols = st.columns(4)
+                        for column, name in zip(cols, ("Aman", "Kurang", "Kosong", "Tanpa data stok")):
+                            card(column, name, fmt_num(int(counts.get(name, 0))), hint="SKU Top 50")
+                        sigma_map = stock.set_index("item_key")["sigma_qty"].to_dict() if isinstance(stock, pd.DataFrame) and "sigma_qty" in stock.columns else {}
+                        lead = params.get("lead_time", {})
+                        rows = []
+                        for _, row in top.head(10).iterrows():
+                            mc = monte_carlo_stock_scenarios(
+                                demand_mean=float(row["pred_harian"]),
+                                demand_sigma=float(sigma_map.get(row["item_key"], row["pred_harian"] * 0.5)),
+                                lead_time_mean=float(lead.get("lokal_hari", 7)),
+                                lead_time_sigma=float(lead.get("lokal_sigma_hari", 0) or 0),
+                                current_stock=float(row["stok"]) if bool(row.get("ada_data_stok", False)) else 0.0,
+                                safety_stock=float(row["ss"]),
+                            )
+                            pick = mc.set_index("Skenario")
+                            rows.append(
+                                {
+                                    "SKU": row["sku"],
+                                    "Produk": row["product_name"],
+                                    "Stok": row["stok"] if bool(row.get("ada_data_stok", False)) else None,
+                                    "SS": row["ss"],
+                                    "ROP": row["rop"],
+                                    "Restock moderat": round(pick.loc["Moderat", "Restock disarankan"]),
+                                    "Restock pesimistis": round(pick.loc["Pesimistis", "Restock disarankan"]),
+                                    "Risiko stockout (%)": round(pick.loc["Moderat", "Risiko stockout"], 1),
+                                }
+                            )
+                        frame = pd.DataFrame(rows)
+                        st.markdown("**Skenario Monte Carlo (1.000 simulasi permintaan × lead time) untuk 10 SKU teratas**")
+                        show_table(frame, kinds={"SS": "count", "ROP": "count"})
+                        st.caption("ROP = permintaan harian × lead time + SS. Pesan ulang saat stok menyentuh ROP; restock pesimistis = kebutuhan kuantil 90%.")
+                        download_excel(frame, "laporan_stok_monte_carlo.xlsx", key="xl-report-mc")
+                elif section == SECTIONS[4]:
+                    product_sales = float(ads["sales_produk_bersih"])
+                    share = float(ads["porsi_sales_iklan_pct"])
+                    warnings, notes = ad_validation(ad_result, product_sales)
+                    for message in warnings:
+                        st.warning(message)
                     cols = st.columns(4)
-                    card(cols[0], "Pengunjung", fmt_num(perf["pengunjung"]), hint=f"sebelumnya {fmt_num(perf['pengunjung_prev'])}")
-                    card(cols[1], "Pesanan", fmt_num(perf["pesanan"]), hint=f"sebelumnya {fmt_num(perf['pesanan_prev'])}")
-                    card(cols[2], "Konversi", fmt_pct(perf["konversi"], 2), hint=f"sebelumnya {fmt_pct(perf['konversi_prev'], 2)}")
-                    card(cols[3], "Pembeli baru", fmt_num(perf["pembeli_baru"]))
-            elif section == SECTIONS[6]:
-                cols = st.columns(4)
-                metric_card(cols[0], "pesanan_semua", fmt_num(facts["pesanan_semua"]), hint=f"bersih {fmt_num(facts['pesanan_bersih'])}")
-                metric_card(cols[1], "pesanan_batal", fmt_num(facts["pesanan_batal"]), hint=fmt_pct(cancel_rate))
-                metric_card(cols[2], "retur_unit", fmt_qty(facts["retur_unit"]), hint=f"{fmt_num(facts['pesanan_retur_penuh'])} pesanan diretur penuh")
-                metric_card(cols[3], "belum_bayar", fmt_num(unpaid), hint=f"{fmt_num(facts['belum_bayar_akun'])} akun")
-                if not reasons.empty:
-                    per_cat = reasons.groupby("kategori")["orders"].sum().reindex(list(CATEGORIES), fill_value=0)
-                    st.markdown("**Alasan batal per kategori**")
-                    show_table(pd.DataFrame({"Kategori": per_cat.index, "Pesanan": per_cat.values.astype(int)}))
-                    show_table(reasons.rename(columns={"reason": "Alasan batal", "orders": "Pesanan", "kategori": "Kategori"})[["Kategori", "Alasan batal", "Pesanan"]].head(10))
-            elif section == SECTIONS[7]:
-                promo_days = int(promo_flag(pd.Series(pd.date_range(window_start, window_end))).sum())
-                context = {
-                    "sales_growth_pct": growth,
-                    "top50_share_pct": (
-                        float(top["sales_total"].sum() / table["sales_total"].sum() * 100)
-                        if not top.empty and table is not None and float(table["sales_total"].sum()) > 0
-                        else None
-                    ),
-                    "roas": roas,
-                    "target_roas": params.get("iklan", {}).get("target_roas", 8),
-                    "cancel_pct": cancel_rate,
-                    "top50_short": short_top,
-                    "unpaid_orders": unpaid,
-                    "promo_days": promo_days,
-                    "poor_names": int((st.session_state.get("_name-recs", (None, pd.DataFrame()))[1].get("Status skor", pd.Series(dtype=str)) == "Poor").sum()) if st.session_state.get("_name-recs") else None,
-                    "dead_stock": int(table.get("productivity_label", pd.Series(dtype=str)).astype(str).str.contains("Dead|Slow", regex=True).sum()) if table is not None else None,
-                    "zero_stock": int(table["m_status"].map(status_key).eq("Kosong").sum()) if table is not None and "m_status" in table.columns else None,
-                }
-                result = swot(context)
-                cols = st.columns(2)
-                for index, (name, items) in enumerate(result.items()):
-                    with cols[index % 2].container(border=True):
-                        st.markdown(f"**{name}**")
-                        st.markdown("\n".join(f"- {item}" for item in items))
-            elif section == SECTIONS[8]:
-                bones = fishbone(reasons)
-                st.caption("Masalah utama: pembatalan pesanan. Angka = jumlah pesanan batal per alasan pada periode laporan.")
-                cols = st.columns(3)
-                for index, category in enumerate(FISHBONE_CATEGORIES):
-                    with cols[index % 3].container(border=True):
-                        st.markdown(f"**{category}**")
-                        items = bones.get(category) or ["Tidak ada alasan pada kategori ini"]
-                        st.markdown("\n".join(f"- {item}" for item in items[:6]))
-            elif section == SECTIONS[9]:
-                if records.empty:
-                    st.write("Belum ada rekomendasi.")
-                else:
-                    st.caption("Restock = max(0, prediksi + SS − stok DC). Tenggat = hari ini + stok ÷ prediksi harian (Segera bila sudah habis). PIC: restock lokal → Team DC; ada PO impor → Team IC/MD; harga/iklan → E-commerce.")
-                    display = records_display(records.head(30))
-                    show_table(display, kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"}, column_config={"Alasan": st.column_config.TextColumn(width="large")})
-                    download_excel(records_display(records), "laporan_rekomendasi.xlsx", key="xl-report-adv")
-            elif section == SECTIONS[10]:
-                days_in_month = pd.Timestamp(today).days_in_month
-                basis = target if target > 0 else month_pred
-                guide = work_guide(
-                    {
-                        "target_sales": basis,
-                        "target_text": fmt_idr(basis),
-                        "daily_target_text": fmt_idr(basis / days_in_month),
+                    metric_card(cols[0], "biaya_iklan", fmt_idr(ad_cost))
+                    metric_card(cols[1], "omzet_iklan", fmt_idr(ad_sales))
+                    metric_card(cols[2], "roas", fmt_num(roas, 1))
+                    card(cols[3], "Porsi sales dari iklan", fmt_pct(share), hint=f"dari sales produk bersih {fmt_idr(product_sales)}")
+                    for message in notes:
+                        st.caption(message)
+                    st.caption(
+                        "Porsi sales dari iklan = omzet iklan ÷ sales produk bersih (Harga Setelah Diskon × QTY, tanpa pesanan batal, "
+                        "dikurangi retur). Dasar ini sama dengan batas omzet iklan per SKU. Sales bersih di kartu Ringkasan memakai "
+                        "Total Pembayaran per pesanan (setelah voucher/koin, ditambah ongkir), jadi nilainya bisa berbeda."
+                    )
+                    if ad_cost <= 0:
+                        st.caption("Laporan iklan belum diunggah, belum terpetakan ke SKU, atau tidak ada pada periode laporan.")
+                    else:
+                        ads = ad_result.per_sku.loc[ad_result.per_sku["biaya_iklan"] > 0].merge(table[["sku", "product_name", "m_status"]].drop_duplicates("sku"), on="sku", how="left")
+                        ads = ads[["sku", "product_name", "biaya_iklan", "omzet_iklan", "m_status"]].copy()
+                        ads["ROAS"] = ads["omzet_iklan"] / ads["biaya_iklan"]
+                        ads = ads.sort_values("biaya_iklan", ascending=False).head(20)
+                        show_table(ads.rename(columns={"sku": "SKU", "product_name": "Produk", "biaya_iklan": "Biaya", "omzet_iklan": "Omzet iklan", "m_status": "Status stok"}))
+                elif section == SECTIONS[5]:
+                    # Ikut periode laporan: 28 hari yang berakhir di hari terakhir periode laporan.
+                    perf_end = (report_hi + pd.Timedelta(days=1)).date()
+                    perf = store_performance(frames.performance, perf_end)
+                    if not perf:
+                        st.write("Data performa toko belum diunggah.")
+                    else:
+                        span_text = f"28 hari s.d. {fmt_date(report_hi.date(), short=True)}"
+                        st.caption(f"Performa toko {span_text}, dibanding 28 hari sebelumnya.")
+                        cols = st.columns(4)
+                        card(cols[0], "Pengunjung", fmt_num(perf["pengunjung"]), hint=f"sebelumnya {fmt_num(perf['pengunjung_prev'])}")
+                        card(cols[1], "Pesanan", fmt_num(perf["pesanan"]), hint=f"sebelumnya {fmt_num(perf['pesanan_prev'])}")
+                        card(cols[2], "Konversi", fmt_pct(perf["konversi"], 2), hint=f"sebelumnya {fmt_pct(perf['konversi_prev'], 2)}")
+                        card(cols[3], "Pembeli baru", fmt_num(perf["pembeli_baru"]))
+                elif section == SECTIONS[6]:
+                    cols = st.columns(4)
+                    metric_card(cols[0], "pesanan_semua", fmt_num(facts["pesanan_semua"]), hint=f"bersih {fmt_num(facts['pesanan_bersih'])}")
+                    metric_card(cols[1], "pesanan_batal", fmt_num(facts["pesanan_batal"]), hint=fmt_pct(cancel_rate))
+                    metric_card(cols[2], "retur_unit", fmt_qty(facts["retur_unit"]), hint=f"{fmt_num(facts['pesanan_retur_penuh'])} pesanan diretur penuh")
+                    metric_card(cols[3], "belum_bayar", fmt_num(unpaid), hint=f"{fmt_num(facts['belum_bayar_akun'])} akun")
+                    if not reasons.empty:
+                        per_cat = reasons.groupby("kategori")["orders"].sum().reindex(list(CATEGORIES), fill_value=0)
+                        st.markdown("**Alasan batal per kategori**")
+                        show_table(pd.DataFrame({"Kategori": per_cat.index, "Pesanan": per_cat.values.astype(int)}))
+                        show_table(reasons.rename(columns={"reason": "Alasan batal", "orders": "Pesanan", "kategori": "Kategori"})[["Kategori", "Alasan batal", "Pesanan"]].head(10))
+                elif section == SECTIONS[7]:
+                    promo_days = int(promo_flag(pd.Series(pd.date_range(window_start, window_end))).sum())
+                    context = {
+                        "sales_growth_pct": growth,
+                        "top50_share_pct": (
+                            float(top["sales_total"].sum() / table["sales_total"].sum() * 100)
+                            if not top.empty and table is not None and float(table["sales_total"].sum()) > 0
+                            else None
+                        ),
+                        "roas": roas,
                         "target_roas": params.get("iklan", {}).get("target_roas", 8),
+                        "cancel_pct": cancel_rate,
+                        "top50_short": short_top,
+                        "unpaid_orders": unpaid,
+                        "promo_days": promo_days,
+                        "poor_names": int((st.session_state.get("_name-recs", (None, pd.DataFrame()))[1].get("Status skor", pd.Series(dtype=str)) == "Poor").sum()) if st.session_state.get("_name-recs") else None,
+                        "dead_stock": int(table.get("productivity_label", pd.Series(dtype=str)).astype(str).str.contains("Dead|Slow", regex=True).sum()) if table is not None else None,
+                        "zero_stock": int(table["m_status"].map(status_key).eq("Kosong").sum()) if table is not None and "m_status" in table.columns else None,
                     }
-                )
-                if target <= 0:
-                    st.caption(f"Acuan panduan = {pred_label} (target belum diisi di Rekomendasi › Iklan).")
-                for name, tasks in guide.items():
-                    st.markdown(f"**{name}**")
-                    show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))
-        except Exception as exc:  # satu bagian gagal tidak menghentikan laporan
-            st.warning(f"Bagian ini belum bisa ditampilkan: {exc}")
+                    result = swot(context)
+                    cols = st.columns(2)
+                    for index, (name, items) in enumerate(result.items()):
+                        with cols[index % 2].container(border=True):
+                            st.markdown(f"**{name}**")
+                            st.markdown("\n".join(f"- {item}" for item in items))
+                elif section == SECTIONS[8]:
+                    bones = fishbone(reasons)
+                    st.caption("Masalah utama: pembatalan pesanan. Angka = jumlah pesanan batal per alasan pada periode laporan.")
+                    cols = st.columns(3)
+                    for index, category in enumerate(FISHBONE_CATEGORIES):
+                        with cols[index % 3].container(border=True):
+                            st.markdown(f"**{category}**")
+                            items = bones.get(category) or ["Tidak ada alasan pada kategori ini"]
+                            st.markdown("\n".join(f"- {item}" for item in items[:6]))
+                elif section == SECTIONS[9]:
+                    if records.empty:
+                        st.write("Belum ada rekomendasi.")
+                    else:
+                        st.caption("Restock = max(0, prediksi + SS − stok DC). Tenggat = hari ini + stok ÷ prediksi harian (Segera bila sudah habis). PIC: restock lokal → Team DC; ada PO impor → Team IC/MD; harga/iklan → E-commerce.")
+                        display = records_display(records.head(30))
+                        show_table(display, kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"}, column_config={"Alasan": st.column_config.TextColumn(width="large")})
+                        download_excel(records_display(records), "laporan_rekomendasi.xlsx", key="xl-report-adv")
+                elif section == SECTIONS[10]:
+                    days_in_month = pd.Timestamp(today).days_in_month
+                    basis = target if target > 0 else month_pred
+                    guide = work_guide(
+                        {
+                            "target_sales": basis,
+                            "target_text": fmt_idr(basis),
+                            "daily_target_text": fmt_idr(basis / days_in_month),
+                            "target_roas": params.get("iklan", {}).get("target_roas", 8),
+                        }
+                    )
+                    if target <= 0:
+                        st.caption(f"Acuan panduan = {pred_label} (target belum diisi di Rekomendasi › Iklan).")
+                    for name, tasks in guide.items():
+                        st.markdown(f"**{name}**")
+                        show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))
+            except Exception as exc:  # satu bagian gagal tidak menghentikan laporan
+                st.warning(f"Bagian ini belum bisa ditampilkan: {exc}")

@@ -273,8 +273,8 @@ def _conclusion(outcome, results: dict, base_history: pd.DataFrame | None, perio
             st.session_state["_feat-imp"] = (stamp, imp, method)
         st.markdown(f"**Kepentingan fitur model global** · {method}")
         if not imp.empty:
-            fig = go.Figure(go.Bar(x=imp["Kepentingan"], y=imp["Fitur"], orientation="h", marker_color="#1b3da6", text=[f"{v:.1f}%" for v in imp["Kepentingan"]], textposition="outside", hovertemplate="%{y}: %{x:.1f}%<extra></extra>"))
-            fig.update_layout(height=420, yaxis=dict(autorange="reversed"), xaxis_title="Kepentingan (%)", margin=dict(l=40, r=20, t=20, b=40))
+            fig = go.Figure(go.Bar(x=imp["Kepentingan"], y=imp["Fitur"], orientation="h", marker_color="#1b3da6", text=[fmt_pct(v, 1) for v in imp["Kepentingan"]], textposition="outside", hovertemplate="%{y}: %{x:.1f}%<extra></extra>"))
+            fig.update_layout(height=420, separators=",.", yaxis=dict(autorange="reversed"), xaxis_title="Kepentingan (%)", margin=dict(l=40, r=20, t=20, b=40))
             st.plotly_chart(fig, use_container_width=True, key="eval-imp")
 
 
