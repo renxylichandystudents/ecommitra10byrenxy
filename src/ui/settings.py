@@ -74,7 +74,7 @@ def show_business_settings(params: dict, user_root: Path) -> dict:
         left, right = st.columns(2)
         if left.button("Simpan pengaturan", key="bp-save", type="primary"):
             save_params(draft, user_root)
-            st.success("Pengaturan disimpan. Jalankan analisis lagi agar angka mengikuti pengaturan baru.")
+            st.success("Pengaturan disimpan. Jalankan analisa lagi agar angka mengikuti pengaturan baru.")
             return draft
         if right.button("Kembalikan ke default", key="bp-reset"):
             fresh = default_params()

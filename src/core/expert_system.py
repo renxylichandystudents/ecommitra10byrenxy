@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from src.core.config import load_rules
+from src.utils.format import desimal, persen
 
 OPS = {
     "lt": lambda a, b: a < b,
@@ -145,7 +146,7 @@ def root_cause(facts: dict) -> tuple[str, str]:
         return "Listing", "Banyak dilihat tetapi jarang diklik: ganti foto utama dan judul."
     price_gap = facts.get("harga_vs_kompetitor_pct")
     if price_gap is not None and not np.isnan(price_gap) and price_gap > 5:
-        return "Harga", f"Harga {price_gap:.0f}% di atas kompetitor: uji turun harga atau bundling."
+        return "Harga", f"Harga {persen(price_gap, 0)} di atas kompetitor: uji turun harga atau bundling."
     return "Konversi", "Klik ada tetapi pembeli ragu: lengkapi deskripsi, spesifikasi, dan jawab alasan batal."
 
 
@@ -155,7 +156,7 @@ def drivers_and_risks(facts: dict, row: pd.Series) -> tuple[list[str], list[str]
     down: list[str] = []
     trend = facts.get("tren_pct")
     if trend is not None and not np.isnan(trend):
-        (up if trend > 0 else down).append(f"Penjualan 28 hari terakhir {'naik' if trend > 0 else 'turun'} {abs(trend):.0f}% dibanding 28 hari sebelumnya")
+        (up if trend > 0 else down).append(f"Penjualan 28 hari terakhir {'naik' if trend > 0 else 'turun'} {persen(abs(trend), 0)} dibanding 28 hari sebelumnya")
     roas = facts.get("roas")
     if roas is not None and not np.isnan(roas):
         (up if roas >= 6 else down).append(f"ROAS iklan {_fmt(round(float(roas), 1))}")
@@ -173,10 +174,10 @@ def drivers_and_risks(facts: dict, row: pd.Series) -> tuple[list[str], list[str]
     elif status == "Aman":
         up.append(f"Stok aman untuk {_fmt(facts.get('hari_cukup'))} hari")
     if facts.get("batal_pct", 0) > 10:
-        down.append(f"Tingkat batal semua alasan {facts['batal_pct']:.0f}%")
+        down.append(f"Tingkat batal semua alasan {persen(facts['batal_pct'], 1)}")
     gap = facts.get("harga_vs_kompetitor_pct")
     if gap is not None and not np.isnan(gap):
-        (down if gap > 5 else up).append(f"Harga {abs(gap):.0f}% {'di atas' if gap > 0 else 'di bawah'} kompetitor")
+        (down if gap > 5 else up).append(f"Harga {persen(abs(gap), 0)} {'di atas' if gap > 0 else 'di bawah'} kompetitor")
     if not up:
         up.append("Belum ada pendorong kuat dari data; manfaatkan tanggal promo (gajian, tanggal kembar)")
     if not down:
@@ -208,16 +209,16 @@ def swot(context: dict) -> dict[str, list[str]]:
     s, w, o, t = [], [], [], []
     growth = context.get("sales_growth_pct")
     if growth is not None and np.isfinite(growth):
-        (s if growth >= 0 else w).append(f"Sales bersih {'naik' if growth >= 0 else 'turun'} {abs(growth):.1f}% dibanding bulan lalu")
+        (s if growth >= 0 else w).append(f"Sales bersih {'naik' if growth >= 0 else 'turun'} {persen(abs(growth), 1)} dibanding bulan lalu")
     share = context.get("top50_share_pct")
     if share is not None:
-        s.append(f"Top 50 SKU menyumbang {share:.1f}% sales")
+        s.append(f"Top 50 SKU menyumbang {persen(share, 1)} sales")
     roas = context.get("roas")
     if roas is not None and np.isfinite(roas):
-        (s if roas >= context.get("target_roas", 8) else w).append(f"ROAS iklan {roas:.1f} (target {context.get('target_roas', 8)})")
+        (s if roas >= context.get("target_roas", 8) else w).append(f"ROAS iklan {desimal(roas, 1)} (target {context.get('target_roas', 8)})")
     cancel = context.get("cancel_pct")
     if cancel is not None:
-        (w if cancel > 5 else s).append(f"Tingkat batal {cancel:.1f}% dari pesanan")
+        (w if cancel > 5 else s).append(f"Tingkat batal {persen(cancel, 1)} dari pesanan")
     short = context.get("top50_short")
     if short:
         w.append(f"{short} SKU Top 50 stoknya di bawah prediksi + safety stock")
@@ -229,7 +230,7 @@ def swot(context: dict) -> dict[str, list[str]]:
         o.append(f"{promo_days} tanggal promo (gajian/tanggal kembar) dalam periode prediksi")
     poor_names = context.get("poor_names")
     if poor_names:
-        o.append(f"{poor_names} nama produk berskor Poor bisa diperbaiki untuk SEO")
+        o.append(f"{poor_names} nama produk berskor Kurang bisa diperbaiki untuk SEO")
     comp_cheaper = context.get("competitor_cheaper")
     if comp_cheaper:
         t.append(f"{comp_cheaper} produk lebih mahal dari kompetitor > 5%")
@@ -283,8 +284,8 @@ def work_guide(context: dict) -> dict[str, list[tuple[str, str]]]:
             ("Pantau iklan dengan ROAS < 3 dan turunkan bid", f"ROAS harian ≥ {roas_target}"),
         ],
         "Mingguan": [
-            ("Upload stok terbaru (snapshot DC Cikupa) dan jalankan analisis", "Prediksi dan lama kosong ter-update"),
-            ("Perbaiki 10 nama/deskripsi berskor Poor", "Skor naik ke Standard/Excellence"),
+            ("Upload stok terbaru (snapshot DC Cikupa) dan jalankan analisa", "Prediksi dan lama kosong ter-update"),
+            ("Perbaiki 10 nama/deskripsi berskor Kurang", "Skor naik ke Cukup/Sangat baik"),
             ("Evaluasi budget iklan per SKU terhadap stok", "Tidak ada iklan aktif pada SKU stok kurang"),
             ("Siapkan flash sale minggu depan dari tab Rekomendasi", "Kuota flash sale terjual ≥ 70%"),
         ],

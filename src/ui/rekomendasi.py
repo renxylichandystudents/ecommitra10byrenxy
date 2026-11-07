@@ -20,6 +20,8 @@ from src.ui.common import button_tabs, card, download_excel, fmt_date, fmt_idr, 
 from src.utils.format import input_rupiah, show_table
 
 STATUS_TONES = {"Poor": "#fee2e2", "Standard": "#fef9c3", "Excellence": "#dcfce7"}
+# Nilai tersimpan tetap Poor/Standard/Excellence; tampilan memakai label Indonesia.
+SCORE_DISPLAY = {"Poor": "Kurang", "Standard": "Cukup", "Excellence": "Sangat baik"}
 
 
 def _cancel_reason_map(table: pd.DataFrame) -> dict[str, list[str]]:
@@ -61,13 +63,13 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
         return recs
     if frames.competitors.empty:
         st.caption("Data Produk kompetitor belum diunggah: kata kunci dibaca dari nama produk sendiri.")
-    st.caption(f"{note} Dinilai {fmt_num(len(recs))} SKU teratas menurut peringkat (maks. {NAME_LIMIT}).")
+    st.caption(f"Dinilai {fmt_num(len(recs))} SKU teratas menurut peringkat (maks. {NAME_LIMIT}).", help=f"Metode: {note}")
     counts = recs["Status skor"].value_counts()
     current = st.session_state.get("name-filter", "Semua")
     cols = st.columns(4)
     for column, status in zip(cols, ("Semua", "Poor", "Standard", "Excellence")):
         total = len(recs) if status == "Semua" else int(counts.get(status, 0))
-        if column.button(f"{status} · {fmt_num(total)}", key=f"name-filter-{status}", type="primary" if current == status else "secondary", use_container_width=True):
+        if column.button(f"{SCORE_DISPLAY.get(status, status)} · {fmt_num(total)}", key=f"name-filter-{status}", type="primary" if current == status else "secondary", use_container_width=True):
             st.session_state["name-filter"] = status
             st.rerun()
     view = recs if current == "Semua" else recs.loc[recs["Status skor"].eq(current)]
@@ -78,7 +80,9 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
     columns = ["SKU", "Nama produk saat ini", "Status skor", "Rekomendasi nama baru", "Kata kunci utama"]
     display = page[columns].copy()
     display["Ringkasan deskripsi"] = page["Rekomendasi deskripsi"].map(description_summary)
-    table_col, detail_col = st.columns([3, 2], gap="medium")
+    display["Status skor"] = display["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v))
+    # Tabel selebar penuh; detail baris terpilih tampil di bawahnya.
+    table_col, detail_col = st.container(), st.container(border=True)
     with table_col:
         event = show_table(
             display,
@@ -143,9 +147,9 @@ def _description_html(text: str) -> str:
 
 def _name_detail(item: pd.Series) -> None:
     with st.container(border=True):
-        st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b'>Nama saat ini · skor {html.escape(str(item['Status skor']))} ({item['Poin skor']}/8)</div>"
+        st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b'>Nama saat ini · skor {html.escape(SCORE_DISPLAY.get(str(item['Status skor']), str(item['Status skor'])))} ({item['Poin skor']}/8)</div>"
                     f"<div style='font-size:var(--fs-sm)'>{html.escape(str(item['Nama produk saat ini']))}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b;margin-top:.5rem'>Nama rekomendasi · skor {html.escape(str(item['Skor nama baru']))}</div>"
+        st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b;margin-top:.5rem'>Nama rekomendasi · skor {html.escape(SCORE_DISPLAY.get(str(item['Skor nama baru']), str(item['Skor nama baru'])))}</div>"
                     f"<div style='font-weight:700'>{html.escape(str(item['Rekomendasi nama baru']))}</div>", unsafe_allow_html=True)
         st.markdown(_keyword_chips(item["Kata kunci utama"]) + _keyword_chips(item["Kata kunci pendukung"]), unsafe_allow_html=True)
         checks = item["Kriteria"] if isinstance(item["Kriteria"], dict) else {}
@@ -296,7 +300,7 @@ def show_recommendations(
 
     st.subheader("Rekomendasi")
     if table is None or table.empty:
-        st.write("Jalankan analisis terlebih dahulu.")
+        st.write("Jalankan analisa terlebih dahulu.")
         return
     slugs = [slug for slug, _label in SUB_TABS]
     current = st.session_state.get("rek-sub") or slugs[0]

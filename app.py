@@ -926,9 +926,9 @@ st.markdown(
     .qty-legend .down { background: #dc2626; }
     .qty-legend .flat { background: #64748b; }
     .qty-card { padding: 0.95rem 0.15rem 1.05rem; }
-    .qty-id { text-align: right; margin-bottom: 0.45rem; }
+    .qty-id { text-align: left; margin-bottom: 0.45rem; }
     .qty-rank { font-weight: 800; color: #0f172a; font-size: var(--fs-base); }
-    .qty-name { color: #1e293b; font-weight: 650; line-height: 1.4; margin-top: 0.12rem; }
+    .qty-name { color: #1e293b; font-weight: 650; line-height: 1.4; margin-top: 0.12rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .qty-var { color: #94a3b8; font-size: var(--fs-sm); margin-top: 0.08rem; }
     .qty-line { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.42rem; }
     .qty-metric {
@@ -1115,6 +1115,11 @@ st.markdown(
         opacity: 0;
         animation: mitra-load-in .2s ease .6s forwards;
         pointer-events: none;
+    }
+    /* Judul kolom Riwayat analisa tetap terlihat saat daftar di-scroll. */
+    .st-key-run-history > :first-child {
+        position: sticky; top: 0; z-index: 3;
+        background: #ffffff; border-bottom: 1px solid #e2e8f0;
     }
     /* Pop-up (menu akun, pilihan dropdown) selalu di atas header yang dipaku (z-index 40) dan pelindungnya. */
     div[data-baseweb="popover"],
@@ -1881,7 +1886,7 @@ def show_homepage() -> None:
                 <div class="brand-card shopee"><img src="{shopee}" alt="Shopee"></div>
             </div>
             <div class="home-kicker">E-commerce intelligence</div>
-            <div class="home-title">Keputusan e-commerce,<br>dalam satu ruang kerja.</div>
+            <div class="home-title">Keputusan e&#8209;commerce,<br>dalam satu ruang kerja.</div>
             <div class="home-lead">
                 Ruang kerja manajer e-commerce dan digital marketing, sekaligus artefak tesis
                 Magister Teknik Informatika Renxy Lichandy for Mitra10 - 2026.
@@ -1905,8 +1910,14 @@ def show_homepage() -> None:
             """,
             unsafe_allow_html=True,
         )
-        run_col, train_col, _gap = st.columns([1.2, 1.2, 3])
+        run_col, train_col, open_col, _gap = st.columns([1.2, 1.2, 1.5, 1.6])
         may_run = can(AUTH_USER.role, "jalankan_analisa")
+        latest = _latest_ready_run() if "analysis" not in st.session_state else None
+        if latest is not None and open_col.button("Buka analisa terakhir", use_container_width=True, key="home-open-last", help=f"Hasil {run_stamp_text(latest.run_at)} oleh {latest.run_by}"):
+            with st.spinner("Membuka hasil analisa terakhir…"):
+                opened_ok = open_saved_run(latest.id)
+            if opened_ok:
+                st.rerun()
         if not may_run:
             st.caption("Role Anda melihat hasil analisa terakhir. Buka hasil dari Riwayat analisa di bawah.")
         if may_run and run_col.button("Jalankan analisa", type="primary", use_container_width=True, key="home-run"):
@@ -2096,6 +2107,18 @@ def persist_run_caches() -> None:
     st.session_state["active-run"] = (run_id, tuple(cache))
 
 
+def _latest_ready_run():
+    """Riwayat terbaru yang file hasilnya masih ada (untuk tombol Buka analisa terakhir)."""
+    try:
+        repo = run_repository()
+        for record in repo.list_runs(limit=10):
+            if repo.available(record):
+                return record
+    except Exception:
+        return None
+    return None
+
+
 def show_run_history() -> None:
     try:
         runs = run_repository().list_runs(limit=30)
@@ -2127,7 +2150,7 @@ def show_run_history() -> None:
             cells[3].markdown("QTY terjual" if record.parameter == "qty" else "Sales volume")
             cells[4].markdown(f"{record.safety_stock}%")
             until = data_until.get(int(record.id))
-            cells[5].markdown(fmt_date_short(until) if until else "–")
+            cells[5].markdown(fmt_date_short(until) if until else "<span style='color:#94a3b8'>tidak tercatat</span>", unsafe_allow_html=True)
             ready = repo.available(record)
             if ready:
                 cells[6].markdown("✅ Sukses")
@@ -2386,7 +2409,7 @@ def show_prediction_inputs() -> None:
         if notice:
             st.error(notice)
         if "analysis" in st.session_state:
-            st.caption("Hasil analisis sebelumnya tetap ada sampai analisis dijalankan lagi.")
+            st.caption("Hasil analisa sebelumnya tetap ada sampai analisa dijalankan lagi.")
 
     upload_box = st.container(border=True)
     summary_box = st.container(border=True)
@@ -2403,7 +2426,7 @@ def show_prediction_inputs() -> None:
     with period_box:
         st.markdown(
             """
-            <div class="home-section">PERIODE ANALISIS DATA LATIH</div>
+            <div class="home-section">PERIODE ANALISA DATA LATIH</div>
             <div class="feature-copy">Checklist periode mana yang akan digunakan sebagai data latih untuk analisa trend dan prediksi</div>
             """,
             unsafe_allow_html=True,
@@ -2569,9 +2592,9 @@ def show_prediction_inputs() -> None:
             "</div>",
             unsafe_allow_html=True,
         )
-        if run_col.button("Jalankan analisis", type="primary", use_container_width=True):
+        if run_col.button("Jalankan analisa", type="primary", use_container_width=True):
             if not isinstance(orders_raw, pd.DataFrame) or orders_raw.empty:
-                st.session_state["input-error"] = "Pilih tahun dan bulan, atau unggah laporan, sebelum menjalankan analisis."
+                st.session_state["input-error"] = "Pilih tahun dan bulan, atau unggah laporan, sebelum menjalankan analisa."
                 st.rerun()
             request_analysis_run(
                 period=period,
@@ -2612,7 +2635,7 @@ def safety_recommendation_html(rec, service: int, impact: dict | None, period: s
             f"Risiko kehabisan per siklus ±{format_number(impact['risk_new'], 0)}% (saran ±{format_number(impact['risk_rec'], 0)}%)."
         )
     else:
-        lines.append(f"Risiko kehabisan per siklus ±{format_number(max(100 - service, 0), 0)}%. Jalankan analisis untuk melihat dampak unit dan rupiah.")
+        lines.append(f"Risiko kehabisan per siklus ±{format_number(max(100 - service, 0), 0)}%. Jalankan analisa untuk melihat dampak unit dan rupiah.")
     return (
         f"<div style='border-left:4px solid {tone};background:{bg};padding:10px 14px;border-radius:8px;color:#0f172a;font-size:var(--fs-sm);line-height:1.55'>"
         + "<br>".join(lines)
@@ -2799,10 +2822,10 @@ def _qty_pill(predicted: int, actual: int) -> tuple[str, str, int, float | None]
     qty_text = format_qty(predicted)
     if direction == "naik":
         mark = "▲"
-        signed = f"+{format_number(abs(percent), 2)}%" if percent is not None else ""
+        signed = _signed_pct(abs(percent)) if percent is not None else ""
     elif direction == "turun":
         mark = "▼"
-        signed = f"−{format_number(abs(percent), 2)}%" if percent is not None else ""
+        signed = _signed_pct(-abs(percent)) if percent is not None else ""
     else:
         mark = "–"
         signed = "0%"
@@ -2894,9 +2917,15 @@ def _last_month_sold(orders: pd.DataFrame | None, as_of: date) -> tuple[str, dic
     )
 
 
+PCT_DISPLAY_CAP = 999.0
+
+
 def _signed_pct(value: float, decimals: int = 1) -> str:
+    """Persen bertanda, 1 desimal; di atas ±999% ditulis "> +999%" (angka dasar terlalu kecil untuk dibaca sebagai %)."""
     sign = "+" if value > 0 else "−" if value < 0 else ""
-    return f"{sign}{format_number(abs(value), decimals)}%"
+    if abs(value) > PCT_DISPLAY_CAP:
+        return f"> {sign}{format_number(PCT_DISPLAY_CAP, 0)}%"
+    return f"{sign}{format_number(abs(value), min(decimals, 1))}%"
 
 
 def _share_text(value: float) -> str:
@@ -3575,7 +3604,7 @@ def _insight_markup(row: pd.Series, brief: dict) -> str:
         f"<div class='insight-head {head_tone}'>"
         f"<div class='insight-kicker'>{html.escape(brief['kicker'])}</div>"
         f"<div class='insight-title'>{name}</div>"
-        f"<div class='insight-meta'>SKU {sku} · Variance: {variance}</div>"
+        f"<div class='insight-meta'>SKU {sku} · Varian: {variance}</div>"
         "</div>"
         "<div class='insight-stat'>"
         f"<div class='insight-stat-label'>Prediksi {html.escape(brief['month_label'])} dibanding terjual</div>"
@@ -3702,7 +3731,7 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
         "<div class='qty-card'>"
         "<div class='qty-id'>"
         f"<div class='qty-rank'>{rank}. SKU {sku}</div>"
-        f"<div class='qty-name'>{name}</div>"
+        f"<div class='qty-name' title='{name}'>{name}</div>"
         f"<div class='qty-var'>Varian {variance}</div>"
         "</div>"
         "<div class='qty-line qty-head-row'>"
@@ -4331,7 +4360,7 @@ def show_folder_menu() -> None:
     st.subheader("Folder data")
     st.caption(
         "Data yang sudah diimpor tersimpan di sini. Bulan yang dipakai sebagai data latih dipilih di halaman "
-        "Ubah data latih (Periode analisis data latih). Untuk data transaksi, file baru yang memuat bulan yang sama "
+        "Ubah data latih (Periode analisa data latih). Untuk data transaksi, file baru yang memuat bulan yang sama "
         "mengganti isi bulan itu di folder ini dengan isi file baru."
     )
     if not saved:
@@ -4430,9 +4459,9 @@ def safety_analysis(
         )
     if impact is None or not synced:
         if not synced and has_result:
-            pending = "Klik Jalankan analisis supaya angka mengikuti file dan periode yang baru."
+            pending = "Klik Jalankan analisa supaya angka mengikuti file dan periode yang baru."
         elif not has_result:
-            pending = "Klik Jalankan analisis untuk menghitung angka ini."
+            pending = "Klik Jalankan analisa untuk menghitung angka ini."
         else:
             pending = "Angka item terlaris belum tersedia untuk persentase ini."
         return css, f"{headline}<br>{pending}"
@@ -6680,7 +6709,7 @@ def show_analysis_movement(
                     "<div class='stat-card'>"
                     f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
                     f"<div class='readable-metric-value'>{html.escape(format_idr(total_sales))}</div>"
-                    f"<div class='metric-hint'>{format_number(len(all_sku), 0)} SKU dianalisis</div>"
+                    f"<div class='metric-hint'>{format_number(len(all_sku), 0)} SKU dianalisa</div>"
                     "</div>",
                     unsafe_allow_html=True,
                 )
@@ -6829,7 +6858,7 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
         f"Prediksi sales bulan ini = bagian {format_number(month_days)} hari, {html.escape(format_id_date(day))} sampai {html.escape(format_id_date(month_end))}. "
         "Stok disarankan hari ini = prediksi QTY 1 hari + safety stock 1 hari. "
         f"Stok disarankan bulan ini memakai {format_number(month_days)} hari. Safety mengikuti akar jumlah hari, bukan dibagi rata. "
-        "Di bawah stok hari ini, selisih terhadap analisis tanggal pembanding: biru naik, merah turun, tanda - bila sama.</div>",
+        "Di bawah stok hari ini, selisih terhadap analisa tanggal pembanding: biru naik, merah turun, tanda - bila sama.</div>",
         unsafe_allow_html=True,
     )
     if ready is None or ready.empty:
@@ -6943,7 +6972,7 @@ with PAGE_ROOT.container(key="page-root"):
 
     if run and (not isinstance(orders_raw, pd.DataFrame) or orders_raw.empty):
         st.session_state["editing-input"] = True
-        st.session_state["input-error"] = "Data latih tidak terbaca. Pilih bulan atau unggah laporan, lalu jalankan analisis lagi."
+        st.session_state["input-error"] = "Data latih tidak terbaca. Pilih bulan atau unggah laporan, lalu jalankan analisa lagi."
         st.rerun()
 
     sheet = str(st.session_state.get("active-sheet", "Ringkasan"))
@@ -7008,7 +7037,7 @@ with PAGE_ROOT.container(key="page-root"):
         history = aggregate_item_periods(orders, period)
 
         if history.empty:
-            st.warning("Tidak ada transaksi yang bisa dianalisis pada data ini.")
+            st.warning("Tidak ada transaksi yang bisa dianalisa pada data ini.")
             st.stop()
 
         base_period = "hari"
@@ -7124,7 +7153,7 @@ with PAGE_ROOT.container(key="page-root"):
         period_text = stored.get("period_text") or forecast_window(period)[2]
 
     if filters_changed:
-        st.warning("Periode prediksi, parameter, atau data latih berubah. Klik **Jalankan analisis** untuk menghitung ulang.")
+        st.warning("Periode prediksi, parameter, atau data latih berubah. Klik **Jalankan analisa** untuk menghitung ulang.")
 
     stored = st.session_state["analysis"]
     orders_all = stored.get("orders_all", orders)
@@ -7343,7 +7372,9 @@ with PAGE_ROOT.container(key="page-root"):
             label_options=list(LABEL_ICONS),
         )
         show_pred_vs_actual(FEATURES, orders=orders, table=enriched)
-        show_exclude_and_cards()
+        # Kartu penjualan & saklar batal/retur sama dengan Ringkasan: di sini dilipat agar tidak dobel.
+        with st.expander("Ringkasan penjualan periode & saklar Kecualikan batal & retur (sama dengan menu Ringkasan)"):
+            show_exclude_and_cards()
         st.subheader("Prediksi semua produk")
         if enriched is None or enriched.empty:
             st.write("Tidak ada item untuk ditampilkan.")
@@ -7383,7 +7414,7 @@ with PAGE_ROOT.container(key="page-root"):
                     filename="prediksi_semua_produk.xlsx",
                     height=720,
                 )
-                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default)
+                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, scope="Semua produk sesuai saringan")
                 if picked:
                     show_sku_detail(page_view, picked, key=f"allpred-chart-{picked}")
 

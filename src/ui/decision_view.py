@@ -80,8 +80,8 @@ def table_parts(
     columns: list[dict] = [
         {"id": "pick", "label": "Grafik", "pin": True, "width": 64},
         {"id": "rank", "label": "Peringkat", "pin": True, "width": 86, "kind": "num", "sort": True},
-        {"id": "sku", "label": "SKU", "kicker": "Produk", "pin": True, "width": 116, "sort": True},
-        {"id": "name", "label": "Produk", "kicker": "Produk", "pin": True, "width": 290, "kind": "name", "sort": True},
+        {"id": "sku", "label": "SKU", "pin": True, "width": 116, "sort": True},
+        {"id": "name", "label": "Produk", "pin": True, "width": 290, "kind": "name", "sort": True},
         {"id": "variance", "label": "Varian", "width": 160, "kind": "name", "sort": True},
         {"id": "sold", "label": main_label, "group": f"Terjual · {resume_label}", "kind": "num", "sort": True},
     ]
@@ -210,11 +210,11 @@ def label_legend() -> None:
     st.markdown(f"<div class='field-hint'>{LABEL_LEGEND}</div>", unsafe_allow_html=True)
 
 
-def safety_stock_box(table: pd.DataFrame, *, period: str, today: date, definition: str, used_default: bool) -> None:
+def safety_stock_box(table: pd.DataFrame, *, period: str, today: date, definition: str, used_default: bool, scope: str = "Top 50") -> None:
     groups = period_groups(period, today)
     with st.container(border=True):
-        st.markdown("**Analisa safety stock**")
-        st.caption(definition)
+        st.markdown(f"**Analisa safety stock · {scope} ({fmt_num(len(table))} SKU)**")
+        st.caption(definition + " Total SS sama di setiap periode karena SS dihitung dari lead time, bukan dari panjang periode.")
         cols = st.columns(len(groups))
         for column, group in zip(cols, groups):
             summary = safety_stock_summary(table, group.prefix)

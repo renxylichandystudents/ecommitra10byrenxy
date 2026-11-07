@@ -72,7 +72,7 @@ def _candidates(table: pd.DataFrame, data: FeatureData, margin_min: float, roas_
 def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, params: dict, window_start: date, username: str, can_edit: bool) -> None:
     st.markdown("<div class='section-title'>Target penjualan & strategi iklan</div>", unsafe_allow_html=True)
     if table is None or table.empty:
-        st.write("Jalankan analisis terlebih dahulu.")
+        st.write("Jalankan analisa terlebih dahulu.")
         return
     periode = _periode(window_start)
     saved = data.target or {}
@@ -207,7 +207,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
 def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date) -> None:
     st.markdown("<div class='section-title'>Flash sale toko</div>", unsafe_allow_html=True)
     if table is None or table.empty:
-        st.write("Jalankan analisis terlebih dahulu.")
+        st.write("Jalankan analisa terlebih dahulu.")
         return
     products = product_frame(table).set_index("sku")
     candidates, skipped = [], []
@@ -272,7 +272,7 @@ def _ranked_for_exposure(table: pd.DataFrame, data: FeatureData, orders: pd.Data
 def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: pd.DataFrame | None, frames, today: date, username: str, can_edit: bool) -> None:
     st.markdown("<div class='section-title'>Exposure media sosial</div>", unsafe_allow_html=True)
     if table is None or table.empty:
-        st.write("Jalankan analisis terlebih dahulu.")
+        st.write("Jalankan analisa terlebih dahulu.")
         return
     ym = st.session_state.get("expo-ym") or (today.year, today.month)
     n1, n2, n3, n4 = st.columns([1, 1, 1, 3])

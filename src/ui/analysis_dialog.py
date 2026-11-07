@@ -77,7 +77,7 @@ def analysis_markup(
         "<div class='insight-head flat'>"
         f"<div class='insight-kicker'>Analisa prediksi · peringkat {fmt_num(row.get('peringkat'))}</div>"
         f"<div class='insight-title'>{name}</div>"
-        f"<div class='insight-meta'>SKU {sku} · Variance: {variance} {('· ' + labels) if labels else ''}</div>"
+        f"<div class='insight-meta'>SKU {sku} · Varian: {variance} {('· ' + labels) if labels else ''}</div>"
         "</div>"
     )
     # 1. Prediksi per periode vs stok

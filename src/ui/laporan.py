@@ -257,7 +257,8 @@ def show_report(
             if section == SECTIONS[0]:
                 cols = st.columns(4)
                 metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
-                card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"target {fmt_idr(target)}" if target > 0 else None)
+                window_text = f"{fmt_date(window_start, short=True)} – {fmt_date(window_end, short=True)}"
+                card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"{window_text} · target {fmt_idr(target)}" if target > 0 else window_text)
                 metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
                 short_hint = f"stok di bawah {pred_label} + SS · {fmt_num(shortage['kosong'])} kosong (stok 0)"
                 if shortage["tanpa_data"]:
@@ -347,13 +348,17 @@ def show_report(
                     ads = ads.sort_values("biaya_iklan", ascending=False).head(20)
                     show_table(ads.rename(columns={"sku": "SKU", "product_name": "Produk", "biaya_iklan": "Biaya", "omzet_iklan": "Omzet iklan", "m_status": "Status stok"}))
             elif section == SECTIONS[5]:
-                perf = store_performance(frames.performance, today)
+                # Ikut periode laporan: 28 hari yang berakhir di hari terakhir periode laporan.
+                perf_end = (report_hi + pd.Timedelta(days=1)).date()
+                perf = store_performance(frames.performance, perf_end)
                 if not perf:
                     st.write("Data performa toko belum diunggah.")
                 else:
+                    span_text = f"28 hari s.d. {fmt_date(report_hi.date(), short=True)}"
+                    st.caption(f"Performa toko {span_text}, dibanding 28 hari sebelumnya.")
                     cols = st.columns(4)
-                    card(cols[0], "Pengunjung 28 hari", fmt_num(perf["pengunjung"]), hint=f"sebelumnya {fmt_num(perf['pengunjung_prev'])}")
-                    card(cols[1], "Pesanan 28 hari", fmt_num(perf["pesanan"]), hint=f"sebelumnya {fmt_num(perf['pesanan_prev'])}")
+                    card(cols[0], "Pengunjung", fmt_num(perf["pengunjung"]), hint=f"sebelumnya {fmt_num(perf['pengunjung_prev'])}")
+                    card(cols[1], "Pesanan", fmt_num(perf["pesanan"]), hint=f"sebelumnya {fmt_num(perf['pesanan_prev'])}")
                     card(cols[2], "Konversi", fmt_pct(perf["konversi"], 2), hint=f"sebelumnya {fmt_pct(perf['konversi_prev'], 2)}")
                     card(cols[3], "Pembeli baru", fmt_num(perf["pembeli_baru"]))
             elif section == SECTIONS[6]:

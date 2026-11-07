@@ -171,7 +171,15 @@ def recommendation_records(
     return frame.head(limit) if limit else frame
 
 
+PRIORITY_WORDS = {1: "1 · Mendesak", 2: "2 · Penting", 3: "3 · Biasa"}
+
+
 def records_display(records: pd.DataFrame) -> pd.DataFrame:
+    """Kolom tampilan + nomor urut (prioritas 1–3 adalah tingkat, urutan di dalamnya = restock terbesar)."""
+    records = records.copy()
+    if "prioritas" in records.columns:
+        records["prioritas"] = records["prioritas"].map(lambda v: PRIORITY_WORDS.get(int(v), v) if pd.notna(v) else v)
+    records.insert(0, "No", range(1, len(records) + 1))
     return records.rename(
         columns={
             "prioritas": "Prioritas",

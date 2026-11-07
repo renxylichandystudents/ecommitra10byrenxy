@@ -14,6 +14,7 @@ import pandas as pd
 
 from src.core.naming import category_label
 from src.core.preprocessing import promo_flag
+from src.utils.format import desimal, persen
 
 SHORT_STATUSES = {"Kosong", "Kurang"}
 
@@ -127,7 +128,7 @@ def ads_plan(
         if status in SHORT_STATUSES:
             reasons.append(f"Stok {status.lower()}: kebutuhan belum tertutup, iklan ditunda")
         elif row["roas_est"] < target_roas:
-            reasons.append(f"Estimasi ROAS {row['roas_est']:.1f} di bawah target {target_roas:g}")
+            reasons.append(f"Estimasi ROAS {desimal(row['roas_est'], 1)} di bawah target {target_roas:g}")
         elif row["porsi_organik"] >= 0.9 and row["sales_total"] > 0 and "Terlaris" in (row.get("label") or []):
             reasons.append("Penjualan organik sudah tinggi (≥ 90% tanpa iklan)")
         elif row["sales_periode"] <= 0:
@@ -144,9 +145,9 @@ def ads_plan(
     eligible["Estimasi ROAS"] = np.where(eligible["Budget"] > 0, eligible["Estimasi sales iklan"] / eligible["Budget"], 0.0)
     eligible["Tanggal iklan"] = date_text
     eligible["Analisa"] = [
-        f"Stok {_status(r).lower() or 'tersedia'}, hari cukup {r['hari_cukup']:.0f}; ROAS {'historis' if pd.notna(r['roas_hist']) else 'default'} {r['roas_est']:.1f}"
+        f"Stok {_status(r).lower() or 'tersedia'}, hari cukup {r['hari_cukup']:.0f}; ROAS {'historis' if pd.notna(r['roas_hist']) else 'default'} {desimal(r['roas_est'], 1)}"
         if pd.notna(r.get("hari_cukup")) and np.isfinite(r.get("hari_cukup", np.nan))
-        else f"ROAS {'historis' if pd.notna(r['roas_hist']) else 'default'} {r['roas_est']:.1f}; stok belum diunggah"
+        else f"ROAS {'historis' if pd.notna(r['roas_hist']) else 'default'} {desimal(r['roas_est'], 1)}; stok belum diunggah"
         for _, r in eligible.iterrows()
     ]
     group_keys: dict[str, str] = {}
@@ -274,8 +275,8 @@ def flash_sale_plan(
             if row.get("dilihat", 0) and row.get("dilihat", 0) > 0:
                 reason.append(f"dilihat {int(row['dilihat'])}, klik {int(row.get('klik', 0))}")
             if pd.notna(row["konversi"]):
-                reason.append(f"konversi iklan {row['konversi'] * 100:.1f}%")
-            reason.append(f"margin tetap ≥ {margin_min * 100:.0f}%")
+                reason.append(f"konversi iklan {persen(row['konversi'] * 100, 1)}")
+            reason.append(f"margin tetap ≥ {persen(margin_min * 100, 0)}")
             if promo:
                 reason.append("tanggal promo")
             rows.append(
