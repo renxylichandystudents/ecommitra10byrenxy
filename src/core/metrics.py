@@ -97,8 +97,13 @@ def _num(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
 def _text(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series("", index=frame.index, dtype=object)
-    values = frame[column].fillna("").astype(str).str.strip()
-    return values.mask(values.str.lower().isin(BLANK_IDS), "")
+    from src.ingest import via_unique
+
+    def _clean(part: pd.Series) -> pd.Series:
+        values = part.fillna("").astype(str).str.strip()
+        return values.mask(values.str.lower().isin(BLANK_IDS), "")
+
+    return via_unique(frame[column], _clean)
 
 
 def normalize_lines(frame: pd.DataFrame | None) -> pd.DataFrame:

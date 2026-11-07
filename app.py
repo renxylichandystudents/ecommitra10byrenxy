@@ -1387,7 +1387,17 @@ def _tick(label: str) -> None:
 
 
 def show_timings() -> None:
-    if str(st.query_params.get("debug", "")) != "waktu" or getattr(AUTH_USER, "role", "") != "super_user":
+    # ?debug=waktu sekali saja: tanda disimpan di sesi karena URL ditulis ulang saat pindah halaman.
+    if str(st.query_params.get("debug", "")) == "waktu":
+        st.session_state["_debug-waktu"] = True
+    if os.getenv("MITRA_TIMING") == "1":
+        prev = _T0
+        parts = []
+        for label, stamp in TIMINGS:
+            parts.append(f"{label}={stamp - prev:.2f}")
+            prev = stamp
+        print("TIMING " + " | ".join(parts) + f" | TOTAL={time.perf_counter() - _T0:.2f}", flush=True)
+    if not st.session_state.get("_debug-waktu") or getattr(AUTH_USER, "role", "") != "super_user":
         return
     rows, last = [], _T0
     for label, stamp in TIMINGS:
@@ -1398,6 +1408,8 @@ def show_timings() -> None:
         st.dataframe(pd.DataFrame(rows), hide_index=True)
 
 AUTH_USER = login_gate()
+if str(st.query_params.get("debug", "")) == "waktu":
+    st.session_state["_debug-waktu"] = True
 _tick("login")
 get_features()
 
@@ -1608,7 +1620,7 @@ def cached_library_frames(
     return source, clean_order_frame(source)
 
 
-@st.cache_data(show_spinner=False, max_entries=2)
+@st.cache_data(show_spinner=False, max_entries=4)  # Data & Ringkasan memakai kombinasi bulan berbeda
 def cached_ledger(keys: tuple[str, ...], stamp: tuple[float, ...]) -> pd.DataFrame:
     del stamp
     source, _orders = load_months(list(keys))
@@ -4229,17 +4241,28 @@ def _one_row_per_sku(shown: pd.DataFrame, issue_kind: str) -> pd.DataFrame:
     if shown.empty or not {"SKU", "Varian"} <= set(shown.columns):
         return shown
     sums = [c for c in ISSUE_SUMS if c in shown.columns]
-    groups = []
-    for (_sku, _variant), part in shown.groupby(["SKU", "Varian"], sort=False):
-        row = {"SKU": part["SKU"].iloc[0], "Produk": part["Produk"].iloc[0] if "Produk" in part else "", "Varian": part["Varian"].iloc[0]}
-        for column in sums:
-            row[column] = pd.to_numeric(part[column], errors="coerce").fillna(0).sum()
-        if "Alasan retur" in part:
-            row["Alasan retur"] = _join_reasons(part["Alasan retur"], part.get("Qty retur", pd.Series(0, index=part.index)))
-        if "Alasan batal" in part:
-            row["Alasan batal"] = _join_reasons(part["Alasan batal"], part.get("Invoice batal", pd.Series(0, index=part.index)))
-        groups.append(row)
-    merged = pd.DataFrame(groups)
+    work = shown.copy()
+    for column in sums:
+        work[column] = pd.to_numeric(work[column], errors="coerce").fillna(0)
+    keys = ["SKU", "Varian"]
+    agg = {column: "sum" for column in sums}
+    if "Produk" in work.columns:
+        agg["Produk"] = "first"
+    merged = work.groupby(keys, sort=False, as_index=False).agg(agg)
+    for reason_col, weight_col in (("Alasan retur", "Qty retur"), ("Alasan batal", "Invoice batal")):
+        if reason_col not in work.columns:
+            continue
+        weights = work[weight_col] if weight_col in work.columns else pd.Series(0, index=work.index)
+        part = work.assign(_w=weights).loc[work[reason_col].astype(str).str.strip().ne("")]
+        if part.empty:
+            merged[reason_col] = ""
+            continue
+        per = part.groupby(keys + [reason_col], sort=False, as_index=False)["_w"].sum()
+        per = per.sort_values(keys + ["_w", reason_col], ascending=[True, True, False, True], kind="mergesort")
+        per["_txt"] = [f"{r} ({format_number(w)})" if w > 0 else str(r) for r, w in zip(per[reason_col], per["_w"])]
+        joined = per.groupby(keys, sort=False)["_txt"].agg(" · ".join).rename(reason_col).reset_index()
+        merged = merged.merge(joined, on=keys, how="left")
+        merged[reason_col] = merged[reason_col].fillna("")
     order = {"Retur": ["Qty retur", "Nominal retur"], "Batal": ["Qty batal", "Nominal batal"]}.get(
         issue_kind, ["Qty retur", "Nominal retur", "Qty batal", "Nominal batal"]
     )
@@ -4249,7 +4272,6 @@ def _one_row_per_sku(shown: pd.DataFrame, issue_kind: str) -> pd.DataFrame:
     merged.insert(0, "Peringkat", 0)
     columns = [c for c in shown.columns if c in merged.columns]
     return merged.loc[:, columns].reset_index(drop=True)
-
 
 @st.cache_data(show_spinner=False, max_entries=64)
 def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str, ...], all_reasons: tuple[str, ...]) -> tuple[pd.DataFrame, int]:
@@ -6828,6 +6850,12 @@ def enriched_catalog(
     cached = st.session_state.get("_enriched")
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1]
+    # Beberapa menu memakai periode penjualan berbeda (stamp berbeda): simpan 8 hasil terakhir agar
+    # bolak-balik menu tidak menghitung ulang katalog.
+    recent = st.session_state.setdefault("_enriched-recent", {})
+    if stamp in recent:
+        st.session_state["_enriched"] = (stamp, recent[stamp])
+        return recent[stamp]
     try:
         table = enrich_catalog(
             catalog,
@@ -6845,6 +6873,9 @@ def enriched_catalog(
         table["label"] = [[] for _ in range(len(table))]
         table["label_text"] = ""
     st.session_state["_enriched"] = (stamp, table)
+    recent[stamp] = table
+    while len(recent) > 8:
+        recent.pop(next(iter(recent)))
     return table
 
 

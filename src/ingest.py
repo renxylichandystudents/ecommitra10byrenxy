@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
+import numpy as np
 import pandas as pd
 
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -568,9 +569,26 @@ def clean_sku_columns(frame: pd.DataFrame) -> pd.DataFrame:
 _EMPTY_TOKENS = {"", "nan", "none", "-", "—", "tidak ada"}
 
 
-def clean_text_series(series: pd.Series) -> pd.Series:
-    text = series.fillna("").astype(str).str.strip()
+def via_unique(series: pd.Series, transform) -> pd.Series:
+    """Jalankan `transform` pada nilai unik saja lalu petakan balik ke semua baris.
+
+    Kolom teks laporan Shopee (status, alasan, nama produk) punya puluhan–ratusan nilai unik
+    tetapi ratusan ribu baris; hasilnya identik dengan memproses setiap baris, jauh lebih cepat.
+    """
+    if len(series) < 2000:
+        return transform(series)
+    codes, uniques = pd.factorize(series, use_na_sentinel=False)
+    values = np.asarray(transform(pd.Series(uniques, dtype=object)))
+    return pd.Series(values[codes], index=series.index)
+
+
+def _clean_text_values(series: pd.Series) -> pd.Series:
+    text = series.where(series.notna(), "").astype(str).str.strip()
     return text.mask(text.str.lower().isin(_EMPTY_TOKENS), "")
+
+
+def clean_text_series(series: pd.Series) -> pd.Series:
+    return via_unique(series, _clean_text_values)
 
 
 def clean_sku_series(series: pd.Series) -> pd.Series:
@@ -612,23 +630,31 @@ def item_label_series(frame: pd.DataFrame) -> pd.Series:
 
 
 def normalize_status_series(series: pd.Series) -> pd.Series:
-    text = series.fillna("").astype(str).str.strip()
+    return via_unique(series, _normalize_status_values)
+
+
+def _normalize_status_values(series: pd.Series) -> pd.Series:
+    text = series.where(series.notna(), "").astype(str).str.strip()
     text = text.mask(text.str.lower().isin({"", "nan", "none"}), "")
     text = text.str.replace(_RETURN_WINDOW, "", regex=True).str.strip(" .")
     lower = text.str.lower()
     return text.mask(lower.isin({"pesanan diterima", "diterima"}), "Pesanan Diterima")
 
 
-def cancelled_status_mask(series: pd.Series) -> pd.Series:
-    text = series.fillna("").astype(str).str.strip().str.lower()
+def _cancelled_values(series: pd.Series) -> pd.Series:
+    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
     mask = pd.Series(False, index=series.index)
     for hint in CANCEL_HINTS:
         mask = mask | text.str.contains(hint, regex=False)
     return mask
 
 
+def cancelled_status_mask(series: pd.Series) -> pd.Series:
+    return via_unique(series, _cancelled_values).astype(bool)
+
+
 def success_status_mask(series: pd.Series) -> pd.Series:
-    return series.fillna("").astype(str).str.strip().str.lower().isin(SUCCESS_STATUSES)
+    return via_unique(series, lambda part: part.fillna("").astype(str).str.strip().str.lower().isin(SUCCESS_STATUSES)).astype(bool)
 
 
 def _item_key(row: pd.Series) -> str:
