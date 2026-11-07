@@ -6629,9 +6629,9 @@ def _aligned_totals(
 
 
 def _delta_text(now: float, then: float, *, money: bool) -> str:
-    delta = (round(float(now)) - round(float(then))) if money else round(float(now) - float(then), 1)
+    delta = round(float(now)) - round(float(then))
     amount = format_idr(abs(delta)) if money else format_qty(abs(delta))
-    if abs(delta) < 0.05:
+    if delta == 0:
         return "0 (0%)"
     sign = "+" if delta > 0 else "−"
     if then == 0:
@@ -6651,7 +6651,7 @@ def _move_line(now: float, then: float | None, *, money: bool, fresh: bool = Fal
         return "<div class='metric-move flat'>Data latih sebelum hari ini belum cukup untuk dihitung.</div>"
     text = _delta_text(now, then, money=money)
     tone = "flat" if text.startswith("0 ") else ("up" if float(now) > float(then) else "down")
-    before = format_idr(then) if money else f"{format_qty(then)} unit"
+    before = format_idr(then) if money else f"{format_number(round(float(then)), 0)} unit"
     # Nilai pembanding ditulis langsung agar user tidak perlu menghitung dari persentase.
     return f"<div class='metric-move {tone}'>{html.escape(text)} dibanding prediksi kemarin <b>{html.escape(before)}</b></div>"
 
@@ -7099,7 +7099,7 @@ def show_analysis_movement(
             _prediction_card(
                 cards[0],
                 f"Prediksi {'sales' if main_money else qty_label} {name} · Top 50 SKU",
-                format_idr(main_now) if main_money else f"{format_qty(main_now)} unit",
+                format_idr(main_now) if main_money else f"{format_number(round(float(main_now)), 0)} unit",
                 _move_line(main_now, main_then, money=main_money, fresh=fresh),
                 tip=day_tip if not main_money else "",
                 extra_html=actual_html if not main_money else "",
@@ -7107,7 +7107,7 @@ def show_analysis_movement(
             _prediction_card(
                 cards[1],
                 f"Prediksi {qty_label if main_money else 'sales'} {name} · Top 50 SKU",
-                f"{format_qty(qty_now)} unit" if main_money else format_idr(sales_now),
+                f"{format_number(round(float(qty_now)), 0)} unit" if main_money else format_idr(sales_now),
                 _move_line(qty_now if main_money else sales_now, None if then is None else (then[0] if main_money else then[1]), money=not main_money, fresh=fresh),
                 tip=day_tip if main_money else "",
                 extra_html=actual_html if main_money else "",
@@ -7119,7 +7119,7 @@ def show_analysis_movement(
             _prediction_card(
                 cards[2],
                 f"Kebutuhan stok {name} · Top 50 SKU",
-                f"{format_qty(need_now)} unit",
+                f"{format_number(round(float(need_now)), 0)} unit",
                 _move_line(need_now, None if then is None else then[2], money=False, fresh=fresh),
                 tip=need_tip,
             )
