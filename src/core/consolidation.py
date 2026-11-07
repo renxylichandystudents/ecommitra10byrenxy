@@ -149,3 +149,136 @@ def stock_zero_streaks(store: LocalDataStore) -> pd.DataFrame:
         rows.append({"sku": sku, "zero_since": zero_since, "snapshots_zero": len(latest_zero)})
     return pd.DataFrame(rows)
 
+
+
+def _num(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(0.0, index=frame.index)
+    text = frame[column].astype(str).str.replace(r"[^\d,.\-]", "", regex=True)
+    # Format Indonesia "1.234.567,8" → 1234567.8; angka biasa tetap.
+    indo = text.str.contains(r"\.\d{3}(?:[.,]|$)", regex=True) | text.str.contains(",", regex=False)
+    text = text.where(~indo, text.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+    return pd.to_numeric(text, errors="coerce").fillna(0.0)
+
+
+def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
+    """Rincian tiga angka konsolidasi: SKU yang tidak cocok, kode iklan yang tidak terpetakan, dan daftar snapshot.
+
+    Persentase di kartu dihitung per kode unik; rincian ini menambahkan bobot QTY/Sales/biaya iklan,
+    kapan terakhir terjual, dan apakah kode itu ada di stok Site 10062/10036.
+    """
+    from src.core.dc_stock import DC_SITES, latest_site_stock
+
+    tx = store.read_source("transactions")
+    stock = store.read_source("stock")
+    out: dict[str, object] = {}
+    dc_skus: set[str] = set()
+    for _code, _name, source in DC_SITES:
+        site = latest_site_stock(store.read_source(source))
+        dc_skus |= set(site["sku"].astype(str))
+
+    # 1) SKU transaksi vs SKU di Data stok Site 10037
+    if not tx.empty and "sku" in tx.columns:
+        work = tx.copy()
+        work["sku"] = _clean_key(work["sku"])
+        blank_rows = int(work["sku"].eq("").sum())
+        work = work.loc[work["sku"].ne("")]
+        work["qty_n"] = _num(work, "qty")
+        price = _num(work, "net_price")
+        work["sales_n"] = work["qty_n"] * price
+        work["day"] = pd.to_datetime(work["order_time"], errors="coerce") if "order_time" in work.columns else pd.NaT
+        stock_skus = set(_clean_key(stock["sku"])) - {""} if not stock.empty and "sku" in stock.columns else set()
+        per = work.groupby("sku").agg(
+            produk=("product_name", "last") if "product_name" in work.columns else ("sku", "last"),
+            qty=("qty_n", "sum"),
+            sales=("sales_n", "sum"),
+            terakhir=("day", "max"),
+            pesanan=("sku", "size"),
+        )
+        per["cocok"] = per.index.isin(stock_skus)
+        per["di_dc"] = per.index.isin(dc_skus)
+        ref = pd.Timestamp(today) if today is not None else work["day"].max()
+        per["hari_sejak"] = (ref - per["terakhir"]).dt.days
+        miss = per.loc[~per["cocok"]]
+        out["tx"] = {
+            "sku_total": int(len(per)),
+            "sku_cocok": int(per["cocok"].sum()),
+            "baris_tanpa_sku": blank_rows,
+            "qty_cocok_pct": float(per.loc[per["cocok"], "qty"].sum() / per["qty"].sum() * 100) if per["qty"].sum() else 0.0,
+            "sales_cocok_pct": float(per.loc[per["cocok"], "sales"].sum() / per["sales"].sum() * 100) if per["sales"].sum() else 0.0,
+            "miss_30": int((miss["hari_sejak"] <= 30).sum()),
+            "miss_90": int(((miss["hari_sejak"] > 30) & (miss["hari_sejak"] <= 90)).sum()),
+            "miss_lama": int((miss["hari_sejak"] > 90).sum()),
+            "miss_di_dc": int(miss["di_dc"].sum()),
+            "stok_tanpa_transaksi": int(len(stock_skus - set(per.index))),
+            "sku_stok": int(len(stock_skus)),
+        }
+        table = miss.sort_values("sales", ascending=False).reset_index()
+        out["tx_miss"] = pd.DataFrame(
+            {
+                "SKU": table["sku"],
+                "Produk": table["produk"].astype(str),
+                "QTY terjual": table["qty"].round(),
+                "Sales value": table["sales"].round(),
+                "Terakhir terjual": table["terakhir"].map(lambda d: tanggal(d) if pd.notna(d) else "-"),
+                "Ada di Site 10062/10036": table["di_dc"].map({True: "Ya", False: "Tidak"}),
+            }
+        )
+
+    # 2) Kode produk iklan vs Kode Produk di Data stok Site 10037
+    code_to_sku = _product_code_to_sku(stock)
+    rows = []
+    for key in ("ads_auto", "ads_group", "ads_overall"):
+        frame = store.read_source(key)
+        if frame.empty or "product_code" not in frame.columns:
+            continue
+        part = pd.DataFrame(
+            {
+                "kode": _clean_key(frame["product_code"]),
+                "nama": frame["product_name"].astype(str) if "product_name" in frame.columns else "",
+                "biaya": _num(frame, "cost"),
+                "omzet": _num(frame, "ad_sales"),
+                "laporan": SOURCE_SPECS[key].label.replace("Data ", ""),
+            }
+        )
+        rows.append(part)
+    if rows:
+        ads = pd.concat(rows, ignore_index=True)
+        blank = ads["kode"].eq("") | ads["kode"].isin({"-", "0"})
+        ads_named = ads.loc[~blank]
+        per = ads_named.groupby("kode").agg(nama=("nama", "last"), biaya=("biaya", "sum"), omzet=("omzet", "sum"), laporan=("laporan", lambda v: ", ".join(sorted(set(v)))))
+        per["cocok"] = per.index.isin(code_to_sku)
+        total_cost = float(per["biaya"].sum())
+        miss = per.loc[~per["cocok"]]
+        out["ads"] = {
+            "kode_total": int(len(per)),
+            "kode_cocok": int(per["cocok"].sum()),
+            "baris_tanpa_kode": int(blank.sum()),
+            "biaya_tanpa_kode": float(ads.loc[blank, "biaya"].sum()),
+            "biaya_cocok_pct": float(per.loc[per["cocok"], "biaya"].sum() / total_cost * 100) if total_cost else 0.0,
+            "biaya_miss": float(miss["biaya"].sum()),
+            "kode_di_stok": int(len(code_to_sku)),
+        }
+        table = miss.sort_values("biaya", ascending=False).reset_index()
+        out["ads_miss"] = pd.DataFrame(
+            {
+                "Kode produk": table["kode"],
+                "Nama di laporan iklan": table["nama"],
+                "Biaya iklan": table["biaya"].round(),
+                "Omzet iklan": table["omzet"].round(),
+                "Laporan": table["laporan"],
+            }
+        )
+
+    # 3) Snapshot stok Site 10037
+    if not stock.empty and "_submitted_at" in stock.columns:
+        snaps = stock.groupby(stock["_submitted_at"].astype(str)).agg(baris=("sku", "size"), kosong=("stock_dc_cikupa", lambda v: int((pd.to_numeric(v, errors="coerce").fillna(0) <= 0).sum())))
+        snaps = snaps.sort_index().reset_index()
+        out["snapshots"] = pd.DataFrame(
+            {
+                "Diunggah": snaps["_submitted_at"].map(lambda v: tanggal(v, jam=True)),
+                "Jumlah SKU": snaps["baris"],
+                "SKU stok 0": snaps["kosong"],
+            }
+        )
+    return out

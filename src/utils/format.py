@@ -117,7 +117,7 @@ def table_height(rows: int, max_height: int = 600, row_px: int = ROW_PX) -> int:
     return int(min(max(max_height, row_px * 2 + ROW_PX), ROW_PX + rows * row_px + 3))
 
 
-WRAP_CHARS = 42  # perkiraan huruf per baris pada kolom teks lebar
+WRAP_CHARS = 60  # perkiraan huruf per baris pada kolom teks lebar (lebar otomatis ±400–600 px)
 LINE_PX = 21
 
 
@@ -138,7 +138,7 @@ def wrap_row_height(frame: pd.DataFrame) -> int:
         longest = max(longest, int(sample.str.len().max() or 0))
     if longest <= WRAP_CHARS:
         return ROW_PX
-    lines = min(6, max(3, -(-longest // WRAP_CHARS)))
+    lines = min(5, max(3, -(-longest // WRAP_CHARS)))
     return lines * LINE_PX + 4
 
 

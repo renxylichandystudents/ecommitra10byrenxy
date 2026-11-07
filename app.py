@@ -1864,8 +1864,77 @@ def show_training_summary() -> None:
             show_metric(c2, "Produk iklan terpetakan", f"{format_number(metrics['produk_iklan_terpetakan_sku_pct'], 1)}%")
             show_metric(c3, "Snapshot stok", format_number(metrics["snapshot_stok"], 0))
             show_table(consolidated)
+        with st.expander("Rincian: kenapa angka kecocokan tidak 100%?", expanded=False):
+            show_match_diagnostics(store, stamp)
     except Exception as exc:  # noqa: BLE001 - summary is informative, not blocking
         st.caption(f"Ringkasan konsolidasi belum tersedia: {exc}")
+
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def cached_match_diagnostics(root: str, stamp: float) -> dict:
+    from src.core.consolidation import match_diagnostics
+
+    return match_diagnostics(LocalDataStore(root), today=date.today())
+
+
+def show_match_diagnostics(store, stamp: float) -> None:
+    """Penjelasan tiga kartu konsolidasi dengan angka dari data tersimpan."""
+    with st.spinner("Menghitung rincian kecocokan..."):
+        diag = cached_match_diagnostics(str(store.root), stamp)
+    tx = diag.get("tx")
+    st.markdown("**1. SKU transaksi cocok stok**")
+    if tx:
+        miss = tx["sku_total"] - tx["sku_cocok"]
+        st.markdown(
+            f"Dari **{format_number(tx['sku_total'], 0)}** SKU unik yang pernah terjual di Data transaksi, "
+            f"**{format_number(tx['sku_cocok'], 0)}** ada di Data stok Site 10037 (daftar produk Shopee yang diunggah), "
+            f"**{format_number(miss, 0)}** tidak ada. Angka kartu dihitung per SKU, bukan per penjualan: "
+            f"SKU yang cocok mewakili **{format_number(tx['qty_cocok_pct'], 1)}%** QTY dan **{format_number(tx['sales_cocok_pct'], 1)}%** Sales value transaksi."
+        )
+        st.markdown(
+            f"SKU yang tidak cocok menurut terakhir terjual: {format_number(tx['miss_30'], 0)} SKU dalam 30 hari terakhir, "
+            f"{format_number(tx['miss_90'], 0)} SKU 31–90 hari lalu, {format_number(tx['miss_lama'], 0)} SKU lebih dari 90 hari lalu. "
+            f"{format_number(tx['miss_di_dc'], 0)} di antaranya masih ada di stok Site 10062/10036, artinya barangnya ada di Mitra10 "
+            "tetapi tidak (lagi) tercantum di daftar produk Shopee: produk dihapus/diarsipkan, SKU variasi diganti, atau salah ketik Nomor Referensi SKU. "
+            + (f"{format_number(tx['baris_tanpa_sku'], 0)} baris transaksi tanpa SKU tidak dihitung. " if tx["baris_tanpa_sku"] else "")
+            + f"Sebaliknya, {format_number(tx['stok_tanpa_transaksi'], 0)} dari {format_number(tx['sku_stok'], 0)} SKU di Data stok belum pernah terjual."
+        )
+        if not diag["tx_miss"].empty:
+            show_table(diag["tx_miss"], max_height=420, kinds={"QTY terjual": "count", "Sales value": "money"})
+    else:
+        st.caption("Data transaksi atau Data stok Site 10037 belum ada.")
+    ads = diag.get("ads")
+    st.markdown("**2. Produk iklan terpetakan**")
+    if ads:
+        miss = ads["kode_total"] - ads["kode_cocok"]
+        st.markdown(
+            f"Laporan iklan (otomatis, grup, keseluruhan) memakai **Kode Produk** Shopee, bukan SKU. Kode itu diterjemahkan ke SKU lewat "
+            f"Data stok Site 10037 (kolom Kode Produk ↔ SKU, {format_number(ads['kode_di_stok'], 0)} kode). "
+            f"Dari **{format_number(ads['kode_total'], 0)}** kode produk unik di laporan iklan, **{format_number(ads['kode_cocok'], 0)}** "
+            f"ditemukan, **{format_number(miss, 0)}** tidak. Dihitung per biaya, iklan yang terpetakan mewakili "
+            f"**{format_number(ads['biaya_cocok_pct'], 1)}%** biaya iklan; biaya iklan yang tidak terpetakan {format_idr(ads['biaya_miss'])}."
+        )
+        st.markdown(
+            "Penyebab umum: produk yang diiklankan sudah dihapus/diarsipkan dari toko sehingga tidak ada di ekspor Data stok terbaru, "
+            "atau iklan pada periode lama untuk produk yang kemudian diganti listing-nya."
+            + (f" {format_number(ads['baris_tanpa_kode'], 0)} baris iklan tanpa Kode Produk (iklan toko/total, {format_idr(ads['biaya_tanpa_kode'])}) tidak dihitung." if ads["baris_tanpa_kode"] else "")
+            + " Biaya iklan yang tidak terpetakan tidak masuk ke ROAS per SKU."
+        )
+        if not diag["ads_miss"].empty:
+            show_table(diag["ads_miss"], max_height=420, kinds={"Biaya iklan": "money", "Omzet iklan": "money"})
+    else:
+        st.caption("Laporan iklan atau Data stok Site 10037 belum ada.")
+    st.markdown("**3. Snapshot stok**")
+    snaps = diag.get("snapshots")
+    if snaps is not None and not snaps.empty:
+        st.markdown(
+            f"Snapshot = satu kali unggahan Data stok Site 10037. Stok tidak ditimpa: setiap Simpan disimpan sebagai potret stok pada jam itu, "
+            f"jadi angka **{format_number(len(snaps), 0)}** berarti file stok Site 10037 sudah disimpan {format_number(len(snaps), 0)} kali. "
+            "Analisa memakai snapshot terbaru untuk stok saat ini, dan rangkaian snapshot untuk menghitung lama kosong (sejak kapan stok 0). "
+            "Makin rutin diunggah (misalnya harian atau mingguan), makin akurat lama kosong. Unggahan dua kali di hari yang sama tetap dihitung dua snapshot. "
+            "Stok Site 10062/10036 tidak ikut dihitung di kartu ini."
+        )
+        show_table(snaps, kinds={"Jumlah SKU": "count", "SKU stok 0": "count"})
 
 
 def prepare_analysis_orders(
