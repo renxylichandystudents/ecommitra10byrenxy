@@ -23,6 +23,40 @@ def _rules() -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple((str(cat), tuple(str(p).lower() for p in phrases or ())) for cat, phrases in data.items())
 
 
+# Teks alasan Shopee yang sama artinya tetapi berbeda tulisan/bahasa → satu label tampilan.
+REASON_ALIASES = {
+    "need to change delivery address": "Perlu mengubah alamat pengiriman",
+    "change delivery address": "Perlu mengubah alamat pengiriman",
+    "alasan lainnya": "Lainnya",
+    "others": "Lainnya",
+    "ubah pesanan yang ada": "Perlu mengubah pesanan",
+    "modify existing order": "Perlu mengubah pesanan",
+    "change of mind": "Tidak ingin membeli lagi",
+    "pesanan belum dibayar": "Belum dibayar",
+}
+REASON_PREFIXES = (
+    ("dibatalkan oleh pembeli. alasan:", "Pembeli"),
+    ("dibatalkan secara otomatis oleh sistem shopee. alasan:", "Sistem Shopee"),
+    ("dibatalkan oleh penjual. alasan:", "Penjual"),
+)
+
+
+def short_reason(reason: object) -> str:
+    """"Dibatalkan oleh Pembeli. Alasan: Need to change delivery address" → "Pembeli · Perlu mengubah alamat pengiriman"."""
+    text = " ".join(str(reason or "").split())
+    if not text or text.lower() in {"nan", "none", "-"}:
+        return "Tanpa alasan"
+    who = ""
+    lower = text.lower()
+    for prefix, label in REASON_PREFIXES:
+        if lower.startswith(prefix):
+            who, text = label, text[len(prefix):].strip()
+            break
+    text = REASON_ALIASES.get(text.lower(), text)
+    text = text[:1].upper() + text[1:] if text else "Tanpa alasan"
+    return f"{who} · {text}" if who else text
+
+
 def categorize(reason: object) -> str:
     text = str(reason or "").strip().lower()
     if not text or text in {"nan", "none", "-"}:

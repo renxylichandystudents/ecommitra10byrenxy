@@ -5,6 +5,7 @@ import pandas as pd
 from src.core.inventory import snapshot_time
 from src.core.schemas import SOURCE_SPECS, find_columns, validation_report
 from src.core.storage import LocalDataStore
+from src.utils.format import tanggal
 
 
 def _clean_key(series: pd.Series) -> pd.Series:
@@ -17,7 +18,7 @@ def _date_range(frame: pd.DataFrame, fields: tuple[str, ...]) -> str:
             continue
         dates = pd.to_datetime(frame[field], errors="coerce", dayfirst=True)
         if dates.notna().any():
-            return f"{dates.min().date()} - {dates.max().date()}"
+            return f"{tanggal(dates.min())} – {tanggal(dates.max())}"
     return "-"
 
 

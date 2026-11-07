@@ -548,11 +548,21 @@ st.markdown(
     [data-testid="stFileUploaderDropzoneInstructions"] div span:last-child {
         display: none !important;
     }
+    /* Teks kotak unggah bawaan Streamlit berbahasa Inggris: diganti lewat CSS. */
     [data-testid="stFileUploaderDropzoneInstructions"] div span:first-child {
         white-space: normal !important;
         overflow: visible !important;
         text-overflow: unset !important;
-        font-size: var(--fs-base) !important;
+        font-size: 0 !important;
+    }
+    [data-testid="stFileUploaderDropzoneInstructions"] div span:first-child::after {
+        content: "Tarik & lepas file ke sini";
+        font-size: var(--fs-base);
+    }
+    [data-testid="stFileUploaderDropzone"] [data-testid="stBaseButton-secondary"] { font-size: 0 !important; }
+    [data-testid="stFileUploaderDropzone"] [data-testid="stBaseButton-secondary"]::after {
+        content: "Pilih file";
+        font-size: var(--fs-sm);
     }
     .upload-note {
         font-size: var(--fs-sm);
@@ -4063,7 +4073,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     metric_card(row_two[2], "retur_unit", format_qty(summary["sales_return"]))
     metric_card(row_two[3], "nominal_retur", format_idr(summary["nominal_return"]))
     row_three = st.columns(4)
-    net_hint = "Semua status pada periode ini"
+    net_hint = "Selalu tanpa pesanan batal & retur (tidak bergantung saklar)"
     metric_card(row_three[0], "pesanan_bersih", format_number(facts["pesanan_bersih"]), hint=net_hint)
     metric_card(row_three[1], "sales_bersih", format_idr(facts["sales_bersih"]), hint=net_hint)
     metric_card(row_three[2], "belum_bayar", format_number(facts["belum_bayar"]), hint=f"{format_number(facts['belum_bayar_akun'])} akun")
@@ -4320,14 +4330,21 @@ def show_folder_menu() -> None:
     saved = list_months()
     st.subheader("Folder data")
     st.caption(
-        "Data yang sudah diimpor tersimpan di sini. Pilih tahun dan bulan untuk memakai data itu tanpa "
-        "mengunggah ulang. Data baru diunggah lewat tombol Ubah data latih. Untuk data transaksi, file baru "
-        "yang memuat bulan yang sama mengganti isi bulan itu di folder ini dengan isi file baru."
+        "Data yang sudah diimpor tersimpan di sini. Bulan yang dipakai sebagai data latih dipilih di halaman "
+        "Ubah data latih (Periode analisis data latih). Untuk data transaksi, file baru yang memuat bulan yang sama "
+        "mengganti isi bulan itu di folder ini dengan isi file baru."
     )
     if not saved:
         st.write("Belum ada data tersimpan.")
     else:
-        folder = cached_folder(bundle_stamp([item["key"] for item in saved]))
+        folder = cached_folder(bundle_stamp([item["key"] for item in saved])).rename(
+            columns={
+                "No. Pesanan": "Jumlah pesanan",
+                "Sales bersih": "Sales bersih (Rp)",
+                "Sales retur": "Sales retur (Rp)",
+                "Sales batal": "Sales batal (Rp)",
+            }
+        )
         st.caption(
             "Sales bersih = sales bruto − nominal batal − nominal retur, sama dengan Ringkasan, Data, dan Laporan untuk bulan yang sama. "
             "QTY bersih = QTY selain batal − unit retur. Sales retur = unit retur × Harga Setelah Diskon. "

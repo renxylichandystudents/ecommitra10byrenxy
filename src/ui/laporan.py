@@ -16,7 +16,7 @@ from src.core.optimization import monte_carlo_stock_scenarios
 from src.core.preprocessing import promo_flag
 from src.ui.analysis_dialog import store_performance
 from src.core.ads import ad_validation
-from src.core.cancel_reasons import CATEGORIES, categorize_series
+from src.core.cancel_reasons import CATEGORIES, categorize_series, short_reason
 from src.core.metrics import ads_metrics
 from src.core.periods import format_period_label, last_full_month
 from src.core.restock import recommendation_records, records_display
@@ -78,6 +78,9 @@ def _cancel_reasons(frame: pd.DataFrame) -> pd.DataFrame:
     key = part["order_id"] if "order_id" in part.columns else part.index.to_series()
     out = pd.DataFrame({"reason": reason, "key": key}).drop_duplicates().groupby("reason").size().rename("orders").reset_index()
     out["kategori"] = categorize_series(out["reason"])
+    # Kategori dari teks asli; tampilan memakai label pendek (alasan sama beda tulisan/bahasa digabung).
+    out["reason"] = out["reason"].map(short_reason)
+    out = out.groupby(["reason", "kategori"], as_index=False)["orders"].sum()
     return out.sort_values("orders", ascending=False).reset_index(drop=True)
 
 

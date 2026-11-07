@@ -61,6 +61,23 @@ def persen(value: object, n: int = 1) -> str:
     return EMPTY if number is None else f"{_group(number, n)}%"
 
 
+def tanggal(value: object, *, jam: bool = False) -> str:
+    """Satu format tanggal tabel: 07/11/2026 (atau 07/11/2026 07:28). ISO, "07-11-2026", datetime → sama."""
+    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+        return EMPTY
+    text = str(value).strip()
+    if not text or text in {"-", EMPTY, "NaT", "None", "nan"}:
+        return EMPTY
+    dayfirst = bool(re.match(r"^\d{1,2}[-/]\d{1,2}[-/]\d{4}", text))
+    try:
+        stamp = pd.Timestamp(pd.to_datetime(text, dayfirst=dayfirst))
+    except (TypeError, ValueError):
+        return text
+    if stamp.tzinfo is not None:
+        stamp = stamp.tz_convert("Asia/Jakarta").tz_localize(None)
+    return stamp.strftime("%d/%m/%Y %H:%M" if jam else "%d/%m/%Y")
+
+
 def parse_rupiah(text: object) -> int:
     """"Rp 250.000.000" / "250000000" / "250.000.000,50" -> 250000000."""
     raw = str(text or "").strip()

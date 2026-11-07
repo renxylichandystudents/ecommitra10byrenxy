@@ -18,7 +18,7 @@ from src.core.access import MENU_LABELS, access_matrix_rows, allowed
 from src.core.db import database_url, make_engine
 from src.core.feature_store import FeatureStore
 from src.ui.confirm import confirm_action
-from src.utils.format import show_table
+from src.utils.format import show_table, tanggal
 
 SESSION_KEY = "auth-user"
 PAGE_KEY = "auth-page"
@@ -363,9 +363,9 @@ def users_panel(repo: UserRepository, user: User) -> None:
                 "Username": u.username,
                 "Role": role_label(u.role),
                 "Status": "Nonaktif" if not u.is_active else ("Wajib ganti password" if u.must_change_password else "Aktif"),
-                "Dibuat": u.created_at,
+                "Dibuat": tanggal(u.created_at, jam=True),
                 "Oleh": u.created_by,
-                "Login terakhir": u.last_login_at or "-",
+                "Login terakhir": tanggal(u.last_login_at, jam=True),
             }
             for u in users
         ]

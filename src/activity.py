@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from src.aggregate import period_start
+from src.core.cancel_reasons import short_reason
 from src.ingest import (
     cancelled_status_mask,
     clean_sku_series,
@@ -273,7 +274,7 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
     work["cancel_order"] = np.where(work["is_cancel"] & work["order_id"].ne(""), work["order_id"], np.nan)
     work["alasan_batal"] = np.where(
         work["is_cancel"],
-        work["cancel_reason"].where(work["cancel_reason"].ne(""), "Tanpa alasan"),
+        work["cancel_reason"].map(short_reason),
         "",
     )
     work["alasan_retur"] = np.where(
@@ -392,7 +393,7 @@ def cancel_contribution(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.Data
     base["nominal_cancel"] = _order_money(cancel)
     if cancel.empty:
         return base, pd.DataFrame(columns=columns)
-    cancel["alasan"] = cancel["cancel_reason"].where(cancel["cancel_reason"].ne(""), "Tanpa alasan")
+    cancel["alasan"] = cancel["cancel_reason"].map(short_reason)
     cancel["status_batal"] = cancel["status"].where(cancel["status"].ne(""), "Batal")
     rows = []
     for (status, reason), group in cancel.groupby(["status_batal", "alasan"], sort=False):
@@ -520,7 +521,7 @@ def unpaid_buyer_table(
                     "_buyer": str(record.buyer_key),
                     "_name": str(record.buyer).strip() or "Tanpa akun",
                     "_time": pd.Timestamp(record.order_time),
-                    "Tanggal pembelian": pd.Timestamp(record.order_time).strftime("%d-%m-%Y"),
+                    "Tanggal pembelian": pd.Timestamp(record.order_time).strftime("%d/%m/%Y"),
                     "No. Pesanan": str(record.order_id),
                     "SKU": str(record.sku).strip() or "Tanpa SKU",
                     "Produk": product,

@@ -20,6 +20,7 @@ from src.core.schemas import (
     normalize_header,
     validation_report,
 )
+from src.utils.format import tanggal
 
 
 DEFAULT_DATA_DIR = Path.home() / ".prediksi_shopee"
@@ -426,7 +427,7 @@ class LocalDataStore:
                     "Kolom wajib terbaca": len(report["found_required"]),
                     "Kolom wajib hilang": ", ".join(report["missing_required"]) or "-",
                     "File terakhir": ", ".join(info.get("files") or []),
-                    "Diperbarui": info.get("updated_at") or "-",
+                    "Diperbarui": tanggal(info.get("updated_at"), jam=True),
                     "Kegunaan": spec.utility,
                 }
             )

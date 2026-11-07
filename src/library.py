@@ -10,6 +10,7 @@ import pandas as pd
 from src.activity import ledger_from_raw
 from src.core.metrics import order_metrics
 from src.ingest import _clean_token, _parse_datetime, map_columns, order_revenue
+from src.utils.format import tanggal
 
 LIBRARY_DIR = Path(__file__).resolve().parents[1] / "uploads" / "library"
 CATALOG_PATH = LIBRARY_DIR / "catalog.json"
@@ -188,7 +189,7 @@ def folder_frame() -> pd.DataFrame:
                 "Pesanan retur": counts["return_orders"],
                 "Pesanan batal": counts["cancel_orders"],
                 "File terakhir": ", ".join(item["files"]),
-                "Diperbarui": item["updated_at"],
+                "Diperbarui": tanggal(item["updated_at"], jam=True),
             }
         )
     return pd.DataFrame(rows)
@@ -203,7 +204,7 @@ def history_frame() -> pd.DataFrame:
     for item in history:
         rows.append(
             {
-                "Tanggal perubahan": item.get("at") or "",
+                "Tanggal perubahan": tanggal(item.get("at"), jam=True),
                 "Data": item.get("data") or "",
                 "File": item.get("files") or "",
                 "Perubahan": item.get("change") or "",
