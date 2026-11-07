@@ -246,7 +246,15 @@ def safety_stock_box(table: pd.DataFrame, *, period: str, today: date, definitio
             st.caption("Lead time memakai asumsi default dari Pengaturan bisnis.")
 
 
-def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, period: str, today: date, resume_label: str) -> None:
+def top50_matrix(
+    view: pd.DataFrame,
+    actuals: dict[str, dict[str, float]],
+    *,
+    period: str,
+    today: date,
+    resume_label: str,
+    all_sku: pd.DataFrame | None = None,
+) -> None:
     """R5: baris Hari ini/Prediksi bulan/+periode, kolom actual, prediksi, kontribusi sales Top 50."""
     groups = period_groups(period, today)
     rows = []
@@ -259,6 +267,13 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
         sales_act = float(act.get("sales", 0.0))
         share_base = float(act.get("store_sales", 0.0))
         share = sales_act / share_base * 100 if share_base > 0 else np.nan
+        pred_sales = float(view[f"{p}_sales_exp"].sum() if f"{p}_sales_exp" in view.columns else view[f"{p}_sales"].sum())
+        pred_base = 0.0
+        if isinstance(all_sku, pd.DataFrame) and not all_sku.empty:
+            col = f"{p}_sales_exp" if f"{p}_sales_exp" in all_sku.columns else f"{p}_sales"
+            if col in all_sku.columns:
+                pred_base = float(pd.to_numeric(all_sku[col], errors="coerce").fillna(0).sum())
+        pred_share = pred_sales / pred_base * 100 if pred_base > 0 else np.nan
         rows.append(
             {
                 "Periode": f"{group.label} · {span}",
@@ -266,8 +281,9 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
                 "QTY actual": fmt_qty(qty_act),
                 "Sales value actual": fmt_idr(sales_act),
                 "Prediksi QTY": fmt_qty(round(view[f"{p}_qty_exp"].sum() if f"{p}_qty_exp" in view.columns else view[f"{p}_qty"].sum())),
-                "Prediksi sales value": fmt_idr(view[f"{p}_sales_exp"].sum() if f"{p}_sales_exp" in view.columns else view[f"{p}_sales"].sum()),
-                "Kontribusi sales Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)}" if share_base > 0 else "-",
+                "Prediksi sales value": fmt_idr(pred_sales),
+                "Kontribusi actual Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)} (actual seluruh toko)" if share_base > 0 else "-",
+                "Kontribusi prediksi Top 50": f"{fmt_pct(pred_share)} dari {fmt_idr(pred_base)} (prediksi All SKU)" if pred_base > 0 else "-",
             }
         )
     frame = pd.DataFrame(rows)
@@ -287,7 +303,10 @@ def top50_matrix(view: pd.DataFrame, actuals: dict[str, dict[str, float]], *, pe
             ("Actual hari", "hari penuh terakhir sebelum hari ini (hari ini masih berjalan)"),
             ("Actual bulan", "bulan penuh terakhir" + (f"; {extra_text.lstrip('; ')}" if extra_text else "")),
             ("Sales", "Harga setelah diskon × QTY, sesuai setelan Kecualikan batal & retur analisa ini"),
-            ("Kontribusi", "sales Top 50 ÷ sales seluruh toko pada rentang actual yang sama (dasar sales yang sama)"),
+            ("Kontribusi actual", "sales actual Top 50 ÷ sales actual seluruh toko pada tanggal actual pembanding yang sama"),
+            ("Kontribusi prediksi", "prediksi sales Top 50 ÷ prediksi sales All SKU (angka yang sama dengan kartu Prediksi sales · All SKU)"),
+            ("Kenapa dasarnya berbeda", "actual = transaksi yang sudah terjadi (kemarin / bulan lalu); prediksi = perkiraan periode berjalan. Bandingkan actual dengan actual, prediksi dengan prediksi"),
+            ("Prediksi hari ini", "laju harian rata-rata periode prediksi (prediksi bulan ÷ jumlah hari), termasuk hari promo seperti 11.11, jadi bisa lebih tinggi dari actual satu hari biasa"),
             ("Beda dengan kartu Sales bersih", "kartu itu memakai Total Pembayaran per pesanan (setelah voucher, termasuk ongkir)"),
         ]
     )

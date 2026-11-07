@@ -7702,6 +7702,7 @@ with PAGE_ROOT.container(key="page-root"):
                 period=period,
                 today=today,
                 resume_label=resume_label,
+                all_sku=enriched,
             )
             legacy_view = apply_horizon_slices(shown, period, today)
             show_qty_forecast_board(
