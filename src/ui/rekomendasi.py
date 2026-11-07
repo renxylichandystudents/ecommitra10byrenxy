@@ -235,7 +235,7 @@ def _flash_tab(table: pd.DataFrame, params: dict, today: date, user_root: Path) 
     start = st.date_input("Mulai rencana flash sale (1 bulan)", value=today + timedelta(days=1), key="flash-start", format="DD/MM/YYYY")
     has_stock = bool(table.get("ada_data_stok", pd.Series(dtype=bool)).fillna(False).any())
     if not has_stock:
-        st.info("Data stok belum pernah diunggah (menu Data stok), jadi kuota flash sale belum bisa dihitung tanpa mengganggu kebutuhan prediksi + SS.")
+        st.info("Data stok belum pernah diunggah (menu Data stok Site 10037), jadi kuota flash sale belum bisa dihitung tanpa mengganggu kebutuhan prediksi + SS.")
         return pd.DataFrame()
     stamp = _stock_date_text(table)
     plan = flash_sale_plan(table, start=start, params=params)

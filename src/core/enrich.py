@@ -8,6 +8,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from src.core.dc_stock import DC_SITES
 from src.core.decision_table import build_decision_table
 from src.core.inventory import stock_zero_duration
 from src.core.labels import ads_by_sku, product_labels
@@ -26,6 +27,7 @@ class StoreFrames:
     performance: pd.DataFrame = field(default_factory=pd.DataFrame)
     descriptions: pd.DataFrame = field(default_factory=pd.DataFrame)
     competitors: pd.DataFrame = field(default_factory=pd.DataFrame)
+    dc_stock: dict[str, pd.DataFrame] = field(default_factory=dict)
 
     @property
     def has_stock(self) -> bool:
@@ -50,6 +52,7 @@ def load_store_frames(store: LocalDataStore) -> StoreFrames:
         performance=clean_performance(read("performance")),
         descriptions=read("product_descriptions"),
         competitors=read("competitors"),
+        dc_stock={source: read(source) for _code, _name, source in DC_SITES},
     )
 
 
@@ -135,6 +138,7 @@ def enrich_catalog(
         stock_frame=frames.stock if frames.has_stock else None,
         zero_duration=zero_frame,
         lead_time_days=lead,
+        dc_frames=frames.dc_stock,
     )
     ads = ads_by_sku(frames.ads, frames.stock, orders=orders_used) if frames.has_ads and frames.has_stock else pd.DataFrame()
     if not ads.empty:

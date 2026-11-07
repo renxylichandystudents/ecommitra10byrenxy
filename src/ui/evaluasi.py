@@ -250,7 +250,7 @@ def _conclusion(outcome, results: dict, base_history: pd.DataFrame | None, perio
             "sehingga skornya cenderung lebih baik daripada uji pada data baru."
         )
     improve = [
-        "Unggah snapshot stok DC Cikupa rutin (mingguan) agar hari kosong & lama kosong akurat.",
+        "Unggah snapshot stok Site 10037 rutin (mingguan) agar hari kosong & lama kosong akurat.",
         "Lengkapi laporan iklan per Kode produk agar ROAS per SKU tidak memakai default.",
         "Tambah riwayat ≥ 12 bulan untuk menangkap musim renovasi (Kuartal/Semester/Tahun).",
     ]

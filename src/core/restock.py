@@ -1,6 +1,7 @@
 """Rekomendasi ber-SKU dan tabel restock prioritas (Revisi Final 2C & 4A).
 
-  restock    = max(0, prediksi_window + SS − stok_dc)
+  restock    = max(0, prediksi_window + SS − stok Site 10037)
+  ambil dari DC = restock dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO supplier
   stok_habis = hari_ini + floor(stok_dc / prediksi_harian)   (prediksi harian 0 → tidak habis)
   status     = Kosong bila stok 0; Kurang bila stok < prediksi + SS; selain itu Aman
   pic        = restock lokal → Team DC; ada PO impor terbuka → Team IC/MD; harga/iklan → E-commerce
@@ -17,8 +18,13 @@ import pandas as pd
 
 from src.core.decision_table import stock_need
 
-RECORD_COLUMNS = ("prioritas", "tindakan", "sku", "nama", "varian", "stok", "kebutuhan", "restock", "tenggat", "pic", "alasan")
+RECORD_COLUMNS = ("prioritas", "tindakan", "sku", "nama", "varian", "stok", "kebutuhan", "restock", "ambil_dc", "tenggat", "pic", "alasan")
 CANCEL_HIGH_PCT = 15.0
+
+
+def _dc(row, code: str):
+    value = row.get(f"stok_{code}")
+    return None if value is None or pd.isna(value) else float(value)
 
 
 def _num(value, default: float = 0.0) -> float:
@@ -52,7 +58,7 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
 
 def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None) -> pd.DataFrame:
     """Tabel "Kebutuhan restock prioritas". Urut stok habis naik, lalu restock turun."""
-    columns = ["Peringkat", "sku", "Produk", "Varian", "Stok DC", "Prediksi", "SS", "Restock", "Stok habis", "Status", "Inbound", "_habis", "_pred_harian", "_sales_harian"]
+    columns = ["Peringkat", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "_habis", "_pred_harian", "_sales_harian"]
     if table is None or table.empty:
         return pd.DataFrame(columns=columns)
     po = po or {}
@@ -81,10 +87,13 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
                 "sku": str(row.get("sku", "")),
                 "Produk": str(row.get("product_name", "")),
                 "Varian": str(row.get("variasi_tampil", "") or ""),
-                "Stok DC": stok,
+                "Stok Site 10037": stok,
                 "Prediksi": pred,
                 "SS": ss,
                 "Restock": restock,
+                "Stok Site 10062": _dc(row, "10062"),
+                "Stok Site 10036": _dc(row, "10036"),
+                "Ambil dari DC": str(row.get("sumber_restock", "") or ""),
                 "Stok habis": habis,
                 "Status": status,
                 "Inbound": f"{inbound['no_po']} · {inbound['eta'].strftime('%d/%m/%Y') if inbound.get('eta') else 'ETA belum ada'}" if inbound else "",
@@ -161,6 +170,7 @@ def recommendation_records(
                 "stok": stok,
                 "kebutuhan": math.ceil(need),
                 "restock": restock,
+                "ambil_dc": str(row.get("sumber_restock", "") or "") if restock else "",
                 "tenggat": tenggat,
                 "pic": pic,
                 "alasan": "; ".join(reasons) if reasons else "-",
@@ -187,9 +197,10 @@ def records_display(records: pd.DataFrame) -> pd.DataFrame:
             "sku": "SKU",
             "nama": "Produk",
             "varian": "Varian",
-            "stok": "Stok DC",
+            "stok": "Stok Site 10037",
             "kebutuhan": "Kebutuhan",
             "restock": "Restock",
+            "ambil_dc": "Ambil dari DC",
             "tenggat": "Tenggat",
             "pic": "PIC",
             "alasan": "Alasan",

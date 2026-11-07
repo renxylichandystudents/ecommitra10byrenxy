@@ -296,7 +296,7 @@ def show_report(
                     )
                     if not records.empty:
                         st.markdown("**Rekomendasi utama**")
-                        show_table(records_display(records.head(5)), kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"})
+                        show_table(records_display(records.head(5)), kinds={"Stok Site 10037": "count", "Kebutuhan": "count", "Restock": "count"})
                 elif section == SECTIONS[1]:
                     _show_trend(orders, orders_all, today=today, month_pred=month_pred, pred_label=pred_label, exclude=exclude)
                 elif section == SECTIONS[2]:
@@ -435,7 +435,7 @@ def show_report(
                     else:
                         st.caption("Restock = max(0, prediksi + SS − stok DC). Tenggat = hari ini + stok ÷ prediksi harian (Segera bila sudah habis). PIC: restock lokal → Team DC; ada PO impor → Team IC/MD; harga/iklan → E-commerce.")
                         display = records_display(records.head(30))
-                        show_table(display, kinds={"Stok DC": "count", "Kebutuhan": "count", "Restock": "count"}, column_config={"Alasan": st.column_config.TextColumn(width="large")})
+                        show_table(display, kinds={"Stok Site 10037": "count", "Kebutuhan": "count", "Restock": "count"}, column_config={"Alasan": st.column_config.TextColumn(width="large")})
                         download_excel(records_display(records), "laporan_rekomendasi.xlsx", key="xl-report-adv")
                 elif section == SECTIONS[10]:
                     days_in_month = pd.Timestamp(today).days_in_month

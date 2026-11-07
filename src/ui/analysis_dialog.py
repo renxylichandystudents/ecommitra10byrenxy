@@ -110,7 +110,7 @@ def analysis_markup(
         "</p>"
     )
     if not bool(row.get("ada_data_stok", False)):
-        block2 = "<p class='insight-copy'>Data stok belum diunggah. Unggah menu Data stok agar hari cukup dan lama kosong terhitung.</p>"
+        block2 = "<p class='insight-copy'>Data stok belum diunggah. Unggah menu Data stok Site 10037 agar hari cukup dan lama kosong terhitung.</p>"
     # 3. Performa toko
     if performance:
         block3 = (

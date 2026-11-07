@@ -13,6 +13,7 @@ from typing import BinaryIO
 import pandas as pd
 
 from src.core.schemas import (
+    SNAPSHOT_SOURCES,
     SOURCE_SPECS,
     SourceSpec,
     canonicalize_frame,
@@ -344,12 +345,16 @@ class LocalDataStore:
         previous = self.read_source(source_key)
         before_rows = int(len(previous))
 
-        if source_key == "stock":
+        if source_key in SNAPSHOT_SOURCES:
             merged = pd.concat([previous, incoming], ignore_index=True) if not previous.empty else incoming
             # Stok adalah snapshot; jangan menimpa submit lama, hanya rapikan duplikasi dalam submit yang sama.
             subset = [key for key in (*spec.dedup_keys, "_submitted_at") if key in merged.columns]
             if subset:
                 merged = merged.drop_duplicates(subset=subset, keep="last")
+            if spec.site_code and "_submitted_at" in merged.columns:
+                # Stok DC ~20 ribu baris per unggahan: simpan 4 snapshot terakhir saja.
+                keep = sorted(merged["_submitted_at"].astype(str).unique())[-4:]
+                merged = merged.loc[merged["_submitted_at"].astype(str).isin(keep)]
         else:
             merged = pd.concat([previous, incoming], ignore_index=True) if not previous.empty else incoming
             subset = _usable_dedup_keys(merged, spec)
@@ -386,8 +391,8 @@ class LocalDataStore:
         self._write_registry(registry)
         after_rows = int(len(merged))
         added = max(after_rows - before_rows, 0)
-        replaced = max(int(len(incoming)) - added, 0) if source_key != "stock" else 0
-        if source_key == "stock":
+        replaced = max(int(len(incoming)) - added, 0) if source_key not in SNAPSHOT_SOURCES else 0
+        if source_key in SNAPSHOT_SOURCES:
             message = f"{spec.label}: snapshot stok disimpan ({len(incoming)} baris baru)."
         elif before_rows == 0:
             message = f"{spec.label}: {after_rows} baris tersimpan."

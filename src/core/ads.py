@@ -183,7 +183,7 @@ def ad_validation(result: AdAttribution, total_sales: float) -> tuple[list[str],
     if abs(gap) > max(1.0, result.file_cost * 0.001):
         issues.append(
             f"Total biaya iklan per SKU {rupiah(result.cost)} belum sama dengan total file {rupiah(result.file_cost)}: "
-            f"{rupiah(result.unmapped_cost)} dari {result.unmapped_codes} kode produk belum ada di Data stok."
+            f"{rupiah(result.unmapped_cost)} dari {result.unmapped_codes} kode produk belum ada di Data stok Site 10037."
         )
     raw = float(result.per_sku["omzet_iklan_shopee"].sum())
     if raw > result.sales + 1:

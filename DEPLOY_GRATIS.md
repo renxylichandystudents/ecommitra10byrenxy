@@ -91,7 +91,7 @@ Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL
 
 - Semua user yang login memakai satu folder data tim yang sama (unggahan, Pengaturan bisnis, riwayat analisa).
 - Default database: SQLite `data/app.db`. **Di Streamlit Community Cloud file ini hilang saat reboot/redeploy**, jadi user (selain super user dari Secrets) dan daftar riwayat ikut hilang. Isi `DATABASE_URL` Postgres gratis (Neon/Supabase) di Secrets agar user dan daftar riwayat tetap ada.
-- Data latih yang diunggah (folder bulan dan 9 menu) serta file hasil analisa (`data/runs/<id>/`) disalin otomatis ke tabel `file_vault` di Postgres. Saat server baru menyala (setelah tidur, reboot, atau redeploy), file dipulihkan ke disk sebelum halaman tampil, jadi data kemarin tetap terbaca tanpa unggah ulang. Status tampil di halaman Data latih. Tanpa `DATABASE_URL`, file tetap hanya di disk sementara.
+- Data latih yang diunggah (folder bulan dan 11 menu) serta file hasil analisa (`data/runs/<id>/`) disalin otomatis ke tabel `file_vault` di Postgres. Saat server baru menyala (setelah tidur, reboot, atau redeploy), file dipulihkan ke disk sebelum halaman tampil, jadi data kemarin tetap terbaca tanpa unggah ulang. Status tampil di halaman Data latih. Tanpa `DATABASE_URL`, file tetap hanya di disk sementara.
 - Cek connection string dari laptop: `.venv/bin/python scripts/cek_database.py` (pesan error tidak disensor seperti di Streamlit Cloud).
 - Riwayat analisa lebih dari 90 hari dihapus otomatis.
 

@@ -23,6 +23,7 @@ class SourceSpec:
     date_fields: tuple[str, ...] = ()
     sku_fields: tuple[str, ...] = ()
     utility: str = ""
+    site_code: str = ""
 
 
 def normalize_header(value: object) -> str:
@@ -141,6 +142,17 @@ STOCK_ALIASES = {
     "stock_dc_cikupa": _alias("Stok: DC Cikupa", "Stok DC Cikupa", "DC Cikupa"),
 }
 
+# Laporan "Stock Qty and Value" ERP Mitra10 per site (DC fisik). Item No = SKU Shopee tanpa nol di depan.
+DC_STOCK_ALIASES = {
+    "sku": _alias("Item No", "Item Number", "Item No.", "Kode Item"),
+    "product_name": _alias("Item Name", "Nama Item"),
+    "qty": _alias("Quantity", "Qty", "Jumlah Stok"),
+    "blocked": _alias("Blocked"),
+    "uom": _alias("UoM", "Satuan"),
+    "store_code": _alias("Store Code", "Site", "Kode Site"),
+    "store_name": _alias("Store Name", "Nama Site"),
+}
+
 DESCRIPTION_ALIASES = {
     "product_code": _alias("Kode Produk", "Product Code"),
     "sku": _alias("SKU", "Nomor Referensi SKU", "Seller SKU", "SKU Induk"),
@@ -218,12 +230,32 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
     ),
     "stock": SourceSpec(
         key="stock",
-        label="Data stok",
+        label="Data stok Site 10037",
         required=("sku", "stock_dc_cikupa"),
         aliases=STOCK_ALIASES,
         dedup_keys=("sku", "product_code", "variation"),
         sku_fields=("sku",),
-        utility="Snapshot stok DC Cikupa untuk kebutuhan, selisih stok, hari cukup, dan lama kosong.",
+        utility="Snapshot stok Site 10037 (kolom \"Stok: DC Cikupa\" di ekspor Shopee) untuk kebutuhan, selisih stok, hari cukup, dan lama kosong.",
+    ),
+    "stock_10062": SourceSpec(
+        key="stock_10062",
+        label="Data stok Site 10062 (DC Cikupa)",
+        required=("sku", "qty"),
+        aliases=DC_STOCK_ALIASES,
+        dedup_keys=("sku",),
+        sku_fields=("sku",),
+        utility="Stok DC Cikupa (Site 10062) dari laporan Stock Qty and Value; sumber pengisian bila stok Site 10037 kurang.",
+        site_code="10062",
+    ),
+    "stock_10036": SourceSpec(
+        key="stock_10036",
+        label="Data stok Site 10036 (DC Cipeucang)",
+        required=("sku", "qty"),
+        aliases=DC_STOCK_ALIASES,
+        dedup_keys=("sku",),
+        sku_fields=("sku",),
+        utility="Stok DC Cipeucang (Site 10036) dari laporan Stock Qty and Value; sumber pengisian bila stok Site 10037 kurang.",
+        site_code="10036",
     ),
     "product_descriptions": SourceSpec(
         key="product_descriptions",
@@ -243,6 +275,9 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         utility="Benchmark harga, judul, keyword, rating/ulasan, dan market gap kompetitor.",
     ),
 }
+
+
+SNAPSHOT_SOURCES = ("stock", "stock_10062", "stock_10036")
 
 
 def source_menu() -> list[SourceSpec]:

@@ -74,7 +74,7 @@ from src.ui.decision_view import (
     top50_matrix,
 )
 from src.ui.settings import show_business_settings
-from src.core.schemas import SOURCE_SPECS, find_columns, source_menu, validation_report
+from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
 from src.utils.format import excel_bytes as numeric_excel_bytes
@@ -1740,6 +1740,18 @@ def _process_upload(store, spec, files) -> dict:
             status.update(label="File belum disimpan", state="error")
             outcome["message"] = "File belum disimpan karena kolom wajib belum cocok dengan menu ini."
             return outcome
+        if spec.site_code:
+            from src.core.dc_stock import site_codes_in
+
+            codes = site_codes_in(canonicalize_frame(parsed, spec)[0])
+            wrong = [code for code in codes if code != spec.site_code]
+            if wrong:
+                status.update(label="File belum disimpan", state="error")
+                outcome["message"] = (
+                    f"File ini berisi stok Site {', '.join(wrong)}, bukan Site {spec.site_code}. "
+                    "Pilih menu upload yang sesuai dengan kode site pada file."
+                )
+                return outcome
         bar.progress(1.0, text=f"{total} dari {total} file terbaca · menyimpan data latih...")
         try:
             result, keys = _submit_upload(store, spec, files, parsed, orders)
@@ -1755,7 +1767,7 @@ def _process_upload(store, spec, files) -> dict:
 
 
 def show_training_uploads() -> tuple[list[str], str | None]:
-    """Upload 9 menu. Data transaksi juga disalin ke library lama agar analisis lama tetap jalan."""
+    """Upload menu data latih. Data transaksi juga disalin ke library lama agar analisis lama tetap jalan."""
     store = DATA_STORE
     imported_keys: list[str] = []
     load_error: str | None = None
@@ -1763,7 +1775,7 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         """
         <div class="home-section">UPLOAD DATA LATIH</div>
         <div class="feature-copy">
-        Silakan upload data latih meliputi data transaksi, data performa toko, data iklan produk otomatis, data iklan produk grup, data keseluruhan iklan, data iklan pencarian, data stok, data produk deskripsi, dan data produk kompetitor. Setelah file diunggah dan tombol Simpan ditekan, data tersimpan. Unggahan berikutnya ditambahkan sebagai pembaruan (baris yang sama diganti, bukan digandakan). Data yang disimpan menjadi data latih.
+        Silakan upload data latih meliputi data transaksi, data performa toko, data iklan produk otomatis, data iklan produk grup, data keseluruhan iklan, data iklan pencarian, data stok Site 10037 (toko Shopee), data stok Site 10062 (DC Cikupa), data stok Site 10036 (DC Cipeucang), data produk deskripsi, dan data produk kompetitor. Setelah file diunggah dan tombol Simpan ditekan, data tersimpan. Unggahan berikutnya ditambahkan sebagai pembaruan (baris yang sama diganti, bukan digandakan). Data yang disimpan menjadi data latih.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1781,7 +1793,7 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         picked = st.radio("Menu upload", options=labels, key="upload-source-label")
         selected_spec = specs[labels.index(picked)]
         filled = sum(1 for status in statuses.values() if status == "Siap")
-        st.caption(f"{filled} dari 9 menu terisi")
+        st.caption(f"{filled} dari {len(specs)} menu terisi")
     with right:
         st.markdown(f"<div class='side-section'>{html.escape(selected_spec.label)}</div>", unsafe_allow_html=True)
         result_key = f"upload-result-{selected_spec.key}"
@@ -3653,7 +3665,7 @@ def _insight_markup(row: pd.Series, brief: dict) -> str:
 
 
 def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
-    """Baris Stok DC Cikupa paling bawah: chip per periode, hijau aman, merah kurang (jumlah & %)."""
+    """Baris Stok Site 10037 paling bawah: chip per periode, hijau aman, merah kurang (jumlah & %)."""
     if row is None:
         return ""
     if not bool(row.get("ada_data_stok", False)):
@@ -3679,7 +3691,7 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
         chips = "".join(parts)
     return (
         "<div class='qty-line'>"
-        "<div class='qty-metric'>Stok DC Cikupa<small>snapshot terakhir</small></div>"
+        "<div class='qty-metric'>Stok Site 10037<small>snapshot terakhir</small></div>"
         f"<div class='qty-track stock-row'>{chips}</div>"
         f"<div class='qty-base'>{stock_text}<small>unit</small></div>"
         "</div>"
@@ -3792,7 +3804,7 @@ def show_qty_forecast_board(
     decision: pd.DataFrame | None = None,
     performance: dict | None = None,
 ) -> None:
-    """R6: per SKU baris Prediksi bulan, Aktual kemarin, Tanggal sama bulan lalu, + periode tambahan, dan Stok DC Cikupa paling bawah."""
+    """R6: per SKU baris Prediksi bulan, Aktual kemarin, Tanggal sama bulan lalu, + periode tambahan, dan Stok Site 10037 paling bawah."""
     if view.empty:
         st.write("Tidak ada item untuk grafik ini.")
         return
@@ -6572,7 +6584,7 @@ def _render_movement_board(
                 "Safety stock bulan ini": item["safety_month"],
                 "Perubahan sales bulan ini": item["sales_month_now"] - item["sales_month_then"],
                 "Perubahan qty bulan ini": item["qty_month_now"] - item["qty_month_then"],
-                "Stok DC Cikupa": float(row["stok"]) if has_stock else None,
+                "Stok Site 10037": float(row["stok"]) if has_stock else None,
                 "Selisih stok hari ini": float(row["d_selisih"]) if has_stock else None,
                 "Selisih stok bulan ini": float(row["m_selisih"]) if has_stock else None,
                 "Lama kosong": lama_kosong_text(row) if row is not None else "-",
@@ -6609,8 +6621,8 @@ def _render_movement_board(
         "<th rowspan='2'>Varian</th>"
         "<th class='group-head' colspan='2'>Prediksi hari ini</th>"
         f"<th class='group-head' colspan='2'>{html.escape(format_period_label('prediksi', today))}</th>"
-        "<th class='stock-col' rowspan='2'>Stok DC · hari ini</th>"
-        f"<th class='stock-col' rowspan='2'>Stok DC · {html.escape(month_year(today))}</th>"
+        "<th class='stock-col' rowspan='2'>Stok Site 10037 · hari ini</th>"
+        f"<th class='stock-col' rowspan='2'>Stok Site 10037 · {html.escape(month_year(today))}</th>"
         "<th class='stock-col' rowspan='2'>Lama kosong</th>"
         "<th class='group-head' colspan='2'>Penjualan</th>"
         "</tr>"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -80,13 +81,21 @@ def show_prediction_checklist(
             "Varian": page["variasi_tampil"].fillna("").astype(str).to_numpy(),
             pred_label: page["m_qty"].to_numpy(),
             actual_label: page["item_key"].astype(str).map(month_qty).fillna(0).to_numpy(),
-            "Stok DC": page["stok"].where(page["ada_data_stok"].astype(bool)).to_numpy(),
+            "Stok Site 10037": page["stok"].where(page["ada_data_stok"].astype(bool)).to_numpy(),
+            "Stok Site 10062": page["stok_10062"].to_numpy() if "stok_10062" in page.columns else np.nan,
+            "Stok Site 10036": page["stok_10036"].to_numpy() if "stok_10036" in page.columns else np.nan,
+            "Ambil dari DC": page["sumber_restock"].fillna("").astype(str).to_numpy() if "sumber_restock" in page.columns else "",
             "SS": page["ss"].to_numpy(),
             "Status stok": page["m_status"].map(status_key).to_numpy(),
             "Label": page.get("label_text", pd.Series("", index=page.index)).fillna("").astype(str).to_numpy(),
             "_key": page["item_key"].astype(str).to_numpy(),
         }
     )
+    for column in ("Stok Site 10062", "Stok Site 10036"):
+        if frame[column].isna().all():
+            frame = frame.drop(columns=column)
+    if not frame["Ambil dari DC"].astype(str).str.strip().any():
+        frame = frame.drop(columns="Ambil dari DC")
     shown = status_badges(frame, "Status stok")
     editor_box = st.container(key="desktop-chk-editor")
     edited = editor_box.data_editor(
@@ -98,7 +107,10 @@ def show_prediction_checklist(
             "Pilih": st.column_config.CheckboxColumn("Pilih", width="small"),
             pred_label: st.column_config.NumberColumn(format="localized"),
             actual_label: st.column_config.NumberColumn(format="localized"),
-            "Stok DC": st.column_config.NumberColumn(format="localized"),
+            "Stok Site 10037": st.column_config.NumberColumn(format="localized"),
+            "Stok Site 10062": st.column_config.NumberColumn(format="localized"),
+            "Stok Site 10036": st.column_config.NumberColumn(format="localized"),
+            "Ambil dari DC": st.column_config.TextColumn(width="large"),
             "SS": st.column_config.NumberColumn(format="localized"),
             "Status stok": st.column_config.TextColumn(width="small"),
         },
@@ -114,7 +126,7 @@ def show_prediction_checklist(
                 "produk": r["Produk"],
                 "varian": r["Varian"],
                 "status": r["Status stok"],
-                "nums": [(pred_label, fmt_num(r[pred_label])), (actual_label, fmt_num(r[actual_label])), ("Stok DC", fmt_num(r["Stok DC"])), ("SS", fmt_num(r["SS"]))],
+                "nums": [(pred_label, fmt_num(r[pred_label])), (actual_label, fmt_num(r[actual_label])), ("Stok Site 10037", fmt_num(r["Stok Site 10037"])), ("SS", fmt_num(r["SS"]))] + ([("Ambil dari DC", r["Ambil dari DC"])] if r.get("Ambil dari DC") else []),
             }
             for r in frame.to_dict("records")
         ],
@@ -164,11 +176,17 @@ def _explain_card(row, *, pred_label, actual_label, month_qty, last_day, day_qty
         card(cols[2], format_period_label("aktual_hari", last_day), fmt_num(day_qty.get(key, 0)), hint=f"prediksi {fmt_num(row['pred_harian'], 1)}/hari")
         card(cols[3], format_period_label("bulan_lalu", ago), fmt_num(ago_qty.get(key, 0)))
         parts = [
-            f"Stok DC {fmt_num(stok) if known else 'belum ada data'}",
+            f"Stok Site 10037 {fmt_num(stok) if known else 'belum ada data'}",
             f"kebutuhan {fmt_num(need)} (prediksi + SS)",
         ]
         if known:
             parts.append(f"restock {fmt_num(restock)}" + (f", tenggat {fmt_date_short(habis)}" if habis and restock else ""))
+            for code in ("10062", "10036"):
+                value = row.get(f"stok_{code}")
+                if value is not None and pd.notna(value):
+                    parts.append(f"Stok Site {code} {fmt_num(value)}")
+            if restock and str(row.get("sumber_restock") or ""):
+                parts.append(str(row["sumber_restock"]))
         parts.append(f"PO impor {po['no_po']} · {fmt_num(po['qty'])} unit · ETA {fmt_date(po['eta'])}" if po else "tidak ada PO impor terbuka")
         st.markdown(f"<div class='field-hint'>{html.escape(' · '.join(parts))}</div>", unsafe_allow_html=True)
 

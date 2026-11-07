@@ -238,7 +238,7 @@ def swot(context: dict) -> dict[str, list[str]]:
     if dead:
         t.append(f"{dead} SKU Slow-Moving/Dead Stock menahan modal")
     if context.get("zero_stock"):
-        t.append(f"{context['zero_stock']} SKU stok kosong di DC Cikupa")
+        t.append(f"{context['zero_stock']} SKU stok kosong di Site 10037")
     for bucket, fallback in ((s, "Data belum cukup untuk kekuatan"), (w, "Belum ada kelemahan menonjol dari data"), (o, "Peluang belum terlihat dari data"), (t, "Ancaman belum terlihat dari data")):
         if not bucket:
             bucket.append(fallback)
@@ -284,7 +284,7 @@ def work_guide(context: dict) -> dict[str, list[tuple[str, str]]]:
             ("Pantau iklan dengan ROAS < 3 dan turunkan bid", f"ROAS harian ≥ {roas_target}"),
         ],
         "Mingguan": [
-            ("Upload stok terbaru (snapshot DC Cikupa) dan jalankan analisa", "Prediksi dan lama kosong ter-update"),
+            ("Upload stok terbaru (snapshot Site 10037) dan jalankan analisa", "Prediksi dan lama kosong ter-update"),
             ("Perbaiki 10 nama/deskripsi berskor Kurang", "Skor naik ke Cukup/Sangat baik"),
             ("Evaluasi budget iklan per SKU terhadap stok", "Tidak ada iklan aktif pada SKU stok kurang"),
             ("Siapkan flash sale minggu depan dari tab Rekomendasi", "Kuota flash sale terjual ≥ 70%"),

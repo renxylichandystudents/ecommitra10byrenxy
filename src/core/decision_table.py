@@ -95,6 +95,7 @@ def build_decision_table(
     stock_frame: pd.DataFrame | None = None,
     zero_duration: pd.DataFrame | None = None,
     lead_time_days: float = 7.0,
+    dc_frames: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """Tambah kolom keputusan per periode pada tabel produk.
 
@@ -186,7 +187,11 @@ def build_decision_table(
     ]
     out["di_bawah_ss"] = out["ada_data_stok"] & (out["stok"].fillna(0) < out["ss"])
     out["rop"] = np.ceil(out["pred_harian"] * float(lead_time_days) + out["ss"])
-    return out
+    from src.core.dc_stock import add_transfer_columns, attach_dc_stock
+
+    out = attach_dc_stock(out, dc_frames)
+    need_col = "m_butuh" if "m_butuh" in out.columns else next((c for c in out.columns if str(c).endswith("_butuh")), "m_butuh")
+    return add_transfer_columns(out, need_col)
 
 
 def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today: date) -> dict[str, dict[str, float]]:

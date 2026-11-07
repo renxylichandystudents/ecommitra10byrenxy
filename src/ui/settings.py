@@ -13,7 +13,7 @@ from src.utils.format import input_angka
 
 FIELDS = (
     # (path, label, min, max, step, keterangan)
-    ("lead_time.lokal_hari", "Lead time lokal (hari)", 0, 120, 1, "DC Cikupa ke pembeli, dipakai pada safety stock dan ROP."),
+    ("lead_time.lokal_hari", "Lead time lokal (hari)", 0, 120, 1, "Site 10037 ke pembeli, dipakai pada safety stock dan ROP."),
     ("gudang.kapasitas_unit", "Kapasitas gudang (unit)", 0, 10_000_000, 100, "Batas optimasi pembelian."),
     ("margin.margin_min_pct", "Margin minimum (%)", 0, 100, 1, "Batas bawah harga flash sale dan markdown."),
     ("target.sales_bulanan_rp", "Target sales bulanan (Rp)", 0, 100_000_000_000, 1_000_000, "0 = memakai prediksi sebagai target."),

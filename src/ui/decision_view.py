@@ -147,7 +147,7 @@ def table_parts(
             export[f"{label} - Prediksi sales"] = sales
             export[f"{label} - SS"] = float(row[f"{p}_ss"])
             export[f"{label} - Butuh"] = float(row[f"{p}_butuh"])
-            export[f"{label} - Stok DC Cikupa"] = float(row["stok"]) if bool(row.get("ada_data_stok", False)) else None
+            export[f"{label} - Stok Site 10037"] = float(row["stok"]) if bool(row.get("ada_data_stok", False)) else None
             export[f"{label} - Selisih"] = float(row[f"{p}_selisih"]) if bool(row.get("ada_data_stok", False)) else None
             export[f"{label} - Status"] = status_key(row[f"{p}_status"])
         cover = row.get("hari_cukup")
@@ -398,9 +398,13 @@ def sku_charts(
     card(chips[2], "Safety stock", f"{fmt_qty(ss)} unit", hint=fmt_idr(ss * price))
     if has_stock:
         gap = float(row["m_selisih"])
-        card(chips[3], "Stok DC Cikupa", f"{fmt_qty(stok)} unit", hint=(f"kurang {fmt_qty(-gap)} unit" if gap < 0 else f"lebih {fmt_qty(gap)} unit") + " dari kebutuhan", tone="stock")
+        card(chips[3], "Stok Site 10037", f"{fmt_qty(stok)} unit", hint=(f"kurang {fmt_qty(-gap)} unit" if gap < 0 else f"lebih {fmt_qty(gap)} unit") + " dari kebutuhan", tone="stock")
+        dc_parts = [f"Site {code}: {fmt_qty(row[f'stok_{code}'])} unit" for code in ("10062", "10036") if pd.notna(row.get(f"stok_{code}", np.nan))]
+        transfer = str(row.get("sumber_restock") or "")
+        if dc_parts or transfer:
+            st.caption("Stok DC · " + " · ".join(dc_parts) + (f" — {transfer}" if transfer else ""))
     else:
-        card(chips[3], "Stok DC Cikupa", "-", hint="Unggah Data stok untuk proyeksi sisa stok", tone="stock")
+        card(chips[3], "Stok Site 10037", "-", hint="Unggah Data stok Site 10037 untuk proyeksi sisa stok", tone="stock")
 
     if period == "bulan":
         return

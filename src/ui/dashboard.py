@@ -129,7 +129,7 @@ def show_priority_dashboard(
         st.markdown(f"**Kebutuhan restock prioritas · Top 50 {basis}**")
         st.caption(
             f"SKU = Top 50 menurut {basis} (kolom Peringkat); angka prediksi QTY sama untuk kedua parameter. "
-            "Restock = max(0, prediksi + SS − stok DC). Stok habis = hari ini + stok ÷ prediksi harian. Urut stok habis paling cepat, lalu restock terbesar."
+            "Restock = max(0, prediksi + SS − stok Site 10037). Ambil dari DC = restock dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier. Stok habis = hari ini + stok ÷ prediksi harian. Urut stok habis paling cepat, lalu restock terbesar."
         )
         if priority.empty:
             st.info("Data stok Top 50 belum diunggah, jadi kebutuhan restock belum bisa dihitung.")
@@ -139,8 +139,13 @@ def show_priority_dashboard(
             display = status_badges(view.head(limit))
             if not display["Inbound"].astype(str).str.strip().any():
                 display = display.drop(columns="Inbound")
+            for column in ("Stok Site 10062", "Stok Site 10036"):
+                if display[column].isna().all():
+                    display = display.drop(columns=column)
+            if not display["Ambil dari DC"].astype(str).str.strip().any():
+                display = display.drop(columns="Ambil dari DC")
             with st.container(key="desktop-dash-restock"):
-                show_table(display, kinds={"Peringkat": "count", "Stok DC": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small")})
+                show_table(display, kinds={"Peringkat": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small"), "Ambil dari DC": st.column_config.TextColumn(width="large")})
             sku_cards(
                 [
                     {
@@ -148,7 +153,7 @@ def show_priority_dashboard(
                         "produk": r.get("Produk"),
                         "varian": r.get("Varian"),
                         "status": r.get("Status"),
-                        "nums": [("Peringkat", fmt_num(r.get("Peringkat"))), ("Stok DC", fmt_num(r.get("Stok DC"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))],
+                        "nums": [("Peringkat", fmt_num(r.get("Peringkat"))), ("Stok Site 10037", fmt_num(r.get("Stok Site 10037"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))] + ([("Ambil dari DC", r.get("Ambil dari DC"))] if r.get("Ambil dari DC") else []),
                     }
                     for r in view.head(limit).to_dict("records")
                 ],
@@ -168,7 +173,7 @@ def restock_view(priority: pd.DataFrame) -> pd.DataFrame:
         short_date(day) if day else ("Tidak habis · prediksi 0" if rate <= 0 else "–")
         for day, rate in zip(out["Stok habis"], out["_pred_harian"])
     ]
-    return out[["Peringkat", "SKU", "Produk", "Varian", "Stok DC", "Prediksi", "SS", "Restock", "Stok habis", "Status", "Inbound"]]
+    return out[["Peringkat", "SKU", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Ambil dari DC", "Stok Site 10062", "Stok Site 10036", "Stok habis", "Status", "Inbound"]]
 
 
 def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureData, role: str) -> None:
@@ -177,6 +182,15 @@ def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureDat
         empty = int((priority["Status"] == "Kosong").sum())
         total = float(priority["Restock"].sum())
         lines.append(f"<b>{fmt_num(empty)}</b> SKU Top 50 kosong · total restock Top 50 <b>{fmt_num(total)}</b> unit.")
+        source = priority.loc[priority["Restock"] > 0, "Ambil dari DC"].astype(str)
+        if source.str.strip().any():
+            covered = int((source.str.startswith("Ambil") & ~source.str.contains("PO")).sum())
+            partly = int((source.str.startswith("Ambil") & source.str.contains("PO")).sum())
+            po_only = int(source.str.startswith("Stok Site").sum())
+            lines.append(
+                f"Dari {fmt_num(len(source))} SKU yang perlu restock: <b>{fmt_num(covered)}</b> cukup diambil dari Site 10062/10036, "
+                f"{fmt_num(partly)} sebagian dari DC + PO, {fmt_num(po_only)} harus PO karena kedua DC kosong."
+            )
         first = priority.iloc[0]
         po = data.po.get(str(first["sku"]))
         if po:
