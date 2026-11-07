@@ -6563,10 +6563,10 @@ def _aligned_totals(
     )
 
 
-def _delta_text(now: int, then: int, *, money: bool) -> str:
-    delta = int(now) - int(then)
+def _delta_text(now: float, then: float, *, money: bool) -> str:
+    delta = (round(float(now)) - round(float(then))) if money else round(float(now) - float(then), 1)
     amount = format_idr(abs(delta)) if money else format_qty(abs(delta))
-    if delta == 0:
+    if abs(delta) < 0.05:
         return "0 (0%)"
     sign = "+" if delta > 0 else "−"
     if then == 0:
@@ -6576,7 +6576,7 @@ def _delta_text(now: int, then: int, *, money: bool) -> str:
     return f"{sign}{amount} ({percent_sign}{format_number(abs(percent), 1)}%)"
 
 
-def _move_line(now: int, then: int | None, *, money: bool, fresh: bool = False) -> str:
+def _move_line(now: float, then: float | None, *, money: bool, fresh: bool = False) -> str:
     if fresh:
         return (
             "<div class='metric-move flat'><span style='display:inline-block;padding:1px 8px;border-radius:999px;"
@@ -6584,8 +6584,11 @@ def _move_line(now: int, then: int | None, *, money: bool, fresh: bool = False) 
         )
     if then is None:
         return "<div class='metric-move flat'>Data latih sebelum hari ini belum cukup untuk dihitung.</div>"
-    tone = "up" if int(now) > int(then) else "down" if int(now) < int(then) else "flat"
-    return f"<div class='metric-move {tone}'>{html.escape(_delta_text(now, then, money=money))} dibanding prediksi kemarin</div>"
+    text = _delta_text(now, then, money=money)
+    tone = "flat" if text.startswith("0 ") else ("up" if float(now) > float(then) else "down")
+    before = format_idr(then) if money else f"{format_qty(then)} unit"
+    # Nilai pembanding ditulis langsung agar user tidak perlu menghitung dari persentase.
+    return f"<div class='metric-move {tone}'>{html.escape(text)} dibanding prediksi kemarin <b>{html.escape(before)}</b></div>"
 
 
 def _prediction_card(column, label: str, value: str, move_html: str, *, tip: str = "", extra_html: str = "") -> None:
@@ -6991,7 +6994,7 @@ def show_analysis_movement(
             is_day = group.prefix == "d"
             main_money = metric == "sales"
             main_now = sales_now if main_money else qty_now
-            main_then = None if then is None else int(then[1] if main_money else then[0])
+            main_then = None if then is None else float(then[1] if main_money else then[0])
             qty_label = "QTY terjual" if is_day else "QTY"
             day_tip = (
                 "Prediksi QTY hari ini = jumlah per SKU dari (prediksi QTY horizon ÷ jumlah hari horizon), dibulatkan ke bawah "
@@ -7012,7 +7015,7 @@ def show_analysis_movement(
                 cards[0],
                 f"Prediksi {'sales' if main_money else qty_label} {name} · Top 50 SKU",
                 format_idr(main_now) if main_money else f"{format_qty(main_now)} unit",
-                _move_line(int(main_now), main_then, money=main_money, fresh=fresh),
+                _move_line(main_now, main_then, money=main_money, fresh=fresh),
                 tip=day_tip if not main_money else "",
                 extra_html=actual_html if not main_money else "",
             )
@@ -7020,7 +7023,7 @@ def show_analysis_movement(
                 cards[1],
                 f"Prediksi {qty_label if main_money else 'sales'} {name} · Top 50 SKU",
                 f"{format_qty(qty_now)} unit" if main_money else format_idr(sales_now),
-                _move_line(int(qty_now if main_money else sales_now), None if then is None else int(then[0] if main_money else then[1]), money=not main_money, fresh=fresh),
+                _move_line(qty_now if main_money else sales_now, None if then is None else (then[0] if main_money else then[1]), money=not main_money, fresh=fresh),
                 tip=day_tip if main_money else "",
                 extra_html=actual_html if main_money else "",
             )
@@ -7032,7 +7035,7 @@ def show_analysis_movement(
                 cards[2],
                 f"Kebutuhan stok {name} · Top 50 SKU",
                 f"{format_qty(need_now)} unit",
-                _move_line(int(need_now), None if then is None else int(then[2]), money=False, fresh=fresh),
+                _move_line(need_now, None if then is None else then[2], money=False, fresh=fresh),
                 tip=need_tip,
             )
             if all_sku is not None and group.prefix in {"d", "m"} and f"{group.prefix}_sales" in all_sku.columns:
