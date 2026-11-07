@@ -242,7 +242,9 @@
       row3 += `<th data-c="${esc(c.id)}" class="${cls(c)} r3" style="${style(c)}">${cellHtml(args.total[c.id])}</th>`;
     });
 
-    const body = sortedRows(args).map((r) => {
+    // limit: tampil N baris teratas SETELAH diurutkan (urut tetap atas semua baris); Muat lagi menambah limit dari Streamlit.
+    const limit = Number(args.limit) > 0 ? Number(args.limit) : Infinity;
+    const body = sortedRows(args).slice(0, limit).map((r) => {
       const picked = r.key === state.selected;
       const tds = cols.map((c) => {
         if (c.id === "pick") {

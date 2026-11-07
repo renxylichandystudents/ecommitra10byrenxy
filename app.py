@@ -6977,9 +6977,8 @@ def _render_movement_board(
         "sold_qty": qty_cell(total("sold_qty"), None),
     }
     limit = max(MOVEMENT_STEP, int(st.session_state.get("movement-limit", MOVEMENT_STEP)))
-    shown = rows[:limit]
-    _TOP50_TABLE(columns=columns, rows=shown, total=total_row, selected="", height=620, sort="", key="movement-top50", default="")
-    rest = len(rows) - len(shown)
+    _TOP50_TABLE(columns=columns, rows=rows, total=total_row, selected="", height=620, sort="", key="movement-top50", default="", limit=limit)
+    rest = len(rows) - min(limit, len(rows))
     if rest > 0:
         more_col, _gap = st.columns([1, 3])
         if more_col.button(f"Muat {min(MOVEMENT_STEP, rest)} SKU lagi (sisa {rest})", key="movement-more", use_container_width=True):
@@ -7788,6 +7787,7 @@ with PAGE_ROOT.container(key="page-root"):
                 window_label=window_label,
                 key=f"top50-{metric}-{period}",
                 filename="top50_item_terlaris.xlsx",
+                step=5,
             )
             safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default)
             if picked:

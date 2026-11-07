@@ -186,23 +186,36 @@ def show_decision_table(
     key: str,
     filename: str,
     height: int = 680,
+    step: int | None = None,
 ) -> str:
-    """Tabel bersama R8 dan Prediksi semua produk. Mengembalikan item_key yang dicentang di kolom Grafik."""
+    """Tabel bersama R8 dan Prediksi semua produk. Mengembalikan item_key yang dicentang di kolom Grafik.
+
+    step: tampilkan `step` baris teratas (setelah diurutkan) lalu tombol Muat lagi menambah `step` baris.
+    """
     columns, rows, total, export = table_parts(view, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label)
     keys = {row["key"] for row in rows}
     previous = str(st.session_state.get(f"{key}-value") or "")
+    limit_key = f"{key}-limit"
+    limit = max(int(step), int(st.session_state.get(limit_key, step))) if step else 0
     picked = _TABLE(
         columns=columns,
         rows=rows,
         total=total,
         selected=previous if previous in keys else "",
         height=height,
+        limit=limit,
         sort="rank",
         key=key,
         default=previous if previous in keys else "",
     )
     picked = str(picked or "")
     st.session_state[f"{key}-value"] = picked
+    rest = len(rows) - limit if step else 0
+    if rest > 0:
+        more_col, _gap = st.columns([1, 3])
+        if more_col.button(f"Muat {min(int(step), rest)} SKU lagi (sisa {rest})", key=f"{key}-more", use_container_width=True):
+            st.session_state[limit_key] = limit + int(step)
+            st.rerun()
     download_excel(export, filename, key=f"xl-{key}")
     return picked if picked in keys else ""
 
