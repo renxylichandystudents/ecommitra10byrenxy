@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from src.core.inventory import snapshot_time
@@ -174,9 +175,11 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
     stock = store.read_source("stock")
     out: dict[str, object] = {}
     dc_skus: set[str] = set()
-    for _code, _name, source in DC_SITES:
+    dc_qty: dict[str, pd.Series] = {}
+    for code, _name, source in DC_SITES:
         site = latest_site_stock(store.read_source(source))
         dc_skus |= set(site["sku"].astype(str))
+        dc_qty[code] = site.set_index("sku")["qty"] if not site.empty else pd.Series(dtype=float)
 
     # 1) SKU transaksi vs SKU di Data stok Site 10037
     if not tx.empty and "sku" in tx.columns:
@@ -224,7 +227,7 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
                 "QTY terjual": table["qty"].round(),
                 "Sales value": table["sales"].round(),
                 "Terakhir terjual": table["terakhir"].map(lambda d: tanggal(d) if pd.notna(d) else "-"),
-                "Ada di Site 10062/10036": table["di_dc"].map({True: "Ya", False: "Tidak"}),
+                **{f"Stok Site {code}": table["sku"].map(qty).fillna(0.0) if len(qty) else np.nan for code, qty in dc_qty.items()},
             }
         )
 
@@ -284,9 +287,11 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
             "baris_tanpa_kode": int(blank.sum()),
             "biaya_cocok_pct": float(per.loc[per["cocok"], "biaya"].sum() / total_cost * 100) if total_cost else 0.0,
             "biaya_miss": float(miss["biaya"].sum()),
+            "omzet_miss": float(miss["omzet"].sum()),
             "kode_di_stok": int(len(code_to_sku)),
         }
-        table = miss.sort_values("biaya", ascending=False).reset_index()
+        # Urut dampak terbesar: omzet iklan yang hilang dari ROAS per SKU, lalu biaya.
+        table = miss.sort_values(["omzet", "biaya"], ascending=False).reset_index()
         key_names = table["nama"].astype(str).str.lower().str.replace(r"\s*\[\d+\]\s*$", "", regex=True).str.split().str.join(" ")
         out["ads_miss"] = pd.DataFrame(
             {

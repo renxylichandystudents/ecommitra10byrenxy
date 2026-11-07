@@ -19,7 +19,7 @@ from src.core.promo import momentum_14d, product_label, promo_eligible
 from src.ui.common import card, download_excel, fmt_idr, fmt_num
 from src.ui.feature_data import FeatureData, bump, product_frame
 from src.core.ads import roas_estimate
-from src.utils.format import input_rupiah, show_table, wrap_row_height
+from src.utils.format import input_rupiah, show_table, wrap_layout
 
 STEP = 20
 CANDIDATE_LIMIT = 300
@@ -154,18 +154,20 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
     alloc = alloc.sort_values(["Budget tambahan", "Budget saat ini / bulan"], ascending=False)
     limit = int(st.session_state.get("tgt-limit", STEP))
     page = alloc.head(limit)
+    alloc_cfg = {
+        "SKU · produk · varian": st.column_config.TextColumn(width="large"),
+        "Budget saat ini / bulan": st.column_config.NumberColumn(format="localized"),
+        "Budget tambahan": st.column_config.NumberColumn(format="localized", step=500_000, min_value=0),
+        "ROAS marginal": st.column_config.NumberColumn(format="%.1f"),
+    }
+    alloc_row, alloc_cfg = wrap_layout(page.drop(columns="_sku"), alloc_cfg)
     edited = st.data_editor(
         page.drop(columns="_sku"),
-        row_height=wrap_row_height(page.drop(columns="_sku")),
+        row_height=alloc_row,
         hide_index=True,
         use_container_width=True,
         disabled=["SKU · produk · varian", "Keputusan", "Budget saat ini / bulan", "ROAS marginal"],
-        column_config={
-            "SKU · produk · varian": st.column_config.TextColumn(width="large"),
-            "Budget saat ini / bulan": st.column_config.NumberColumn(format="localized"),
-            "Budget tambahan": st.column_config.NumberColumn(format="localized", step=500_000, min_value=0),
-            "ROAS marginal": st.column_config.NumberColumn(format="%.1f"),
-        },
+        column_config=alloc_cfg,
         key=f"tgt-alloc-{choice}-{limit}",
     )
     if limit < len(alloc) and st.button("Muat 20 SKU lagi", key="tgt-more"):

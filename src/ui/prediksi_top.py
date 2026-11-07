@@ -18,7 +18,7 @@ from src.core.restock import stock_out_date
 from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct, sku_cards, status_key
 from src.ui.dashboard import status_badges
 from src.ui.feature_data import FeatureData
-from src.utils.format import show_table, table_height, wrap_row_height
+from src.utils.format import show_table, table_height, wrap_layout
 
 STEP = 20
 
@@ -98,24 +98,25 @@ def show_prediction_checklist(
         frame = frame.drop(columns="Ambil dari DC")
     shown = status_badges(frame, "Status stok")
     editor_box = st.container(key="desktop-chk-editor")
-    row_px = wrap_row_height(shown.drop(columns="_key"))
+    editor_cfg = {
+        "Pilih": st.column_config.CheckboxColumn("Pilih", width="small"),
+        pred_label: st.column_config.NumberColumn(format="localized"),
+        actual_label: st.column_config.NumberColumn(format="localized"),
+        "Stok Site 10037": st.column_config.NumberColumn(format="localized"),
+        "Stok Site 10062": st.column_config.NumberColumn(format="localized"),
+        "Stok Site 10036": st.column_config.NumberColumn(format="localized"),
+        "Ambil dari DC": st.column_config.TextColumn(width="large"),
+        "SS": st.column_config.NumberColumn(format="localized"),
+        "Status stok": st.column_config.TextColumn(width="small"),
+    }
+    row_px, editor_cfg = wrap_layout(shown.drop(columns="_key"), editor_cfg)
     edited = editor_box.data_editor(
         shown.drop(columns="_key"),
         row_height=row_px,
         hide_index=True,
         use_container_width=True,
         disabled=[c for c in shown.columns if c not in ("Pilih", "_key")],
-        column_config={
-            "Pilih": st.column_config.CheckboxColumn("Pilih", width="small"),
-            pred_label: st.column_config.NumberColumn(format="localized"),
-            actual_label: st.column_config.NumberColumn(format="localized"),
-            "Stok Site 10037": st.column_config.NumberColumn(format="localized"),
-            "Stok Site 10062": st.column_config.NumberColumn(format="localized"),
-            "Stok Site 10036": st.column_config.NumberColumn(format="localized"),
-            "Ambil dari DC": st.column_config.TextColumn(width="large"),
-            "SS": st.column_config.NumberColumn(format="localized"),
-            "Status stok": st.column_config.TextColumn(width="small"),
-        },
+        column_config=editor_cfg,
         key=f"chk-editor-{limit}-{needle}-{'|'.join(labels)}-{'|'.join(statuses)}",
         height=table_height(len(shown), 720, row_px),
     )

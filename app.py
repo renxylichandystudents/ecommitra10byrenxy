@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, download_excel, exclude_toggle_card, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_toggle_card, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -78,7 +78,7 @@ from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, sou
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
 from src.utils.format import excel_bytes as numeric_excel_bytes
-from src.utils.format import drop_blank_rows, help_columns, show_table, style_frame, table_height, wrap_row_height
+from src.utils.format import drop_blank_rows, help_columns, show_table, style_frame, table_height, wrap_layout
 from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
@@ -1922,7 +1922,7 @@ def show_training_summary() -> None:
         st.caption(f"Ringkasan konsolidasi belum tersedia: {exc}")
 
 
-PAGE_STEP = 20
+PAGE_STEP = 5
 
 
 def paged_table(frame: pd.DataFrame, *, key: str, filename: str, kinds: dict | None = None, step: int = PAGE_STEP) -> None:
@@ -1974,7 +1974,15 @@ def show_match_diagnostics(store, stamp: float) -> None:
         period_text = f"{fmt_date_short(lo)} – {fmt_date_short(hi)}" if lo is not None and pd.notna(lo) else "-"
         if not diag["tx_miss"].empty:
             st.markdown(f"**SKU transaksi yang tidak ada di Data stok** · QTY terjual & Sales value periode data transaksi {period_text}")
-            paged_table(diag["tx_miss"], key="diag-tx", filename=f"sku_tidak_cocok_stok_{period_text}", kinds={"QTY terjual": "count", "Sales value": "money"})
+            miss_tx = diag["tx_miss"]
+            t1, t2, t3, t4 = st.columns(4)
+            card(t1, "SKU tidak ada di Data stok", format_number(len(miss_tx), 0))
+            card(t2, "QTY terjual", format_number(miss_tx["QTY terjual"].sum(), 0), hint=period_text)
+            card(t3, "Potensi loss sales", format_idr(miss_tx["Sales value"].sum()), hint="Sales value SKU yang tidak lagi terdaftar di toko")
+            dc_cols = [c for c in miss_tx.columns if c.startswith("Stok Site")]
+            dc_ready = int((miss_tx[dc_cols].sum(axis=1) > 0).sum()) if dc_cols else 0
+            card(t4, "Masih ada stok di DC", f"{format_number(dc_ready, 0)} SKU", hint="Site 10062 / 10036 · bisa didaftarkan ulang")
+            paged_table(diag["tx_miss"], key="diag-tx", filename=f"sku_tidak_cocok_stok_{period_text}", kinds={"QTY terjual": "count", "Sales value": "money", "Stok Site 10062": "count", "Stok Site 10036": "count"})
     else:
         st.caption("Data transaksi atau Data stok Site 10037 belum ada.")
     ads = diag.get("ads")
@@ -1998,7 +2006,14 @@ def show_match_diagnostics(store, stamp: float) -> None:
         lo, hi = diag.get("ads_period", (None, None))
         period_text = f"{fmt_date_short(lo)} – {fmt_date_short(hi)}" if lo is not None and pd.notna(lo) else "-"
         if not diag["ads_miss"].empty:
-            st.markdown(f"**Kode produk iklan yang belum terpetakan** · biaya & omzet iklan periode laporan iklan {period_text}")
+            st.markdown(f"**Kode produk iklan yang belum terpetakan** · biaya & omzet iklan periode laporan iklan {period_text} · urut omzet terbesar")
+            miss_ads = diag["ads_miss"]
+            a1, a2, a3, a4 = st.columns(4)
+            card(a1, "Kode produk", format_number(len(miss_ads), 0))
+            card(a2, "Biaya iklan", format_idr(miss_ads["Biaya iklan"].sum()), hint=period_text)
+            card(a3, "Potensi loss omzet", format_idr(miss_ads["Omzet iklan"].sum()), hint="Omzet iklan yang tidak masuk ROAS per SKU")
+            spend = float(miss_ads["Biaya iklan"].sum())
+            card(a4, "ROAS kode ini", format_number(miss_ads["Omzet iklan"].sum() / spend, 1) if spend > 0 else "–")
             paged_table(diag["ads_miss"], key="diag-ads", filename=f"iklan_belum_terpetakan_{period_text}", kinds={"Biaya iklan": "money", "Omzet iklan": "money"})
             st.caption("SKU (varian) dicari dari nama produk yang sama di Data transaksi; \"tidak ditemukan\" = produk belum pernah terjual dengan nama itu.")
     else:
@@ -4426,7 +4441,8 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             * len(row),
             axis=1,
         )
-        st.dataframe(styled, height=table_height(len(unpaid_view), 720, wrap_row_height(unpaid_view)), row_height=wrap_row_height(unpaid_view), hide_index=True, use_container_width=True)
+        unpaid_row, unpaid_cfg = wrap_layout(unpaid_view)
+        st.dataframe(styled, height=table_height(len(unpaid_view), 720, unpaid_row), row_height=unpaid_row, column_config=unpaid_cfg or None, hide_index=True, use_container_width=True)
         offer_excel(unpaid_view, "pembeli_belum_bayar.xlsx")
     show_sku_issue_section(sku_sheet, selected_label)
 

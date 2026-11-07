@@ -117,30 +117,61 @@ def table_height(rows: int, max_height: int = 600, row_px: int = ROW_PX) -> int:
     return int(min(max(max_height, row_px * 2 + ROW_PX), ROW_PX + rows * row_px + 3))
 
 
-WRAP_CHARS = 90  # huruf yang muat satu baris pada kolom teks terlebar (lebar otomatis ±600 px)
-LINE_PX = 21
+CHAR_PX = 7.2  # lebar rata-rata satu huruf di tabel (px)
+CELL_PAD_PX = 18
+TEXT_MAX_PX = 400
+NAMED_WIDTH_PX = {"small": 75, "medium": 200, "large": 400}
+LINE_PX = 20
+MAX_LINES = 6
 
 
-def wrap_row_height(frame: pd.DataFrame) -> int:
-    """Tinggi baris agar teks panjang tampil utuh (dibungkus), bukan terpotong "…".
-
-    st.dataframe (Streamlit 1.50) hanya membungkus teks bila row_height > 64 px, jadi tabel berisi
-    teks panjang mendapat 3–6 baris teks per sel; tabel angka tetap ROW_PX.
-    """
-    if frame is None or frame.empty:
-        return ROW_PX
-    longest = 0
+def _text_columns(frame: pd.DataFrame) -> dict[str, int]:
+    """Kolom teks → panjang teks terpanjang (sampel 300 baris)."""
+    out: dict[str, int] = {}
     for column in frame.columns:
         series = frame[column]
         if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
             continue
         sample = series.head(300).astype(str)
-        longest = max(longest, int(sample.str.len().max() or 0))
-    if longest <= WRAP_CHARS:
-        return ROW_PX
-    # Baris dibungkus hanya bila teks melebihi satu baris kolom lebar; 65 px = batas minimum Streamlit untuk membungkus.
-    lines = -(-longest // WRAP_CHARS)
-    return max(65, min(4, lines) * LINE_PX + 6)
+        out[str(column)] = int(sample.str.len().max() or 0)
+    return out
+
+
+def wrap_layout(frame: pd.DataFrame, column_config: dict | None = None) -> tuple[int, dict]:
+    """Lebar kolom teks panjang dikunci (px) sehingga jumlah baris teks bisa dihitung pasti;
+    tinggi baris = baris teks terbanyak. Teks tidak terpotong dan tinggi tidak berlebih.
+
+    st.dataframe (Streamlit 1.50) hanya membungkus teks bila row_height > 64 px."""
+    config = dict(column_config or {})
+    if frame is None or frame.empty:
+        return ROW_PX, config
+    import streamlit as st
+
+    lines_needed = 1
+    for column, longest in _text_columns(frame).items():
+        own = config.get(column)
+        own_width = own.get("width") if isinstance(own, dict) else None
+        if isinstance(own_width, str):
+            width = NAMED_WIDTH_PX.get(own_width, 200)
+        elif isinstance(own_width, (int, float)) and not isinstance(own_width, bool):
+            width = int(own_width)
+        else:
+            natural = longest * CHAR_PX + CELL_PAD_PX
+            if natural <= TEXT_MAX_PX:
+                continue  # muat satu baris dengan lebar otomatis
+            width = TEXT_MAX_PX
+            config[column] = {**own, "width": width} if isinstance(own, dict) else st.column_config.Column(width=width)
+        per_line = max(int((width - CELL_PAD_PX) / CHAR_PX), 8)
+        lines_needed = max(lines_needed, -(-longest // per_line))
+    if lines_needed <= 1:
+        return ROW_PX, config
+    lines = min(lines_needed, MAX_LINES)
+    # Minimal 65 px agar Streamlit membungkus teks; tambahan 8 px untuk jarak atas-bawah sel.
+    return max(65, lines * LINE_PX + 8), config
+
+
+def wrap_row_height(frame: pd.DataFrame) -> int:
+    return wrap_layout(frame)[0]
 
 
 BLANK_CELLS = {"", "-", "–", "—", "nan", "none", "nat", "<na>"}
@@ -233,7 +264,9 @@ def show_table(
     config = dict(column_config or {})
     preformatted = [name for name, cfg in config.items() if _has_own_format(cfg)]
     data = style_frame(frame, kinds=kinds, skip=preformatted, bold_label=bold_label) if styled else frame
-    row_px = kwargs.pop("row_height", None) or wrap_row_height(frame)
+    fixed_row = kwargs.pop("row_height", None)
+    wrapped_row, config = wrap_layout(frame, config)
+    row_px = fixed_row or wrapped_row
     if row_px > ROW_PX:
         max_height = max(max_height, 720)
     return st.dataframe(
