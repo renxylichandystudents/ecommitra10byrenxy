@@ -97,6 +97,6 @@ Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL
 
 ### Setelah deploy
 
-- Setiap `git push origin main` otomatis memperbarui aplikasi.
+- Setiap `git push origin main` otomatis menarik kode baru ke server, **tetapi** karena `.streamlit/config.toml` memakai `fileWatcherType = "none"`, aplikasi yang sedang berjalan baru memakai kode baru setelah **Reboot** (share.streamlit.io → ⋮ di samping app → Reboot). Reboot memutus user yang sedang aktif; sesi login tetap tersimpan, cukup refresh.
 - Bila build gagal, buka **Manage app** → log di kanan bawah untuk melihat paket yang gagal.
 - `requirements.txt` memasang XGBoost, LightGBM, Prophet, dan SHAP. Bila salah satunya gagal dimuat di server, aplikasi otomatis memakai cadangan (HistGradientBoosting scikit-learn, permutation importance) dan menulis model yang dilewati di menu **Evaluasi model**. LSTM dan Sentence-BERT tidak dipasang karena butuh torch yang melebihi batas Streamlit Community Cloud.

@@ -4,7 +4,7 @@ Aplikasi Streamlit untuk toko bahan bangunan Mitra10 di Shopee. Dipakai sehari-h
 
 Aplikasi membaca laporan Seller Center Shopee, memprediksi **Top 50 item terlaris** (diurutkan dari seluruh SKU), lalu menghitung **stok yang harus disiapkan** per SKU.
 
-> **Status terbaru:** lihat [`docs/STATUS.md`](docs/STATUS.md). Branch `main` adalah satu-satunya versi acuan; setiap push ke `main` otomatis men-deploy ulang aplikasi di Streamlit Community Cloud.
+> **Status terbaru:** lihat [`docs/STATUS.md`](docs/STATUS.md). Branch `main` adalah satu-satunya versi acuan; setiap push ke `main` menarik kode baru ke Streamlit Community Cloud, lalu app di-Reboot agar kode baru aktif.
 
 ## Alur pemakaian
 

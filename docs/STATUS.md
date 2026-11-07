@@ -6,7 +6,7 @@ Diperbarui: 7 November 2026.
 
 - **`main` adalah satu-satunya versi acuan.** Semua pekerjaan baru (di Cursor atau di Claude) dimulai dari `main` terbaru: jalankan `git pull origin main` dulu sebelum mengubah apa pun.
 - PR #1 (`perbaikan-audit-nov2026`, 2 Nov 2026) sudah **ditutup tanpa merge**. Isinya sudah tertinggal dari `main`. Jangan dipakai lagi.
-- Setiap push ke `main` otomatis men-deploy ulang aplikasi di Streamlit Community Cloud (lihat `DEPLOY_GRATIS.md`).
+- Setiap push ke `main` menarik kode baru ke Streamlit Community Cloud, lalu aplikasi perlu **di-Reboot** agar kode baru dipakai (`fileWatcherType = "none"`; lihat `DEPLOY_GRATIS.md`).
 
 ## Isi versi ini
 
