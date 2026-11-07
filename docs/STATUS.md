@@ -19,6 +19,13 @@ Perapian 7 Nov 2026 (tidak mengubah rumus prediksi, safety stock, atau data):
 - `README.md` ditulis ulang sesuai metode saat ini (ensemble walk-forward 6 lipatan, rumus stok, 4 role).
 - `DEPLOY_GRATIS.md`: lokasi matriks hak akses dan daftar library yang dipasang disesuaikan.
 
+Perbaikan tampilan 7 Nov 2026:
+
+- Pindah halaman (mis. Buka riwayat → Ringkasan, atau ganti menu): sisa elemen halaman lama tidak lagi tampil acak di kolom halaman baru selama halaman baru dihitung.
+- Tombol Buka di Riwayat analisa menampilkan indikator "Membuka hasil analisa …".
+- Riwayat analisa di HP: baris tetap mendatar dan bisa digeser ke samping.
+- `DEPLOY_GRATIS.md`: kunci akun 15 menit setelah 5× salah password (sesuai kode).
+
 ## Hasil pemeriksaan
 
 - Lint (`ruff`, aturan F dan E9): bersih, tidak ada nama tak terdefinisi.

@@ -1086,6 +1086,8 @@ st.markdown(
     [data-testid="stSidebarCollapsedControl"] {
         display: none !important;
     }
+    /* Elemen <style> pertama di wadah halaman: tidak menambah jarak. */
+    .st-key-page-root > [data-testid="stElementContainer"]:first-child { display: none !important; }
     [data-stale="true"],
     [data-stale="true"] * {
         opacity: 1 !important;
@@ -1313,6 +1315,10 @@ st.markdown(
         .st-key-mobile-header [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center; min-height: 56px; max-height: 56px; }
         .st-key-mobile-header [data-testid="stColumn"] { min-width: 0 !important; width: auto !important; flex: 1 1 auto !important; }
         .st-key-mobile-header img { height: 30px; }
+        /* Riwayat analisa di HP: baris tetap mendatar dan bisa digeser, bukan ditumpuk per kolom. */
+        .st-key-run-history { overflow-x: auto !important; }
+        .st-key-run-history [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; min-width: 760px; }
+        .st-key-run-history [data-testid="stColumn"] { min-width: 0 !important; }
     }
     </style>
     """,
@@ -2054,7 +2060,7 @@ def show_run_history() -> None:
         data_until = {}
     widths = [1.6, 1.0, 0.9, 1.0, 0.55, 0.95, 0.8, 0.8] + ([0.8] if can_delete else [])
     headers = ["Tanggal & jam", "Oleh", "Periode", "Parameter", "SS", "Data s.d.", "Status", ""] + ([""] if can_delete else [])
-    with st.container(border=True, height=min(80 + 46 * len(runs), 520)):
+    with st.container(border=True, height=min(80 + 46 * len(runs), 520), key="run-history"):
         for column, title in zip(st.columns(widths), headers):
             column.markdown(f"<div class='field-hint'><b>{title}</b></div>", unsafe_allow_html=True)
         for record in runs:
@@ -2075,7 +2081,9 @@ def show_run_history() -> None:
             else:
                 cells[6].markdown(f"⚠️ {record.status.title()}")
             if cells[7].button("Buka", key=f"run-open-{record.id}", disabled=not ready, use_container_width=True):
-                if open_saved_run(record.id):
+                with st.spinner(f"Membuka hasil analisa {run_stamp_text(record.run_at)}…"):
+                    opened_ok = open_saved_run(record.id)
+                if opened_ok:
                     st.rerun()
             if can_delete and cells[8].button("Hapus", key=f"run-del-{record.id}", use_container_width=True):
 
@@ -6766,7 +6774,13 @@ render_header()
 PAGE_ROOT = st.empty()
 if ROUTE_CHANGED:
     PAGE_ROOT.empty()
-with PAGE_ROOT.container():
+with PAGE_ROOT.container(key="page-root"):
+    # Elemen pertama selalu ada (jumlah elemen tetap). Saat halaman berganti, sisa halaman lama (data-stale)
+    # disembunyikan selama halaman baru dihitung; tanpa ini baris Beranda tampil acak di kolom halaman baru.
+    st.markdown(
+        "<style>.st-key-page-root [data-stale='true']{display:none !important;}</style>" if ROUTE_CHANGED else "<style></style>",
+        unsafe_allow_html=True,
+    )
     if show_auth_page(AUTH_USER):
         st.stop()
     if st.session_state.get("setting-open"):

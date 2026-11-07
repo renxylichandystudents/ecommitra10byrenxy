@@ -81,7 +81,7 @@ Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL
 
 ### Login dan role
 
-- Semua halaman berada di balik login. Password di-hash bcrypt, minimal 8 karakter. 5× salah password → tunggu 5 menit.
+- Semua halaman berada di balik login. Password di-hash bcrypt, minimal 8 karakter. 5× salah password → akun dikunci 15 menit.
 - User baru dan user yang di-reset wajib ganti password saat login berikutnya.
 - Hak akses ada di satu tempat: matriks `src/core/access.py` (Super user, E-commerce specialist, Team DC, Team IC/MD); `auth/permissions.py` hanya membacanya.
 - Sesi login bertahan 12 jam sejak aktivitas terakhir (atur lewat secret `SESSION_TTL_HOURS`): refresh, tab baru, dan tombol back browser tidak meminta login lagi. Cookie `mitra10_session` hanya berisi token acak; di database hanya disimpan hash token-nya (tabel `sessions`). Logout, nonaktifkan user, atau reset password menghapus sesi tersebut.
