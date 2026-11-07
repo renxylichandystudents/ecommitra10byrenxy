@@ -37,9 +37,9 @@ METRIC_DEFINITIONS: dict[str, str] = {
     "sales_bersih": "Sales bruto − nominal batal − nominal retur.",
     "qty_bersih": "QTY pesanan selain batal − unit retur.",
     "tingkat_batal": "Pesanan batal ÷ pesanan semua status.",
-    "biaya_iklan": "Biaya iklan produk pada periode, setelah baris ringkasan laporan iklan dibuang.",
-    "omzet_iklan": "Omzet iklan per SKU, dibatasi sales bersih SKU itu pada periode yang sama.",
-    "roas": "Omzet iklan ÷ biaya iklan.",
+    "biaya_iklan": "Biaya iklan toko menurut Semua Laporan Iklan (all iklan) pada periode yang sama, diprorata per hari laporan.",
+    "omzet_iklan": "Omzet penjualan dari iklan menurut Shopee (all iklan), periode sama dengan angka pesanan.",
+    "roas": "Omzet iklan ÷ biaya iklan (sama dengan Efektifitas Iklan di Seller Centre).",
     "sku_terjual_bersih": "SKU dengan QTY bersih > 0 pada periode.",
     "sku_non_batal": "SKU yang punya pesanan selain batal pada periode (termasuk yang kemudian diretur).",
     "sku_data_latih": "SKU yang pernah terjual (selain batal) di seluruh data latih terpilih.",
@@ -255,17 +255,20 @@ def ads_metrics(ads_frames, stock_frame, frame: pd.DataFrame | None, start=None,
         start, end = stamps.min(), stamps.max()
     lines = net_sku_sales(frame, start, end)
     result = attribute_ads(list(ads_frames or []), stock_frame, orders=lines, start=start, end=end)
-    cost, sales = result.cost, result.sales
+    # Acuan total = all iklan (Semua Laporan Iklan) pada periode yang sama, diprorata per hari laporan.
+    cost, sales = result.total_cost, result.total_sales
     product_sales = float(lines["sales"].sum()) if not lines.empty else 0.0
     return {
         "biaya_iklan": cost,
         "omzet_iklan": sales,
         "roas": sales / cost if cost > 0 else float("nan"),
-        # Pembanding porsi iklan: dasar sama dengan batas omzet iklan per SKU (Harga Setelah Diskon × QTY, tanpa batal, dikurangi retur).
+        # Pembanding porsi iklan: Harga Setelah Diskon × QTY, tanpa batal, dikurangi retur.
         "sales_produk_bersih": product_sales,
         "porsi_sales_iklan_pct": sales / product_sales * 100 if product_sales > 0 else float("nan"),
         "biaya_iklan_file": result.file_cost,
+        "biaya_iklan_terinci": result.file_cost,
         "biaya_iklan_tanpa_sku": result.unmapped_cost,
+        "hari_iklan": result.days,
         "result": result,
     }
 

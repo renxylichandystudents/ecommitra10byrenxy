@@ -16,7 +16,10 @@ def _date_range(frame: pd.DataFrame, fields: tuple[str, ...]) -> str:
     for field in fields:
         if field not in frame.columns:
             continue
-        dates = pd.to_datetime(frame[field], errors="coerce", dayfirst=True)
+        values = frame[field]
+        iso = values.astype(str).str.match(r"^\d{4}-\d{2}-\d{2}")
+        # Tanggal tersimpan ISO (2026-11-01) tidak boleh dibaca dayfirst (jadi 11 Jan); teks laporan dd/mm/yyyy tetap dayfirst.
+        dates = pd.to_datetime(values.where(iso), errors="coerce", format="mixed").fillna(pd.to_datetime(values.where(~iso), errors="coerce", dayfirst=True))
         if dates.notna().any():
             return f"{tanggal(dates.min())} – {tanggal(dates.max())}"
     return "-"
@@ -98,19 +101,17 @@ def _ads_mapping_match(frames: dict[str, pd.DataFrame]) -> float:
     code_to_sku = _product_code_to_sku(frames.get("stock", pd.DataFrame()))
     if not code_to_sku:
         return 0.0
-    total = 0
-    matched = 0
+    codes: set[str] = set()
     for key in ("ads_auto", "ads_group", "ads_overall"):
         frame = frames.get(key, pd.DataFrame())
         if frame.empty or "product_code" not in frame.columns:
             continue
-        codes = _clean_key(frame["product_code"])
-        codes = codes[codes.ne("")]
-        total += int(codes.nunique())
-        matched += int(codes[codes.isin(code_to_sku)].nunique())
-    if total == 0:
+        values = _clean_key(frame["product_code"])
+        codes |= set(values[~values.str.lower().isin({"", "-", "nan", "none"})])
+    # Satu Kode Produk dihitung sekali walau muncul di beberapa laporan (otomatis, grup, all iklan).
+    if not codes:
         return 0.0
-    return round(matched / total * 100, 2)
+    return round(len(codes & set(code_to_sku)) / len(codes) * 100, 2)
 
 
 def latest_stock_frame(store: LocalDataStore) -> pd.DataFrame:
@@ -244,7 +245,7 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
         rows.append(part)
     if rows:
         ads = pd.concat(rows, ignore_index=True)
-        blank = ads["kode"].eq("") | ads["kode"].isin({"-", "0"})
+        blank = ads["kode"].eq("") | ads["kode"].isin({"-", "0", "nan"})
         ads_named = ads.loc[~blank]
         per = ads_named.groupby("kode").agg(nama=("nama", "last"), biaya=("biaya", "sum"), omzet=("omzet", "sum"), laporan=("laporan", lambda v: ", ".join(sorted(set(v)))))
         per["cocok"] = per.index.isin(code_to_sku)
@@ -254,7 +255,6 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
             "kode_total": int(len(per)),
             "kode_cocok": int(per["cocok"].sum()),
             "baris_tanpa_kode": int(blank.sum()),
-            "biaya_tanpa_kode": float(ads.loc[blank, "biaya"].sum()),
             "biaya_cocok_pct": float(per.loc[per["cocok"], "biaya"].sum() / total_cost * 100) if total_cost else 0.0,
             "biaya_miss": float(miss["biaya"].sum()),
             "kode_di_stok": int(len(code_to_sku)),

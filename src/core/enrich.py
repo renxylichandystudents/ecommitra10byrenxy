@@ -144,7 +144,17 @@ def enrich_catalog(
     if not ads.empty:
         key = table["sku"].fillna("").astype(str).str.strip()
         table = table.assign(_sku=key).merge(ads.rename(columns={"sku": "_sku"}), on="_sku", how="left").drop(columns="_sku")
-    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "omzet_iklan_shopee", "terjual_iklan", "keranjang", "sales_sku"):
+    if not ads.empty:
+        # Riwayat 90 hari untuk ROAS perencanaan (membaca hasil iklan yang sudah berjalan).
+        from src.core.ads import HISTORY_DAYS, attribute_ads
+
+        recent = attribute_ads(frames.ads, frames.stock, orders=orders_used)
+        if recent.end is not None:
+            hist = attribute_ads(frames.ads, frames.stock, orders=orders_used, start=recent.end - pd.Timedelta(days=HISTORY_DAYS - 1), end=recent.end).per_sku
+            hist = hist[["sku", "biaya_iklan", "omzet_iklan"]].rename(columns={"sku": "_sku", "biaya_iklan": "biaya_iklan_90", "omzet_iklan": "omzet_iklan_90"})
+            key = table["sku"].fillna("").astype(str).str.strip()
+            table = table.assign(_sku=key).merge(hist, on="_sku", how="left").drop(columns="_sku")
+    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "omzet_iklan_shopee", "terjual_iklan", "keranjang", "sales_sku", "biaya_harian", "biaya_iklan_90", "omzet_iklan_90"):
         if column not in table.columns:
             table[column] = 0.0
         table[column] = table[column].fillna(0.0)

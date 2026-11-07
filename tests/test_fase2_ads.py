@@ -56,24 +56,77 @@ class AdAttributionTest(unittest.TestCase):
         result = attribute_ads(frames, STOCK, orders=_orders(), start="2026-10-01", end="2026-10-31")
         self.assertAlmostEqual(result.file_cost, 300.0)
         latest = attribute_ads(frames, STOCK, orders=_orders())
-        self.assertEqual(latest.start, pd.Timestamp("2026-10-01"))
+        # Tanpa rentang: 30 hari yang berakhir di hari terakhir laporan iklan, diprorata per hari.
+        self.assertEqual(latest.end, pd.Timestamp("2026-10-31"))
+        self.assertEqual(latest.start, pd.Timestamp("2026-10-02"))
+        self.assertAlmostEqual(latest.file_cost, 300.0 * 30 / 31)
 
-    def test_revenue_capped_and_validation(self):
+    def test_omzet_follows_shopee_and_validation(self):
         result = attribute_ads([_ads()], STOCK, orders=_orders(), start="2026-10-01", end="2026-10-31")
         per = result.per_sku.set_index("sku")
-        self.assertLessEqual(per.loc["600007312", "omzet_iklan"], 750.0)
-        self.assertGreater(per.loc["600007312", "omzet_iklan_shopee"], per.loc["600007312", "omzet_iklan"])
-        total_sales = float(_orders()["sales"].sum())
-        warnings, notes = ad_validation(result, total_sales)
+        # Omzet tidak dipotong sales SKU: sama dengan laporan Shopee (dibagi ke varian menurut sales).
+        self.assertAlmostEqual(per.loc["600007312", "omzet_iklan"], 1500.0)
+        self.assertAlmostEqual(result.sales, 3000.0)
+        warnings, notes = ad_validation(result, 1000.0)
         self.assertEqual(warnings, [])
         self.assertTrue(any("Shopee" in n for n in notes))
-        self.assertLessEqual(result.sales, total_sales)
 
     def test_validation_flags_unmapped_cost(self):
-        ads = pd.concat([_ads(), pd.DataFrame([{"period": "2026-10-01", "product_code": "999", "product_name": "X", "cost": 50.0, "ad_sales": 0.0}])])
+        ads = pd.concat([_ads(), pd.DataFrame([{"period": "2026-10-01", "product_code": "999", "product_name": "X", "cost": 50_000.0, "ad_sales": 0.0}])])
         result = attribute_ads([ads], STOCK, orders=_orders(), start="2026-10-01", end="2026-10-31")
         warnings, _notes = ad_validation(result, 6000.0)
-        self.assertTrue(any("belum sama dengan total file" in w for w in warnings))
+        self.assertTrue(any("belum ada di Data stok" in w for w in warnings))
+
+
+class AllIklanReferenceTest(unittest.TestCase):
+    """All iklan = acuan total; otomatis + grup + iklan satu produk = rincian; laporan tumpang tindih tidak dobel."""
+
+    def _frames(self):
+        text = {"Periode laporan (teks)": "01/11/2026 - 07/11/2026", "period": "2026-11-01", "_submitted_at": "2026-11-07T14:00"}
+        overall = pd.DataFrame(
+            [
+                {"product_code": "-", "product_name": "Iklan Produk Otomatis", "cost": 700.0, "ad_sales": 7000.0},
+                {"product_code": "-", "product_name": "Grup Closet", "cost": 200.0, "ad_sales": 3000.0},
+                {"product_code": "111", "product_name": "Kloset (iklan satu produk)", "cost": 100.0, "ad_sales": 1000.0},
+            ]
+        ).assign(_source_key="ads_overall", **text)
+        auto = pd.DataFrame(
+            [
+                {"product_code": "-", "product_name": "Iklan Produk Otomatis", "cost": 700.0, "ad_sales": 7000.0},
+                {"product_code": "222", "product_name": "Pompa", "cost": 700.0, "ad_sales": 7000.0},
+            ]
+        ).assign(_source_key="ads_auto", **text)
+        group = pd.DataFrame(
+            [
+                {"product_code": "-", "product_name": "Grup Closet", "cost": 200.0, "ad_sales": 3000.0},
+                {"product_code": "111", "product_name": "Kloset", "cost": 200.0, "ad_sales": 3000.0},
+            ]
+        ).assign(_source_key="ads_group", **text)
+        return overall, auto, group
+
+    def test_total_sama_dengan_all_iklan_dan_rincian_cocok(self):
+        overall, auto, group = self._frames()
+        result = attribute_ads([auto, group, overall], STOCK, start="2026-11-01", end="2026-11-07")
+        self.assertAlmostEqual(result.total_cost, 1000.0)
+        self.assertAlmostEqual(result.total_sales, 11000.0)
+        self.assertAlmostEqual(result.file_cost, 1000.0)  # 700 otomatis + 200 grup + 100 iklan satu produk
+        self.assertEqual(result.days, 7)
+        per = result.per_sku.set_index("sku")
+        self.assertAlmostEqual(per.loc["1300003198", "biaya_iklan"], 700.0)
+        self.assertAlmostEqual(per.loc["1300003198", "biaya_harian"], 100.0)
+
+    def test_unggahan_ulang_rentang_lebih_panjang_tidak_dobel(self):
+        overall, auto, group = self._frames()
+        older = overall.assign(**{"Periode laporan (teks)": "01/11/2026 - 05/11/2026", "_submitted_at": "2026-11-05T09:00"})
+        result = attribute_ads([auto, group, overall, older], STOCK, start="2026-11-01", end="2026-11-07")
+        self.assertAlmostEqual(result.total_cost, 1000.0)
+
+    def test_prorata_laporan_bulanan(self):
+        overall, _auto, _group = self._frames()
+        october = overall.assign(**{"Periode laporan (teks)": "01/10/2026 - 31/10/2026", "period": "2026-10-01", "_submitted_at": "2026-11-01T09:00"})
+        result = attribute_ads([october, overall], STOCK, start="2026-10-25", end="2026-11-07")
+        self.assertAlmostEqual(result.total_cost, 1000.0 * 7 / 31 + 1000.0)
+        self.assertEqual(result.days, 14)
 
 
 def _eligible():

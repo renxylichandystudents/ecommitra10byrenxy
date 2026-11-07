@@ -357,10 +357,16 @@ def show_report(
                     card(cols[3], "Porsi sales dari iklan", fmt_pct(share), hint=f"dari sales produk bersih {fmt_idr(product_sales)}")
                     for message in notes:
                         st.caption(message)
+                    period_days = int((pd.Timestamp(report_hi) - pd.Timestamp(report_lo)).days) + 1
+                    covered = int(ads.get("hari_iklan", 0) or 0)
+                    if 0 < covered < period_days:
+                        st.caption(f"Laporan iklan tersimpan hanya mencakup {covered} dari {period_days} hari periode ini; biaya dan omzet iklan di atas hanya untuk {covered} hari tersebut.")
                     st.caption(
-                        "Porsi sales dari iklan = omzet iklan ÷ sales produk bersih (Harga Setelah Diskon × QTY, tanpa pesanan batal, "
-                        "dikurangi retur). Dasar ini sama dengan batas omzet iklan per SKU. Sales bersih di kartu Ringkasan memakai "
-                        "Total Pembayaran per pesanan (setelah voucher/koin, ditambah ongkir), jadi nilainya bisa berbeda."
+                        "Biaya, omzet, dan ROAS = Semua Laporan Iklan (all iklan) Shopee pada periode laporan; laporan yang rentangnya "
+                        "hanya sebagian masuk periode diambil per hari (prorata). Rincian per SKU = laporan iklan otomatis + grup + iklan "
+                        "satu produk, dibagi ke varian menurut sales varian. Porsi sales dari iklan = omzet iklan Shopee ÷ sales produk "
+                        "bersih (Harga Setelah Diskon × QTY, tanpa batal, dikurangi retur); omzet Shopee termasuk belanja produk lain "
+                        "setelah klik iklan, jadi porsinya bisa tinggi."
                     )
                     if ad_cost <= 0:
                         st.caption("Laporan iklan belum diunggah, belum terpetakan ke SKU, atau tidak ada pada periode laporan.")

@@ -113,14 +113,17 @@ def ads_plan(
     peak_days = demand_days(orders, start, end)
     date_text = ", ".join(f"{d.day}/{d.month}" for d in peak_days[:5])
     work = table.copy()
-    cost = work.get("biaya_iklan", pd.Series(0.0, index=work.index)).fillna(0.0)
+    from src.core.ads import roas_estimate
+
     ad_sales = work.get("omzet_iklan", pd.Series(0.0, index=work.index)).fillna(0.0)
-    hist_roas = np.where(cost > 0, ad_sales / cost.replace(0, np.nan), np.nan)
-    work["roas_hist"] = hist_roas
-    work["roas_est"] = pd.Series(hist_roas, index=work.index).fillna(default_roas)
+    estimates = [roas_estimate(row, default_roas) for _, row in work.iterrows()]
+    work["roas_est"] = [value for value, _basis in estimates]
+    work["roas_hist"] = [value if basis != "default" else np.nan for value, basis in estimates]
     daily_sales = work["pred_harian"].astype(float) * work["harga_bersih"].astype(float)
     work["sales_periode"] = daily_sales * days
-    organic_share = np.where(work["sales_total"].astype(float) > 0, 1 - (ad_sales / work["sales_total"].astype(float).replace(0, np.nan)), 1.0)
+    # Porsi organik pada jendela iklan yang sama (sales SKU di jendela laporan iklan), bukan seluruh data latih.
+    window_sales = work["sales_sku"].astype(float) if "sales_sku" in work.columns else work["sales_total"].astype(float)
+    organic_share = np.where(window_sales > 0, 1 - (ad_sales / window_sales.replace(0, np.nan)), 1.0)
     work["porsi_organik"] = pd.Series(organic_share, index=work.index).fillna(1.0).clip(0, 1)
     reasons = []
     for _, row in work.iterrows():

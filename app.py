@@ -1917,7 +1917,8 @@ def show_match_diagnostics(store, stamp: float) -> None:
         st.markdown(
             "Penyebab umum: produk yang diiklankan sudah dihapus/diarsipkan dari toko sehingga tidak ada di ekspor Data stok terbaru, "
             "atau iklan pada periode lama untuk produk yang kemudian diganti listing-nya."
-            + (f" {format_number(ads['baris_tanpa_kode'], 0)} baris iklan tanpa Kode Produk (iklan toko/total, {format_idr(ads['biaya_tanpa_kode'])}) tidak dihitung." if ads["baris_tanpa_kode"] else "")
+            + (f" {format_number(ads['baris_tanpa_kode'], 0)} baris tanpa Kode Produk adalah baris ringkasan pengaturan iklan (Iklan Produk Otomatis, kepala grup iklan) "
+               "yang rinciannya ada di laporan otomatis dan grup, jadi tidak dihitung dua kali." if ads["baris_tanpa_kode"] else "")
             + " Biaya iklan yang tidak terpetakan tidak masuk ke ROAS per SKU."
         )
         if not diag["ads_miss"].empty:

@@ -18,6 +18,7 @@ from src.core.product_features import features_from_description, hook_for
 from src.core.promo import momentum_14d, product_label, promo_eligible
 from src.ui.common import card, download_excel, fmt_idr, fmt_num
 from src.ui.feature_data import FeatureData, bump, product_frame
+from src.core.ads import roas_estimate
 from src.utils.format import input_rupiah, show_table, wrap_row_height
 
 STEP = 20
@@ -55,9 +56,9 @@ def _candidates(table: pd.DataFrame, data: FeatureData, margin_min: float, roas_
         sku = str(row["sku"])
         margin_pct, known_margin = _margin_of(data, sku, margin_min)
         ok, reasons, decision = promo_eligible(row, excluded=data.excluded, margin_pct=data.margin_pct.get(sku), cancel_pct=row.get("batal_pct"), margin_min=margin_min)
-        cost_month = float(row.get("biaya_iklan", 0) or 0)
-        roas_now = float(row.get("omzet_iklan", 0) or 0) / cost_month if cost_month > 0 else roas_default
-        daily = cost_month / ads_plan.DAYS
+        # Biaya harian = biaya iklan ÷ hari yang benar-benar tercakup laporan (bukan ÷ 30 untuk laporan 7 hari).
+        daily = float(row.get("biaya_harian", 0) or 0)
+        roas_now, _basis = roas_estimate(row, roas_default)
         curve = ads_plan.default_curve(daily, roas_now)
         stok = float(row["stok"]) if bool(row.get("ada_data_stok", False)) else 0.0
         extra_units = stok - stock_need(row)
