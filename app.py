@@ -491,15 +491,16 @@ st.markdown(
         min-height: 2.6rem;
         white-space: normal;
     }
+    /* Sama dengan judul kartu lain (.home-section): huruf kapital kecil abu-abu, tanpa garis hitam. */
     .side-section {
         font-size: var(--fs-xs);
-        font-weight: 800;
-        letter-spacing: 0.06em;
+        font-weight: 700;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
-        color: #0f172a;
-        margin: 0.15rem 0 0.45rem 0;
+        color: #64748b;
+        margin: 0.35rem 0 0.45rem 0;
         padding-bottom: 0.28rem;
-        border-bottom: 2px solid #0f172a;
+        border-bottom: 1px solid #e2e8f0;
     }
     section[data-testid="stSidebar"] [data-testid="stButton"] button {
         border-radius: 10px;
@@ -875,13 +876,16 @@ st.markdown(
         box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
     }
     .stButton > button[kind="primary"],
-    .stButton > button[data-testid="stBaseButton-primary"] {
+    .stButton > button[data-testid="stBaseButton-primary"],
+    [data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"],
+    button[data-testid="stBaseButton-primaryFormSubmit"] {
         background: linear-gradient(135deg, #ff7348 0%, #ee4d2d 100%);
         border: none;
         color: #ffffff;
     }
     .stButton > button[kind="primary"]:hover,
-    .stButton > button[data-testid="stBaseButton-primary"]:hover {
+    .stButton > button[data-testid="stBaseButton-primary"]:hover,
+    button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
         background: linear-gradient(135deg, #ff8158 0%, #e24122 100%);
         color: #ffffff;
     }
@@ -4386,10 +4390,13 @@ def show_folder_menu() -> None:
             }
         )
         st.caption(
-            "Sales bersih = sales bruto − nominal batal − nominal retur, sama dengan Ringkasan, Data, dan Laporan untuk bulan yang sama. "
-            "QTY bersih = QTY selain batal − unit retur. Sales retur = unit retur × Harga Setelah Diskon. "
-            "Pesanan retur dan Pesanan batal adalah jumlah No. Pesanan. "
-            "Berhasil menggabungkan Pesanan Diterima, Sedang Dikirim, Selesai, dan Telah Dikirim."
+            "Angka per bulan sama dengan Ringkasan, Data, dan Laporan untuk bulan yang sama. Arahkan kursor ke ikon ? untuk definisi kolom.",
+            help=(
+                "Sales bersih = sales bruto − nominal batal − nominal retur. "
+                "QTY bersih = QTY selain batal − unit retur. Sales retur = unit retur × Harga Setelah Diskon. "
+                "Pesanan retur dan Pesanan batal adalah jumlah No. Pesanan. "
+                "Berhasil = Pesanan Diterima, Sedang Dikirim, Selesai, dan Telah Dikirim."
+            ),
         )
         show_table(folder, bold_label="Total", column_config=table_column_config(folder))
         offer_excel(folder, "folder_data.xlsx")
@@ -4398,7 +4405,13 @@ def show_folder_menu() -> None:
     if changes.empty:
         st.write("Belum ada perubahan impor.")
     else:
-        show_table(changes)
+        # Daftar file panjang diringkas di layar ("a.xlsx, b.xlsx +8 file"); unduhan Excel tetap lengkap.
+        def _short_files(text: object) -> str:
+            names = [n.strip() for n in str(text or "").split(",") if n.strip()]
+            return ", ".join(names[:2]) + (f" +{len(names) - 2} file" if len(names) > 2 else "")
+
+        shown_changes = changes.assign(File=changes["File"].map(_short_files)) if "File" in changes.columns else changes
+        show_table(shown_changes, column_config={"Perubahan": st.column_config.TextColumn(width="large")})
         offer_excel(changes, "riwayat_perubahan_data.xlsx")
 
 

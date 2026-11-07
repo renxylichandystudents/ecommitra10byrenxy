@@ -203,7 +203,10 @@ def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: 
 def _margin_report_tab(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | None, today: date) -> None:
     st.markdown("**Laporan margin**")
     if data.components.empty:
-        st.info("Komponen biaya belum diunggah (Setting › Kalkulator biaya).")
+        st.info(
+            "Komponen biaya belum diunggah. Langkah: buka Setting › Kalkulator biaya → Unduh template → isi HPP, komisi, "
+            "biaya layanan, packing, dan ongkir per SKU → unggah. Laporan margin muncul otomatis setelahnya."
+        )
         return
     if orders is None or orders.empty:
         st.info("Belum ada transaksi.")
