@@ -217,7 +217,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         aliases=AD_PRODUCT_ALIASES,
         dedup_keys=("period", "row_no", "product_code", "product_name"),
         date_fields=("period",),
-        utility="Kontrol total biaya iklan dan efektivitas iklan toko.",
+        utility="Acuan total biaya, omzet, dan ROAS iklan toko (Semua Laporan Iklan).",
     ),
     "ads_search": SourceSpec(
         key="ads_search",
@@ -235,7 +235,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         aliases=STOCK_ALIASES,
         dedup_keys=("sku", "product_code", "variation"),
         sku_fields=("sku",),
-        utility="Snapshot stok Site 10037 (kolom \"Stok: DC Cikupa\" di ekspor Shopee) untuk kebutuhan, selisih stok, hari cukup, dan lama kosong.",
+        utility="Stok toko Shopee (kolom Stok: DC Cikupa): kebutuhan, hari cukup, dan lama kosong.",
     ),
     "stock_10062": SourceSpec(
         key="stock_10062",
@@ -244,7 +244,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         aliases=DC_STOCK_ALIASES,
         dedup_keys=("sku",),
         sku_fields=("sku",),
-        utility="Stok DC Cikupa (Site 10062) dari laporan Stock Qty and Value; sumber pengisian bila stok Site 10037 kurang.",
+        utility="Stok DC Cikupa (laporan Stock Qty and Value): sumber pengisian Site 10037.",
         site_code="10062",
     ),
     "stock_10036": SourceSpec(
@@ -254,7 +254,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         aliases=DC_STOCK_ALIASES,
         dedup_keys=("sku",),
         sku_fields=("sku",),
-        utility="Stok DC Cipeucang (Site 10036) dari laporan Stock Qty and Value; sumber pengisian bila stok Site 10037 kurang.",
+        utility="Stok DC Cipeucang (laporan Stock Qty and Value): sumber pengisian Site 10037.",
         site_code="10036",
     ),
     "product_descriptions": SourceSpec(

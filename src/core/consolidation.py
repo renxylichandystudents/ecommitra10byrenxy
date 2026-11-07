@@ -201,6 +201,8 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
         ref = pd.Timestamp(today) if today is not None else work["day"].max()
         per["hari_sejak"] = (ref - per["terakhir"]).dt.days
         miss = per.loc[~per["cocok"]]
+        days = work["day"].dropna()
+        out["tx_period"] = (days.min(), days.max()) if not days.empty else (None, None)
         out["tx"] = {
             "sku_total": int(len(per)),
             "sku_cocok": int(per["cocok"].sum()),
@@ -228,6 +230,17 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
 
     # 2) Kode produk iklan vs Kode Produk di Data stok Site 10037
     code_to_sku = _product_code_to_sku(stock)
+    name_to_variants: dict[str, str] = {}
+    if not tx.empty and {"product_name", "sku"} <= set(tx.columns):
+        names = tx["product_name"].astype(str).str.lower().str.replace(r"\s*\[\d+\]\s*$", "", regex=True).str.split().str.join(" ")
+        variant = tx["variation"].fillna("").astype(str).str.strip() if "variation" in tx.columns else pd.Series("", index=tx.index)
+        pairs = pd.DataFrame({"name": names, "sku": _clean_key(tx["sku"]), "var": variant}).drop_duplicates()
+        pairs = pairs.loc[pairs["sku"].ne("")]
+        for name, part in pairs.groupby("name"):
+            name_to_variants[name] = "; ".join(f"{s}" + (f" ({v})" if v and v.lower() not in {"nan", "-"} else "") for s, v in zip(part["sku"], part["var"]))
+    from src.core.ads import _ranges
+
+    ad_lo, ad_hi = None, None
     rows = []
     for key in ("ads_auto", "ads_group", "ads_overall"):
         frame = store.read_source(key)
@@ -243,11 +256,25 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
             }
         )
         rows.append(part)
+        if "period" in frame.columns:
+            lo, hi = _ranges(frame)
+            if lo.notna().any():
+                ad_lo = lo.min() if ad_lo is None else min(ad_lo, lo.min())
+                ad_hi = hi.max() if ad_hi is None else max(ad_hi, hi.max())
+    out["ads_period"] = (ad_lo, ad_hi)
     if rows:
         ads = pd.concat(rows, ignore_index=True)
         blank = ads["kode"].eq("") | ads["kode"].isin({"-", "0", "nan"})
         ads_named = ads.loc[~blank]
-        per = ads_named.groupby("kode").agg(nama=("nama", "last"), biaya=("biaya", "sum"), omzet=("omzet", "sum"), laporan=("laporan", lambda v: ", ".join(sorted(set(v)))))
+        per = ads_named.groupby("kode").agg(nama=("nama", "last"), laporan=("laporan", lambda v: ", ".join(sorted(set(v)))))
+        # Biaya/omzet per kode lewat mesin atribusi: laporan tumpang tindih tidak dobel, periode penuh semua laporan.
+        from src.core.ads import ad_product_rows
+
+        frames_ads = [store.read_source(key) for key in ("ads_auto", "ads_group", "ads_overall")]
+        clean, _lo, _hi = ad_product_rows(frames_ads, start=ad_lo, end=ad_hi)
+        sums = clean.groupby("product_code")[["biaya_iklan", "omzet_iklan"]].sum()
+        per["biaya"] = per.index.map(sums["biaya_iklan"]).fillna(0.0) if not sums.empty else 0.0
+        per["omzet"] = per.index.map(sums["omzet_iklan"]).fillna(0.0) if not sums.empty else 0.0
         per["cocok"] = per.index.isin(code_to_sku)
         total_cost = float(per["biaya"].sum())
         miss = per.loc[~per["cocok"]]
@@ -260,9 +287,11 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
             "kode_di_stok": int(len(code_to_sku)),
         }
         table = miss.sort_values("biaya", ascending=False).reset_index()
+        key_names = table["nama"].astype(str).str.lower().str.replace(r"\s*\[\d+\]\s*$", "", regex=True).str.split().str.join(" ")
         out["ads_miss"] = pd.DataFrame(
             {
                 "Kode produk": table["kode"],
+                "SKU (varian) dari Data transaksi": key_names.map(name_to_variants).fillna("tidak ditemukan"),
                 "Nama di laporan iklan": table["nama"],
                 "Biaya iklan": table["biaya"].round(),
                 "Omzet iklan": table["omzet"].round(),

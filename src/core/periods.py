@@ -10,8 +10,40 @@ PERIOD_MONTHS = {"bulan": 1, "kuartal": 3, "semester": 6, "tahun": 12}
 MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 
 
+ROMAN = ("I", "II", "III", "IV")
+
+
+def calendar_period(period: str, day: date) -> tuple[date, date, str]:
+    """Periode kalender yang memuat `day`: kuartal Jan–Mar/Apr–Jun/Jul–Sep/Okt–Des, semester Jan–Jun/Jul–Des, tahun Jan–Des."""
+    if period == "kuartal":
+        index = (day.month - 1) // 3
+        first_month = index * 3 + 1
+        start = date(day.year, first_month, 1)
+        end = (pd.Timestamp(start) + pd.DateOffset(months=3) - pd.Timedelta(days=1)).date()
+        label = f"Kuartal {ROMAN[index]} {day.year} ({MONTHS_SHORT[first_month - 1]}–{MONTHS_SHORT[first_month + 1]})"
+        return start, end, label
+    if period == "semester":
+        half = 0 if day.month <= 6 else 1
+        start = date(day.year, 1 if half == 0 else 7, 1)
+        end = date(day.year, 6, 30) if half == 0 else date(day.year, 12, 31)
+        label = f"Semester {half + 1} {day.year} ({'Jan–Jun' if half == 0 else 'Jul–Des'})"
+        return start, end, label
+    if period == "tahun":
+        return date(day.year, 1, 1), date(day.year, 12, 31), f"Tahun {day.year}"
+    start = date(day.year, day.month, 1)
+    return start, (pd.Timestamp(start) + pd.offsets.MonthEnd(0)).date(), month_year(day)
+
+
+def previous_calendar_period(period: str, day: date) -> tuple[date, date, str]:
+    start, _end, _label = calendar_period(period, day)
+    return calendar_period(period, (pd.Timestamp(start) - pd.Timedelta(days=1)).date())
+
+
 def prediction_window(period: str, today: date) -> tuple[date, date]:
-    """Jendela prediksi dari Pengaturan bisnis. Bulan, dijalankan 2 Nov 2026 → 2 Nov – 1 Des 2026."""
+    """Jendela prediksi. Bulan: 30 hari ke depan (2 Nov → 2 Nov – 1 Des). Kuartal/Semester/Tahun: dari hari ini
+    sampai akhir periode kalender (7 Nov 2026, Kuartal → 7 Nov – 31 Des 2026 = sisa Kuartal IV)."""
+    if period in {"kuartal", "semester", "tahun"}:
+        return today, calendar_period(period, today)[1]
     months = PERIOD_MONTHS.get(period, 1)
     end = (pd.Timestamp(today) + pd.DateOffset(months=months) - pd.Timedelta(days=1)).date()
     return today, end

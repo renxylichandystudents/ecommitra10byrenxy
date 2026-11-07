@@ -9,10 +9,10 @@ import time
 from datetime import date, datetime, timedelta
 
 # Server Streamlit Cloud berjalan di UTC; tanggal "hari ini" harus WIB seperti waktu pesanan Shopee.
-if not os.environ.get("TZ"):
-    os.environ["TZ"] = "Asia/Jakarta"
-    if hasattr(time, "tzset"):
-        time.tzset()
+# Selalu WIB, juga bila platform sudah mengisi TZ=UTC: tanggal "hari ini" menentukan jendela prediksi.
+os.environ["TZ"] = "Asia/Jakarta"
+if hasattr(time, "tzset"):
+    time.tzset()
 from pathlib import Path
 from statistics import NormalDist
 
@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, exclude_toggle_card, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, download_excel, exclude_toggle_card, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -383,7 +383,7 @@ st.markdown(
         line-height: 1.55;
         color: #1e293b;
         margin: 0.15rem 0 0.7rem;
-        max-width: 68rem;
+        max-width: none;
     }
     .slide-note {
         background: #f8fafc;
@@ -469,7 +469,7 @@ st.markdown(
         font-size: var(--fs-sm);
         line-height: 1.45;
         color: #64748b;
-        max-width: 62rem;
+        max-width: none;
         margin: 0 0 0.35rem;
     }
     div[data-testid="stElementContainer"]:has(.app-menu-label) {
@@ -789,7 +789,7 @@ st.markdown(
         font-size: var(--fs-sm) !important;
         line-height: 1.45 !important;
         color: #64748b !important;
-        max-width: 62rem;
+        max-width: none;
         margin-bottom: 0;
     }
     [data-testid="stMarkdownContainer"] {
@@ -1197,7 +1197,7 @@ st.markdown(
         margin: 0 0 0.7rem;
     }
     .home-lead {
-        max-width: 42rem;
+        max-width: none;
         font-size: var(--fs-lg);
         line-height: 1.7;
         color: #334155;
@@ -1239,8 +1239,8 @@ st.markdown(
     .feature-copy {
         color: #334155;
         font-size: var(--fs-base);
-        line-height: 1.7;
-        max-width: 46rem;
+        line-height: 1.6;
+        max-width: none;
         margin: 0 0 1rem 0;
     }
     .feature-bar {
@@ -1368,7 +1368,7 @@ st.markdown(
         [data-testid="stMainBlockContainer"] { padding-top: 0.75rem !important; }
         /* Riwayat analisa di HP: baris tetap mendatar dan bisa digeser, bukan ditumpuk per kolom. */
         .st-key-run-history { overflow-x: auto !important; }
-        .st-key-run-history [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; min-width: 760px; }
+        .st-key-run-history [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; min-width: 980px; }
         .st-key-run-history [data-testid="stColumn"] { min-width: 0 !important; }
     }
     </style>
@@ -1440,10 +1440,12 @@ def format_id_date(value: date) -> str:
 
 def forecast_window(period: str, today: date | None = None) -> tuple[date, date, str]:
     """Periode prediksi dimulai hari ini dan mengikuti tanggal kalender."""
+    from src.core.periods import calendar_period, prediction_window
+
     start = today or date.today()
-    months = {"bulan": 1, "kuartal": 3, "semester": 6, "tahun": 12}[period]
-    end = (pd.Timestamp(start) + pd.DateOffset(months=months) - pd.Timedelta(days=1)).date()
-    text = f"{PERIOD_SPECS[period].label} · {format_id_date(start)} – {format_id_date(end)}"
+    start, end = prediction_window(period, start)
+    name = PERIOD_SPECS[period].label if period == "bulan" else f"Sisa {calendar_period(period, start)[2]}"
+    text = f"{name} · {format_id_date(start)} – {format_id_date(end)}"
     return start, end, text
 
 
@@ -1694,6 +1696,23 @@ def _source_status_map(store: LocalDataStore) -> dict[str, str]:
     return {spec.key: str(by_label.get(spec.label, "Kosong")) for spec in source_menu()}
 
 
+UPLOAD_GROUPS = (
+    ("Penjualan", ("transactions", "performance")),
+    ("Iklan", ("ads_overall", "ads_auto", "ads_group", "ads_search")),
+    ("Stok", ("stock", "stock_10062", "stock_10036")),
+    ("Produk", ("product_descriptions", "competitors")),
+)
+
+
+def _source_updated_map(store: LocalDataStore) -> dict[str, str]:
+    """Tanggal unggahan terakhir per menu (dd/mm/yyyy)."""
+    summary = store.source_summaries()
+    if summary.empty or "Diperbarui" not in summary.columns:
+        return {}
+    by_label = summary.set_index("Menu")["Diperbarui"].astype(str).str.slice(0, 10).to_dict()
+    return {spec.key: by_label.get(spec.label, "") for spec in source_menu() if by_label.get(spec.label, "") not in ("", "-")}
+
+
 def _file_period_text(frame: pd.DataFrame, source_key: str) -> str:
     spec = SOURCE_SPECS[source_key]
     mapping = find_columns(frame.columns, spec)
@@ -1775,25 +1794,57 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         """
         <div class="home-section">UPLOAD DATA LATIH</div>
         <div class="feature-copy">
-        Silakan upload data latih meliputi data transaksi, data performa toko, data iklan produk otomatis, data iklan produk grup, data keseluruhan iklan, data iklan pencarian, data stok Site 10037 (toko Shopee), data stok Site 10062 (DC Cikupa), data stok Site 10036 (DC Cipeucang), data produk deskripsi, dan data produk kompetitor. Setelah file diunggah dan tombol Simpan ditekan, data tersimpan. Unggahan berikutnya ditambahkan sebagai pembaruan (baris yang sama diganti, bukan digandakan). Data yang disimpan menjadi data latih.
+        Pilih menu sesuai jenis laporan, unggah file, lalu tekan Simpan. Data yang tersimpan menjadi data latih. Unggahan
+        berikutnya memperbarui data: baris yang sama diganti, bukan digandakan.
         </div>
         """,
         unsafe_allow_html=True,
     )
     show_vault_status()
     statuses = _source_status_map(store)
+    updated = _source_updated_map(store)
+    done = set(st.session_state.get("upload-done", set()))
     specs = source_menu()
-    labels = [f"{spec.label} · {statuses.get(spec.key, 'Kosong')}" for spec in specs]
-    stored_label = str(st.session_state.get("upload-source-label", labels[0]))
-    # Label memuat status ("· Siap"); setelah submit statusnya berubah, jadi cocokkan lewat nama menu.
-    selected_label = next((label for spec, label in zip(specs, labels) if stored_label.startswith(f"{spec.label} · ")), labels[0])
-    st.session_state["upload-source-label"] = selected_label
-    left, right = st.columns([1.25, 3.2], gap="large")
+    by_key = {spec.key: spec for spec in specs}
+
+    def menu_label(spec) -> str:
+        status = statuses.get(spec.key, "Kosong")
+        if status == "Siap" and spec.key in done:
+            return f"{spec.label} · ✓ Siap (baru disimpan)"
+        if status == "Siap":
+            when = updated.get(spec.key)
+            return f"{spec.label} · tersimpan {when}" if when else f"{spec.label} · tersimpan"
+        return f"{spec.label} · {status}"
+
+    selected_key = st.session_state.get("upload-source", specs[0].key)
+    if selected_key not in by_key:
+        selected_key = specs[0].key
+
+    def pick(group: str) -> None:
+        choice = st.session_state.get(f"upload-group-{group}")
+        if choice:
+            st.session_state["upload-source"] = choice
+            for other, _keys in UPLOAD_GROUPS:
+                if other != group:
+                    st.session_state[f"upload-group-{other}"] = None
+
+    left, right = st.columns([1.35, 3.1], gap="large")
     with left:
-        picked = st.radio("Menu upload", options=labels, key="upload-source-label")
-        selected_spec = specs[labels.index(picked)]
+        st.markdown("<div class='side-section'>Menu upload</div>", unsafe_allow_html=True)
+        for group, keys in UPLOAD_GROUPS:
+            keys = [key for key in keys if key in by_key]
+            if not keys:
+                continue
+            widget = f"upload-group-{group}"
+            if widget not in st.session_state:
+                st.session_state[widget] = selected_key if selected_key in keys else None
+            st.radio(group, options=keys, format_func=lambda key: menu_label(by_key[key]), key=widget, on_change=pick, args=(group,))
+        selected_spec = by_key[st.session_state.get("upload-source", selected_key)]
         filled = sum(1 for status in statuses.values() if status == "Siap")
-        st.caption(f"{filled} dari {len(specs)} menu terisi")
+        st.caption(
+            f"{filled} dari {len(specs)} menu berisi data. ✓ Siap = diunggah dan disimpan di sesi ini; "
+            "tersimpan = data dari unggahan sebelumnya (tanggal unggahan terakhir)."
+        )
     with right:
         st.markdown(f"<div class='side-section'>{html.escape(selected_spec.label)}</div>", unsafe_allow_html=True)
         result_key = f"upload-result-{selected_spec.key}"
@@ -1826,6 +1877,7 @@ def show_training_uploads() -> tuple[list[str], str | None]:
                 st.session_state[result_key] = outcome
                 if outcome["level"] == "success":
                     st.session_state["upload-imported-keys"] = outcome["keys"]
+                    st.session_state["upload-done"] = set(st.session_state.get("upload-done", set())) | {selected_spec.key}
                     st.rerun()
                 load_error = outcome["message"]
             if load_error and result_key not in st.session_state:
@@ -1870,6 +1922,25 @@ def show_training_summary() -> None:
         st.caption(f"Ringkasan konsolidasi belum tersedia: {exc}")
 
 
+PAGE_STEP = 20
+
+
+def paged_table(frame: pd.DataFrame, *, key: str, filename: str, kinds: dict | None = None, step: int = PAGE_STEP) -> None:
+    """Tabel bernomor urut, tampil bertahap (Muat lagi) + unduh Excel lengkap."""
+    full = frame.reset_index(drop=True)
+    full.insert(0, "No", range(1, len(full) + 1))
+    shown_key = f"{key}-shown"
+    shown = int(st.session_state.get(shown_key, step))
+    show_table(full.head(shown), kinds=kinds, max_height=10_000)
+    left, mid, _gap = st.columns([1.3, 1.2, 3])
+    rest = len(full) - shown
+    if rest > 0 and left.button(f"Muat {min(step, rest)} lagi (sisa {rest})", key=f"{key}-more", use_container_width=True):
+        st.session_state[shown_key] = shown + step
+        st.rerun()
+    with mid:
+        download_excel(full, filename.replace("/", "-").replace(" ", "_"), key=f"{key}-xl", label=f"Unduh Excel ({len(full)} baris)")
+
+
 @st.cache_data(show_spinner=False, max_entries=2)
 def cached_match_diagnostics(root: str, stamp: float) -> dict:
     from src.core.consolidation import match_diagnostics
@@ -1899,8 +1970,11 @@ def show_match_diagnostics(store, stamp: float) -> None:
             + (f"{format_number(tx['baris_tanpa_sku'], 0)} baris transaksi tanpa SKU tidak dihitung. " if tx["baris_tanpa_sku"] else "")
             + f"Sebaliknya, {format_number(tx['stok_tanpa_transaksi'], 0)} dari {format_number(tx['sku_stok'], 0)} SKU di Data stok belum pernah terjual."
         )
+        lo, hi = diag.get("tx_period", (None, None))
+        period_text = f"{fmt_date_short(lo)} – {fmt_date_short(hi)}" if lo is not None and pd.notna(lo) else "-"
         if not diag["tx_miss"].empty:
-            show_table(diag["tx_miss"], max_height=420, kinds={"QTY terjual": "count", "Sales value": "money"})
+            st.markdown(f"**SKU transaksi yang tidak ada di Data stok** · QTY terjual & Sales value periode data transaksi {period_text}")
+            paged_table(diag["tx_miss"], key="diag-tx", filename=f"sku_tidak_cocok_stok_{period_text}", kinds={"QTY terjual": "count", "Sales value": "money"})
     else:
         st.caption("Data transaksi atau Data stok Site 10037 belum ada.")
     ads = diag.get("ads")
@@ -1921,8 +1995,12 @@ def show_match_diagnostics(store, stamp: float) -> None:
                "yang rinciannya ada di laporan otomatis dan grup, jadi tidak dihitung dua kali." if ads["baris_tanpa_kode"] else "")
             + " Biaya iklan yang tidak terpetakan tidak masuk ke ROAS per SKU."
         )
+        lo, hi = diag.get("ads_period", (None, None))
+        period_text = f"{fmt_date_short(lo)} – {fmt_date_short(hi)}" if lo is not None and pd.notna(lo) else "-"
         if not diag["ads_miss"].empty:
-            show_table(diag["ads_miss"], max_height=420, kinds={"Biaya iklan": "money", "Omzet iklan": "money"})
+            st.markdown(f"**Kode produk iklan yang belum terpetakan** · biaya & omzet iklan periode laporan iklan {period_text}")
+            paged_table(diag["ads_miss"], key="diag-ads", filename=f"iklan_belum_terpetakan_{period_text}", kinds={"Biaya iklan": "money", "Omzet iklan": "money"})
+            st.caption("SKU (varian) dicari dari nama produk yang sama di Data transaksi; \"tidak ditemukan\" = produk belum pernah terjual dengan nama itu.")
     else:
         st.caption("Laporan iklan atau Data stok Site 10037 belum ada.")
     st.markdown("**3. Snapshot stok**")
@@ -2226,6 +2304,22 @@ def _latest_ready_run():
     return None
 
 
+def run_daily_totals() -> dict[int, float]:
+    """Total prediksi QTY per hari per analisa, dari prediction_snapshot (rata-rata per tanggal target)."""
+    try:
+        from sqlalchemy import func, select
+
+        from src.core.feature_store import prediction_snapshot
+
+        with get_features().engine.connect() as conn:
+            rows = conn.execute(
+                select(prediction_snapshot.c.run_id, func.sum(prediction_snapshot.c.pred_qty), func.count(func.distinct(prediction_snapshot.c.target_date))).group_by(prediction_snapshot.c.run_id)
+            ).all()
+        return {int(run): float(total) / max(int(days), 1) for run, total, days in rows if total is not None}
+    except Exception:
+        return {}
+
+
 def show_run_history() -> None:
     try:
         runs = run_repository().list_runs(limit=30)
@@ -2243,8 +2337,15 @@ def show_run_history() -> None:
         data_until = {int(r): d for r, d in zip(info["run_id"], info["data_until"])}
     except Exception:
         data_until = {}
-    widths = [1.6, 1.0, 0.9, 1.0, 0.55, 0.95, 0.8, 0.8] + ([0.8] if can_delete else [])
-    headers = ["Tanggal & jam", "Oleh", "Periode", "Parameter", "SS", "Data s.d.", "Status", ""] + ([""] if can_delete else [])
+    totals = run_daily_totals()
+    # Analisa dengan data, periode, parameter, SS, dan tanggal yang sama harus menghasilkan prediksi yang sama.
+    groups: dict[tuple, set[int]] = {}
+    for record in runs:
+        if record.id in totals:
+            key = (record.data_hash, record.periode, record.parameter, record.safety_stock, record.exclude_batal_retur, str(record.run_at)[:10])
+            groups.setdefault(key, set()).add(int(round(totals[record.id])))
+    widths = [1.5, 0.9, 0.8, 0.95, 0.5, 0.9, 0.75, 1.0, 0.75, 0.75] + ([0.75] if can_delete else [])
+    headers = ["Tanggal & jam", "Oleh", "Periode", "Parameter", "SS", "Data s.d.", "Sidik data", "Prediksi/hari", "Status", ""] + ([""] if can_delete else [])
     with st.container(border=True, height=min(80 + 46 * len(runs), 520), key="run-history"):
         for column, title in zip(st.columns(widths), headers):
             column.markdown(f"<div class='field-hint'><b>{title}</b></div>", unsafe_allow_html=True)
@@ -2258,19 +2359,27 @@ def show_run_history() -> None:
             cells[4].markdown(f"{record.safety_stock}%")
             until = data_until.get(int(record.id))
             cells[5].markdown(fmt_date_short(until) if until else "<span style='color:#94a3b8'>tidak tercatat</span>", unsafe_allow_html=True)
+            cells[6].markdown(f"<code>{html.escape(str(record.data_hash or '')[:6]) or '–'}</code>", unsafe_allow_html=True, help="6 karakter pertama sidik isi data latih. Sama = data latih identik.")
+            total = totals.get(record.id)
+            key = (record.data_hash, record.periode, record.parameter, record.safety_stock, record.exclude_batal_retur, str(record.run_at)[:10])
+            differs = total is not None and len(groups.get(key, set())) > 1
+            cells[7].markdown(
+                ("–" if total is None else f"{format_number(total, 0)} unit") + (" ⚠️" if differs else ""),
+                help=("Total prediksi QTY per hari (semua SKU). " + ("Berbeda dengan analisa lain yang data, parameter, dan tanggalnya sama." if differs else "Analisa dengan sidik data, parameter, dan tanggal yang sama harus bernilai sama.")),
+            )
             ready = repo.available(record)
             if ready:
-                cells[6].markdown("✅ Sukses")
+                cells[8].markdown("✅ Sukses")
             elif record.status == "sukses":
-                cells[6].markdown("⚠️ File hasil hilang", help="Server sempat restart/redeploy; file hasil di disk server terhapus.")
+                cells[8].markdown("⚠️ File hasil hilang", help="Server sempat restart/redeploy; file hasil di disk server terhapus.")
             else:
-                cells[6].markdown(f"⚠️ {record.status.title()}")
-            if cells[7].button("Buka", key=f"run-open-{record.id}", disabled=not ready, use_container_width=True):
+                cells[8].markdown(f"⚠️ {record.status.title()}")
+            if cells[9].button("Buka", key=f"run-open-{record.id}", disabled=not ready, use_container_width=True):
                 with st.spinner(f"Membuka hasil analisa {run_stamp_text(record.run_at)}…"):
                     opened_ok = open_saved_run(record.id)
                 if opened_ok:
                     st.rerun()
-            if can_delete and cells[8].button("Hapus", key=f"run-del-{record.id}", use_container_width=True):
+            if can_delete and cells[10].button("Hapus", key=f"run-del-{record.id}", use_container_width=True):
 
                 def _delete(run_id: int = record.id, stamp: str = run_stamp_text(record.run_at)) -> None:
                     require("riwayat_analisa", "edit")
@@ -2285,7 +2394,11 @@ def show_run_history() -> None:
                     _delete,
                     confirm_label="Ya, hapus",
                 )
-    st.caption("Riwayat lebih dari 90 hari dihapus otomatis. Buka memuat hasil tersimpan tanpa menghitung ulang.")
+    st.caption(
+        "Riwayat lebih dari 90 hari dihapus otomatis. Buka memuat hasil tersimpan tanpa menghitung ulang. "
+        "Sidik data berubah setiap ada unggahan baru (termasuk stok, iklan, DC). Analisa dengan sidik data, periode, parameter, SS, dan "
+        "tanggal yang sama menghasilkan Prediksi/hari yang sama; tanda ⚠️ muncul bila berbeda."
+    )
 
 
 def pin_app_header() -> None:
@@ -3796,16 +3909,18 @@ def _extra_period_bar(row: pd.Series | None, period: str, item_orders: pd.DataFr
     """Baris periode tambahan (Kuartal/Semester/Tahun) di bawah Bulan lalu."""
     if row is None or period == "bulan" or "p_qty" not in row.index:
         return None
-    months = {"kuartal": 3, "semester": 6, "tahun": 12}[period]
-    start = (pd.Timestamp(today) - pd.DateOffset(months=months)).normalize()
+    from src.core.periods import calendar_period, previous_calendar_period
+
+    prev_lo, prev_hi, prev_label = previous_calendar_period(period, today)
+    _lo, end, now_label = calendar_period(period, today)
     sold = None
     if isinstance(item_orders, pd.DataFrame) and not item_orders.empty:
         days = pd.to_datetime(item_orders["order_time"]).dt.normalize()
-        part = item_orders.loc[days.ge(start) & days.lt(pd.Timestamp(today))]
+        part = item_orders.loc[days.ge(pd.Timestamp(prev_lo)) & days.le(pd.Timestamp(prev_hi))]
         sold = float(part["qty" if metric == "qty" else "sales"].sum())
     pred = float(row["p_qty"] if metric == "qty" else row["p_sales"])
     label = PERIOD_LABELS[period]
-    spec = _bar_spec(label, f"{months} bln ke depan", int(round(pred)), None if sold is None else int(round(sold)), f"{months} bln terakhir")
+    spec = _bar_spec(label, f"sisa {now_label} s.d. {format_id_date(end)}", int(round(pred)), None if sold is None else int(round(sold)), f"aktual {prev_label}")
     if metric == "sales":
         spec["sold"] = "–" if sold is None else format_idr(sold)
     spec["extra"] = True
@@ -7384,9 +7499,10 @@ with PAGE_ROOT.container(key="page-root"):
         start, end = period_bounds(sales_orders)
         facts = show_performance_cards(start, end, resume_label)
         if period != "bulan":
-            months_back = {"kuartal": 3, "semester": 6, "tahun": 12}[period]
-            lo = (pd.Timestamp(today) - pd.DateOffset(months=months_back)).date()
-            show_performance_cards(lo, today, f"{PERIOD_LABELS[period]} · {months_back} bulan terakhir s.d. hari ini", tone="extra")
+            from src.core.periods import calendar_period
+
+            lo, _hi, cal_label = calendar_period(period, today)
+            show_performance_cards(lo, today, f"{cal_label} · {format_id_date(lo)} s.d. hari ini", tone="extra")
         note = (
             f"{resume_label}: {format_number(facts['pesanan_batal'], 0)} pesanan batal "
             f"({format_pct_id(facts['tingkat_batal'] * 100)}) dan {format_qty(facts['retur_unit'])} unit retur "

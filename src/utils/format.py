@@ -117,7 +117,7 @@ def table_height(rows: int, max_height: int = 600, row_px: int = ROW_PX) -> int:
     return int(min(max(max_height, row_px * 2 + ROW_PX), ROW_PX + rows * row_px + 3))
 
 
-WRAP_CHARS = 60  # perkiraan huruf per baris pada kolom teks lebar (lebar otomatis ±400–600 px)
+WRAP_CHARS = 90  # huruf yang muat satu baris pada kolom teks terlebar (lebar otomatis ±600 px)
 LINE_PX = 21
 
 
@@ -138,8 +138,9 @@ def wrap_row_height(frame: pd.DataFrame) -> int:
         longest = max(longest, int(sample.str.len().max() or 0))
     if longest <= WRAP_CHARS:
         return ROW_PX
-    lines = min(5, max(3, -(-longest // WRAP_CHARS)))
-    return lines * LINE_PX + 4
+    # Baris dibungkus hanya bila teks melebihi satu baris kolom lebar; 65 px = batas minimum Streamlit untuk membungkus.
+    lines = -(-longest // WRAP_CHARS)
+    return max(65, min(4, lines) * LINE_PX + 6)
 
 
 BLANK_CELLS = {"", "-", "–", "—", "nan", "none", "nat", "<na>"}

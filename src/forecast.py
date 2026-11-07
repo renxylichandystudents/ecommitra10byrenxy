@@ -256,6 +256,7 @@ def _xgboost_forecast(values: np.ndarray, steps: int = 1) -> ModelResult | None:
             colsample_bytree=0.9,
             objective="reg:squarederror",
             n_jobs=1,
+            random_state=42,
             verbosity=0,
         )
         model.fit(x_train, y_train)
@@ -269,6 +270,7 @@ def _xgboost_forecast(values: np.ndarray, steps: int = 1) -> ModelResult | None:
             colsample_bytree=0.9,
             objective="reg:squarederror",
             n_jobs=1,
+            random_state=42,
             verbosity=0,
         )
         full.fit(x, y)

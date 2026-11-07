@@ -59,7 +59,8 @@ class DecisionTableTests(unittest.TestCase):
         self.assertEqual([g.prefix for g in period_groups("bulan", TODAY)], ["d", "m"])
         groups = period_groups("kuartal", TODAY)
         self.assertEqual([g.prefix for g in groups], ["d", "m", "p"])
-        self.assertEqual(groups[2].label, "Kuartal")
+        self.assertEqual(groups[2].label, "Sisa Kuartal IV 2026 (Okt–Des)")
+        self.assertEqual(groups[2].days, (date(2026, 12, 31) - TODAY).days + 1)
         self.assertEqual(groups[1].label, "Prediksi Okt 2026")
         self.assertEqual(groups[1].days, 30)
 

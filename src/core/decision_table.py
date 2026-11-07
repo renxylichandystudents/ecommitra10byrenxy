@@ -35,14 +35,14 @@ def whole_units(qty):
 
 def period_groups(period: str, today: date) -> list[PeriodGroup]:
     """Hari ini dan jendela prediksi bulan selalu ada. Periode tambahan hanya untuk Kuartal/Semester/Tahun."""
-    ref = pd.Timestamp(today).normalize()
     groups = [
         PeriodGroup("d", "Hari ini", 1, False),
         PeriodGroup("m", format_period_label("prediksi", today), window_days("bulan", today), False),
     ]
     if period != "bulan":
-        end = ref + pd.DateOffset(months=PERIOD_MONTHS[period]) - pd.Timedelta(days=1)
-        groups.append(PeriodGroup("p", PERIOD_LABELS[period], int((end - ref).days) + 1, True))
+        from src.core.periods import calendar_period
+
+        groups.append(PeriodGroup("p", f"Sisa {calendar_period(period, today)[2]}", window_days(period, today), True))
     return groups
 
 
@@ -212,7 +212,11 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
     spans = {"d": (last_day, last_day + pd.Timedelta(days=1)), "m": (pd.Timestamp(month_lo), pd.Timestamp(month_hi) + pd.Timedelta(days=1))}
     labels = {"d": format_period_label("aktual_hari", last_day.date()), "m": format_period_label("aktual_bulan", month_lo)}
     if period != "bulan":
-        spans["p"] = (ref - pd.DateOffset(months=PERIOD_MONTHS[period]), ref)
+        from src.core.periods import previous_calendar_period
+
+        prev_lo, prev_hi, prev_label = previous_calendar_period(period, ref.date())
+        spans["p"] = (pd.Timestamp(prev_lo), pd.Timestamp(prev_hi) + pd.Timedelta(days=1))
+        labels["p"] = f"Aktual {prev_label}"
     for prefix, (lo, hi) in spans.items():
         mask = days.ge(lo) & days.lt(hi)
         part = orders.loc[mask & in_top]

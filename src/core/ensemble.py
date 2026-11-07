@@ -153,6 +153,8 @@ def _gbm_regressor(engine: str = "xgboost"):
             colsample_bytree=0.9,
             n_jobs=2,
             random_state=42,
+            deterministic=True,
+            force_row_wise=True,
             verbose=-1,
         )
         return model, MODEL_LGBM
@@ -167,6 +169,8 @@ def _gbm_regressor(engine: str = "xgboost"):
             colsample_bytree=0.9,
             objective="reg:squarederror",
             n_jobs=2,
+            random_state=42,
+            tree_method="hist",
             verbosity=0,
         )
         return model, MODEL_GBM
