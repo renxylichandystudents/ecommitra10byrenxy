@@ -11,7 +11,7 @@ import streamlit as st
 from src.core import warehouse
 from src.core.access import ROLE_LABELS, setting_tabs
 from src.core.decision_table import stock_shortage
-from src.core.fmt import fmt_date
+from src.core.fmt import fmt_date, fmt_rp
 from src.core.periods import prediction_window, short_date
 from src.core.promo import promo_eligible
 from src.core.restock import restock_priority
@@ -134,7 +134,9 @@ def show_priority_dashboard(
                 ("Restock", "prediksi + SS − stok Site 10037 (minimal 0)"),
                 ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier"),
                 ("Stok habis", "hari ini + stok ÷ prediksi harian"),
-                ("Urutan", "🔴 Kosong → 🟡 Kurang → 🟢 Aman, lalu stok habis paling cepat, lalu restock terbesar"),
+                ("Potensi loss", "prediksi periode − stok Site 10037; dalam unit (QTY) dan rupiah (sales value)"),
+                ("Urutan", "🔴 Kosong & ada stok di Site 10062/10036 → 🔴 Kosong tanpa stok DC → 🟡 Kurang & ada stok DC → 🟡 Kurang tanpa stok DC → 🟢 Aman"),
+                ("Dalam tiap kelompok", "dampak omzet terbesar lebih dulu (gabungan potensi loss sales value dan QTY), lalu stok habis paling cepat"),
             ]
         )
         if priority.empty:
@@ -151,7 +153,7 @@ def show_priority_dashboard(
             if not display["Ambil dari DC"].astype(str).str.strip().any():
                 display = display.drop(columns="Ambil dari DC")
             with st.container(key="desktop-dash-restock"):
-                show_table(display, kinds={"Rank": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Prediksi": "count", "SS": "count", "Restock": "count"}, column_config={"Status": st.column_config.TextColumn(width="small"), "Ambil dari DC": st.column_config.TextColumn(width="large")})
+                show_table(display, kinds={"Rank": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Prediksi": "count", "SS": "count", "Restock": "count", "Potensi loss QTY": "count", "Potensi loss sales": "money"}, column_config={"Status": st.column_config.TextColumn(width="small"), "Ambil dari DC": st.column_config.TextColumn(width="large")})
             sku_cards(
                 [
                     {
@@ -159,7 +161,7 @@ def show_priority_dashboard(
                         "produk": r.get("Produk"),
                         "varian": r.get("Varian"),
                         "status": r.get("Status"),
-                        "nums": [("Rank", fmt_num(r.get("Rank"))), ("Stok Site 10037", fmt_num(r.get("Stok Site 10037"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Stok habis", r.get("Stok habis", "–"))] + ([("Ambil dari DC", r.get("Ambil dari DC"))] if r.get("Ambil dari DC") else []),
+                        "nums": [("Rank", fmt_num(r.get("Rank"))), ("Stok Site 10037", fmt_num(r.get("Stok Site 10037"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Potensi loss sales", fmt_rp(r.get("Potensi loss sales"))), ("Stok habis", r.get("Stok habis", "–"))] + ([("Ambil dari DC", r.get("Ambil dari DC"))] if r.get("Ambil dari DC") else []),
                     }
                     for r in view.head(limit).to_dict("records")
                 ],
@@ -179,7 +181,7 @@ def restock_view(priority: pd.DataFrame) -> pd.DataFrame:
         short_date(day) if day else ("Tidak habis · prediksi 0" if rate <= 0 else "–")
         for day, rate in zip(out["Stok habis"], out["_pred_harian"])
     ]
-    return out[["Rank", "SKU", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Ambil dari DC", "Stok Site 10062", "Stok Site 10036", "Stok habis", "Status", "Inbound"]]
+    return out[["Rank", "SKU", "Produk", "Varian", "Status", "Stok Site 10037", "Stok Site 10062", "Stok Site 10036", "Potensi loss sales", "Potensi loss QTY", "Prediksi", "SS", "Restock", "Ambil dari DC", "Stok habis", "Inbound"]]
 
 
 def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureData, role: str) -> None:

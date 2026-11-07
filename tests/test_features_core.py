@@ -124,6 +124,22 @@ class RestockTests(unittest.TestCase):
         self.assertEqual(frame.set_index("sku").loc["C", "Status"], "Kosong")
         self.assertEqual(frame.set_index("sku").loc["B", "Status"], "Aman")
 
+    def test_restock_priority_dc_dan_dampak(self):
+        rows = [
+            # Kosong tanpa stok DC, dampak besar
+            {"sku": "P", "product_name": "Pompa", "ada_data_stok": True, "stok": 0, "m_qty": 100, "ss": 5, "pred_harian": 3, "harga_bersih": 500000},
+            # Kosong dengan stok DC, dampak kecil
+            {"sku": "D1", "product_name": "Lem", "ada_data_stok": True, "stok": 0, "m_qty": 10, "ss": 2, "pred_harian": 1, "harga_bersih": 20000, "stok_10062": 50},
+            # Kosong dengan stok DC, dampak besar
+            {"sku": "D2", "product_name": "Kloset", "ada_data_stok": True, "stok": 0, "m_qty": 40, "ss": 5, "pred_harian": 2, "harga_bersih": 1500000, "stok_10036": 10},
+            # Kurang dengan stok DC
+            {"sku": "K", "product_name": "Kran", "ada_data_stok": True, "stok": 5, "m_qty": 30, "ss": 5, "pred_harian": 1, "harga_bersih": 100000, "stok_10062": 40},
+        ]
+        frame = restock.restock_priority(pd.DataFrame(rows), date(2026, 11, 2))
+        self.assertEqual(list(frame["sku"]), ["D2", "D1", "P", "K"])
+        self.assertEqual(frame.set_index("sku").loc["D2", "Potensi loss sales"], 40 * 1500000)
+        self.assertEqual(frame.set_index("sku").loc["K", "Potensi loss QTY"], 25)
+
 
 class WarehouseTests(unittest.TestCase):
     def test_kapasitas_zona(self):

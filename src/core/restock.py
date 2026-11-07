@@ -57,8 +57,8 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
 
 
 def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None) -> pd.DataFrame:
-    """Tabel "Kebutuhan restock prioritas". Urut stok habis naik, lalu restock turun."""
-    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "_habis", "_pred_harian", "_sales_harian"]
+    """Tabel "Kebutuhan restock prioritas": kosong + ada stok DC dulu, lalu dampak omzet (sales value & QTY) terbesar."""
+    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi loss sales", "Potensi loss QTY", "_habis", "_pred_harian", "_sales_harian"]
     if table is None or table.empty:
         return pd.DataFrame(columns=columns)
     po = po or {}
@@ -81,6 +81,9 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
         else:
             status = "Aman"
         inbound = po.get(str(row.get("sku")))
+        price = _num(row.get("harga_bersih"))
+        # Unit prediksi periode yang tidak tertutup stok Site 10037 = penjualan yang hilang bila tidak direstock.
+        loss_qty = max(0.0, pred - max(stok, 0.0))
         rows.append(
             {
                 "Rank": row.get("peringkat"),
@@ -97,6 +100,8 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
                 "Stok habis": habis,
                 "Status": status,
                 "Inbound": f"{inbound['no_po']} · {inbound['eta'].strftime('%d/%m/%Y') if inbound.get('eta') else 'ETA belum ada'}" if inbound else "",
+                "Potensi loss sales": loss_qty * price,
+                "Potensi loss QTY": loss_qty,
                 "_habis": habis or date.max,
                 "_pred_harian": daily,
                 "_sales_harian": daily * _num(row.get("harga_bersih")),
@@ -105,10 +110,23 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
     frame = pd.DataFrame(rows, columns=columns)
     if frame.empty:
         return frame
-    # Prioritas untuk user: Kosong → Kurang → Aman → tanpa data; lalu stok habis paling cepat, lalu restock terbesar.
-    order = {"Kosong": 0, "Kurang": 1, "Aman": 2}
-    frame["_prioritas"] = frame["Status"].map(lambda s: order.get(str(s).split(" · ")[0], 3))
-    return frame.sort_values(["_prioritas", "_habis", "Restock"], ascending=[True, True, False]).drop(columns="_prioritas").reset_index(drop=True)
+    # Prioritas untuk user:
+    # 1) Kosong tapi ada stok di Site 10062/10036 (bisa langsung ditransfer), 2) Kosong tanpa stok DC (PO),
+    # 3) Kurang dengan stok DC, 4) Kurang tanpa stok DC, 5) Aman.
+    # Dalam tiap kelompok: dampak omzet terbesar = rata-rata skor potensi loss sales value dan potensi loss QTY.
+    dc_total = frame["Stok Site 10062"].map(_num) + frame["Stok Site 10036"].map(_num)
+    has_dc = dc_total.gt(0)
+    status = frame["Status"].astype(str).str.split(" · ").str[0]
+    base = status.map({"Kosong": 0, "Kurang": 2, "Aman": 4}).fillna(5)
+    frame["_prioritas"] = base + ((status != "Aman") & ~has_dc).astype(int)
+
+    def _scale(values: pd.Series) -> pd.Series:
+        top = float(values.max()) if len(values) else 0.0
+        return values / top if top > 0 else values * 0.0
+
+    frame["_dampak"] = 0.5 * _scale(frame["Potensi loss sales"].astype(float)) + 0.5 * _scale(frame["Potensi loss QTY"].astype(float))
+    frame = frame.sort_values(["_prioritas", "_dampak", "_habis"], ascending=[True, False, True])
+    return frame.drop(columns=["_prioritas", "_dampak"]).reset_index(drop=True)
 
 
 def recommendation_records(
