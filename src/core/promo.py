@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from src.core.decision_table import stock_need
+from src.core.naming import extract_packing_tag
 
 SEED_EXCLUDED = {"40030033": "Extra Packing Kayu Tambahan"}
 SERVICE_HINTS = ("packing", "bubble wrap", "biaya", "ongkir")
@@ -30,10 +31,15 @@ def exclusion_suggestions(products: pd.DataFrame, excluded: set[str]) -> pd.Data
         for sku, name in zip(names["sku"].astype(str), names["product_name"].fillna("").astype(str)):
             if sku in excluded or sku in SEED_EXCLUDED:
                 continue
-            lower = name.lower()
+            # Label kemasan ("[INCLUDE PACKING KAYU]", "Proteksi Ganda Extra Bubble Wrap") dibuang dulu:
+            # produk fisik yang dikirim dengan packing kayu bukan SKU jasa.
+            remainder, tag = extract_packing_tag(name)
+            lower = remainder.lower()
             hit = next((hint for hint in SERVICE_HINTS if hint in lower), None)
             if hit:
                 rows.append({"sku": sku, "nama": name, "alasan": f'Nama berisi "{hit}"'})
+            elif tag and len(remainder.split()) <= 2:
+                rows.append({"sku": sku, "nama": name, "alasan": f'Nama hanya berisi "{tag}"'})
     return pd.DataFrame(rows, columns=columns)
 
 

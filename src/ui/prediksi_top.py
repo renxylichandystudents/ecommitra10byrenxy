@@ -219,6 +219,11 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         return
     lines = orders.assign(sku=orders["sku"].astype(str))
     last = pd.to_datetime(lines["order_time"]).max().date()
+    # Hari ini masih berjalan: bandingkan hari penuh terakhir agar % pencapaian tidak terlihat anjlok.
+    partial_note = ""
+    if last >= date.today():
+        partial_note = f" Data {fmt_date(last)} belum satu hari penuh, jadi yang dibandingkan {fmt_date(last - timedelta(days=1))}."
+        last = last - timedelta(days=1)
     stock = {str(s): float(v) for s, v, k in zip(table["sku"], table["stok"], table["ada_data_stok"]) if k} if table is not None and not table.empty else {}
     rows = _comparison_for(features, runs, lines, last, stock) if not runs.empty else pd.DataFrame()
     if rows.empty:
@@ -233,7 +238,9 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     card(cols[0], f"Prediksi omzet {fmt_date(last)}", fmt_idr(pred_sales))
     card(cols[1], "Aktual omzet bersih", fmt_idr(actual_sales))
     card(cols[2], "% pencapaian", fmt_pct(actual_sales / pred_sales * 100 if pred_sales > 0 else float("nan"), 1))
-    card(cols[3], "SKU tercapai + melebihi", f"{fmt_num(hit)} / {fmt_num(len(rows))}")
+    card(cols[3], "SKU tercapai + melebihi", f"{fmt_num(hit)} / {fmt_num(len(rows))}", hint="SKU yang punya prediksi pada hari itu")
+    if partial_note:
+        st.caption(partial_note.strip())
     trend = []
     for back in range(13, -1, -1):
         day = last - timedelta(days=back)
@@ -243,7 +250,12 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     if trend:
         fig = go.Figure(go.Scatter(x=[d for d, _ in trend], y=[v for _, v in trend], mode="lines+markers+text", text=[f"{v:.0f}%" for _, v in trend], textposition="top center", line=dict(color="#1b3da6")))
         fig.add_hline(y=100, line_dash="dot", line_color="#94a3b8")
-        fig.update_layout(height=280, margin=dict(l=30, r=20, t=20, b=30), yaxis_title="% pencapaian omzet", xaxis=dict(tickformat="%d/%m"))
+        fig.update_layout(
+            height=280,
+            margin=dict(l=30, r=20, t=20, b=30),
+            yaxis_title="% pencapaian omzet",
+            xaxis=dict(type="date", tickformat="%d/%m", dtick=86_400_000),  # satu label per hari
+        )
         st.plotly_chart(fig, use_container_width=True, key="pva-trend")
     stock_miss = rows.loc[rows["status"].isin(["Hampir", "Tidak"]) & rows["penyebab"].astype(str).str.startswith("Stok")]
     st.markdown(
@@ -255,5 +267,6 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     view = rows.assign(Produk=rows["sku"].map(names).fillna(""))
     view["_order"] = view["status"].map({s: i for i, s in enumerate(reversed(STATUS_ORDER))})
     view = view.sort_values(["_order", "pred_sales"], ascending=[True, False]).drop(columns="_order")
-    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi omzet", "aktual_sales": "Aktual omzet", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab"})
-    show_table(view[["SKU", "Produk", "Varian", "Prediksi QTY", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "% capaian", "Status", "Penyebab"]], max_height=420)
+    view["pred_qty"] = pd.to_numeric(view["pred_qty"], errors="coerce").round(1)
+    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY (laju harian)", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi omzet", "aktual_sales": "Aktual omzet", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab"})
+    show_table(view[["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "% capaian", "Status", "Penyebab"]], max_height=420)

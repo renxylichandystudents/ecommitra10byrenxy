@@ -318,12 +318,12 @@ def user_bar(user: User) -> None:
     if can(user.role, "kelola_user") and admin.button("Kelola user", key="auth-users", use_container_width=True):
         st.session_state[PAGE_KEY] = "users"
         st.rerun()
-    if out.button("Logout", key="auth-logout", use_container_width=True):
+    if out.button("Keluar", key="auth-logout", use_container_width=True):
         logout()
 
 
 def account_menu(user: User) -> None:
-    """Tombol akun di kartu header: nama + role, berisi Ubah password, Kelola user, dan Logout."""
+    """Tombol akun di kartu header: nama + role, berisi Ubah password, Kelola user, dan Keluar."""
     with st.popover(f"👤 {user.username}", use_container_width=True):
         st.markdown(
             f"<div class='user-bar' style='font-size:var(--fs-sm);color:#475569;margin-bottom:.35rem'>"
@@ -336,7 +336,7 @@ def account_menu(user: User) -> None:
         if can(user.role, "kelola_user") and st.button("Kelola user", key="auth-users", use_container_width=True):
             st.session_state[PAGE_KEY] = "users"
             st.rerun()
-        if st.button("Logout", key="auth-logout", use_container_width=True):
+        if st.button("Keluar", key="auth-logout", use_container_width=True):
             logout()
 
 
@@ -376,7 +376,8 @@ def users_panel(repo: UserRepository, user: User) -> None:
         st.markdown("**Tambah user**")
         with st.form("user-add", clear_on_submit=True):
             name = st.text_input("Username")
-            role = st.selectbox("Role", ROLES, format_func=role_label)
+            # Bawaan = hak paling kecil (Team DC, hanya baca); Super user harus dipilih sengaja.
+            role = st.selectbox("Role", ROLES, index=ROLES.index("team_dc"), format_func=role_label)
             temp = st.text_input("Password sementara", type="password", help=PASSWORD_RULE)
             if st.form_submit_button("Tambah", type="primary"):
                 try:

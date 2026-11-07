@@ -1086,6 +1086,9 @@ st.markdown(
     [data-testid="stSidebarCollapsedControl"] {
         display: none !important;
     }
+    /* Pop-up (menu akun, pilihan dropdown) selalu di atas header yang dipaku (z-index 40) dan pelindungnya. */
+    div[data-baseweb="popover"],
+    div[data-testid="stPopoverBody"] { z-index: 1000 !important; }
     /* Elemen <style> pertama di wadah halaman: tidak menambah jarak. */
     .st-key-page-root > [data-testid="stElementContainer"]:first-child { display: none !important; }
     [data-stale="true"],
@@ -2253,7 +2256,7 @@ def _mobile_header(logo: str, title: str, analysis: bool, training: bool, settin
             if can(AUTH_USER.role, "kelola_user") and st.button("Kelola user", key="m-users", use_container_width=True):
                 st.session_state[AUTH_PAGE_KEY] = "users"
                 st.rerun()
-            if st.button("Logout", key="m-logout", use_container_width=True):
+            if st.button("Keluar", key="m-logout", use_container_width=True):
                 auth_logout()
 
 
@@ -4102,6 +4105,43 @@ def sku_issue_reasons(sku_sheet: pd.DataFrame, issue_kind: str) -> list[str]:
     return sorted({str(v) for c in columns if c in kind_sheet.columns for v in kind_sheet[c].tolist() if str(v).strip()})
 
 
+def _join_reasons(values: pd.Series, weights: pd.Series) -> str:
+    """Alasan unik per SKU, terbanyak dulu: "Belum dibayar (3) · Ubah alamat (1)"."""
+    totals: dict[str, float] = {}
+    for reason, weight in zip(values.astype(str), pd.to_numeric(weights, errors="coerce").fillna(0)):
+        if reason.strip():
+            totals[reason] = totals.get(reason, 0.0) + float(weight)
+    ordered = sorted(totals.items(), key=lambda item: (-item[1], item[0]))
+    return " · ".join(f"{reason} ({format_number(weight)})" if weight > 0 else reason for reason, weight in ordered)
+
+
+def _one_row_per_sku(shown: pd.DataFrame, issue_kind: str) -> pd.DataFrame:
+    """Sumber dikelompokkan per SKU × alasan; tampilan digabung jadi satu baris per SKU + varian."""
+    if shown.empty or not {"SKU", "Varian"} <= set(shown.columns):
+        return shown
+    sums = [c for c in ISSUE_SUMS if c in shown.columns]
+    groups = []
+    for (_sku, _variant), part in shown.groupby(["SKU", "Varian"], sort=False):
+        row = {"SKU": part["SKU"].iloc[0], "Produk": part["Produk"].iloc[0] if "Produk" in part else "", "Varian": part["Varian"].iloc[0]}
+        for column in sums:
+            row[column] = pd.to_numeric(part[column], errors="coerce").fillna(0).sum()
+        if "Alasan retur" in part:
+            row["Alasan retur"] = _join_reasons(part["Alasan retur"], part.get("Qty retur", pd.Series(0, index=part.index)))
+        if "Alasan batal" in part:
+            row["Alasan batal"] = _join_reasons(part["Alasan batal"], part.get("Invoice batal", pd.Series(0, index=part.index)))
+        groups.append(row)
+    merged = pd.DataFrame(groups)
+    order = {"Retur": ["Qty retur", "Nominal retur"], "Batal": ["Qty batal", "Nominal batal"]}.get(
+        issue_kind, ["Qty retur", "Nominal retur", "Qty batal", "Nominal batal"]
+    )
+    order = [c for c in order if c in merged.columns]
+    if order:
+        merged = merged.sort_values(order + ["SKU"], ascending=[False] * len(order) + [True], kind="mergesort")
+    merged.insert(0, "Peringkat", 0)
+    columns = [c for c in shown.columns if c in merged.columns]
+    return merged.loc[:, columns].reset_index(drop=True)
+
+
 @st.cache_data(show_spinner=False, max_entries=64)
 def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str, ...], all_reasons: tuple[str, ...]) -> tuple[pd.DataFrame, int]:
     """Tabel SKU retur/batal sesuai filter jenis + alasan, dengan peringkat ulang dan baris Total."""
@@ -4116,6 +4156,7 @@ def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str,
         shown = kind_sheet.loc[kind_sheet["Alasan retur"].astype(str).isin(reasons) | kind_sheet["Alasan batal"].astype(str).isin(reasons)]
     keep = ISSUE_COLUMNS.get(issue_kind, list(shown.columns))
     shown = shown.loc[:, [c for c in keep if c in shown.columns]].copy()
+    shown = _one_row_per_sku(shown, issue_kind)
     count = len(shown)
     if shown.empty:
         return shown, 0
@@ -4131,7 +4172,8 @@ def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str,
 def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None:
     """Filter hanya menjalankan ulang bagian ini (bukan seluruh tab Data)."""
     st.subheader("SKU dengan retur dan batal")
-    issue_kind = st.selectbox("Tampilkan", options=["All", "Retur", "Batal"], index=0, key="data-issue-kind")
+    issue_labels = {"All": "Semua", "Retur": "Retur", "Batal": "Batal"}
+    issue_kind = st.selectbox("Tampilkan", options=["All", "Retur", "Batal"], index=0, format_func=issue_labels.get, key="data-issue-kind")
     reason_names = sku_issue_reasons(sku_sheet, issue_kind)
     selected_reasons: list[str] = []
     if not reason_names:

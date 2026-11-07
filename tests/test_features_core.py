@@ -76,8 +76,14 @@ class PromoTests(unittest.TestCase):
         self.assertEqual(decision, "Dibatasi stok")
 
     def test_usulan_dan_filter(self):
-        products = pd.DataFrame({"sku": ["9", "8"], "product_name": ["Bubble Wrap Tambahan", "Sealant Bening"]})
+        products = pd.DataFrame(
+            {
+                "sku": ["9", "8", "7"],
+                "product_name": ["Bubble Wrap Tambahan", "Sealant Bening", "Kloset Duduk Tidy FSA0089 [INCLUDE PACKING KAYU]"],
+            }
+        )
         usulan = promo.exclusion_suggestions(products, set())
+        self.assertNotIn("7", set(usulan["sku"]))
         self.assertIn("40030033", set(usulan["sku"]))
         self.assertIn("9", set(usulan["sku"]))
         self.assertNotIn("8", set(usulan["sku"]))
@@ -164,13 +170,32 @@ class AdsPlanTests(unittest.TestCase):
             ads_plan.Candidate("C", "C", 30, 10_000, ads_plan.Curve(900_000, 20_000, "fit"), float("inf"), "SKU jasa"),
         ]
         ads_plan.allocate(cands, 2_000_000)
-        self.assertEqual(sum(c.extra_monthly for c in cands), 2_000_000)
+        spent = sum(c.extra_monthly for c in cands)
+        self.assertGreater(spent, 0)
+        self.assertLessEqual(spent, 2_000_000)
         self.assertEqual(cands[2].extra_monthly, 0)
         self.assertGreater(cands[0].extra_monthly, cands[1].extra_monthly)
-        budget = ads_plan.budget_for_gap(cands, 5_000_000)
+        # Tiap SKU berhenti di titik impas: Rp 500.000 terakhir masih untung.
+        for cand in cands[:2]:
+            if cand.extra_monthly > 0:
+                last = cand.daily_cost + (cand.extra_monthly - ads_plan.STEP_RP) / ads_plan.DAYS
+                self.assertTrue(ads_plan.is_profitable(cand, last))
+        budget = ads_plan.budget_for_gap(cands, 50_000)
         ads_plan.allocate(cands, budget)
-        self.assertGreaterEqual(ads_plan.extra_sales(cands), 5_000_000)
+        self.assertGreaterEqual(ads_plan.extra_sales(cands), 50_000)
         self.assertEqual(budget % ads_plan.STEP_RP, 0)
+
+    def test_tidak_ada_budget_untuk_roas_nol(self):
+        # SKU dengan ROAS marginal mendekati 0 tidak boleh menerima tambahan berapa pun budgetnya.
+        weak = ads_plan.Candidate("S", "Sapu", 30, 1_775, ads_plan.Curve(2_000, 50_000, "default"), float("inf"), "Iklankan")
+        ads_plan.allocate([weak], 2_000_000_000)
+        self.assertEqual(weak.extra_monthly, 0)
+        self.assertFalse(ads_plan.is_profitable(weak))
+
+    def test_batas_tambahan_per_sku(self):
+        strong = ads_plan.Candidate("K", "Kloset", 30, 100_000, ads_plan.Curve(50_000_000, 100_000, "fit"), float("inf"), "Iklankan")
+        ads_plan.allocate([strong], 2_000_000_000)
+        self.assertLessEqual(strong.extra_monthly, ads_plan.extra_cap_monthly(strong))
 
 
 class CalendarTests(unittest.TestCase):

@@ -3,6 +3,8 @@
 Kurva respons per SKU:  omzet_iklan_harian = a · ln(1 + biaya_harian / b),  b > 0
 ROAS marginal pada biaya harian x:  a / (b + x)
 Alokasi tambahan budget: greedy per kenaikan Rp 500.000/bulan, skor = ROAS_marginal × margin_pct.
+Syarat untung: tambahan hanya diberikan selama ROAS_marginal × margin ≥ 1 (tiap Rp iklan kembali ≥ Rp 1 margin),
+dan tambahan per SKU dibatasi maks. 5× budget saat ini (minimal Rp 5 juta/bulan).
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ DAYS = 30
 MIN_POINTS = 20
 EFFICIENT_ROAS = 10.0
 BOOTSTRAP = 200
+EXTRA_MULTIPLE = 5.0
+EXTRA_FLOOR_MONTHLY = 5_000_000.0
 
 
 @dataclass
@@ -90,8 +94,25 @@ def unit_cap_to_cost(curve: Curve, base_daily: float, extra_units: float, price:
     return max(cost - base_daily, 0.0)
 
 
+def break_even_marginal(cand: Candidate) -> float:
+    """ROAS marginal minimum agar tambahan iklan tidak rugi: 1 / margin."""
+    return 100.0 / max(cand.margin_pct, 0.01)
+
+
+def extra_cap_monthly(cand: Candidate) -> float:
+    """Tambahan budget maksimum per SKU per bulan."""
+    return max(EXTRA_MULTIPLE * cand.daily_cost * DAYS, EXTRA_FLOOR_MONTHLY)
+
+
+def is_profitable(cand: Candidate, daily_cost: float | None = None) -> bool:
+    """True bila Rp 500.000 berikutnya masih menghasilkan margin ≥ biayanya."""
+    base = cand.daily_cost if daily_cost is None else daily_cost
+    return cand.curve.marginal(base + STEP_RP / DAYS / 2) >= break_even_marginal(cand)
+
+
 def allocate(candidates: list[Candidate], budget_monthly: float, *, min_marginal: float = 0.0) -> list[Candidate]:
-    """Greedy: kenaikan Rp 500.000/bulan ke skor (ROAS_marginal × margin) tertinggi sampai budget habis."""
+    """Greedy: kenaikan Rp 500.000/bulan ke skor (ROAS_marginal × margin) tertinggi sampai budget habis
+    atau tidak ada lagi SKU yang untung (ROAS marginal × margin < 1) / mencapai batas tambahan."""
     for cand in candidates:
         cand.extra_monthly = 0.0
     remaining = float(budget_monthly)
@@ -102,8 +123,10 @@ def allocate(candidates: list[Candidate], budget_monthly: float, *, min_marginal
             daily_now = cand.daily_cost + cand.extra_monthly / DAYS
             if (cand.extra_monthly + STEP_RP) / DAYS > cand.max_extra_daily + 1e-9:
                 continue
+            if cand.extra_monthly + STEP_RP > extra_cap_monthly(cand) + 1e-9:
+                continue
             marginal = cand.curve.marginal(daily_now + STEP_RP / DAYS / 2)
-            if marginal < min_marginal:
+            if marginal < max(min_marginal, break_even_marginal(cand)):
                 continue
             score = marginal * max(cand.margin_pct, 0.01)
             if score > best_score:

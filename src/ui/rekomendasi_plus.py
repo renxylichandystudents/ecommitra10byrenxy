@@ -33,6 +33,12 @@ def _periode(day: date) -> str:
     return f"{day.year:04d}-{day.month:02d}"
 
 
+def _bulan_label(day: date) -> str:
+    """Label bulan untuk tampilan: "November 2026" (kunci simpan tetap YYYY-MM)."""
+    names = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
+    return f"{names[day.month - 1]} {day.year}"
+
+
 def _margin_of(data: FeatureData, sku: str, fallback: float) -> tuple[float, bool]:
     value = data.margin_pct.get(str(sku))
     if value is None or not np.isfinite(value):
@@ -72,7 +78,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
     saved = data.target or {}
     c1, c2, c3 = st.columns([1.6, 1, 1])
     with c1:
-        target = float(input_rupiah(f"Target sales bersih {periode}", int(saved.get("target_sales_bersih", 0) or 0), key=f"tgt-rp-{periode}"))
+        target = float(input_rupiah(f"Target sales bersih {_bulan_label(window_start)}", int(saved.get("target_sales_bersih", 0) or 0), key=f"tgt-rp-{periode}"))
     margin_min = float(c2.number_input("Margin minimum (%)", min_value=0.0, max_value=60.0, value=float(saved.get("margin_min_pct", 8.0) or 8.0), step=0.5, key=f"tgt-margin-{periode}"))
     c3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
     if c3.button("Simpan target", key="tgt-save", type="primary", disabled=not can_edit, use_container_width=True):
@@ -113,20 +119,30 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
     view["Rentang ROAS"] = view["Rentang ROAS"].map(lambda v: f"{fmt_num(v[0], 1)} – {fmt_num(v[1], 1)}" if np.isfinite(v[0]) else "–")
     show_table(view, kinds={"Budget tambahan": "money", "Omzet tambahan (p50)": "money", "ROAS tambahan": "dec", "% target": "pct", "Margin strategi (%)": "pct"})
     st.caption(
-        "Kurva respons per SKU: omzet iklan harian = a · ln(1 + biaya harian / b). Laporan iklan Shopee yang diunggah berupa total per periode "
-        "(bukan harian), sehingga belum ada SKU dengan ≥ 20 hari berbiaya untuk di-fit; kurva memakai titik biaya & ROAS saat ini (b = biaya harian). "
-        "Alokasi greedy per Rp 500.000/bulan ke ROAS marginal × margin tertinggi. Rentang = persentil 10–90 dari 200× bootstrap residual."
+        "Tambahan budget hanya diberikan ke SKU yang masih untung: tiap Rp 1 iklan tambahan harus kembali minimal Rp 1 margin "
+        f"(ROAS marginal × margin ≥ 1), dan maksimal {fmt_num(ads_plan.EXTRA_MULTIPLE, 0)}× budget saat ini per SKU."
     )
+    with st.expander("Metode perhitungan"):
+        st.caption(
+            "Kurva respons per SKU: omzet iklan harian = a · ln(1 + biaya harian / b). Laporan iklan Shopee yang diunggah berupa total per periode "
+            "(bukan harian), sehingga belum ada SKU dengan ≥ 20 hari berbiaya untuk di-fit; kurva memakai titik biaya & ROAS saat ini (b = biaya harian). "
+            "Alokasi greedy per Rp 500.000/bulan ke ROAS marginal × margin tertinggi, berhenti di titik impas. "
+            "Rentang = persentil 10–90 dari 200× bootstrap residual."
+        )
     if not known.empty and not known["known_margin"].any():
         st.caption(f"Komponen biaya belum diunggah (Setting › Kalkulator biaya): margin semua SKU memakai margin minimum {fmt_num(margin_min, 1)}%.")
-    choice = st.radio("Strategi", list(plans), index=list(plans).index("Seimbang"), horizontal=True, key="tgt-strategy")
+    choice = st.radio("Strategi", list(plans), index=list(plans).index("Efisien"), horizontal=True, key="tgt-strategy")
     plan = plans.get(choice, {})
     rows = []
     for cand in cands:
+        extra = float(plan.get(cand.sku, 0.0))
+        decision = cand.decision
+        if decision in ("Iklankan", "Dibatasi stok") and extra <= 0 and not ads_plan.is_profitable(cand):
+            decision = "Jangan tambah (di bawah titik impas)"
         rows.append(
             {
                 "SKU · produk · varian": cand.label,
-                "Keputusan": cand.decision,
+                "Keputusan": decision,
                 "Budget saat ini / bulan": cand.daily_cost * ads_plan.DAYS,
                 "Budget tambahan": float(plan.get(cand.sku, 0.0)),
                 "ROAS marginal": cand.curve.marginal(cand.daily_cost + plan.get(cand.sku, 0.0) / ads_plan.DAYS),
