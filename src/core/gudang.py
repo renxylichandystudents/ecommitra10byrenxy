@@ -274,7 +274,8 @@ def build_view(
     items["stok"] = [float(stock[s]) if s in stock else float(soh) for s, soh in zip(items["sku"], items["soh"])]
     items["sumber_stok"] = ["Data stok 10037" if s in stock else "SOH replenishment" for s in items["sku"]]
     items["nama"] = [names.get(s) or n for s, n in zip(items["sku"], items["nama"])]
-    items["pred_30"] = [float(pred_daily.get(s, np.nan)) * 30 if s in pred_daily else np.nan for s in items["sku"]]
+    # SKU tanpa prediksi di analisa = prediksi 0 (analisa hanya menyimpan SKU dengan laju > 0).
+    items["pred_30"] = [float(pred_daily.get(s, 0.0)) * 30 if pred_daily else np.nan for s in items["sku"]]
     # Omzet: penjualan 30 hari terakhir, tren vs 30 hari sebelumnya, dan prediksi 30 hari (QTY × harga bersih).
     if sales is not None and not sales.empty:
         joined = sales.reindex(items["sku"])
@@ -288,7 +289,7 @@ def build_view(
         float(price[s]) if s in price and price[s] else (float(o) / float(q) if q and q == q and q > 0 else np.nan)
         for s, o, q in zip(items["sku"], items["omzet_30"], items["qty_30"])
     ]
-    items["pred_omzet_30"] = items["pred_30"] * pd.Series(unit_price, index=items.index)
+    items["pred_omzet_30"] = (items["pred_30"] * pd.Series(unit_price, index=items.index)).where(items["pred_30"].ne(0), 0.0)
     items["hari_cukup"] = [
         float(st_) / (p / 30) if p == p and p > 0 else np.nan for st_, p in zip(items["stok"], items["pred_30"])
     ]

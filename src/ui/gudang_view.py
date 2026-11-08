@@ -84,6 +84,33 @@ def _table_maps(table: pd.DataFrame | None) -> tuple[dict, dict, dict, dict]:
     return stock, names, pred, price
 
 
+def latest_prediction(features) -> tuple[dict, dict, object]:
+    """Prediksi dari analisa terakhir yang tersimpan (tabel prediction_snapshot): laju QTY & omzet harian per SKU.
+
+    Dipakai di Setting agar tim DC/IC/MD tetap melihat prediksi tanpa membuka analisa; mengembalikan (qty/hari, omzet/hari, waktu analisa)."""
+    try:
+        from sqlalchemy import func, select
+
+        from src.core.feature_store import prediction_snapshot as snap
+
+        with features.engine.connect() as conn:
+            run = conn.execute(select(func.max(snap.c.run_id))).scalar()
+            if run is None:
+                return {}, {}, None
+            rows = conn.execute(
+                select(snap.c.sku, snap.c.target_date, snap.c.pred_qty, snap.c.pred_sales, snap.c.created_at).where(snap.c.run_id == run)
+            ).all()
+    except Exception:
+        return {}, {}, None
+    frame = pd.DataFrame(rows, columns=["sku", "tanggal", "q", "s", "at"])
+    if frame.empty:
+        return {}, {}, None
+    days = max(frame["tanggal"].nunique(), 1)
+    frame["sku"] = frame["sku"].map(gudang.norm_sku)
+    grouped = frame.groupby("sku")[["q", "s"]].sum() / days
+    return grouped["q"].to_dict(), grouped["s"].to_dict(), pd.Timestamp(frame["at"].min())
+
+
 def cached_view(features, table: pd.DataFrame | None, orders: pd.DataFrame | None = None) -> dict | None:
     """Analisa gudang (disimpan di sesi; dihitung ulang bila snapshot replenishment/tabel berubah)."""
     repl, snap, _dates = load_replenishment(features)
@@ -94,17 +121,26 @@ def cached_view(features, table: pd.DataFrame | None, orders: pd.DataFrame | Non
     else:
         st.session_state["_gudang_orders"] = orders
     stamp = (
-        gudang.snapshot_stamp(snap), len(repl), 0 if table is None else len(table), len(locations),
+        gudang.snapshot_stamp(snap), len(repl), _latest_run_id(features), 0 if table is None else len(table), len(locations),
         0 if denah is None else len(denah["cells"]), 0 if orders is None else len(orders),
     )
     cache = st.session_state.get("_gudang_view")
     if cache and cache[0] == stamp:
         return cache[1]
     stock, names, pred, price = _table_maps(table)
+    pred_source = "analisa yang sedang dibuka" if pred else ""
+    if not pred:
+        # Setting dibuka tanpa analisa: pakai prediksi dari analisa terakhir yang tersimpan.
+        pred_q, pred_s, run_at = latest_prediction(features)
+        if pred_q:
+            pred = pred_q
+            price = {k: pred_s[k] / v for k, v in pred_q.items() if v and k in pred_s}
+            pred_source = f"analisa terakhir ({run_at:%d/%m/%Y %H:%M})" if run_at is not None else "analisa terakhir"
     sales = gudang.sales_summary(orders)
     view = gudang.build_view(locations, repl, stock=stock, names=names, pred_daily=pred, price=price, sales=sales)
     view["sales_end"] = sales.attrs.get("end") if not sales.empty else None
     view["has_pred"] = bool(pred)
+    view["pred_source"] = pred_source
     view["snapshot"] = snap
     view["has_repl"] = not repl.empty
     view["has_stock"] = bool(stock)
@@ -438,6 +474,10 @@ def _omzet_columns(src: pd.DataFrame) -> dict:
 
 
 def _with_total(frame: pd.DataFrame, label_col: str, label: str) -> pd.DataFrame:
+    frame = frame.copy()
+    for column in OMZET_KINDS:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
     total = {c: (np.nan if pd.api.types.is_numeric_dtype(frame[c]) else "") for c in frame.columns}
     total[label_col] = label
     for column in ("Terjual 30 hari (QTY)", "Omzet 30 hari", "Prediksi QTY 30 hari", "Prediksi omzet 30 hari", "Stok 10037"):
@@ -446,11 +486,25 @@ def _with_total(frame: pd.DataFrame, label_col: str, label: str) -> pd.DataFrame
     return pd.concat([pd.DataFrame([total], columns=frame.columns), frame], ignore_index=True)
 
 
+def _latest_run_id(features):
+    try:
+        from sqlalchemy import func, select
+
+        from src.core.feature_store import prediction_snapshot as snap
+
+        with features.engine.connect() as conn:
+            return conn.execute(select(func.max(snap.c.run_id))).scalar()
+    except Exception:
+        return None
+
+
 def _omzet_note(view: dict) -> None:
     end = view.get("sales_end")
     bits = [f"Omzet & QTY 30 hari s.d. {end:%d/%m/%Y} (tanpa pesanan batal); tren = dibanding 30 hari sebelumnya." if end else "Data penjualan belum termuat, kolom omzet kosong."]
-    if not view.get("has_pred"):
-        bits.append("Prediksi tampil setelah analisa dibuka (menu Hasil analisa).")
+    if view.get("has_pred"):
+        bits.append(f"Prediksi 30 hari dari {view.get('pred_source') or 'analisa terakhir'}.")
+    else:
+        bits.append("Prediksi belum ada: jalankan analisa sekali agar prediksi tersimpan.")
     st.markdown(f"<div class='field-hint'>{' '.join(bits)}</div>", unsafe_allow_html=True)
 
 
