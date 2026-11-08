@@ -209,6 +209,15 @@ class RampTest(unittest.TestCase):
         self.assertGreater(big["omzet_tambahan"], small["omzet_tambahan"])
 
 
+    def test_ramp_does_not_chase_gap_twice(self):
+        units = [unit("a", cost=100_000, a=50_000_000, b=2_000_000), unit("b", cost=100_000, a=40_000_000, b=2_000_000)]
+        gap = 2_000_000 * 21
+        steps = A.ramp(units, weeks=[7, 7, 7], gap_total=gap, target_roas=2, budget_total=None)
+        extra = A.ramp_effect(units, steps)["omzet_tambahan"]
+        self.assertGreaterEqual(extra, gap * 0.95)
+        self.assertLessEqual(extra, gap * 1.4)
+
+
 class EvaluateTest(unittest.TestCase):
     def test_detects_applied_and_not_applied(self):
         base = {"a": {"periode": "2026-11-01", "hari": 5, "biaya": 500_000, "omzet": 5_000_000},

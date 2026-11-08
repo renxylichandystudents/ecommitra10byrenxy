@@ -253,7 +253,7 @@ def label_legend() -> None:
         ("🏆", "Terlaris", "10 besar QTY & sales sekaligus"),
         ("👁", "Populer", "10% teratas dilihat"),
         ("👆", "Paling diminati", "10% teratas klik/CTR"),
-        ("⚠", "Perlu perhatian", "batal > 15% atau > 2× median toko"),
+        ("⚠", "Perlu perhatian", "batal > 15% atau > 2× median toko, min. 5 baris pesanan"),
     ]
     cards = "".join(
         f"<div class='lg-item'><span class='lg-ico'>{icon}</span><div><b>{name}</b><br><span>{text}</span></div></div>"

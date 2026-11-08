@@ -9,6 +9,7 @@ Harga jual selalu dari data produk (tanpa input net price terpisah).
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -84,8 +85,27 @@ def breakdown(harga: float, comp: Components, iklan_per_unit: float = 0.0) -> pd
     return frame
 
 
+def _parse_number(value) -> tuple[float, bool]:
+    """(angka, ditulis dengan %). Format Indonesia (1.234,5) maupun 1234.5 diterima."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return float("nan"), False
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value), False
+    text = str(value).strip().replace(" ", "").replace("Rp", "").replace("rp", "")
+    pct = "%" in text
+    text = text.replace("%", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"-?\d{1,3}(\.\d{3})+", text):
+        text = text.replace(".", "")
+    try:
+        return float(text), pct
+    except ValueError:
+        return float("nan"), pct
+
+
 def normalize_components(frame: pd.DataFrame) -> pd.DataFrame:
-    """Rapikan upload template; persen boleh ditulis 8 atau 0,08 (≤ 1 dianggap pecahan)."""
+    """Rapikan upload template; persen boleh ditulis 8, 8%, 0,5% atau pecahan 0,08 (< 1 tanpa tanda % dianggap pecahan)."""
     if frame is None or frame.empty:
         return pd.DataFrame(columns=list(TEMPLATE_COLUMNS))
     work = frame.copy()
@@ -96,13 +116,12 @@ def normalize_components(frame: pd.DataFrame) -> pd.DataFrame:
     work["sku"] = work["sku"].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True)
     work["varian"] = work["varian"].fillna("").astype(str).str.strip().replace({"nan": ""})
     for column in COMPONENT_COLUMNS:
-        values = work[column]
-        if values.dtype == object:
-            values = values.astype(str).str.replace("%", "", regex=False).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-        work[column] = pd.to_numeric(values, errors="coerce")
-    for column in ("komisi_pct", "layanan_pct", "transaksi_pct"):
-        small = work[column].notna() & (work[column] <= 1)
-        work.loc[small, column] = work.loc[small, column] * 100
+        parsed = [_parse_number(v) for v in work[column]]
+        values = pd.Series([v for v, _p in parsed], index=work.index, dtype=float)
+        if column in ("komisi_pct", "layanan_pct", "transaksi_pct"):
+            fraction = pd.Series([not p for _v, p in parsed], index=work.index) & values.notna() & (values > 0) & (values < 1)
+            values = values.where(~fraction, values * 100)
+        work[column] = values
     work["berlaku_mulai"] = pd.to_datetime(work["berlaku_mulai"], errors="coerce", dayfirst=True).dt.date
     return work.loc[work["sku"].ne("")][list(TEMPLATE_COLUMNS)]
 

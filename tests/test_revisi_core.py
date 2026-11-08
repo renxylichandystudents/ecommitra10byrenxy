@@ -207,10 +207,12 @@ class ExpertNlpTests(unittest.TestCase):
 class LabelsConfigRecommendationTests(unittest.TestCase):
     def test_labels(self) -> None:
         table = _view()
-        orders = pd.DataFrame({"item_key": ["A", "B", "B", "B"], "status": ["Selesai", "Batal", "Batal", "Selesai"]})
+        orders = pd.DataFrame({"item_key": ["A"] + ["B"] * 5, "status": ["Selesai", "Batal", "Batal", "Selesai", "Selesai", "Selesai"]})
         out = product_labels(table, orders=orders, params=default_params())
         self.assertIn("Terlaris", out.loc[0, "label"])
         self.assertIn("Perlu perhatian", out.loc[1, "label"])
+        few = product_labels(table, orders=orders.iloc[:4], params=default_params())
+        self.assertNotIn("Perlu perhatian", few.loc[1, "label"])
 
     def test_ads_mapping_proportional(self) -> None:
         ads = pd.DataFrame({"product_code": ["111"], "views": [1000], "clicks": [50], "cost": [10_000], "ad_sales": [80_000]})

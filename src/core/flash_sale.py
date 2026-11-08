@@ -12,6 +12,7 @@ Per SKU (yang laku dan punya prediksi):
 - Harga flash = harga × (1 − diskon) dibulatkan ke atas Rp 100, tidak di bawah harga impas (margin 0, tanpa biaya iklan
   karena pesanan flash sale tidak lewat iklan). Diskon dicoba dari yang terbesar: pendorong 10/7/5%, habiskan stok
   20/15/10/5%. Mode prioritas omzet: bila tidak ada ruang, diskon minimal dipakai dan rugi per unit dicatat.
+- Stok flash per SKU dibagi ke semua slotnya (slot berulang tidak memakai stok yang sama dua kali).
 - Jadwal harian: tiap hari `per_day` SKU (+3 di tanggal kembar, gajian 25, Harbolnas), campuran pendorong & habiskan
   stok, SKU sama berjarak ≥ 7 hari (≥ 3 hari bila kandidat kurang), SKU dari DC baru boleh tampil ≥ 3 hari setelah hari
   ini (waktu transfer).
@@ -40,7 +41,7 @@ CANCEL_LIMIT = 15.0
 
 INPUT_COLUMNS = ("sku", "label", "nama", "harga", "stok", "ada_stok", "ss", "harian", "dc", "terjual", "m_sales", "batal_pct", "floor", "momentum")
 CANDIDATE_COLUMNS = ["sku", "label", "nama", "tujuan", "sumber", "kuota", "harga", "harga_flash", "diskon", "skor", "stok", "dc", "hari_stok",
-                     "batas_beli", "margin_unit", "alasan"]
+                     "batas_beli", "margin_unit", "alasan", "stok_flash"]
 
 
 def _num(value, default: float = float("nan")) -> float:
@@ -101,18 +102,23 @@ def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_f
         if cancel == cancel and cancel > CANCEL_LIMIT:
             notes.append(f"batal {cancel:.0f}%: batas beli 1/pembeli, kejar bayar pesanan flash lewat chat")
         if known and free >= 2:
-            source, quota = SRC_SITE, int(min(target, math.floor(free)))
+            pool = math.floor(free)
+            source, quota = SRC_SITE, int(min(target, pool))
             notes.append(f"stok toko {stok:.0f}, sisa {free:.0f} setelah SS + kebutuhan 7 hari")
         elif dc >= 2:
-            source, quota = SRC_DC, int(min(target, math.floor(dc / 2)))
+            pool = math.floor(dc / 2)
+            source, quota = SRC_DC, int(min(target, pool))
             notes.append(f"stok toko {'belum ada datanya' if not known else f'{stok:.0f} (tipis)'}; DC {dc:.0f}: transfer {quota} unit")
         elif known and above_ss >= 2:
-            source, quota = SRC_THIN, int(min(target, math.floor(above_ss / 2)))
+            pool = math.floor(above_ss / 2)
+            source, quota = SRC_THIN, int(min(target, pool))
             notes.append(f"stok {stok:.0f} sedikit di atas SS {ss:.0f}: kuota kecil, ajukan restock")
         else:
             skip("data stok belum ada dan DC kosong" if not known else "stok 0 / di bawah SS dan DC kosong: restock dulu")
             continue
         floor = _num(r.get("floor"))
+        if floor != floor:
+            notes.append("margin belum diketahui (File margin): cek harga impas sebelum dijalankan")
         priced = flash_price(price, DISCOUNTS[purpose], floor)
         if priced is None and not below_floor:
             skip("harga impas tidak memberi ruang diskon ≥ 5%")
@@ -131,7 +137,7 @@ def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_f
         rows.append({"sku": sku, "label": label, "nama": str(r.get("nama") or label), "tujuan": purpose, "sumber": source, "kuota": max(quota, 1),
                      "harga": price, "harga_flash": flash, "diskon": disc * 100, "skor": score, "stok": stok, "dc": dc,
                      "hari_stok": cover, "batas_beli": 1 if cancel == cancel and cancel > CANCEL_LIMIT else None,
-                     "margin_unit": flash - floor if floor == floor else np.nan, "alasan": "; ".join(notes)})
+                     "margin_unit": flash - floor if floor == floor else np.nan, "alasan": "; ".join(notes), "stok_flash": max(pool, 1)})
     return pd.DataFrame(rows, columns=CANDIDATE_COLUMNS), pd.DataFrame(skipped, columns=["SKU · produk · varian", "Stok toko", "Stok DC", "Alasan"])
 
 
@@ -163,6 +169,7 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
         cursor = (pd.Timestamp(cursor) + pd.DateOffset(months=1)).date()
     pools = {p: cands.loc[cands["tujuan"] == p].sort_values("skor", ascending=False).to_dict("records") for p in (DRIVER, CLEAR)}
     used: dict[str, date] = {}
+    left = {str(item["sku"]): int(item.get("stok_flash", item["kuota"]) or item["kuota"]) for pool in pools.values() for item in pool}
     rows = []
     for offset in range(days):
         day = start + timedelta(days=offset)
@@ -176,7 +183,7 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
             for item in pool:
                 if n <= 0:
                     break
-                if item in picked or (item["sku"] in used and (day - used[item["sku"]]).days < gap):
+                if item in picked or (item["sku"] in used and (day - used[item["sku"]]).days < gap) or left.get(str(item["sku"]), 0) < 1:
                     continue
                 if item["sumber"] == SRC_DC and (day - today).days < TRANSFER_DAYS:
                     continue
@@ -191,7 +198,8 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
             take(pools[DRIVER] + pools[CLEAR], count - len(picked), gap=MIN_GAP_DAYS)
         for slot, item in enumerate(picked):
             used[item["sku"]] = day
-            quota = int(item["kuota"])
+            quota = int(min(int(item["kuota"]), left.get(str(item["sku"]), int(item["kuota"]))))
+            left[str(item["sku"])] = left.get(str(item["sku"]), quota) - quota
             rows.append({
                 "Tanggal": day, "Momen": label or "Harian", "Jam": SLOT_HOURS[slot % len(SLOT_HOURS)], "Tujuan": item["tujuan"],
                 "SKU": item["sku"], "Produk": item["label"], "Harga normal": item["harga"], "Harga flash": item["harga_flash"],

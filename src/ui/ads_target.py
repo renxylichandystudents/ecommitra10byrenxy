@@ -119,7 +119,8 @@ def _blocks(start: date, end: date, first_open: date, month_end: date) -> list[t
 def _recommendation(units, members, products, contribution, *, weeks: list[int], gap: float, lift: float, key: tuple) -> dict:
     """`A.recommend` disimpan per sesi: pencarian ROAS butuh beberapa detik dan tidak bergantung pada budget/ROAS yang diketik."""
     cache = st.session_state.setdefault("adt-rec-cache", {})
-    full = (*key, tuple(weeks), round(gap), lift, len(units), round(sum(u.daily_cost for u in units)))
+    full = (*key, tuple(weeks), round(gap), lift, len(units), round(sum(u.daily_cost for u in units)), round(sum(u.daily_sales for u in units)),
+            len(products), round(sum(contribution.values()), 4) if isinstance(contribution, dict) else 0)
     if full not in cache:
         if len(cache) > 8:
             cache.clear()
@@ -439,6 +440,9 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     weeks = [(b - a).days + 1 for a, b in blocks]
     run_days = sum(weeks)
     gap_daily = gap / run_days
+    if _run_days(start, end, first_open, month_end) == 0:
+        st.warning(f"Periode campaign {week_text} tidak jatuh di sisa hari {month_name} setelah data terakhir ({fmt_date(last)}). "
+                   "Rencana di bawah memakai seluruh periode campaign sebagai pendekatan; untuk target bulan berikutnya, unggah data & target bulan itu dulu.")
     base_units = units
     rec = alt = None
     if gap > 0:
@@ -477,11 +481,13 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         head = (f"Target ROAS <b>{fmt_num(rec['roas'], 1)}</b> · budget <b>{fmt_idr(rec_budget)}</b> untuk {period_days} hari "
                 f"(rata-rata {fmt_idr(rec['budget'] / run_days)}/hari, naik bertahap tiap minggu) → proyeksi <b>{fmt_idr(rec_final)}</b> "
                 f"(<b style='color:{_tone(rec['tercapai'])}'>{fmt_pct(rec_final / target * 100, 1)}</b> target).")
+        no_demand = sum(1 for u in units if not u.locked and math.isfinite(u.demand) and u.demand <= 0)
         if rec["tercapai"]:
             body = head + " Ini target ROAS tertinggi yang masih menutup target dengan iklan saja; flash sale & exposure jadi tambahan di atasnya."
         else:
             body = (head + f"<br>Dengan asumsi daya dorong iklan maks. +{lift * 100:.0f}%, iklan saja paling banyak mencapai angka di atas: "
-                    f"masih kurang <b>{fmt_idr(target - rec_final)}</b>. Menurunkan ROAS lebih jauh tidak menambah omzet karena permintaan produk yang diiklankan sudah penuh.")
+                    f"masih kurang <b>{fmt_idr(target - rec_final)}</b>. Menurunkan ROAS lebih jauh tidak menambah omzet karena kenaikan omzet tiap iklan "
+                    "dibatasi prediksi omzet produknya." + (f" {fmt_num(no_demand)} iklan berisi produk yang belum punya prediksi (dianggap tidak bisa naik)." if no_demand else ""))
             if alt is not None:
                 alt_budget = math.ceil(alt["budget"] / run_days * period_days / 1_000_000) * 1_000_000
                 body += (f"<br>Bila iklan dianggap bisa mendorong sampai +{alt['lift'] * 100:.0f}% prediksi omzet produk, target tercapai dengan "

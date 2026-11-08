@@ -318,11 +318,11 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
             c2, c3, c4 = st.columns([1, 1.2, 1.4])
             per_day = int(c2.number_input("SKU per hari", min_value=2, max_value=20, value=5, step=1, key="fs-per-day",
                                           help="Tanggal kembar, gajian (25), dan Harbolnas mendapat +3 SKU."))
-            share = c3.slider("Porsi habiskan stok lebih", 0, 70, 40, step=10, key="fs-share", format="%d%%",
+            share = c3.slider("Porsi slot untuk stok berlebih", 0, 70, 40, step=10, key="fs-share", format="%d%%",
                               help="Sisa slot diisi produk pendorong omzet (laris). Bila kandidat salah satu habis, slot diisi yang lain.") / 100
-            rule = c4.radio("Aturan harga flash", FLASH_RULES, horizontal=True, key="fs-rule",
-                            help="Prioritas omzet: produk yang harga impasnya (File margin, tanpa biaya iklan) di atas harga sekarang tetap ikut "
-                                 "dengan diskon minimal 5% dan rugi per unit dicatat. Tidak di bawah impas: produk itu tidak dijadwalkan.")
+            rule = c4.radio("Aturan harga flash", FLASH_RULES, index=1, horizontal=True, key="fs-rule",
+                            help="Tidak di bawah impas (bawaan): produk yang tidak punya ruang diskon ≥ 5% di atas harga impas tidak dijadwalkan. "
+                                 "Prioritas omzet: produk itu tetap ikut dengan diskon minimal 5% dan rugi per unit dicatat di kolom Margin/unit.")
         cands, skipped = flash.candidates(items, excluded=data.excluded, below_floor=rule == FLASH_RULES[0])
         plan = flash.schedule(cands, start, today=today, days=(end - start).days + 1, per_day=per_day, clear_share=share)
         _flash_render(plan, skipped, start, end, key="fs-new")

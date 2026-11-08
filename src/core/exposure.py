@@ -36,6 +36,8 @@ PLAYBOOK: tuple[tuple[str, tuple[str, ...], str, str, str, str], ...] = (
      "mandi air hangat tanpa tagihan listrik membengkak", "Mandi pagi masih kedinginan? Air hangat siap dalam hitungan menit.", "#waterheater #airpanas #kamarmandi"),
     ("Kloset", ("kloset", "closet", "toilet"), "Shopee Video 30–45 dtk: before–after kamar mandi + uji siram",
      "kamar mandi lama jadi modern, hemat air", "Kloset lama sering mampet & boros air? Ganti yang sekali siram bersih.", "#kloset #kamarmandiminimalis #renovasikamarmandi"),
+    ("Bak cuci piring", ("cuci piring", "kitchen sink", "bak cuci", "dapur"), "Shopee Video: before–after area cuci dapur + uji lebar bak",
+     "dapur lebih rapi, cuci piring lebih lega", "Cuci piring numpuk & bak sempit? Bak granit lebar, dapur lebih rapi.", "#dapur #bakcucipiring #dapurminimalis"),
     ("Wastafel", ("wastafel", "washtafel", "lavatory", "sink"), "Shopee Video: before–after sudut wastafel + ukuran pas",
      "ruang sempit terasa lega", "Sudut kamar mandi sempit? Wastafel gantung bikin ruang terasa lega.", "#wastafel #kamarmandi #interiorrumah"),
     ("Shower", ("shower", "jet shower", "hand shower", "bidet"), "Shopee Video: uji tekanan air + panas–dingin",
@@ -232,7 +234,7 @@ def brief(row: dict, slot_index: int = 0) -> dict:
     script = "\n".join([
         f"0–3 dtk  : {hook}",
         f"3–12 dtk : tunjukkan {p[0] or 'produk terpasang di rumah'}" + (f" dan {p[1]}" if p[1] else ""),
-        f"12–22 dtk: {('demo ' + play[3]) if not p[2] else p[2] + '; demo ' + play[3]}",
+        f"12–22 dtk: {(p[2] + '; ') if p[2] else ''}tunjukkan hasilnya: {play[3]}",
         f"22–30 dtk: {cta}",
     ])
     return {"Format": fmt, "Hook": hook, "Poin jual": " • ".join(points) if points else "–", "Ajakan": cta, "Hashtag": tags, "Naskah 30 dtk": script}

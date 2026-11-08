@@ -75,6 +75,15 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(set(moves["SKU"]), {"dc"})
         self.assertEqual(len(F.shopee_template(plan)), len(plan))
 
+    def test_repeated_slots_share_stock(self):
+        items = pd.DataFrame([item("dc", stok=0, dc=20, harian=5.0), item("site", stok=40, harian=2.0)])
+        cands, _ = F.candidates(items)
+        plan = F.schedule(cands, date(2026, 11, 12), today=date(2026, 11, 8), days=14, per_day=2)
+        used = plan.groupby("SKU")["Kuota"].sum()
+        self.assertLessEqual(used["dc"], 10)
+        self.assertLessEqual(used["site"], 40 - 5 - 14)
+        self.assertLessEqual(F.transfers(plan)["Unit transfer"].sum(), 10)
+
 
 if __name__ == "__main__":
     unittest.main()

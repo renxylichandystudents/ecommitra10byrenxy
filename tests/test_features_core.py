@@ -49,6 +49,15 @@ class MarginTests(unittest.TestCase):
         self.assertEqual(out.iloc[0]["sku"], "1")
         self.assertAlmostEqual(out.iloc[0]["komisi_pct"], 8)
 
+    def test_normalize_persen_teks(self):
+        frame = pd.DataFrame([{"sku": "1", "hpp": "1.250.000", "komisi_pct": "8.5", "layanan_pct": "0,5%", "transaksi_pct": "1", "packing": "2.500,50"}])
+        row = margin.normalize_components(frame).iloc[0]
+        self.assertEqual(row["hpp"], 1_250_000)
+        self.assertAlmostEqual(row["komisi_pct"], 8.5)
+        self.assertAlmostEqual(row["layanan_pct"], 0.5)
+        self.assertAlmostEqual(row["transaksi_pct"], 1)
+        self.assertAlmostEqual(row["packing"], 2500.5)
+
 
 class PromoTests(unittest.TestCase):
     row = {"sku": "1", "stok": 100, "ada_data_stok": True, "m_qty": 50, "ss": 10}

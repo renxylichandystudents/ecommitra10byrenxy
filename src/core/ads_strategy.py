@@ -981,7 +981,8 @@ def ramp(units: list[Unit], *, weeks: list[int], gap_total: float, target_roas: 
     for index, days in enumerate(weeks):
         if days <= 0:
             continue
-        gap_daily = (gap_total - gained) / days_left
+        carried = sum(_now_sales(u) for u in current) - base_now
+        gap_daily = max((gap_total - gained) / days_left - carried, 0.0)
         budget_daily = None if budget_total is None else max(budget_total - spent, 0.0) / days_left
         plan = first if index == 0 and first is not None else allocate_target(current, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily)
         out.append((days, plan))

@@ -15,7 +15,7 @@ LABEL_LEGEND = (
     "🏆 Terlaris: 10 besar QTY dan sales sekaligus · "
     "👁 Populer: 10% teratas dilihat · "
     "👆 Paling diminati: 10% teratas klik/CTR · "
-    "⚠ Perlu perhatian: batal > 15% atau > 2× median toko. "
+    "⚠ Perlu perhatian: batal > 15% atau > 2× median toko (min. 5 baris pesanan). "
     "Data dilihat/klik dari laporan iklan; produk tanpa iklan tidak mendapat label Populer/Paling diminati."
 )
 
@@ -86,9 +86,11 @@ def product_labels(
 
         work = orders[["item_key", "status"]].copy()
         work["batal"] = cancelled_status_mask(work["status"]).astype(float)
-        rate = work.groupby("item_key")["batal"].mean()
+        grouped = work.groupby("item_key")["batal"]
+        rate, count = grouped.mean(), grouped.size()
         median = float(rate[rate > 0].median()) if (rate > 0).any() else 0.0
-        attention = rate[(rate > cancel_limit) | ((median > 0) & (rate > cancel_times * median))]
+        enough = count >= int(cfg.get("perlu_perhatian_min_pesanan", 5))
+        attention = rate[enough & ((rate > cancel_limit) | ((median > 0) & (rate > cancel_times * median)))]
         flagged = set(attention.index.astype(str))
         for index, key in enumerate(out["item_key"].astype(str)):
             if key in flagged:
