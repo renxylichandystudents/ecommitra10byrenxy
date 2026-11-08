@@ -443,6 +443,27 @@ def past_predictions(features, sku: str, varian: str, start: date, end: date) ->
     return frame.groupby("date", as_index=False)[["pred_qty", "pred_sales"]].sum()
 
 
+def backtest_days(item_orders: pd.DataFrame, days: list, weekday: np.ndarray, price: float) -> pd.DataFrame:
+    """Uji mundur: prediksi 1 hari ke depan untuk tiap tanggal D yang sudah lewat, memakai model harian yang sama
+    (level, tren, pola hari) dan hanya data s.d. D−1. Dipakai bila belum ada analisa tersimpan untuk tanggal itu."""
+    from src.forecast import _robust_forecast
+
+    out = []
+    if item_orders is None or item_orders.empty or not days:
+        return pd.DataFrame(columns=["date", "pred_qty", "pred_sales"])
+    by_day = item_orders.groupby(pd.to_datetime(item_orders["order_time"]).dt.normalize())["qty"].sum().sort_index()
+    start = by_day.index.min()
+    for day in days:
+        stamp = pd.Timestamp(day).normalize()
+        if stamp <= start:
+            continue
+        index = pd.date_range(start, stamp - pd.Timedelta(days=1), freq="D")
+        series = by_day.reindex(index, fill_value=0.0).to_numpy(dtype=float)
+        qty = float(_robust_forecast(series, start, 1, weekday, forecast_start=stamp)) if series.sum() > 0 else 0.0
+        out.append({"date": stamp, "pred_qty": qty, "pred_sales": qty * price})
+    return pd.DataFrame(out, columns=["date", "pred_qty", "pred_sales"])
+
+
 def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, start: date, end: date, total: float) -> pd.DataFrame:
     dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D")
     if len(dates) == 0:
@@ -458,7 +479,7 @@ def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, 
     return pd.DataFrame({"date": dates, "qty": qty, "sales": qty * price})
 
 
-def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str, past=None) -> go.Figure:
+def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str, past=None, past_source=None) -> go.Figure:
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.62, 0.38], subplot_titles=(title, "Proyeksi sisa stok"))
     fmt = fmt_idr_short if money else fmt_qty
     fig.add_bar(
@@ -468,9 +489,10 @@ def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str
     )
     if past is not None and np.nansum(np.asarray(past, dtype=float)) > 0:
         # Prediksi yang dulu dibuat untuk hari yang sudah lewat: dibandingkan langsung dengan batang Terjual.
+        sources = list(past_source) if past_source is not None else [""] * len(past)
         hit = [
-            ("" if not p else f"{fmt(p)} · aktual {fmt(a)} ({fmt_num(a / p * 100, 0)}%)")
-            for a, p in zip(sold, past)
+            ("" if not p else f"{fmt(p)} ({src or 'tersimpan'}) · aktual {fmt(a)} ({fmt_num(a / p * 100, 0)}%)")
+            for a, p, src in zip(sold, past, sources)
         ]
         fig.add_bar(
             x=x_labels, y=past, name="Prediksi sebelumnya (hari lewat)", marker_color="rgba(238,77,45,0.30)",
@@ -552,10 +574,24 @@ def sku_charts(
         pred_sales.loc[pd.DatetimeIndex(path["date"])] = path["sales"].to_numpy()
     past_qty = pd.Series(0.0, index=days)
     past_sales = pd.Series(0.0, index=days)
+    past_source = pd.Series("", index=days, dtype=object)
+    lapsed = [d for d in days if d < pd.Timestamp(today)]
+    saved_days: set = set()
     if isinstance(past, pd.DataFrame) and not past.empty:
         part = past.loc[(past["date"] >= pd.Timestamp(month_start)) & (past["date"] < pd.Timestamp(today))].set_index("date")
-        past_qty = past_qty.add(part["pred_qty"].reindex(days, fill_value=0.0), fill_value=0.0)
-        past_sales = past_sales.add(part["pred_sales"].reindex(days, fill_value=0.0), fill_value=0.0)
+        past_qty.loc[part.index] = part["pred_qty"].to_numpy()
+        past_sales.loc[part.index] = part["pred_sales"].to_numpy()
+        past_source.loc[part.index] = "tersimpan"
+        saved_days = set(part.index)
+    # Hari yang belum punya analisa tersimpan diisi uji mundur, sehingga perbandingan tampil mulai tanggal 1.
+    missing = [d for d in lapsed if d not in saved_days]
+    if missing:
+        back = backtest_days(item_orders, missing, weekday, float(row.get("harga_bersih", 0) or 0))
+        if not back.empty:
+            back = back.set_index("date")
+            past_qty.loc[back.index] = back["pred_qty"].to_numpy()
+            past_sales.loc[back.index] = back["pred_sales"].to_numpy()
+            past_source.loc[back.index] = "uji mundur"
     has_stock = bool(row.get("ada_data_stok", False))
     stok = float(row["stok"]) if has_stock else 0.0
     ss = float(row["ss"])
@@ -575,12 +611,12 @@ def sku_charts(
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(
-            _two_panel(labels, sold.to_numpy(), pred.to_numpy(), qty_line, ss, labels[qty_out] if qty_out is not None else None, money=False, title="Grafik QTY · Bulan ini", unit="Unit", past=past_qty.to_numpy()),
+            _two_panel(labels, sold.to_numpy(), pred.to_numpy(), qty_line, ss, labels[qty_out] if qty_out is not None else None, money=False, title="Grafik QTY · Bulan ini", unit="Unit", past=past_qty.to_numpy(), past_source=past_source.to_numpy()),
             use_container_width=True, key=f"{key}-qty",
         )
     with c2:
         st.plotly_chart(
-            _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah", past=past_sales.to_numpy()),
+            _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah", past=past_sales.to_numpy(), past_source=past_source.to_numpy()),
             use_container_width=True, key=f"{key}-sales",
         )
     _sku_summary(
@@ -773,8 +809,9 @@ def _sku_summary(
             )
         )
     else:
-        notes.append(("Prediksi sebelumnya", "belum ada analisa tersimpan yang memprediksi hari-hari yang sudah lewat bulan ini"))
-    notes.append(("Grafik", "batang biru = terjual s.d. kemarin; batang arsir = prediksi yang dulu dibuat untuk hari itu (bandingkan dengan biru); merah = prediksi mulai hari ini; garis oranye = stok Site 10037 dikurangi prediksi kumulatif, garis putus = SS"))
+        notes.append(("Prediksi sebelumnya", "belum ada riwayat penjualan yang cukup untuk menghitung prediksi hari-hari yang sudah lewat"))
+    notes.append(("Prediksi sebelumnya", "dari analisa tersimpan bila ada; tanggal tanpa analisa tersimpan memakai uji mundur (model yang sama, hanya data s.d. sehari sebelumnya)"))
+    notes.append(("Grafik", "batang biru = terjual s.d. kemarin; batang arsir = prediksi untuk hari itu (bandingkan dengan biru); merah = prediksi mulai hari ini; garis oranye = stok Site 10037 dikurangi prediksi kumulatif, garis putus = SS"))
     explain(notes, title="Catatan analisa")
 
 
