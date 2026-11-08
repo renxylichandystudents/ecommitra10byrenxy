@@ -126,6 +126,10 @@ def top_products(orders: pd.DataFrame, start: date, end: date, prev: tuple[date,
     cols = ["Rank", "SKU", "Produk", "QTY", "Sales", "Porsi (%)", "Sales periode lalu", "Perubahan (%)"]
     if orders is None or orders.empty:
         return pd.DataFrame(columns=cols)
+    if "status" in orders.columns:
+        from src.ingest import cancelled_status_mask
+
+        orders = orders.loc[~cancelled_status_mask(orders["status"])]
     day = pd.to_datetime(orders["order_time"]).dt.normalize()
 
     def grab(a, b):
@@ -154,15 +158,21 @@ def performance_range(performance: pd.DataFrame | None, start: date, end: date) 
     work = clean_performance(performance)
     if work.empty:
         return {}, pd.DataFrame()
-    span = (end - start).days + 1
     part = work.loc[work["date"].between(pd.Timestamp(start), pd.Timestamp(end))]
-    prior = work.loc[work["date"].between(pd.Timestamp(start) - pd.Timedelta(days=span), pd.Timestamp(start) - pd.Timedelta(days=1))]
+    prev_start, prev_end = previous_range(start, end)
+    prior = work.loc[work["date"].between(pd.Timestamp(prev_start), pd.Timestamp(prev_end))]
 
     def total(frame, col):
         return float(perf_number(frame[col]).sum()) if col in frame.columns and not frame.empty else float("nan")
 
     def mean(frame, col):
-        return float(perf_number(frame[col]).mean()) if col in frame.columns and not frame.empty else float("nan")
+        if col not in frame.columns or frame.empty:
+            return float("nan")
+        values = perf_number(frame[col])
+        weights = perf_number(frame["visitors"]) if "visitors" in frame.columns else None
+        if weights is not None and float(weights.where(values.notna()).sum()) > 0:
+            return float((values * weights).sum() / weights.where(values.notna()).sum())
+        return float(values.mean())
 
     summary = {
         "hari": int(part["date"].nunique()), "pengunjung": total(part, "visitors"), "pengunjung_prev": total(prior, "visitors"),
@@ -175,6 +185,17 @@ def performance_range(performance: pd.DataFrame | None, start: date, end: date) 
         daily[col] = perf_number(daily[col])
     daily = daily.rename(columns={"date": "Tanggal", "visitors": "Pengunjung", "orders": "Pesanan", "conversion_rate": "Konversi (%)"})
     return summary, daily.reset_index(drop=True)
+
+
+def previous_range(start: date, end: date) -> tuple[date, date]:
+    """Pembanding: bulan kalender sebelumnya bila rentang = bulan penuh (Okt → Sep), selain itu rentang sama panjang tepat sebelumnya."""
+    first, last = pd.Timestamp(start), pd.Timestamp(end)
+    if first.day == 1 and last == last + pd.offsets.MonthEnd(0):
+        months = (last.year - first.year) * 12 + last.month - first.month + 1
+        prev_start = (first - pd.DateOffset(months=months)).date()
+        return prev_start, (first - pd.Timedelta(days=1)).date()
+    span = (end - start).days + 1
+    return start - pd.Timedelta(days=span).to_pytimedelta(), start - pd.Timedelta(days=1).to_pytimedelta()
 
 
 def campaigns_in_range(features, start: date, end: date) -> pd.DataFrame:

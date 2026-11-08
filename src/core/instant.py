@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from src.core.cancel_reasons import short_reason
+from src.core.metrics import UNPAID_HINTS
 from src.ingest import _exact_column, _parse_datetime, _parse_number, cancelled_status_mask, clean_sku_series, clean_text_series, map_columns, normalize_status_series
 
 INSTANT_GROUPS = ("Instant", "Instant Prioritas", "Same Day")
@@ -123,9 +124,9 @@ def order_frame(lines: pd.DataFrame) -> pd.DataFrame:
                       line_value=("line_value", "sum"), return_value=("return_value", "sum"), returned_qty=("returned_qty", "sum"), qty_net=("qty_net", "sum"))
     out["nilai"] = out["payment"].where(out["payment"] > 0, out["line_value"])
     out["returned"] = out["returned_qty"] > 0
-    out["sales_bersih"] = np.where(out["cancelled"], 0.0, (out["nilai"] - out["return_value"]).clip(lower=0))
+    out["sales_bersih"] = np.where(out["cancelled"], 0.0, out["nilai"] - out["return_value"])
     out["qty_bersih"] = np.where(out["cancelled"], 0.0, out["qty_net"])
-    out["unpaid"] = out["cancelled"] & out["cancel_reason"].str.lower().str.contains("belum dibayar|belum bayar|tidak dibayar", regex=True)
+    out["unpaid"] = out["cancelled"] & out["cancel_reason"].str.lower().str.contains("|".join(UNPAID_HINTS), regex=True)
     hours = (out["ship_time"] - out["pay_time"]).dt.total_seconds() / 3600
     out["proses_jam"] = hours.where(hours >= 0)
     done = (out["done_time"] - out["order_time"]).dt.total_seconds() / 3600
@@ -224,6 +225,7 @@ def top_cities(orders: pd.DataFrame, limit: int = 15) -> pd.DataFrame:
     inst = orders.loc[orders["instan"]] if orders is not None and not orders.empty else pd.DataFrame()
     if inst.empty:
         return pd.DataFrame(columns=cols)
+    inst = inst.assign(city=inst["city"].str.title().str.replace("Kab.", "Kab.", regex=False).str.replace("Dki", "DKI", regex=False))
     out = inst.groupby("city").agg(inv=("order_id", "size"), batal=("cancelled", "mean"), sales=("sales_bersih", "sum")).reset_index()
     out["batal"] = out["batal"] * 100
     out = out.sort_values(["inv", "sales"], ascending=False).head(limit)

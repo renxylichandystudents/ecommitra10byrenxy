@@ -317,8 +317,10 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
 
     reach = achievement_line(mtd, last.replace(day=1), last, features)
     k = st.columns(4)
-    card(k[0], f"Penjualan aktual {month_label}", fmt_idr(mtd),
-         hint=(f"realisasi {actual_span}" if running else "bulan sudah lewat · angka aktual") + (f"<br>{reach}" if reach else ""))
+    card(k[0], f"Sales produk aktual {month_label}", fmt_idr(mtd),
+         hint=(f"realisasi {actual_span}" if running else "bulan sudah lewat · angka aktual")
+              + " · harga setelah diskon × QTY, tanpa batal (lebih tinggi dari Sales bersih di Ringkasan karena belum dikurangi voucher Shopee)"
+              + (f"<br>{reach}" if reach else ""))
     card(k[1], f"Margin bersih aktual {month_label}", fmt_pct(m_overall, 1) if np.isfinite(m_overall) else "–",
          hint=(f"{actual_span} · margin kotor {fmt_pct(m_kotor, 1)} − potongan Shopee & iklan = {fmt_idr(m_bersih)}") if np.isfinite(m_overall) else "butuh file margin")
     if running:

@@ -7,7 +7,7 @@ aktif → (opsional) simpan dengan nama. Laporan tersimpan berisi snapshot angka
 from __future__ import annotations
 
 import html
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -129,7 +129,7 @@ def build_snapshot(table, *, orders, orders_all, frames, params, today, period, 
                    features, data, run_id: int, start: date, end: date) -> dict:
     """Semua angka/tabel laporan untuk rentang [start, end]."""
     span = (end - start).days + 1
-    prev = (start - timedelta(days=span), start - timedelta(days=1))
+    prev = R.previous_range(start, end)
     data_until = pd.to_datetime(orders_all["order_time"]).max().date() if isinstance(orders_all, pd.DataFrame) and not orders_all.empty else None
     month_targets = monthly_targets(features)
     facts = cached_order_metrics(orders_all, start, end, exclude)
@@ -272,7 +272,7 @@ def _s_summary(s: dict) -> None:
         lines.append(f"Sales bersih {fmt_idr(k['sales_bersih'])} = {fmt_pct(k['target_pct'], 1)} dari target periode {fmt_idr(k['target'])}.")
     if np.isfinite(k.get("growth") or np.nan):
         lines.append(f"{'Naik' if k['growth'] >= 0 else 'Turun'} {fmt_pct(abs(k['growth']), 1)} dibanding periode sebelumnya ({s['meta']['periode_lalu']}).")
-    lines.append(f"ROAS iklan {fmt_num(ads['roas'], 1)} vs target {fmt_num(ads['target_roas'], 1)}; porsi omzet dari iklan {fmt_pct(ads['porsi'], 1)}.")
+    lines.append(f"ROAS iklan {fmt_num(ads['roas'], 1)} vs target {fmt_num(ads['target_roas'], 1)}; omzet atribusi iklan setara {fmt_pct(ads['porsi'], 1)} sales produk bersih (atribusi Shopee ikut menghitung belanja produk lain setelah klik iklan, jadi bisa di atas 100%).")
     lines.append(f"Tingkat batal {fmt_pct(k['tingkat_batal'], 1)}; {fmt_num(k['belum_bayar'])} pesanan batal karena belum bayar bisa dikejar lewat chat.")
     lines.append(f"{fmt_num(pred['kurang'])} SKU Top 50 stoknya di bawah {pred['label']} + safety stock: prioritas restock sebelum menambah iklan.")
     st.markdown("\n".join(f"- {t}" for t in lines))
@@ -367,7 +367,7 @@ def _s_ads(s: dict) -> None:
     metric_card(cols[0], "biaya_iklan", fmt_idr(ads["biaya"]))
     metric_card(cols[1], "omzet_iklan", fmt_idr(ads["omzet"]))
     metric_card(cols[2], "roas", fmt_num(ads["roas"], 1), hint=f"target {fmt_num(ads['target_roas'], 1)}")
-    card(cols[3], "Porsi sales dari iklan", fmt_pct(ads["porsi"]), hint=f"dari sales produk bersih {fmt_idr(ads['sales_produk'])}")
+    card(cols[3], "Omzet iklan ÷ sales produk", fmt_pct(ads["porsi"]), hint=f"sales produk bersih {fmt_idr(ads['sales_produk'])} · bisa > 100% karena atribusi Shopee")
     for message in ads["catatan"]:
         st.caption(message)
     if 0 < ads["hari_iklan"] < s["meta"]["hari"]:
@@ -415,7 +415,7 @@ def _s_perf(s: dict) -> None:
     cols = st.columns(4)
     card(cols[0], "Pengunjung", fmt_num(perf["pengunjung"]), hint=f"{delta(perf['pengunjung'], perf['pengunjung_prev'])} vs periode lalu")
     card(cols[1], "Pesanan (performa toko)", fmt_num(perf["pesanan"]), hint=f"{delta(perf['pesanan'], perf['pesanan_prev'])} vs periode lalu")
-    card(cols[2], "Konversi rata-rata", fmt_pct(perf["konversi"], 2), hint=f"periode lalu {fmt_pct(perf['konversi_prev'], 2)}")
+    card(cols[2], "Konversi (tertimbang)", fmt_pct(perf["konversi"], 2), hint=f"periode lalu {fmt_pct(perf['konversi_prev'], 2)}")
     card(cols[3], "Pembeli baru", fmt_num(perf["pembeli_baru"]), hint=f"{perf['hari']} hari data performa")
     if isinstance(daily, pd.DataFrame) and not daily.empty:
         x = pd.to_datetime(daily["Tanggal"])

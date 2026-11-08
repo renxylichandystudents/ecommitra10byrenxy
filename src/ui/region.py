@@ -6,12 +6,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.ui.common import batched_view, card, date_range_picker, download_excel, explain, fmt_num, fmt_pct, range_label
+from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct, range_label
 from src.utils.format import show_table
 
 
 @st.fragment
-def show_region_analysis(source_raw: pd.DataFrame) -> None:
+def show_region_analysis(source_raw: pd.DataFrame, start=None, end=None) -> None:
     """Asal pesanan per provinsi dan kota/kabupaten, dengan filter bulan sendiri (satu, beberapa, atau semua bulan)."""
     from src.activity import region_lines, region_summary, region_total_row
 
@@ -22,7 +22,9 @@ def show_region_analysis(source_raw: pd.DataFrame) -> None:
         return
     stamp = pd.to_datetime(lines["order_time"], errors="coerce")
     lo, hi = stamp.min().date(), stamp.max().date()
-    start, end = date_range_picker(key="region-cal", lo=lo, hi=hi, default=(max(lo, hi.replace(day=1)), hi))
+    start = max(pd.Timestamp(start).date(), lo) if start is not None else lo
+    end = min(pd.Timestamp(end).date(), hi) if end is not None else hi
+    st.caption(f"Ikut periode data di atas: {range_label(start, end)}.")
     level = st.segmented_control("Tampilkan per", ["Provinsi", "Kota/Kabupaten"], default="Provinsi", key="region-level") or "Provinsi"
     view = lines.loc[stamp.dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))]
     period_text = "semua data" if (start, end) == (lo, hi) else range_label(start, end)

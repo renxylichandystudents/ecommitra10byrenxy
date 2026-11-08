@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter, table_toolbar
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, install_plotly_locale, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter, table_toolbar
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -138,6 +138,7 @@ st.set_page_config(
     page_icon="📦",
     layout="wide",
 )
+install_plotly_locale()
 
 
 def _app_page() -> None:
@@ -362,7 +363,9 @@ st.markdown(
         line-height: 1.25;
         color: #0f172a;
         white-space: normal;
-        word-break: break-word;
+        word-break: keep-all;
+        overflow-wrap: normal;
+        font-size: clamp(1.05rem, 1.9vw, var(--fs-xl));
     }
     .readable-metric-value.compact {
         font-size: var(--fs-lg);
@@ -1431,6 +1434,14 @@ st.markdown(
         background: #ffedd5 !important;
         color: #9a3412 !important;
         transform: translateY(-1px);
+    }
+    div[class*="st-key-hdr-"] button { padding-left: 0.55rem !important; padding-right: 0.55rem !important; }
+    div[class*="st-key-hdr-"] button p { white-space: nowrap; }
+    div[class*="st-key-menu-"] button, div[class*="st-key-rek-sub-btn-"] button, div[class*="st-key-setting-tab-"] button {
+        padding-left: 0.4rem !important; padding-right: 0.4rem !important;
+    }
+    div[class*="st-key-menu-"] button p, div[class*="st-key-rek-sub-btn-"] button p, div[class*="st-key-setting-tab-"] button p {
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-sm);
     }
     div[data-testid="stHorizontalBlock"]:has(.period-name) {
         align-items: stretch !important;
@@ -2911,7 +2922,7 @@ def render_header() -> None:
     mitra, shopee = _logo_uri("mitra10.png"), _logo_uri("shopee.svg")
     title = "Setting" if on_setting else {PAGE_HOME: "Beranda", PAGE_INPUT: "Upload data & setelan analisa", PAGE_USERS: "Kelola user", PAGE_PASSWORD: "Ubah password"}.get(page, "Hasil analisa")
     _mobile_header(mitra, title, show_analysis_button, show_training_button, show_setting_button)
-    columns = st.columns([4.3, 1.75, 1.85, 1.1, 1.2, 1.45], vertical_alignment="center")
+    columns = st.columns([3.6, 1.7, 1.8, 1.35, 1.4, 1.45], vertical_alignment="center")
     columns[0].markdown(
         f"""
         <div class="feature-bar">
@@ -4764,7 +4775,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             "sekali tiap No. Pesanan"
         )
         order_hint = "Unik, semua status"
-        sku_hint = "Selain pesanan batal; SKU yang hanya diretur tetap dihitung (beda dengan SKU terjual bersih di Ringkasan)"
+        sku_hint = "SKU pada semua status, termasuk pesanan batal dan retur (beda dengan SKU terjual bersih di Ringkasan)"
     elif not picked:
         filtered = period_view.iloc[0:0]
         sales_hint = "Centang minimal satu status pesanan"
@@ -4790,7 +4801,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             include_return=include_return,
         )
         if not include_return and not include_cancel:
-            sales_hint = "Sama dengan Ringkasan saat Kecualikan batal & retur dicentang. Total Pembayaran tanpa batal, sekali tiap No. Pesanan. Baris yang habis diretur tidak dihitung"
+            sales_hint = "Total Pembayaran tanpa batal, sekali tiap No. Pesanan; pesanan yang habis diretur tidak dihitung. Sales bersih di bawah juga mengurangi nilai retur sebagian"
             order_hint = "Tanpa batal dan tanpa pesanan yang habis diretur"
             sku_hint = "SKU yang masih punya QTY setelah retur dikurangi"
         else:
@@ -4800,7 +4811,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     report_frame = filtered
     if return_only and not filtered.empty:
         report_frame = filtered.copy()
-        report_frame["status"] = "Return"
+        report_frame["status"] = "Retur"
     summary, status_table, sku_sheet = activity_report(report_frame)
     summary = focus_summary(
         summary,
@@ -4821,7 +4832,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     if not sku_sheet.empty and not include_return:
         sku_sheet["Qty retur"] = 0
         sku_sheet["Nominal retur"] = 0
-        sku_sheet["Alasan retur"] = ""
+        sku_sheet["Status retur"] = ""
     if not include_return and not include_cancel:
         sku_sheet = sku_sheet.iloc[0:0]
     if include_cancel:
@@ -4847,14 +4858,15 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     show_metric(resume_row[0], "Jumlah pesanan", format_number(summary["orders"]), hint=order_hint)
     show_metric(resume_row[1], "Produk / varian", format_number(sku_shown), hint=sku_hint)
     show_metric(resume_row[2], "Sales bruto" if select_all else "Sales value", format_idr(summary["sales_volume"]), hint=sales_hint)
-    show_metric(resume_row[3], "QTY terjual", format_qty(qty_shown))
+    show_metric(resume_row[3], "QTY semua status" if select_all else "QTY", format_qty(qty_shown),
+                hint=f"termasuk batal & retur · QTY bersih {format_qty(facts['qty_bersih'])}" if select_all else "QTY pada status yang dicentang")
     row_two = st.columns(4)
     metric_card(row_two[0], "pesanan_batal", format_number(summary["invoice_cancel"]))
     metric_card(row_two[1], "nominal_batal", format_idr(summary["nominal_cancel"]))
     metric_card(row_two[2], "retur_unit", format_qty(summary["sales_return"]))
     metric_card(row_two[3], "nominal_retur", format_idr(summary["nominal_return"]))
     row_three = st.columns(4)
-    net_hint = "Selalu tanpa pesanan batal & retur (tidak bergantung saklar)"
+    net_hint = "Selalu tanpa pesanan batal & retur, apa pun centang status di atas"
     metric_card(row_three[0], "pesanan_bersih", format_number(facts["pesanan_bersih"]), hint=net_hint)
     reach = achievement_line(facts["sales_bersih"], period_start_day, period_end_day, get_features())
     metric_card(row_three[1], "sales_bersih", format_idr(facts["sales_bersih"]), hint=net_hint + (f"<br>{reach}" if reach else ""))
@@ -4894,7 +4906,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             },
         )
     show_sku_issue_section(sku_sheet, selected_label)
-    show_region_analysis(source_raw)
+    show_region_analysis(source_raw, *_data_range)
     show_instant_analysis(source_raw, *_data_range)
     st.subheader("Pembeli batal karena belum bayar")
     unpaid_months = list(st.session_state.get("data_months") or [])
@@ -4959,7 +4971,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
 
 
 ISSUE_COLUMNS = {
-    "Retur": ["Rank", "SKU", "Produk", "Varian", "Qty retur", "Nominal retur", "Alasan retur"],
+    "Retur": ["Rank", "SKU", "Produk", "Varian", "Qty retur", "Nominal retur", "Status retur"],
     "Batal": ["Rank", "SKU", "Produk", "Varian", "Qty batal", "Invoice batal", "Nominal batal", "Alasan batal"],
 }
 ISSUE_TITLES = {
@@ -4980,7 +4992,7 @@ def _issue_kind_sheet(sku_sheet: pd.DataFrame, issue_kind: str) -> pd.DataFrame:
 @st.cache_data(show_spinner=False, max_entries=64)
 def sku_issue_reasons(sku_sheet: pd.DataFrame, issue_kind: str) -> list[str]:
     kind_sheet = _issue_kind_sheet(sku_sheet, issue_kind)
-    columns = {"Retur": ["Alasan retur"], "Batal": ["Alasan batal"]}.get(issue_kind, ["Alasan retur", "Alasan batal"])
+    columns = {"Retur": ["Status retur"], "Batal": ["Alasan batal"]}.get(issue_kind, ["Status retur", "Alasan batal"])
     return sorted({str(v) for c in columns if c in kind_sheet.columns for v in kind_sheet[c].tolist() if str(v).strip()})
 
 
@@ -5007,7 +5019,7 @@ def _one_row_per_sku(shown: pd.DataFrame, issue_kind: str) -> pd.DataFrame:
     if "Produk" in work.columns:
         agg["Produk"] = "first"
     merged = work.groupby(keys, sort=False, as_index=False).agg(agg)
-    for reason_col, weight_col in (("Alasan retur", "Qty retur"), ("Alasan batal", "Invoice batal")):
+    for reason_col, weight_col in (("Status retur", "Qty retur"), ("Alasan batal", "Invoice batal")):
         if reason_col not in work.columns:
             continue
         weights = work[weight_col] if weight_col in work.columns else pd.Series(0, index=work.index)
@@ -5042,7 +5054,7 @@ def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str,
     elif issue_kind in ISSUE_COLUMNS:
         shown = kind_sheet.loc[kind_sheet[f"Alasan {issue_kind.lower()}"].astype(str).isin(reasons)]
     else:
-        shown = kind_sheet.loc[kind_sheet["Alasan retur"].astype(str).isin(reasons) | kind_sheet["Alasan batal"].astype(str).isin(reasons)]
+        shown = kind_sheet.loc[kind_sheet["Status retur"].astype(str).isin(reasons) | kind_sheet["Alasan batal"].astype(str).isin(reasons)]
     keep = ISSUE_COLUMNS.get(issue_kind, list(shown.columns))
     shown = shown.loc[:, [c for c in keep if c in shown.columns]].copy()
     shown = _one_row_per_sku(shown, issue_kind)
@@ -5201,14 +5213,14 @@ def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None
         "Qty batal": "Jumlah pada baris berstatus batal",
         "Invoice batal": "No. Pesanan unik berstatus batal",
         "Nominal batal": "Harga Setelah Diskon × Jumlah pada baris batal",
-        "Alasan retur": "Dari kolom Status Pembatalan/Pengembalian",
+        "Status retur": "Status pengajuan retur dari kolom Status Pembatalan/Pengembalian (laporan Shopee tidak memuat alasan retur)",
         "Alasan batal": "Dari kolom Alasan Pembatalan",
     }
     # Baris Total dipindah ke atas; data tampil 5 SKU lalu Muat lebih banyak (+10).
     is_total = shown_sheet["SKU"].astype(str).eq("Total")
     total_part, body = shown_sheet.loc[is_total], shown_sheet.loc[~is_total].reset_index(drop=True)
     export = pd.concat([total_part, body], ignore_index=True)
-    reason_cols = [c for c in ("Alasan retur", "Alasan batal") if c in body.columns]
+    reason_cols = [c for c in ("Status retur", "Alasan batal") if c in body.columns]
 
     def _render_issue(lo: int, hi: int) -> None:
         part = body.iloc[lo:hi].reset_index(drop=True)
@@ -5244,19 +5256,26 @@ def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None
             if column not in frame.columns or frame.empty:
                 return float("nan")
             values = perf_number(frame[column])
-            return float(values.mean() if mean else values.sum())
+            if not mean:
+                return float(values.sum())
+            weight_col = "visitors" if column == "conversion_rate" else "orders"
+            weights = perf_number(frame[weight_col]) if weight_col in frame.columns else None
+            if weights is not None and float(weights.where(values.notna()).sum()) > 0:
+                return float((values * weights).sum() / weights.where(values.notna()).sum())
+            return float(values.mean())
 
         def delta(a: float, b: float) -> str | None:
             if not np.isfinite(a) or not np.isfinite(b) or b == 0:
                 return None
             pct = (a - b) / b * 100
-            return f"{'▲' if pct >= 0 else '▼'} {format_number(abs(pct), 1)}% vs periode sebelumnya"
+            color = "#1d4ed8" if pct >= 0 else "#dc2626"
+            return f"<span style='color:{color};font-weight:700'>{'▲' if pct >= 0 else '▼'} {format_number(abs(pct), 1)}%</span> vs periode sebelumnya"
 
         st.markdown("<div class='section-title'>Performa toko</div>", unsafe_allow_html=True)
         cols = st.columns(4)
         for column, (label, key, is_mean, pct) in zip(
             cols,
-            (("Pengunjung", "visitors", False, False), ("Konversi", "conversion_rate", True, True), ("Pembeli baru", "new_buyers", False, False), ("Pembelian berulang", "repeat_rate", True, True)),
+            (("Pengunjung", "visitors", False, False), ("Konversi (tertimbang)", "conversion_rate", True, True), ("Pembeli baru", "new_buyers", False, False), ("Pembelian berulang", "repeat_rate", True, True)),
         ):
             value = total(now, key, is_mean)
             text = "-" if not np.isfinite(value) else (f"{format_number(value, 2)}%" if pct else format_number(value, 0))
@@ -6814,7 +6833,7 @@ def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
         "Referensi SKU": 260 if roomy else 220,
         "Item": 780 if roomy else 640,
         "Alasan batal": 460,
-        "Alasan retur": 280,
+        "Status retur": 280,
         "Alasan pembatalan": 520,
         "Status batal": 180,
         "Status pesanan": 220,

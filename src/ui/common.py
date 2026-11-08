@@ -722,3 +722,71 @@ def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: in
     info.markdown(_page_caption(lo_row, hi_row, total, noun, page, pages), unsafe_allow_html=True)
     _nav_buttons(nav, page, pages, key=key)
     return min(max(int(st.session_state.get(f"{key}-n", page)), 1), pages)
+
+
+def _axis_values(fig, axis_key: str) -> list:
+    """Nilai data semua trace yang memakai sumbu itu (mis. "xaxis", "yaxis2")."""
+    dim = axis_key[0]
+    ref = dim + axis_key[5:]
+    out = []
+    for trace in fig.data:
+        try:
+            values = getattr(trace, dim, None)
+            own = getattr(trace, f"{dim}axis", None) or dim
+        except Exception:
+            continue
+        if values is None or own != ref:
+            continue
+        try:
+            out.extend(list(values)[:500])
+        except TypeError:
+            continue
+    return out
+
+
+def _is_dateish(value) -> bool:
+    import re
+    from datetime import datetime
+
+    if isinstance(value, (datetime, date, np.datetime64, pd.Timestamp)):
+        return True
+    return isinstance(value, str) and bool(re.match(r"^\d{4}-\d{2}-\d{2}", value))
+
+
+def localize_figure(fig):
+    """Grafik gaya Indonesia: pemisah 1.234,5; tanggal dd/mm (bukan "Oct 4"); judul kosong tidak tampil "undefined"."""
+    try:
+        fig.update_layout(separators=",.")
+        if fig.layout.title.text is None:
+            fig.update_layout(title_text="")
+        layout = fig.layout.to_plotly_json()
+        keys = {k for k in layout if k.startswith(("xaxis", "yaxis"))} | {"xaxis", "yaxis"}
+        for key in keys:
+            axis = getattr(fig.layout, key, None)
+            if axis is None or axis.tickformat or axis.type in ("category", "multicategory", "log"):
+                continue
+            values = [v for v in _axis_values(fig, key) if v is not None]
+            if not values:
+                continue
+            if axis.type == "date" or _is_dateish(values[0]):
+                stamps = pd.to_datetime(pd.Series(values), errors="coerce").dropna()
+                span = (stamps.max() - stamps.min()).days if not stamps.empty else 0
+                axis.update(tickformat="%d/%m" if span <= 400 else "%m/%Y", hoverformat="%d/%m/%Y")
+            elif all(isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, bool) for v in values[:50]):
+                axis.update(tickformat=",~f")
+    except Exception:
+        pass
+    return fig
+
+
+def install_plotly_locale() -> None:
+    """Semua st.plotly_chart di aplikasi memakai localize_figure."""
+    if getattr(st.plotly_chart, "_localized", False):
+        return
+    original = st.plotly_chart
+
+    def plotly_chart(figure_or_data, *args, **kwargs):
+        return original(localize_figure(figure_or_data) if hasattr(figure_or_data, "update_layout") else figure_or_data, *args, **kwargs)
+
+    plotly_chart._localized = True
+    st.plotly_chart = plotly_chart

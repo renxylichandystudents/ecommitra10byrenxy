@@ -14,7 +14,7 @@ from src.ui.common import card, download_excel, explain, fmt_idr, fmt_idr_short,
 from src.utils.format import show_table
 
 UP, DOWN = "#1d4ed8", "#dc2626"
-COLORS = {"Instant": "#ee4d2d", "Instant Prioritas": "#b91c1c", "Same Day": "#f59e0b"}
+COLORS = {"Instant": "#ee4d2d", "Instant Prioritas": "#1b3da6", "Same Day": "#f59e0b"}
 
 
 def _orders(source_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -74,7 +74,7 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
     card(row[1], "Sales bersih instan", fmt_idr(inst["sales_bersih"]), hint=f"{fmt_pct(share_sales, 2)} dari sales bersih toko · {fmt_num(inst['qty_bersih'])} unit")
     card(row[2], "Tingkat batal instan", fmt_pct(inst["tingkat_batal"], 1),
          hint=f"lainnya {fmt_pct(other['tingkat_batal'], 1)} · {_vs(inst['tingkat_batal'], other['tingkat_batal'], lower_better=True)}<br>"
-              f"{fmt_num(inst['batal'])} batal · {fmt_num(inst['belum_bayar'])} belum bayar")
+              f"{fmt_num(inst['batal'])} batal, {fmt_num(inst['belum_bayar'])} di antaranya belum dibayar")
     card(row[3], "AOV instan", fmt_idr(inst["aov"]), hint=f"lainnya {fmt_idr(other['aov'])} · sales bersih ÷ invoice bersih")
     row = st.columns(4)
     card(row[0], "Median waktu proses", f"{fmt_num(inst['proses_median'], 1)} jam",
@@ -109,11 +109,12 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
             if not part.empty:
                 fig.add_box(y=part, name=name, marker_color=COLORS[name], boxmean=True)
         fig.add_hline(y=I.SLOW_HOURS, line_dash="dash", line_color=DOWN, annotation_text=f"{fmt_num(I.SLOW_HOURS)} jam")
-        fig.update_layout(title="Waktu proses (bayar → pengiriman diatur)", yaxis_title="Jam (dipotong 48)", showlegend=False)
+        fig.update_layout(title="Waktu proses (bayar → pengiriman diatur)", yaxis_title="Jam (maks. 48 jam)", showlegend=False)
         _plot(fig, "instant-proc", 340)
 
     st.markdown("**Per layanan & kurir** · semua opsi pengiriman sebagai pembanding")
     services = I.service_table(orders)
+    services["AOV"] = services["AOV"].fillna(0.0)
     total = pd.DataFrame([{"Layanan": "Total", "Kurir": "", "Invoice": services["Invoice"].sum(), "Invoice batal": services["Invoice batal"].sum(),
                            "% batal": every["tingkat_batal"], "Invoice retur": services["Invoice retur"].sum(), "QTY bersih": services["QTY bersih"].sum(),
                            "Sales bersih": services["Sales bersih"].sum(), "AOV": every["aov"], "Kontribusi sales (%)": 100.0, "Median proses (jam)": every["proses_median"]}])
@@ -132,7 +133,7 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
         else:
             part = reasons.head(8).iloc[::-1]
             fig = go.Figure(go.Bar(x=part["Invoice"], y=part["Alasan batal"].str.slice(0, 48), orientation="h", marker_color=DOWN, text=part["Invoice"], textposition="outside"))
-            fig.update_layout(title=None)
+            fig.update_layout(title_text="", xaxis=dict(dtick=1, title="Pesanan"))
             _plot(fig, "instant-reason", 300)
     with c2:
         st.markdown("**Kota tujuan pesanan instan**")
@@ -157,11 +158,11 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
         notes.append(f"{fmt_num(seller_fault)} pesanan instan batal karena sisi penjual (mis. pengiriman tidak diatur tepat waktu) — ini bisa dicegah.")
     if not cities.empty:
         top = cities.iloc[0]
-        notes.append(f"Tujuan instan terbanyak {top['Kota/Kabupaten'].title()} ({fmt_num(top['Invoice instan'])} invoice): fokus stok produk instan di toko pengirim area ini.")
+        notes.append(f"Tujuan instan terbanyak {top['Kota/Kabupaten']} ({fmt_num(top['Invoice instan'])} invoice): fokus stok produk instan di toko pengirim area ini.")
     st.markdown("\n".join(f"- {n}" for n in notes))
     explain([
         ("Instan", "Opsi Pengiriman berisi Instant, Instant Prioritas, atau Same Day"),
-        ("Sales bersih", "Total Pembayaran pesanan tidak batal − Harga Setelah Diskon × Returned quantity (sama dengan tab Data)"),
+        ("Sales bersih", "Total Pembayaran pesanan tidak batal − Harga Setelah Diskon × jumlah retur (sama dengan tab Data)"),
         ("Waktu proses", "Waktu Pengiriman Diatur − Waktu Pembayaran Dilakukan, hanya pesanan tidak batal"),
         ("Sampai selesai", "Waktu Pesanan Selesai − Waktu Pesanan Dibuat"),
     ])

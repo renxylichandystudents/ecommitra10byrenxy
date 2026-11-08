@@ -295,7 +295,7 @@ def _locked_view(cur: dict, *, units, members, products, contribution, projectio
     if goal > 0:
         st.markdown(_progress_bar(mtd, projection - mtd, extra, goal), unsafe_allow_html=True)
     k = st.columns(4)
-    card(k[0], "Target", fmt_idr(goal), hint=f"aktual {fmt_idr(mtd)} · <b style='color:{_tone(mtd >= goal)}'>{fmt_pct(mtd / goal * 100 if goal else 0, 1)}</b> tercapai")
+    card(k[0], "Target", fmt_idr(goal), hint=f"aktual sales produk {fmt_idr(mtd)} · <b style='color:{_tone(mtd >= goal)}'>{fmt_pct(mtd / goal * 100 if goal else 0, 1)}</b> tercapai")
     card(k[1], "Proyeksi dengan campaign", fmt_idr(final), hint=f"hitungan ulang data {fmt_date(today)} · <b style='color:{_tone(final >= goal)}'>"
                                                                f"{fmt_pct(final / goal * 100 if goal else 0, 1)}</b> target")
     card(k[2], "Budget campaign", fmt_idr(float(s.get("budget") or 0)), hint=f"≈ {fmt_idr(budget_daily)}/hari · target ROAS {fmt_num(roas, 1)}")
@@ -503,7 +503,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     st.markdown(_progress_bar(mtd, rest_pred, eff["omzet_tambahan"], target), unsafe_allow_html=True)
     k = st.columns(4)
     card(k[0], f"Target {month_label(periode)}", fmt_idr(target),
-         hint=f"aktual {fmt_idr(mtd)} · <b style='color:{_tone(False)}'>{fmt_pct(mtd / target * 100, 1)}</b> tercapai")
+         hint=f"aktual sales produk {fmt_idr(mtd)} · <b style='color:{_tone(mtd >= target)}'>{fmt_pct(mtd / target * 100, 1)}</b> tercapai")
     card(k[1], "Proyeksi tanpa perubahan", fmt_idr(projection),
          hint=f"aktual + prediksi {days_left} hari · <b style='color:{_tone(projection >= target)}'>{fmt_pct(projection / target * 100, 1)}</b> target"
               + (f" · kurang {fmt_idr(gap)}" if gap > 0 else ""))
