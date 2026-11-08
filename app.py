@@ -8042,11 +8042,9 @@ with PAGE_ROOT.container(key="page-root"):
             safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, **_ss_params(params, applied_service))
 
     elif sheet == "Prediksi":
-        # Tabel "Pilih SKU" dihapus: isinya sudah ada di tabel Prediksi semua produk di bawah (centang Grafik untuk rincian SKU).
+        # Ringkasan penjualan periode & status Kecualikan batal & retur langsung di atas (tidak dilipat).
+        show_exclude_and_cards()
         show_pred_vs_actual(FEATURES, orders=orders, table=enriched)
-        # Kartu penjualan & saklar batal/retur sama dengan Ringkasan: di sini dilipat agar tidak dobel.
-        with st.expander("Ringkasan penjualan periode & saklar Kecualikan batal & retur (sama dengan menu Ringkasan)"):
-            show_exclude_and_cards()
         st.subheader("Prediksi semua produk")
         if enriched is None or enriched.empty:
             st.write("Tidak ada item untuk ditampilkan.")

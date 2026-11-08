@@ -12,7 +12,7 @@ import streamlit as st
 
 from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date, fmt_date_short
-from src.core.pred_actual import STATUS_ORDER, daily_comparison, lost_sales_from_stock
+from src.core.pred_actual import daily_comparison, lost_sales_from_stock
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
 from src.ui.common import batched_view, card, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
@@ -372,8 +372,30 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     )
     names = table.drop_duplicates("sku").set_index(table["sku"].astype(str).drop_duplicates())["product_name"].to_dict() if table is not None and not table.empty else {}
     view = rows.assign(Produk=rows["sku"].map(names).fillna(""))
-    view["_order"] = view["status"].map({s: i for i, s in enumerate(reversed(STATUS_ORDER))})
-    view = view.sort_values(["_order", "pred_sales"], ascending=[True, False]).drop(columns="_order")
+    # Prioritas dampak: selisih omzet aktual vs prediksi terbesar (meleset atau melebihi) lebih dulu.
+    view["Selisih omzet"] = view["aktual_sales"] - view["pred_sales"]
+    view = view.sort_values("Selisih omzet", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
     view["pred_qty"] = pd.to_numeric(view["pred_qty"], errors="coerce").round(1)
     view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY (laju harian)", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi omzet", "aktual_sales": "Aktual omzet", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab"})
-    show_table(view[["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "% capaian", "Status", "Penyebab"]], max_height=420)
+    columns = ["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "Selisih omzet", "% capaian", "Status", "Penyebab"]
+    view = view[columns]
+    total = {c: "" for c in columns}
+    total["SKU"] = "Total"
+    total["Produk"] = f"{fmt_num(len(view))} SKU"
+    for c in ("Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "Selisih omzet"):
+        total[c] = float(pd.to_numeric(view[c], errors="coerce").fillna(0).sum())
+    total["% capaian"] = total["Aktual omzet"] / total["Prediksi omzet"] * 100 if total["Prediksi omzet"] else None
+    total_row = pd.DataFrame([total], columns=columns)
+    st.markdown("<div class='field-hint'>Urutan: SKU dengan selisih omzet aktual vs prediksi terbesar (paling berdampak) lebih dulu. Baris Total di atas.</div>", unsafe_allow_html=True)
+    batched_view(
+        len(view),
+        key="pva-table",
+        render=lambda lo, hi: show_table(
+            pd.concat([total_row, view.iloc[lo:hi]], ignore_index=True),
+            bold_label="Total",
+            kinds={"Prediksi omzet": "money", "Aktual omzet": "money", "Selisih omzet": "money", "% capaian": "pct"},
+            max_height=10_000,
+        ),
+        noun="SKU",
+        download=lambda: download_excel(pd.concat([total_row, view], ignore_index=True), f"prediksi_vs_aktual_{last:%Y%m%d}.xlsx", key="xl-pva"),
+    )
