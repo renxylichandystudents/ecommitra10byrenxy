@@ -4530,21 +4530,50 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     else:
         buyers = int((unpaid["No"].astype(str) != "").sum())
         st.caption(f"{format_number(buyers)} akun · {format_number(unpaid['No. Pesanan'].nunique())} pesanan belum dibayar. Pembeli yang punya pesanan terbayar untuk SKU yang sama pada periode ini tidak dimasukkan.")
-        unpaid_view = append_total_row(unpaid, "Nama akun pembeli", ["QTY", "Sales value"])
+        # Prioritas: akun dengan nilai pesanan belum dibayar terbesar (dampak ke sales) lebih dulu.
+        work = unpaid.copy()
         for column in ("QTY", "Sales value"):
-            unpaid_view[column] = pd.to_numeric(unpaid_view[column], errors="coerce")
-        group_no = unpaid_view["No"].astype(str).replace("", np.nan).ffill().fillna("0")
-        shade = group_no.map(lambda value: int(value) % 2 == 0 if str(value).isdigit() else False)
-        styled = style_frame(unpaid_view, kinds={"QTY": "count", "Sales value": "money"}).apply(
-            lambda row: [
-                "font-weight:700" if str(row["Nama akun pembeli"]) == "Total" else ("background-color:#f8fafc" if shade.iloc[row.name] else "")
+            work[column] = pd.to_numeric(work[column], errors="coerce")
+        work["_grp"] = work["No"].astype(str).replace("", np.nan).ffill()
+        impact = work.groupby("_grp")["Sales value"].sum().sort_values(ascending=False, kind="mergesort")
+        order = {grp: rank for rank, grp in enumerate(impact.index)}
+        work["_rank"] = work["_grp"].map(order)
+        work = work.sort_values(["_rank"], kind="mergesort").reset_index(drop=True)
+        work["No"] = np.where(work["No"].astype(str) != "", (work["_rank"] + 1).astype(str), "")
+        total_row = append_total_row(work.drop(columns=["_grp", "_rank"]), "Nama akun pembeli", ["QTY", "Sales value"]).tail(1).copy()
+        total_row["Nama akun pembeli"] = f"Total · {format_number(len(impact))} akun"
+        total_row["No"] = ""
+        if "No. Pesanan" in total_row.columns:
+            total_row["No. Pesanan"] = f"{format_number(work['No. Pesanan'].nunique())} pesanan"
+        explain(
+            [
+                ("Urutan", "akun dengan nilai pesanan belum dibayar (sales value) terbesar lebih dulu, jadi yang paling berdampak ke sales ada di atas"),
+                ("Baris Total", "di paling atas, menjumlahkan semua akun pada periode ini"),
             ]
-            * len(row),
-            axis=1,
         )
-        unpaid_row, unpaid_cfg = wrap_layout(unpaid_view)
-        st.dataframe(styled, height=table_height(len(unpaid_view), 720, unpaid_row), row_height=unpaid_row, column_config=unpaid_cfg or None, hide_index=True, use_container_width=True)
-        offer_excel(unpaid_view, "pembeli_belum_bayar.xlsx")
+
+        def _render_unpaid(lo: int, hi: int) -> None:
+            part = work.loc[work["_rank"].between(lo, hi - 1)]
+            view = pd.concat([total_row, part.drop(columns=["_grp", "_rank"])], ignore_index=True)
+            shade = pd.concat([pd.Series([False]), (part["_rank"] % 2 == 1).reset_index(drop=True)], ignore_index=True)
+            styled = style_frame(view, kinds={"QTY": "count", "Sales value": "money"}).apply(
+                lambda row: [
+                    "font-weight:700;background-color:#f1f5f9" if str(row["Nama akun pembeli"]).startswith("Total") else ("background-color:#f8fafc" if shade.iloc[row.name] else "")
+                ]
+                * len(row),
+                axis=1,
+            )
+            view_row, view_cfg = wrap_layout(view)
+            st.dataframe(styled, height=table_height(len(view), 720, view_row), row_height=view_row, column_config=view_cfg or None, hide_index=True, use_container_width=True)
+
+        export = pd.concat([total_row, work.drop(columns=["_grp", "_rank"])], ignore_index=True)
+        batched_view(
+            int(len(impact)),
+            key="unpaid-buyers",
+            render=_render_unpaid,
+            noun="akun",
+            download=lambda: download_excel(export, "pembeli_belum_bayar.xlsx", key="xl-unpaid"),
+        )
     show_sku_issue_section(sku_sheet, selected_label)
 
 
