@@ -143,12 +143,11 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
     stamps = pd.to_datetime(orders["order_time"], errors="coerce").dropna()
     lo, hi = stamps.min().date(), stamps.max().date()
     m_lo, m_hi = last_full_month(hi)
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        start, end = date_range_picker(key="margin-cal", lo=lo, hi=hi, default=(max(m_lo, lo), min(m_hi, hi)), label="Periode laporan")
+    # Kalender selebar halaman (seperti menu lain) agar dua bulan tampil berdampingan, tidak bertumpuk ke bawah.
+    start, end = date_range_picker(key="margin-cal", lo=lo, hi=hi, default=(max(m_lo, lo), min(m_hi, hi)), label="Periode laporan")
     active, active_at = st.session_state.get("_active_skus") or (set(), "")
-    c2.markdown(
-        f"<div class='field-hint' style='margin-top:1.9rem'>{status_line(md)} · tarif margin per SKU; volume dari transaksi periode terpilih. "
+    st.markdown(
+        f"<div class='field-hint'>{status_line(md)} · tarif margin per SKU; volume dari transaksi periode terpilih. "
         f"Perbarui di Kalkulator biaya › Parameter biaya.</div>",
         unsafe_allow_html=True,
     )
