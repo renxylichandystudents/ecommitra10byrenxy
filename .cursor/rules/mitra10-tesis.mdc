@@ -22,3 +22,4 @@ Jangan mengubah rumus prediksi, safety stock, atau data yang sudah dikunci kecua
 - Baca `docs/STATUS.md` untuk kondisi terbaru, lalu perbarui file itu setiap kali menyelesaikan perubahan berarti.
 - Push ke `main` menarik kode ke Streamlit Community Cloud; kode baru aktif setelah app di-Reboot. Jalankan `python -m pytest -q` sebelum push.
 - Setiap perubahan yang selesai dan tesnya lolos langsung di-commit dan di-push ke `main` tanpa menunggu konfirmasi, agar app di Cloud selalu memakai versi terbaru. Jangan ikutkan file cadangan lokal (mis. `_cadangan_*.patch`).
+- Pengguna memeriksa tampilan di localhost:8501. Setelah selesai mengubah kode, restart server lokal (`streamlit run app.py --server.fileWatcherType auto`) agar halaman langsung memakai kode baru tanpa galat "tidak punya akses".
