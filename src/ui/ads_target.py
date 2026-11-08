@@ -396,6 +396,10 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         with c1:
             target = float(input_rupiah(f"Target sales {month_name}", int(goals.target_sales), key=key_target,
                                         help="Bawaan dari Upload data › Target sales bulanan. Simpan di sini untuk mengganti target bulan ini."))
+        pending = st.session_state.pop(f"{key_lift}-values", None)
+        if pending:
+            _set_value(key_roas, pending[0], money=False)
+            _set_value(key_budget, pending[1])
         if key_roas not in st.session_state or float(st.session_state[key_roas]) > A.MAX_SHOPEE_ROAS:
             st.session_state[key_roas] = default_roas
         roas = float(c2.number_input("Target ROAS", min_value=1.0, max_value=A.MAX_SHOPEE_ROAS, step=0.5, key=key_roas,
@@ -408,8 +412,10 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         if st.session_state.get(key_lift) not in LIFTS:
             st.session_state[key_lift] = A.DEMAND_LIFT
         lift = float(c4.selectbox("Daya dorong iklan maks.", LIFTS, format_func=LIFT_LABELS.get, key=key_lift,
+                                  on_change=st.session_state.__setitem__, args=(f"{key_lift}-changed", True),
                                   help="Asumsi berapa besar iklan bisa menambah omzet sebuah produk dibanding prediksi omzetnya tanpa iklan. "
-                                       "Konservatif +50% = bawaan. Makin besar, makin banyak budget yang dianggap masih menghasilkan omzet."))
+                                       "Konservatif +50% = bawaan. Makin besar, makin banyak budget yang dianggap masih menghasilkan omzet. "
+                                       "Saat diganti, target ROAS & budget otomatis diisi rekomendasi untuk asumsi ini."))
         budget_daily = budget / period_days
         st.markdown(
             f"<div class='field-hint'>Budget ≈ <b>{fmt_idr(budget_daily)}/hari</b> · saat ini {fmt_num(len(running))} iklan produk tunggal & grup berjalan "
@@ -445,6 +451,12 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                         alt = {**alt, "lift": other}
                         break
                     alt = None
+
+    if st.session_state.pop(f"{key_lift}-changed", False) and rec is not None:
+        values = (rec["roas"], math.ceil(rec["budget"] / run_days * period_days / 1_000_000) * 1_000_000)
+        if abs(values[0] - roas) >= 0.01 or abs(values[1] - budget) > 1:
+            st.session_state[f"{key_lift}-values"] = values
+            st.rerun()
 
     with st.spinner("Menyusun pemilihan produk & budget per iklan..."):
         units, plan, selection = A.build_plan(base_units, members, products, contribution, gap_daily=gap_daily, target_roas=roas, budget_daily=budget_daily, lift=lift)

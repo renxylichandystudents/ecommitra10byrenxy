@@ -188,6 +188,7 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Campaign tersimpan menyimpan `rekomendasi` (dipakai/tidak), `jadwal_minggu`, `iklan_minggu`, `baseline` (total laporan iklan bulan berjalan saat disimpan), `daya_dorong`.
 - **Evaluasi pelaksanaan** di campaign tersimpan: laporan iklan terbaru − baseline (laporan bulanan kumulatif) → biaya & omzet harian per iklan sejak disimpan; "dijalankan" = biaya 60–140% budget usulan minggu berjalan (dijeda: ≈ 0). Iklan tunggal baru (`pisah:`/`baru:`) dicocokkan ke `produk:<kode>`. Bila laporan belum ada hari baru: minta unggah laporan esok hari.
 - Nama campaign ikut setelan terbaru selama belum diketik manual.
+- Mengganti **Daya dorong iklan maks.** langsung mengisi target ROAS & budget dengan rekomendasi untuk asumsi itu (lewat flag + rerun, karena nilai widget tidak boleh diubah sesudah dibuat).
 
 ## Langkah berikutnya
 
