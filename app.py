@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, page_navigator, month_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -2704,14 +2704,13 @@ def render_header() -> None:
 
 
 def _checked_library_keys() -> list[str]:
-    keys = []
-    for item in list_months():
-        key = item["key"]
-        if not st.session_state.get(f"library-year-on-{year_of(key)}", False):
-            continue
-        if st.session_state.get(f"library-month-{key}", False):
-            keys.append(key)
-    return keys
+    """Bulan tersimpan yang tersentuh rentang tanggal "Rentang data latih" (bulan tanpa tanggal selalu ikut)."""
+    keys = sorted(item["key"] for item in list_months())
+    saved = st.session_state.get("_keep::library-cal-range")
+    if not (isinstance(saved, tuple) and len(saved) == 2):
+        return keys
+    touched = set(pd.period_range(saved[0], saved[1], freq="M").astype(str))
+    return [k for k in keys if not k[:4].isdigit() or k in touched]
 
 
 def _orders_from_library(keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, str]:
@@ -2766,10 +2765,6 @@ def show_prediction_inputs() -> None:
                 if year_name not in years:
                     years.append(year_name)
             years = sorted(years)
-            if imported_keys:
-                for key in imported_keys:
-                    st.session_state[f"library-year-on-{year_of(key)}"] = True
-                    st.session_state[f"library-month-{key}"] = True
             today_ts = pd.Timestamp(date.today())
 
             def _library_label(key: str) -> str:
@@ -2781,15 +2776,22 @@ def show_prediction_inputs() -> None:
                 return label
 
             library_keys = sorted(item["key"] for item in saved_months)
-            pick_col, _gap = st.columns([1.5, 2])
-            with pick_col:
-                selected_library = month_picker(
-                    library_keys,
-                    key="library",
-                    year_key=lambda year: f"library-year-on-{year}",
-                    month_key=lambda key: f"library-month-{key}",
-                    default=lambda key: True,
-                )
+            dated_keys = [k for k in library_keys if k[:4].isdigit()]
+            undated_keys = [k for k in library_keys if not k[:4].isdigit()]
+            if dated_keys:
+                lib_lo = pd.Period(dated_keys[0], freq="M").start_time.date()
+                lib_hi = min(pd.Period(dated_keys[-1], freq="M").end_time.date(), max(date.today(), lib_lo))
+                if imported_keys:
+                    # Data baru diunggah: pakai semua bulan.
+                    st.session_state["_keep::library-cal-range"] = (lib_lo, lib_hi)
+                pick_col, _gap = st.columns([1.3, 2])
+                with pick_col:
+                    lib_start, lib_end = date_range_picker(key="library-cal", lo=lib_lo, hi=lib_hi, default=(lib_lo, lib_hi), label="Rentang data latih")
+                touched = set(pd.period_range(lib_start, lib_end, freq="M").astype(str))
+                selected_library = [k for k in dated_keys if k in touched] + undated_keys
+                st.caption("Bulan yang tersentuh rentang tanggal dipakai utuh sebagai data latih: " + ", ".join(_library_label(k) for k in selected_library) + ".")
+            else:
+                selected_library = list(undated_keys)
             current_key = f"{today_ts.year:04d}-{today_ts.month:02d}"
             if current_key in selected_library:
                 st.caption(f"{_library_label(current_key)}: bulan berjalan, data s.d. hari ini.")
@@ -2801,7 +2803,7 @@ def show_prediction_inputs() -> None:
                 source_raw = pd.DataFrame()
                 source_key = "library:none"
                 st.session_state["active-library-keys"] = tuple()
-                st.warning("Centang minimal satu tahun dan satu bulan.")
+                st.warning("Pilih rentang tanggal yang memuat data tersimpan.")
         else:
             st.caption("Belum ada data tersimpan. Unggah laporan di atas.")
     if (
@@ -4321,8 +4323,9 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     st.markdown("<div class='section-title'>Periode data</div>", unsafe_allow_html=True)
     period_view, range_text, data_months = period_filter(ledger, prefix="data")
     st.session_state["data_months"] = list(data_months)
-    st.session_state["data_start"] = st.session_state.get("data-start")
-    st.session_state["data_end"] = st.session_state.get("data-end")
+    _data_range = st.session_state.get("_keep::data-cal-range") or (None, None)
+    st.session_state["data-start"], st.session_state["data-end"] = _data_range
+    st.session_state["data_start"], st.session_state["data_end"] = _data_range
     selected_label = range_text or "kosong"
     show_store_overview(range_text, period_view)
     status_names = sorted(

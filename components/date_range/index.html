@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  /* Filter tanggal gaya Shopee Seller Centre: satu kolom tanggal; klik → pilihan cepat + kalender dua bulan. */
+  :root { color-scheme: light; }
+  html, body { margin: 0; padding: 0; background: transparent; font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif; color: #0f172a; }
+  #root { padding: 1px 2px 4px; }
+  .lbl { font-size: .875rem; font-weight: 600; color: #31333f; margin: 0 0 6px; }
+  .field { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; height: 40px; padding: 0 12px;
+    border: 1px solid #e2e8f0; border-radius: 10px; background: #f0f2f6; cursor: pointer; font-size: .92rem; font-family: inherit; color: #0f172a; text-align: left; }
+  .field:hover, .field.open { border-color: #ee4d2d; background: #fff; }
+  .field svg { width: 17px; height: 17px; color: #64748b; flex: 0 0 auto; }
+  .field .txt { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .field .chev { color: #64748b; font-size: .8rem; }
+  .panel { display: flex; margin-top: 6px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; box-shadow: 0 12px 28px rgba(15, 23, 42, .10); overflow: hidden; width: max-content; max-width: 100%; }
+  .presets { list-style: none; margin: 0; padding: 8px 0; border-right: 1px solid #eef2f7; min-width: 150px; }
+  .presets li { padding: 8px 16px; font-size: .85rem; cursor: pointer; white-space: nowrap; color: #334155; }
+  .presets li:hover { background: #fff3ef; color: #ee4d2d; }
+  .presets li.on { color: #ee4d2d; font-weight: 700; }
+  .presets li.off { color: #cbd5e1; cursor: default; background: none; }
+  .cals { display: flex; gap: 18px; padding: 10px 14px 12px; flex-wrap: wrap; }
+  .cal { width: 238px; }
+  .head { display: flex; align-items: center; justify-content: space-between; height: 30px; font-weight: 700; font-size: .9rem; }
+  .nav { display: flex; gap: 2px; min-width: 44px; }
+  .nav button { border: none; background: none; color: #64748b; cursor: pointer; font-size: 1rem; padding: 2px 5px; border-radius: 6px; font-family: inherit; }
+  .nav button:hover:not(:disabled) { background: #f1f5f9; color: #ee4d2d; }
+  .nav button:disabled { color: #e2e8f0; cursor: default; }
+  .grid { display: grid; grid-template-columns: repeat(7, 34px); row-gap: 2px; }
+  .dow { font-size: .75rem; color: #64748b; text-align: center; padding: 6px 0 4px; font-weight: 600; }
+  .d { height: 30px; display: flex; align-items: center; justify-content: center; font-size: .82rem; cursor: pointer; color: #0f172a; }
+  .d span { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+  .d:hover:not(.off) span { border: 1px solid #ee4d2d; }
+  .d.off { color: #cbd5e1; cursor: default; }
+  .d.in { background: #fff3ef; }
+  .d.edge span { background: #ee4d2d; color: #fff; font-weight: 700; }
+  .d.today:not(.edge) span { color: #ee4d2d; font-weight: 700; }
+  .d.empty { cursor: default; }
+  .hint { font-size: .75rem; color: #64748b; padding: 0 14px 10px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  const MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+  const SHORT = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+  const DOW = ["M", "S", "S", "R", "K", "J", "S"];
+  const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M16 3v3M8 3v3M3 10h18"/></svg>';
+  const state = { args: null, open: false, view: null, pick: null, hover: null, start: null, end: null, preset: "" };
+
+  function post(type, extra) { window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, extra || {}), "*"); }
+  function postHeight() {
+    const root = document.getElementById("root");
+    post("streamlit:setFrameHeight", { height: Math.ceil(root.getBoundingClientRect().height) + 4 });
+  }
+  // Tanggal sebagai bilangan hari (UTC) agar bebas zona waktu.
+  function parse(text) { const [y, m, d] = String(text).split("-").map(Number); return Date.UTC(y, m - 1, d) / 864e5; }
+  function iso(n) { return new Date(n * 864e5).toISOString().slice(0, 10); }
+  function parts(n) { const t = new Date(n * 864e5); return { y: t.getUTCFullYear(), m: t.getUTCMonth(), d: t.getUTCDate(), w: t.getUTCDay() }; }
+  function ymd(y, m, d) { return Date.UTC(y, m, d) / 864e5; }
+  function label(n) { const p = parts(n); return `${p.d} ${SHORT[p.m]} ${p.y}`; }
+  function rangeText(a, b) { return a === b ? label(a) : `${label(a)} – ${label(b)}`; }
+  function clamp(n) { return Math.min(Math.max(n, state.lo), state.hi); }
+
+  function presets() {
+    const a = state.anchor;
+    const p = parts(a);
+    const isToday = a === state.today;
+    const monthStart = ymd(p.y, p.m, 1);
+    const prevStart = ymd(p.y, p.m - 1, 1);
+    const prevEnd = ymd(p.y, p.m, 0);
+    return [
+      [isToday ? "Hari Ini" : `Hari terakhir data (${p.d} ${SHORT[p.m]})`, a, a],
+      ["Kemarin", a - 1, a - 1],
+      ["1 Minggu Terakhir", a - 6, a],
+      ["1 Bulan Terakhir", a - 29, a],
+      ["3 Bulan Terakhir", a - 89, a],
+      ["Bulan Ini", monthStart, a],
+      ["Bulan Lalu", prevStart, prevEnd],
+      ["Semua Data", state.lo, state.hi],
+    ];
+  }
+
+  function apply(a, b, preset) {
+    if (a > b) { const t = a; a = b; b = t; }
+    a = clamp(a); b = clamp(b);
+    state.start = a; state.end = b; state.preset = preset || ""; state.open = false; state.pick = null; state.hover = null;
+    post("streamlit:setComponentValue", { value: { start: iso(a), end: iso(b), preset: state.preset }, dataType: "json" });
+    render();
+  }
+
+  function calendar(y, m, left) {
+    const first = ymd(y, m, 1);
+    const days = parts(ymd(y, m + 1, 0)).d;
+    const lead = parts(first).w;
+    const minView = parts(state.lo), maxView = parts(state.hi);
+    const idx = y * 12 + m;
+    const canPrev = idx > minView.y * 12 + minView.m;
+    const canNext = idx < maxView.y * 12 + maxView.m;
+    const navL = left ? `<div class="nav"><button data-nav="-12" ${idx - 12 < minView.y * 12 + minView.m ? "disabled" : ""} title="Tahun sebelumnya">«</button><button data-nav="-1" ${canPrev ? "" : "disabled"} title="Bulan sebelumnya">‹</button></div>` : `<div class="nav"></div>`;
+    const navR = left ? `<div class="nav"></div>` : `<div class="nav"><button data-nav="1" ${canNext ? "" : "disabled"} title="Bulan berikutnya">›</button><button data-nav="12" ${idx + 12 > maxView.y * 12 + maxView.m ? "disabled" : ""} title="Tahun berikutnya">»</button></div>`;
+    let cells = DOW.map((d) => `<div class="dow">${d}</div>`).join("");
+    for (let i = 0; i < lead; i++) cells += `<div class="d empty"></div>`;
+    let a = state.start, b = state.end;
+    if (state.pick !== null) { a = state.pick; b = state.hover !== null ? state.hover : state.pick; if (a > b) { const t = a; a = b; b = t; } }
+    for (let d = 1; d <= days; d++) {
+      const n = ymd(y, m, d);
+      const off = n < state.lo || n > state.hi;
+      const cls = ["d", off ? "off" : "", n >= a && n <= b ? "in" : "", n === a || n === b ? "edge" : "", n === state.today ? "today" : ""].join(" ");
+      cells += `<div class="${cls}" ${off ? "" : `data-day="${n}"`}><span>${d}</span></div>`;
+    }
+    return `<div class="cal"><div class="head">${navL}<div>${MONTHS[m]} ${y}</div>${navR}</div><div class="grid">${cells}</div></div>`;
+  }
+
+  function render() {
+    const root = document.getElementById("root");
+    const args = state.args;
+    let html = args.label ? `<div class="lbl">${args.label}</div>` : "";
+    html += `<button class="field ${state.open ? "open" : ""}" data-toggle>${ICON}<span class="txt">${rangeText(state.start, state.end)}</span><span class="chev">${state.open ? "▲" : "▼"}</span></button>`;
+    if (state.open) {
+      const list = presets().map(([name, a, b], i) => {
+        const off = b < state.lo || a > state.hi;
+        const on = clamp(a) === state.start && clamp(b) === state.end;
+        return `<li class="${off ? "off" : ""} ${on ? "on" : ""}" ${off ? "" : `data-preset="${i}"`}>${name}</li>`;
+      }).join("");
+      const v = state.view;
+      const right = { y: v.m === 11 ? v.y + 1 : v.y, m: (v.m + 1) % 12 };
+      html += `<div class="panel"><ul class="presets">${list}</ul><div><div class="cals">${calendar(v.y, v.m, true)}${calendar(right.y, right.m, false)}</div>` +
+        `<div class="hint">${state.pick !== null ? "Klik tanggal akhir." : `Klik tanggal awal lalu tanggal akhir. Data tersedia ${label(state.lo)} – ${label(state.hi)}.`}</div></div></div>`;
+    }
+    root.innerHTML = html;
+    root.querySelector("[data-toggle]").addEventListener("click", () => { state.open = !state.open; state.pick = null; resetView(); render(); });
+    root.querySelectorAll("[data-preset]").forEach((li) => li.addEventListener("click", () => {
+      const [name, a, b] = presets()[Number(li.getAttribute("data-preset"))];
+      apply(a, b, name);
+    }));
+    root.querySelectorAll("[data-nav]").forEach((btn) => btn.addEventListener("click", () => {
+      const step = Number(btn.getAttribute("data-nav"));
+      const idx = state.view.y * 12 + state.view.m + step;
+      state.view = { y: Math.floor(idx / 12), m: idx % 12 };
+      render();
+    }));
+    root.querySelectorAll("[data-day]").forEach((cell) => {
+      const n = Number(cell.getAttribute("data-day"));
+      cell.addEventListener("click", () => {
+        if (state.pick === null) { state.pick = n; state.hover = n; render(); }
+        else apply(state.pick, n, "");
+      });
+      cell.addEventListener("mouseenter", () => {
+        if (state.pick !== null && state.hover !== n) { state.hover = n; render(); }
+      });
+    });
+    postHeight();
+  }
+
+  function resetView() {
+    // Bulan kanan = bulan tanggal akhir; bulan kiri = bulan sebelumnya.
+    const p = parts(state.end);
+    const idx = p.y * 12 + p.m - 1;
+    state.view = { y: Math.floor(idx / 12), m: ((idx % 12) + 12) % 12 };
+  }
+
+  window.addEventListener("message", (event) => {
+    const data = event.data || {};
+    if (data.type !== "streamlit:render") return;
+    const args = data.args || {};
+    state.args = args;
+    state.lo = parse(args.lo); state.hi = parse(args.hi);
+    const now = new Date();
+    state.today = ymd(now.getFullYear(), now.getMonth(), now.getDate());
+    state.anchor = Math.min(state.today, state.hi);
+    if (!state.open) { state.start = parse(args.start); state.end = parse(args.end); resetView(); }
+    render();
+  });
+  new ResizeObserver(postHeight).observe(document.getElementById("root"));
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(postHeight);
+  post("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

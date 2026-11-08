@@ -98,13 +98,25 @@
   .btn.dl:hover { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); border-color: #34d399; color: #064e3b; }
   .btn svg { width: 18px; height: 18px; flex: 0 0 auto; }
   .done { border: 1px solid #a7f3d0; background: #ecfdf5; color: #047857; border-radius: 10px; padding: 6px 14px; text-align: center; font-size: var(--fs-sm); }
+  /* Navigasi halaman (sama dengan page_navigator di Streamlit): keterangan kiri, Baris/hal. + nomor halaman kanan. */
+  .pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 2px 2px 8px; }
+  .pager .cap { color: #64748b; font-size: var(--fs-sm); }
+  .pager .cap b { color: #0f172a; }
+  .pager .ctl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .pager select { font-family: inherit; font-size: .88rem; border: 1px solid #d0d5dd; border-radius: 9px; height: 34px; padding: 0 8px; background: #fff; color: #0f172a; }
+  .pg { font-family: inherit; font-size: .9rem; min-width: 38px; height: 34px; padding: 0 10px; border-radius: 9px; border: 1px solid #d0d5dd;
+    background: #fff; color: #0f172a; cursor: pointer; }
+  .pg:hover:not(:disabled) { border-color: #ee4d2d; color: #ee4d2d; }
+  .pg.on { background: linear-gradient(135deg, #ff7348 0%, #ee4d2d 100%); border: none; color: #fff; }
+  .pg:disabled { opacity: .45; cursor: default; }
+  .pg-gap { color: #6b7280; padding: 0 2px; }
   .chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 0 0; border-radius: 999px; background: #f1f5f9; border: 1px solid #e2e8f0; font-weight: 600; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script>
-  const state = { sortId: null, sortDir: 1, selected: "", args: null, order: null, widths: {}, justDragged: false, shown: 0, sig: "" };
+  const state = { sortId: null, sortDir: 1, selected: "", args: null, order: null, widths: {}, justDragged: false, page: 1, size: 0, sig: "" };
 
   const DRAG_PX = 5;
   const MIN_WIDTH = 56;
@@ -299,19 +311,38 @@
     }
     let body = "";
     let foot = "";
+    let pager = "";
     if (batch) {
-      const first = batch.first || 5;
-      const step = batch.step || 10;
+      // Halaman bernomor: pilih jumlah baris per halaman, lalu ‹ 1 2 3 … N ›.
       const noun = esc(batch.noun || "baris");
       const total = allRows.length;
-      const shown = Math.min(total, Math.max(first, state.shown || first));
-      state.shown = shown;
-      body = allRows.slice(0, shown).map(rowHtml).join("");
-      const rest = total - shown;
-      const info = rest > 0 ? "" : `<div class="done"><b>✓ Semua data telah ditampilkan</b> ${total} dari ${total} ${noun}</div>`;
-      const more = rest > 0 ? `<button class="btn primary" data-act="more">${ICON_DOWN} Muat lebih banyak (+${Math.min(step, rest)})</button>` : "";
-      const close = shown > first ? `<button class="btn" data-act="close">${ICON_UP} Tutup</button>` : "";
-      foot = `<div class="foot">${info}<div class="row">${more}${close}${downloadButton(args)}</div></div>`;
+      const size = state.size || batch.first || 5;
+      const pages = Math.max(1, Math.ceil(total / size));
+      const page = Math.min(Math.max(1, state.page || 1), pages);
+      state.page = page;
+      const lo = (page - 1) * size;
+      const hi = Math.min(lo + size, total);
+      body = allRows.slice(lo, hi).map(rowHtml).join("");
+      const nums = new Set([1, pages]);
+      for (let n = Math.max(1, page - 2); n <= Math.min(pages, page + 2); n++) nums.add(n);
+      let prev = 0;
+      let numbers = "";
+      [...nums].sort((x, y) => x - y).forEach((n) => {
+        if (prev && n - prev > 1) numbers += `<span class="pg-gap">…</span>`;
+        numbers += `<button class="pg ${n === page ? "on" : ""}" data-page="${n}">${n}</button>`;
+        prev = n;
+      });
+      const options = [5, 10, 20, 50, 100].map((n) => `<option value="${n}" ${n === size ? "selected" : ""}>${n} / hal.</option>`).join("");
+      const fmt = (n) => Number(n).toLocaleString("id-ID");
+      pager =
+        `<div class="pager"><div class="cap">Baris <b>${fmt(total ? lo + 1 : 0)}–${fmt(hi)}</b> dari <b>${fmt(total)}</b> ${noun} · hal. ${page}/${pages}</div>` +
+        `<div class="ctl"><select data-size title="Baris per halaman">${options}</select>` +
+        (pages > 1
+          ? `<button class="pg" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""} title="Halaman sebelumnya">‹</button>${numbers}` +
+            `<button class="pg" data-page="${page + 1}" ${page >= pages ? "disabled" : ""} title="Halaman berikutnya">›</button>`
+          : "") +
+        `</div></div>`;
+      if (args.download) foot = `<div class="foot"><div class="row">${downloadButton(args)}</div></div>`;
     } else {
       body = allRows.slice(0, limit).map(rowHtml).join("");
       if (args.download) foot = `<div class="foot"><div class="row">${downloadButton(args)}</div></div>`;
@@ -325,7 +356,7 @@
     try { viewport = window.top.innerHeight || 0; } catch (err) { viewport = 0; }
     const maxHeight = viewport > 0 ? Math.min(args.height, Math.round(viewport * 0.7)) : args.height;
     root.innerHTML =
-      `<div class="box" style="max-height:${maxHeight}px"><table><thead>` +
+      pager + `<div class="box" style="max-height:${maxHeight}px"><table><thead>` +
       `<tr class="h1">${row1}</tr><tr class="h2">${row2}</tr><tr class="total">${row3}</tr>` +
       `</thead><tbody>${body}</tbody></table></div>${foot}`;
 
@@ -365,13 +396,14 @@
 
     root.querySelectorAll("[data-act]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const batch = state.args.batch || {};
-        if (btn.getAttribute("data-act") === "download") { saveDownload(state.args.download); return; }
-        if (btn.getAttribute("data-act") === "more") state.shown += batch.step || 10;
-        else state.shown = batch.first || 5;
-        render();
+        if (btn.getAttribute("data-act") === "download") saveDownload(state.args.download);
       });
     });
+    root.querySelectorAll("[data-page]").forEach((btn) => {
+      btn.addEventListener("click", () => { state.page = Number(btn.getAttribute("data-page")) || 1; render(); });
+    });
+    const sizeBox = root.querySelector("select[data-size]");
+    if (sizeBox) sizeBox.addEventListener("change", () => { state.size = Number(sizeBox.value) || 5; state.page = 1; render(); });
 
     const newBox = root.querySelector(".box");
     newBox.scrollTop = keepTop;
@@ -504,7 +536,7 @@
     state.args = args;
     // Data berganti (mis. rentang tanggal lain): kembali ke 5 baris.
     const sig = (args.rows || []).length + "|" + ((args.rows || [])[0] || {}).key;
-    if (sig !== state.sig) { state.sig = sig; state.shown = 0; }
+    if (sig !== state.sig) { state.sig = sig; state.page = 1; }
     if (first) state.selected = args.selected || "";
     if (first && args.sort) state.sortId = args.sort;
     render();

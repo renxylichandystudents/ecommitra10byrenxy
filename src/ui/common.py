@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.utils.format import angka, desimal, persen, rupiah
 from src.utils.format import excel_bytes as numeric_excel_bytes
@@ -294,92 +297,87 @@ def month_picker(
     return [m for m in months if st.session_state.get(month_key(m)) and st.session_state.get(year_key(year_of(m)))]
 
 
-def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -> tuple[pd.DataFrame, str, list[str]]:
-    """Filter periode penjualan bersama, ringkas dalam satu baris: tombol pilih bulan (popover berisi checkbox
-    tahun & bulan + pilihan cepat), lalu tanggal mulai/selesai.
+_DATE_DIR = Path(__file__).resolve().parents[2] / "components" / "date_range"
+_DATE_VERSION = hashlib.md5((_DATE_DIR / "index.html").read_bytes()).hexdigest()[:8]
+_DATE_RANGE = components.declare_component(f"date_range_{_DATE_VERSION}", path=str(_DATE_DIR))
 
-    Hanya memotong angka aktual; prediksi tetap dari input awal.
+
+def date_range_picker(*, key: str, lo: date, hi: date, default: tuple[date, date], label: str = "Periode") -> tuple[date, date]:
+    """Filter tanggal gaya Shopee: satu kolom tanggal; diklik muncul pilihan cepat (Hari Ini, Kemarin, 1 Minggu,
+    1 Bulan, 3 Bulan, Bulan Ini, Bulan Lalu, Semua Data) dan kalender dua bulan untuk memilih rentang.
+
+    Pilihan disimpan (tetap sama walau pindah halaman). Tanggal di luar data [lo, hi] tidak bisa dipilih."""
+    def _fit(pair) -> tuple[date, date]:
+        a, b = pair
+        a, b = (b, a) if a > b else (a, b)
+        return min(max(a, lo), hi), min(max(b, lo), hi)
+
+    saved = _kept(f"{key}-range")
+    current = _fit(saved if isinstance(saved, tuple) and len(saved) == 2 else default)
+    value = _DATE_RANGE(lo=lo.isoformat(), hi=hi.isoformat(), start=current[0].isoformat(), end=current[1].isoformat(), label=label, key=key, default=None)
+    if isinstance(value, dict) and value.get("start") and value.get("end"):
+        raw = (value["start"], value["end"])
+        # Komponen terus mengirim nilai terakhir; pakai hanya bila berbeda dari klik sebelumnya.
+        if st.session_state.get(f"{key}-raw") != raw:
+            st.session_state[f"{key}-raw"] = raw
+            current = _fit((date.fromisoformat(raw[0]), date.fromisoformat(raw[1])))
+    _keep(f"{key}-range", current)
+    return current
+
+
+def range_label(start: date, end: date) -> str:
+    """"Oktober 2026" bila tepat satu/lebih bulan penuh, selain itu "1 Nov 2026 – 7 Nov 2026"."""
+    month_end = (pd.Timestamp(end) + pd.offsets.MonthEnd(0)).date()
+    if start.day == 1 and end == month_end:
+        months = pd.period_range(start, end, freq="M").astype(str).tolist()
+        names = [month_label(m) for m in months]
+        return names[0] if len(names) == 1 else f"{names[0]} – {names[-1]}"
+    return fmt_date(start) if start == end else f"{fmt_date(start)} – {fmt_date(end)}"
+
+
+def _default_range(lo: date, hi: date) -> tuple[date, date]:
+    """Bawaan: bulan terakhir pada data (tanggal 1 s.d. tanggal data terakhir)."""
+    return max(lo, hi.replace(day=1)), hi
+
+
+def _period_slice(orders: pd.DataFrame, start: date, end: date) -> tuple[pd.DataFrame, list[str]]:
+    days = pd.to_datetime(orders["order_time"], errors="coerce").dt.normalize()
+    filtered = orders.loc[days.between(pd.Timestamp(start), pd.Timestamp(end))].reset_index(drop=True)
+    months = pd.period_range(start, end, freq="M").astype(str).tolist()
+    return filtered, months
+
+
+def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -> tuple[pd.DataFrame, str, list[str]]:
+    """Filter periode penjualan bersama: satu kolom tanggal dengan kalender (gaya Shopee).
+
+    Hanya memotong angka aktual; prediksi tetap dari input awal. Mengembalikan (pesanan terfilter, label, bulan yang tercakup).
     """
     if orders is None or orders.empty or "order_time" not in orders.columns:
         return orders, "", []
-    times = pd.to_datetime(orders["order_time"], errors="coerce")
-    work = orders.loc[times.notna()].copy()
-    work["_month"] = times.loc[times.notna()].dt.to_period("M").astype(str)
-    months = sorted(work["_month"].unique())
-    if not months:
-        return work.iloc[0:0], "", []
-    pick_col, start_col, end_col = st.columns([1.5, 1, 1], vertical_alignment="bottom")
-    with pick_col:
-        month_picker(
-            months,
-            key=prefix,
-            year_key=lambda year: f"{prefix}-y-{year}",
-            month_key=lambda key: f"{prefix}-m-{key}",
-            default=lambda key: key == months[-1],
-            persist=True,
-        )
-    selected = [k for k in months if _kept(f"{prefix}-m-{k}") and _kept(f"{prefix}-y-{k[:4]}")]
-    if not selected:
-        st.warning("Centang minimal satu tahun dan satu bulan penjualan.")
-        return work.iloc[0:0].drop(columns="_month"), "tidak ada bulan dipilih", []
-    span = work.loc[work["_month"].isin(selected), "order_time"]
-    lo = pd.Timestamp(span.min()).date()
-    hi = pd.Timestamp(span.max()).date()
-    start_key, end_key = f"{prefix}-start", f"{prefix}-end"
-    stamp_key = f"{prefix}-span"
-    if st.session_state.get(stamp_key) != (lo, hi):
-        st.session_state[start_key] = lo
-        st.session_state[end_key] = hi
-        st.session_state[stamp_key] = (lo, hi)
-    else:
-        # Kunci tanggal hilang setelah membuka halaman lain: pulihkan pilihan terakhir, bukan tanggal hari ini.
-        for widget, fallback in ((start_key, lo), (end_key, hi)):
-            _restore(widget, fallback)
-            value = st.session_state.get(widget)
-            if not isinstance(value, date) or value < lo or value > hi:
-                st.session_state[widget] = fallback
-    start = start_col.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key, format="DD/MM/YYYY")
-    end = end_col.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key, format="DD/MM/YYYY")
-    _keep(start_key, start)
-    _keep(end_key, end)
-    if start > end:
-        start, end = end, start
-    days = pd.to_datetime(work["order_time"]).dt.normalize()
-    mask = work["_month"].isin(selected) & days.between(pd.Timestamp(start), pd.Timestamp(end))
-    filtered = work.loc[mask].drop(columns="_month").reset_index(drop=True)
-    names = [month_label(key) for key in selected]
-    if start == lo and end == hi:
-        label = names[0] if len(names) == 1 else ", ".join(names)
-    else:
-        label = fmt_date(start) if start == end else f"{fmt_date(start)} – {fmt_date(end)}"
-    return filtered, label, selected
+    times = pd.to_datetime(orders["order_time"], errors="coerce").dropna()
+    if times.empty:
+        return orders.iloc[0:0], "", []
+    lo, hi = times.min().date(), times.max().date()
+    col = st.columns([1.3, 2])[0] if not compact else st.container()
+    with col:
+        start, end = date_range_picker(key=f"{prefix}-cal", lo=lo, hi=hi, default=_default_range(lo, hi))
+    filtered, months = _period_slice(orders, start, end)
+    return filtered, range_label(start, end), months
 
 
 def apply_saved_period(orders: pd.DataFrame, *, prefix: str) -> tuple[pd.DataFrame, str]:
-    """Pakai pilihan `period_filter` terakhir tanpa menampilkan widget (default: bulan terakhir)."""
+    """Pakai pilihan `period_filter` terakhir tanpa menampilkan kalender (bawaan: bulan terakhir)."""
     if orders is None or orders.empty or "order_time" not in orders.columns:
         return orders, ""
-    times = pd.to_datetime(orders["order_time"], errors="coerce")
-    work = orders.loc[times.notna()].copy()
-    work["_month"] = times.loc[times.notna()].dt.to_period("M").astype(str)
-    months = sorted(work["_month"].unique())
-    if not months:
-        return work.iloc[0:0].drop(columns="_month"), ""
-    selected = [key for key in months if _kept(f"{prefix}-m-{key}") and _kept(f"{prefix}-y-{key[:4]}")]
-    if not selected:
-        selected = [months[-1]]
-    part = work.loc[work["_month"].isin(selected)]
-    lo = pd.Timestamp(part["order_time"].min()).date()
-    hi = pd.Timestamp(part["order_time"].max()).date()
-    start = _kept(f"{prefix}-start", lo) or lo
-    end = _kept(f"{prefix}-end", hi) or hi
-    start = min(max(start, lo), hi)
-    end = min(max(end, lo), hi)
-    days = pd.to_datetime(part["order_time"]).dt.normalize()
-    filtered = part.loc[days.between(pd.Timestamp(start), pd.Timestamp(end))].drop(columns="_month").reset_index(drop=True)
-    names = [month_label(key) for key in selected]
-    label = (", ".join(names)) if (start == lo and end == hi) else (fmt_date(start) if start == end else f"{fmt_date(start)} – {fmt_date(end)}")
-    return filtered, label
+    times = pd.to_datetime(orders["order_time"], errors="coerce").dropna()
+    if times.empty:
+        return orders.iloc[0:0], ""
+    lo, hi = times.min().date(), times.max().date()
+    saved = _kept(f"{prefix}-cal-range")
+    start, end = saved if isinstance(saved, tuple) and len(saved) == 2 else _default_range(lo, hi)
+    start, end = min(max(start, lo), hi), min(max(end, lo), hi)
+    filtered, _months = _period_slice(orders, start, end)
+    return filtered, range_label(start, end)
 
 
 def exclude_toggle_card(*, key: str, removed_orders: int, removed_units: float) -> bool:
@@ -508,8 +506,12 @@ BATCH_CSS = """
 """
 
 
+PAGE_SIZES = (5, 10, 20, 50, 100)
+
+
 def reset_batches(key: str) -> None:
-    st.session_state.pop(f"{key}-shown", None)
+    """Kembali ke halaman 1 (dipanggil saat filter/data berubah)."""
+    st.session_state.pop(f"{key}-page-n", None)
 
 
 def batched_view(
@@ -524,39 +526,23 @@ def batched_view(
     fragment: bool | None = None,
     download=None,
 ) -> None:
-    """Satu tabel: `first` baris pertama, Muat lebih banyak menambah `step` baris, Tutup kembali ke `first`.
+    """Satu tabel per halaman: di atas tabel ada keterangan baris, pilihan Baris/hal. (5/10/20/50/100) dan
+    tombol halaman bernomor ‹ 1 2 3 … N ›; tombol Unduh Excel di bawah tabel.
 
-    render(start, end) menggambar baris [start, end). download() (opsional) menggambar tombol Unduh Excel di
-    bilah tombol yang sama. Bila fragment=True (bawaan untuk tabel tampilan), klik Muat/Tutup hanya menjalankan
-    ulang tabel ini sehingga halaman tidak ikut dimuat ulang dan posisi layar tetap di tabel."""
+    render(start, end) menggambar baris [start, end). Bila fragment=True (bawaan untuk tabel tampilan), ganti
+    halaman hanya menjalankan ulang tabel ini sehingga halaman lain tidak ikut dimuat ulang. `step` tidak dipakai lagi
+    (dipertahankan agar pemanggil lama tetap jalan)."""
     if fragment is None:
         fragment = rerun_scope == "app"
 
     def _body() -> None:
-        scope = "fragment" if fragment else rerun_scope
         if total <= first:
             render(0, total)
             _action_bar(key, [], download)
             return
-        shown_key = f"{key}-shown"
-        shown = min(total, max(first, int(st.session_state.get(shown_key, first))))
-        render(0, shown)
-        st.markdown(BATCH_CSS, unsafe_allow_html=True)
-        rest = total - shown
-        if rest <= 0:
-            st.markdown(
-                f"<div class='batch-done'><b>✓ Semua data telah ditampilkan</b>{total} dari {total} {noun}</div>",
-                unsafe_allow_html=True,
-            )
-        actions = []
-        if rest > 0:
-            actions.append(("more", f"Muat lebih banyak (+{min(step, rest)})", ":material/expand_more:", "primary", shown + step))
-        if shown > first:
-            actions.append(("close", "Tutup", ":material/expand_less:", "secondary", first))
-        clicked = _action_bar(key, actions, download)
-        if clicked is not None:
-            st.session_state[shown_key] = clicked
-            _rerun(scope)
+        lo, hi = pager(total, key=key, noun=noun, default_size=first)
+        render(lo, hi)
+        _action_bar(key, [], download)
 
     if fragment:
         st.fragment(_body)()
@@ -607,33 +593,25 @@ def _action_bar(key: str, actions: list, download) -> int | None:
     return clicked
 
 
-def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: int, noun: str) -> int:
-    """Navigasi halaman bernomor: « ‹ 1 2 3 … 80 › » + keterangan baris yang tampil. Mengembalikan halaman aktif."""
-    state = f"{key}-n"
-
-    def _go(target: int) -> None:
-        st.session_state[state] = max(1, min(pages, target))
-
-    lo_row = (page - 1) * page_size + 1 if total else 0
-    hi_row = min(page * page_size, total)
-    caption = (
-        f"<div class='field-hint' style='padding-top:.45rem'>Baris <b>{fmt_num(lo_row)}–{fmt_num(hi_row)}</b> "
-        f"dari <b>{fmt_num(total)}</b> {noun} · hal. {page}/{pages}</div>"
-    )
-    if pages <= 1:
-        st.markdown(caption, unsafe_allow_html=True)
-        return page
-    # Nomor halaman: selalu 1 dan terakhir, plus 2 di kiri-kanan halaman aktif; celah ditulis "…".
+def _page_items(page: int, pages: int) -> list:
+    """Nomor halaman: selalu 1 dan terakhir, plus 2 di kiri-kanan halaman aktif; celah ditulis "…"."""
     numbers = sorted({1, pages, *range(max(1, page - 2), min(pages, page + 2) + 1)})
     items: list = []
     for number in numbers:
         if items and isinstance(items[-1], int) and number - items[-1] > 1:
             items.append("…")
         items.append(number)
-    slots = ["prev", *items, "next"]
-    info, nav = st.columns([1, 1.25], vertical_alignment="center")
-    info.markdown(caption, unsafe_allow_html=True)
-    with nav.container(key=f"{key}-nav"):
+    return ["prev", *items, "next"]
+
+
+def _nav_buttons(target, page: int, pages: int, *, key: str) -> None:
+    state = f"{key}-n"
+
+    def _go(value: int) -> None:
+        st.session_state[state] = max(1, min(pages, value))
+
+    with target.container(key=f"{key}-nav"):
+        slots = _page_items(page, pages)
         cols = st.columns(len(slots), gap="small")
         for col, item in zip(cols, slots):
             if item == "prev":
@@ -647,4 +625,50 @@ def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: in
                     str(item), key=f"{key}-p{item}", type="primary" if item == page else "secondary",
                     on_click=_go, args=(item,), use_container_width=True,
                 )
-    return min(max(int(st.session_state.get(state, page)), 1), pages)
+
+
+def _page_caption(lo_row: int, hi_row: int, total: int, noun: str, page: int, pages: int) -> str:
+    return (
+        f"<div class='field-hint' style='padding-top:.45rem'>Baris <b>{fmt_num(lo_row)}–{fmt_num(hi_row)}</b> "
+        f"dari <b>{fmt_num(total)}</b> {noun} · hal. {page}/{pages}</div>"
+    )
+
+
+def pager(total: int, *, key: str, noun: str = "baris", default_size: int = 5) -> tuple[int, int]:
+    """Satu baris: keterangan baris · pilihan Baris/hal. · ‹ 1 2 3 … N ›. Mengembalikan rentang baris [lo, hi)."""
+    size_key, page_key = f"{key}-size", f"{key}-page"
+    sizes = list(PAGE_SIZES) if default_size in PAGE_SIZES else sorted({*PAGE_SIZES, default_size})
+    # Data berubah (jumlah baris lain) → kembali ke halaman 1.
+    if st.session_state.get(f"{key}-total") != total:
+        st.session_state[f"{key}-total"] = total
+        st.session_state[f"{page_key}-n"] = 1
+    info, size_col, nav = st.columns([1.05, 0.42, 1.6], vertical_alignment="center")
+    size = int(
+        size_col.selectbox(
+            "Baris per halaman", options=sizes, index=sizes.index(default_size), key=size_key,
+            format_func=lambda n: f"{n} / hal.", label_visibility="collapsed",
+        )
+    )
+    if st.session_state.get(f"{key}-size-last") != size:
+        st.session_state[f"{key}-size-last"] = size
+        st.session_state[f"{page_key}-n"] = 1
+    pages = max((total - 1) // size + 1, 1)
+    page = min(max(int(st.session_state.get(f"{page_key}-n", 1)), 1), pages)
+    lo, hi = (page - 1) * size, min(page * size, total)
+    info.markdown(_page_caption(lo + 1 if total else 0, hi, total, noun, page, pages), unsafe_allow_html=True)
+    if pages > 1:
+        _nav_buttons(nav, page, pages, key=page_key)
+    return lo, hi
+
+
+def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: int, noun: str) -> int:
+    """Navigasi halaman bernomor: ‹ 1 2 3 … 80 › + keterangan baris yang tampil. Mengembalikan halaman aktif."""
+    lo_row = (page - 1) * page_size + 1 if total else 0
+    hi_row = min(page * page_size, total)
+    if pages <= 1:
+        st.markdown(_page_caption(lo_row, hi_row, total, noun, page, pages), unsafe_allow_html=True)
+        return page
+    info, nav = st.columns([1, 1.25], vertical_alignment="center")
+    info.markdown(_page_caption(lo_row, hi_row, total, noun, page, pages), unsafe_allow_html=True)
+    _nav_buttons(nav, page, pages, key=key)
+    return min(max(int(st.session_state.get(f"{key}-n", page)), 1), pages)

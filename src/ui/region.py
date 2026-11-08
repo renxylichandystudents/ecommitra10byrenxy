@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct, month_label, month_picker
+from src.ui.common import batched_view, card, date_range_picker, download_excel, explain, fmt_num, fmt_pct, range_label
 from src.utils.format import show_table
 
 
@@ -20,22 +20,14 @@ def show_region_analysis(source_raw: pd.DataFrame) -> None:
     if lines.empty:
         st.info("Data transaksi belum memuat kolom Provinsi dan Kota/Kabupaten. Unggah laporan pesanan Shopee lengkap agar analisa wilayah tampil.")
         return
-    months = sorted(lines["month"].unique())
-    labels = {m: month_label(m) for m in months}
-    f1, f3 = st.columns([2, 1.3], vertical_alignment="bottom")
+    stamp = pd.to_datetime(lines["order_time"], errors="coerce")
+    lo, hi = stamp.min().date(), stamp.max().date()
+    f1, f3 = st.columns([1.3, 1.3], vertical_alignment="bottom")
     with f1:
-        picked = month_picker(
-            months,
-            key="region",
-            year_key=lambda year: f"region-y-{year}",
-            month_key=lambda key: f"region-m-{key}",
-            default=lambda key: key == months[-1],
-            persist=True,
-        ) or [months[-1]]
+        start, end = date_range_picker(key="region-cal", lo=lo, hi=hi, default=(max(lo, hi.replace(day=1)), hi))
     level = f3.segmented_control("Tampilkan per", ["Provinsi", "Kota/Kabupaten"], default="Provinsi", key="region-level") or "Provinsi"
-    all_months = len(picked) == len(months) and len(months) > 1
-    view = lines.loc[lines["month"].isin(picked)]
-    period_text = "semua bulan" if all_months else ", ".join(labels[m] for m in sorted(picked))
+    view = lines.loc[stamp.dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))]
+    period_text = "semua data" if (start, end) == (lo, hi) else range_label(start, end)
     prov = region_summary(view, "province")
     city = region_summary(view, "city")
     totals = region_total_row(prov, "Provinsi").iloc[0]
@@ -111,7 +103,7 @@ def show_region_analysis(source_raw: pd.DataFrame) -> None:
                 "Per provinsi": pd.concat([region_total_row(prov, "Provinsi"), prov], ignore_index=True),
                 "Per kota-kabupaten": pd.concat([region_total_row(city, "Kota/Kabupaten"), city], ignore_index=True),
             },
-            f"asal_pesanan_{'semua_bulan' if all_months else '_'.join(sorted(picked))}.xlsx",
+            f"asal_pesanan_{start:%Y%m%d}_{end:%Y%m%d}.xlsx",
             key="xl-region",
             label="Unduh Excel (provinsi & kota)",
         ),
