@@ -5066,15 +5066,38 @@ def show_folder_menu() -> None:
                 "Berhasil = Pesanan Diterima, Sedang Dikirim, Selesai, dan Telah Dikirim."
             ),
         )
-        is_total = folder.apply(lambda row: any(str(v).strip() == "Total" for v in row.values), axis=1)
-        folder_total, folder_body = folder.loc[is_total], folder.loc[~is_total].reset_index(drop=True)
-        folder_export = pd.concat([folder_total, folder_body], ignore_index=True)
-        batched_view(
-            len(folder_body), key="folder-data", noun="bulan",
-            render=lambda lo, hi: show_table(pd.concat([folder_total, folder_body.iloc[lo:hi]], ignore_index=True), bold_label="Total",
-                                             column_config=table_column_config(folder), max_height=10_000),
-            download=lambda: offer_excel(folder_export, "folder_data.xlsx"),
-        )
+        # Filter kalender (bulan yang tersentuh rentang); bawaan 12 bulan terakhir. Total di atas, tinggi baris tetap.
+        keys = [item["key"] for item in saved]
+        folder = folder.assign(_key=keys[: len(folder)])
+        dated = sorted(k for k in keys if str(k)[:4].isdigit())
+        if dated:
+            lo = pd.Period(dated[0], freq="M").start_time.date()
+            hi = pd.Period(dated[-1], freq="M").end_time.date()
+            default_lo = max(lo, (pd.Period(dated[-1], freq="M") - 11).start_time.date())
+            start, end = date_range_picker(key="folder-cal", lo=lo, hi=hi, default=(default_lo, hi), label="Periode folder data")
+            touched = set(pd.period_range(start, end, freq="M").astype(str))
+            folder = folder.loc[folder["_key"].isin(touched) | ~folder["_key"].astype(str).str[:4].str.isdigit()]
+        folder = folder.drop(columns="_key").reset_index(drop=True)
+        if "File terakhir" in folder.columns:
+            folder_export = folder.copy()
+            folder["File terakhir"] = folder["File terakhir"].map(lambda t: (lambda n: ", ".join(n[:1]) + (f" +{len(n) - 1} file" if len(n) > 1 else ""))([x.strip() for x in str(t or "").split(",") if x.strip()]))
+        else:
+            folder_export = folder.copy()
+        sums = [c for c in folder.columns if c not in {"Bulan", "File terakhir", "Diperbarui"} and pd.api.types.is_numeric_dtype(folder[c])]
+
+        def _with_total(frame: pd.DataFrame) -> pd.DataFrame:
+            total = {c: (frame[c].sum() if c in sums else "") for c in frame.columns}
+            total["Bulan"] = f"Total · {len(frame)} bulan"
+            return pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
+
+        shown, rest = folder.head(12), folder.iloc[12:]
+        table_toolbar(lambda: offer_excel(_with_total(folder_export), "folder_data.xlsx"), key="folder-data",
+                      caption=f"{format_number(len(folder))} bulan pada periode terpilih · baris Total di atas")
+        show_table(_with_total(folder) if rest.empty else pd.concat([_with_total(folder).head(1), shown], ignore_index=True),
+                   bold_label=f"Total · {len(folder)} bulan", column_config=table_column_config(folder), row_height=35, max_height=10_000)
+        if not rest.empty:
+            with st.expander(f"Lihat detail · {format_number(len(rest))} bulan lainnya"):
+                show_table(rest, column_config=table_column_config(folder), row_height=35, max_height=10_000)
     st.subheader("Riwayat perubahan data")
     changes = history_frame()
     if changes.empty:
