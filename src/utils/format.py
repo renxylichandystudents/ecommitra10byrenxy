@@ -212,6 +212,17 @@ def style_frame(
             continue
         formats[column] = formatter_for(kinds.get(column) or column_kind(column), frame[column])
     styler = frame.style.format(formats, na_rep=EMPTY)
+    # Angka negatif selalu merah (rugi, minus, selisih turun).
+    numeric = [c for c in formats if c in frame.columns]
+    if numeric:
+        def _neg(value) -> str:
+            try:
+                return "color:#dc2626" if value is not None and float(value) < 0 else ""
+            except (TypeError, ValueError):
+                return ""
+
+        painter = getattr(styler, "map", None) or styler.applymap
+        styler = painter(_neg, subset=numeric)
     if bold_label is not None and len(frame.columns):
         first = frame.columns[0]
         label_column = next((c for c in frame.columns if frame[c].astype(str).eq(bold_label).any()), first)

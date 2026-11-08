@@ -76,7 +76,11 @@ def _with_total(view: pd.DataFrame) -> pd.DataFrame:
         if "Margin bersih (%)" in view.columns and "Margin bersih" in view.columns:
             total["Margin bersih (%)"] = view["Margin bersih"].sum() / sales * 100
     total["No"] = np.nan
-    return pd.concat([pd.DataFrame([total]), view], ignore_index=True)
+    full = pd.concat([pd.DataFrame([total]), view], ignore_index=True)
+    for column in full.columns:
+        if column in KINDS and KINDS[column] != "text":
+            full[column] = pd.to_numeric(full[column], errors="coerce")
+    return full
 
 
 def _paged(view: pd.DataFrame, key: str, filename: str, *, wide: str = "Tindak lanjut") -> None:
@@ -231,43 +235,46 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
             "tetapi dampaknya terlihat di kelompok **SKU nonaktif**: margin bersih rata-rata per bulan selama masih terjual."
         )
 
-    st.markdown("<div class='section-title'>Daftar item</div>", unsafe_allow_html=True)
-    f1, f2 = st.columns([1.4, 1.6])
-    groups = ["Perlu ditindaklanjuti", "Margin tinggi", "Shopee vs nasional", "Semua SKU aktif"] + (["SKU nonaktif"] if len(inactive) else [])
-    group = f1.segmented_control("Kelompok", groups, default="Perlu ditindaklanjuti", key="report-margin-group", label_visibility="collapsed") or "Perlu ditindaklanjuti"
-    pool = inactive if group == "SKU nonaktif" else report
-    query = f2.selectbox("Cari SKU", [f"{s} · {n}" for s, n in zip(pool["sku"], pool["nama"])], index=None, key=f"report-margin-q-{group == 'SKU nonaktif'}",
-                         placeholder="Cari SKU atau nama produk…", label_visibility="collapsed")
-    base = pool.loc[pool["sku"] == str(query).split(" · ")[0]] if query else pool
-    main = ["No", "Status", "SKU", "Nama", "Tindak lanjut", "Penjualan", "Terjual", "Margin kotor (%)", "Potongan Shopee (%)", "Iklan (%)", "Margin bersih (%)", "Margin bersih"]
-    if group == "Perlu ditindaklanjuti":
-        part = base.loc[base["status"].isin(["Rugi", "Rendah"])]
-        st.caption(f"Rugi dulu (kerugian Rp terbesar), lalu margin rendah (kekurangan Rp terbesar ke batas {fmt_pct(acuan, 1)}).")
-        _paged(_view(part, main + ["Rugi", "Kurang dari rata-rata", "Margin nasional (%)", "Sumber margin"]), "report-act", "margin_perlu_tindak_lanjut.xlsx")
-    elif group == "Margin tinggi":
-        part = base.loc[base["status"] == "Tinggi"].sort_values("bersih_rp", ascending=False)
-        st.caption("Urut margin bersih Rp terbesar: kandidat utama untuk didorong penjualannya.")
-        _paged(_view(part, main + ["Margin nasional (%)", "Sumber margin"]), "report-high", "margin_tinggi.xlsx")
-    elif group == "Shopee vs nasional":
-        part = base.loc[base["selisih_nasional"].notna()].sort_values("selisih_nasional")
-        st.caption("Urut selisih terbesar: margin kotor Shopee jauh di bawah nasional berarti harga/diskon di Shopee perlu ditinjau.")
-        _paged(_view(part, ["No", "Status", "SKU", "Nama", "Penjualan", "Margin kotor (%)", "Margin nasional (%)", "Selisih vs nasional (poin)", "Tindak lanjut"]),
-               "report-nas", "margin_shopee_vs_nasional.xlsx")
-    elif group == "SKU nonaktif":
+    st.markdown("<div class='section-title'>Daftar SKU aktif · urut prioritas tindak lanjut</div>", unsafe_allow_html=True)
+    f1, f2 = st.columns([1.2, 1.8])
+    options = [ICON[k] for k in ("Rugi", "Rendah", "Tinggi", "Data tidak wajar", "Tanpa data margin") if (report["status"] == k).any()]
+    picked = f1.multiselect("Status", options, key="report-margin-status", placeholder="Semua status")
+    query = f2.selectbox("Cari SKU", [f"{s} · {n}" for s, n in zip(report["sku"], report["nama"])], index=None, key="report-margin-q",
+                         placeholder="Ketik SKU atau nama produk…")
+    base = report
+    if picked:
+        base = base.loc[base["status"].map(ICON).isin(picked)]
+    if query:
+        base = base.loc[base["sku"] == str(query).split(" · ")[0]]
+    st.caption(f"Urutan: 🔴 Rugi (kerugian Rp terbesar) → 🟠 Rendah (kekurangan Rp terbesar ke {fmt_pct(acuan, 1)}) → 🟢 Tinggi (margin bersih Rp terbesar). "
+               "Margin nasional & selisihnya membantu melihat harga Shopee yang terlalu rendah.")
+    cols = ["No", "Status", "SKU", "Nama", "Tindak lanjut", "Penjualan", "Terjual", "Margin kotor (%)", "Potongan Shopee (%)", "Iklan (%)",
+            "Margin bersih (%)", "Margin bersih", "Rugi", "Kurang dari rata-rata", "Margin nasional (%)", "Selisih vs nasional (poin)", "Sumber margin", "Catatan"]
+    _paged(_view(base, cols), "report-all", "laporan_margin_sku_aktif.xlsx")
+
+    if len(inactive):
+        st.markdown("<div class='section-title'>SKU nonaktif · potensi margin yang hilang</div>", unsafe_allow_html=True)
         c = st.columns(3)
         card(c[0], "SKU nonaktif pernah terjual", fmt_num(len(inactive)), hint="tidak ada di unggahan stok terakhir")
         card(c[1], "Potensi margin hilang", fmt_idr(float(lost["dampak_bulan"].sum())) + "/bln", hint=f"{fmt_num(len(lost))} SKU yang dulu untung")
         card(c[2], "Kerugian yang terhenti", fmt_idr(float(-stopped["dampak_bulan"].sum())) + "/bln", hint=f"{fmt_num(len(stopped))} SKU yang dulu rugi")
-        st.caption("Urut potensi margin hilang terbesar. Dihitung dari riwayat transaksi: margin bersih ÷ jumlah bulan dari pertama s.d. terakhir terjual. "
+        g1, g2 = st.columns([1.2, 1.8])
+        off_opts = [ICON[k] for k in ("Rugi", "Rendah", "Tinggi", "Data tidak wajar", "Tanpa data margin") if (inactive["status"] == k).any()]
+        off_pick = g1.multiselect("Status", off_opts, key="report-off-status", placeholder="Semua status")
+        off_q = g2.selectbox("Cari SKU", [f"{s} · {n}" for s, n in zip(inactive["sku"], inactive["nama"])], index=None, key="report-off-q",
+                             placeholder="Ketik SKU atau nama produk…")
+        off = inactive
+        if off_pick:
+            off = off.loc[off["status"].map(ICON).isin(off_pick)]
+        if off_q:
+            off = off.loc[off["sku"] == str(off_q).split(" · ")[0]]
+        st.caption("Urut potensi margin hilang terbesar. Dari riwayat transaksi: margin bersih ÷ jumlah bulan dari pertama s.d. terakhir terjual. "
                    "SKU yang dulu untung layak dipertimbangkan untuk diaktifkan kembali.")
         view = pd.DataFrame({
-            "No": range(1, len(base) + 1), "Status": base["status"].map(ICON), "SKU": base["sku"], "Nama": base["nama"],
-            "Terakhir terjual": base["terakhir"].map(lambda t: t.strftime("%d/%m/%Y") if pd.notna(t) else ""), "Bulan terjual": base["bulan"],
-            "Penjualan per bulan": base["penjualan_bulan"], "Margin bersih (%)": base["bersih_pct"], "Margin bersih per bulan": base["dampak_bulan"],
-            "Tindak lanjut": np.where(base["dampak_bulan"] > 0, "Potensi hilang: pertimbangkan aktifkan kembali (cek stok & harga)",
-                                      np.where(base["dampak_bulan"] < 0, "Tepat dinonaktifkan: dulu merugi", "Margin belum ada di File margin")),
+            "No": range(1, len(off) + 1), "Status": off["status"].map(ICON), "SKU": off["sku"], "Nama": off["nama"],
+            "Terakhir terjual": off["terakhir"].map(lambda t: t.strftime("%d/%m/%Y") if pd.notna(t) else ""), "Bulan terjual": off["bulan"],
+            "Penjualan per bulan": off["penjualan_bulan"], "Margin bersih (%)": off["bersih_pct"], "Margin bersih per bulan": off["dampak_bulan"],
+            "Tindak lanjut": np.where(off["dampak_bulan"] > 0, "Potensi hilang: pertimbangkan aktifkan kembali (cek stok & harga)",
+                                      np.where(off["dampak_bulan"] < 0, "Tepat dinonaktifkan: dulu merugi", "Margin belum ada di File margin")),
         }).reset_index(drop=True)
         _paged(view, "report-off", "sku_nonaktif_potensi_margin.xlsx")
-    else:
-        _paged(_view(base, main + ["Rugi", "Kurang dari rata-rata", "Margin nasional (%)", "Margin di file (%)", "Sumber margin", "Catatan"]),
-               "report-all", "laporan_margin_sku_aktif.xlsx")

@@ -124,6 +124,12 @@ def _keep_rp(value: str) -> str:
     return str(value).replace("Rp ", "Rp&nbsp;")
 
 
+def _neg_style(value: str) -> str:
+    """Nilai kartu negatif (−Rp…, -12,3%) tampil merah."""
+    text = str(value).strip()
+    return " style='color:#dc2626'" if text[:1] in ("-", "−") and len(text) > 1 else ""
+
+
 def card(column, label: str, value: str, *, hint: str | None = None, tone: str | None = None) -> None:
     style = ""
     if tone == "extra":
@@ -133,7 +139,7 @@ def card(column, label: str, value: str, *, hint: str | None = None, tone: str |
     hint_html = f"<div class='metric-hint'>{hint}</div>" if hint else ""
     column.markdown(
         f"<div class='stat-card' style='{style}'><div class='readable-metric-label'>{html.escape(label)}</div>"
-        f"<div class='readable-metric-value'>{_keep_rp(value)}</div>{hint_html}</div>",
+        f"<div class='readable-metric-value'{_neg_style(value)}>{_keep_rp(value)}</div>{hint_html}</div>",
         unsafe_allow_html=True,
     )
 
@@ -153,7 +159,7 @@ def metric_card(column, key: str, value: str, *, hint: str | None = None, tone: 
     hint_html = f"<div class='metric-hint'>{hint}</div>" if hint else ""
     column.markdown(
         f"<div class='stat-card' style='{style}'><div class='readable-metric-label'>{name}{info}</div>"
-        f"<div class='readable-metric-value'>{_keep_rp(value)}</div>{hint_html}</div>",
+        f"<div class='readable-metric-value'{_neg_style(value)}>{_keep_rp(value)}</div>{hint_html}</div>",
         unsafe_allow_html=True,
     )
 
