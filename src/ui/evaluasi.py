@@ -18,7 +18,7 @@ from src.core.optimization import optimize_restock
 from src.core.libstatus import library_status
 from src.models.evaluate import HORIZON_LABELS, HORIZONS, MODEL_SEGMENT, PERIOD_TO_HORIZON, record_frame
 from src.utils.format import show_table
-from src.ui.common import ID_MONTHS_SHORT, download_excel, explain, fmt_num, fmt_pct
+from src.ui.common import ID_MONTHS_SHORT, download_excel, explain, fmt_num, fmt_pct, table_toolbar
 
 METRIC_COLUMNS = ("MAPE (%)", "MAPE agregat (%)", "WAPE (%)", "Bias (%)", "RMSE", "MAPE kelas A (%)", "MAPE kelas C (%)")
 UPLOAD_MENUS = (
@@ -124,8 +124,8 @@ def _testing(outcome, table: pd.DataFrame, params: dict, today: date, period: st
             ]
         )
         frame = record_frame(record)
+        table_toolbar(lambda: download_excel(frame, f"eval_{horizon}.xlsx", key=f"xl-eval-{horizon}"), key=f"eval-{horizon}")
         show_table(frame, kinds={c: "dec" for c in METRIC_COLUMNS})
-        download_excel(frame, f"eval_{horizon}.xlsx", key=f"xl-eval-{horizon}")
         st.caption(
             f"Faktor koreksi bias ensemble: {fmt_num(record.get('faktor_koreksi_bias', 1.0), 3)} "
             f"(bias sebelum koreksi {fmt_pct(record.get('bias_sebelum_koreksi'))})."

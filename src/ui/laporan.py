@@ -21,7 +21,7 @@ from src.core.metrics import ads_metrics
 from src.core.periods import format_period_label, last_full_month
 from src.core.restock import recommendation_records, records_display
 from src.utils.format import show_table
-from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, explain, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key
+from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, explain, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key, table_toolbar
 
 ALL_SECTIONS = "Semua bagian (untuk dibaca berurutan / dicetak)"
 SECTIONS = (
@@ -310,8 +310,8 @@ def show_report(
                     view = top[[c for c in cols if c in top.columns]].head(20).rename(
                         columns={"peringkat": "Rank", "sku": "SKU", "product_name": "Produk", "qty_total": "QTY terjual", "sales_total": "Sales", "m_qty": f"{pred_label} · QTY", "m_sales": f"{pred_label} · sales", "label_text": "Label"}
                     )
+                    table_toolbar(lambda: download_excel(view, "laporan_terlaris.xlsx", key="xl-report-top"), key="report-top")
                     show_table(view)
-                    download_excel(view, "laporan_terlaris.xlsx", key="xl-report-top")
                 elif section == SECTIONS[3]:
                     if top.empty or "m_status" not in top.columns:
                         st.write("Data stok belum tersedia.")
@@ -347,9 +347,9 @@ def show_report(
                             )
                         frame = pd.DataFrame(rows)
                         st.markdown("**Skenario Monte Carlo (1.000 simulasi permintaan × lead time) untuk 10 SKU teratas**")
+                        table_toolbar(lambda: download_excel(frame, "laporan_stok_monte_carlo.xlsx", key="xl-report-mc"), key="report-mc")
                         show_table(frame, kinds={"SS": "count", "ROP": "count"})
                         st.caption("ROP = permintaan harian × lead time + SS. Pesan ulang saat stok menyentuh ROP; restock pesimistis = kebutuhan kuantil 90%.")
-                        download_excel(frame, "laporan_stok_monte_carlo.xlsx", key="xl-report-mc")
                 elif section == SECTIONS[4]:
                     product_sales = float(ads["sales_produk_bersih"])
                     share = float(ads["porsi_sales_iklan_pct"])
@@ -448,8 +448,8 @@ def show_report(
                     else:
                         st.caption("Restock = max(0, prediksi + SS − stok DC). Tenggat = hari ini + stok ÷ prediksi harian (Segera bila sudah habis). PIC: restock lokal → Team DC; ada PO impor → Team IC/MD; harga/iklan → E-commerce.")
                         display = records_display(records.head(30))
+                        table_toolbar(lambda: download_excel(records_display(records), "laporan_rekomendasi.xlsx", key="xl-report-adv"), key="report-adv")
                         show_table(display, kinds={"Stok Site 10037": "count", "Kebutuhan": "count", "Restock": "count"}, column_config={"Alasan": st.column_config.TextColumn(width="large")})
-                        download_excel(records_display(records), "laporan_rekomendasi.xlsx", key="xl-report-adv")
                 elif section == SECTIONS[10]:
                     days_in_month = pd.Timestamp(today).days_in_month
                     basis = target if target > 0 else month_pred

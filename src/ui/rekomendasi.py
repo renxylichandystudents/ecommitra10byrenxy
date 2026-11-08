@@ -16,7 +16,7 @@ import streamlit as st
 from src.core.nlp_competitor import build_name_recommendations, clean_text, description_summary
 from src.core.recommendations import ads_plan, flash_sale_plan, flash_sale_template
 from src.core.segmentation import association_rules
-from src.ui.common import batched_view, button_tabs, card, download_excel, explain, fmt_date, fmt_idr, fmt_num, reset_batches
+from src.ui.common import batched_view, button_tabs, card, download_excel, explain, fmt_date, fmt_idr, fmt_num, reset_batches, table_toolbar
 from src.utils.format import input_rupiah, show_table
 
 STATUS_TONES = {"Poor": "#fee2e2", "Standard": "#fef9c3", "Excellence": "#dcfce7"}
@@ -221,6 +221,7 @@ def _ads_tab(table: pd.DataFrame, orders: pd.DataFrame, params: dict, today: dat
     if not table.get("biaya_iklan", pd.Series(dtype=float)).fillna(0).gt(0).any():
         st.caption("Laporan iklan belum diunggah atau belum terpetakan ke SKU: ROAS memakai nilai default dari Pengaturan bisnis.")
     kinds = {"Budget": "money", "Estimasi sales iklan": "money", "Estimasi ROAS": "dec"}
+    table_toolbar(lambda: download_excel({"Iklan produk": plan["produk"], "Iklan grup": plan["grup"], "Tidak perlu diiklankan": plan["tidak"]}, "rekomendasi_iklan.xlsx", key="xl-ads"), key="ads")
     if view == "Iklan produk":
         show_table(plan["produk"], kinds=kinds)
     elif view == "Iklan grup":
@@ -228,7 +229,6 @@ def _ads_tab(table: pd.DataFrame, orders: pd.DataFrame, params: dict, today: dat
         show_table(plan["grup"], kinds=kinds)
     else:
         show_table(plan["tidak"])
-    download_excel({"Iklan produk": plan["produk"], "Iklan grup": plan["grup"], "Tidak perlu diiklankan": plan["tidak"]}, "rekomendasi_iklan.xlsx", key="xl-ads")
     return plan
 
 

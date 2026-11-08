@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter, table_toolbar
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -4571,8 +4571,8 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     status_view = append_total_row(status_table, "Status pesanan", ["No. Pesanan", "Kontribusi"])
     if "Kontribusi" in status_view.columns:
         status_view["Kontribusi"] = pd.to_numeric(status_view["Kontribusi"], errors="coerce")
+    excel_toolbar(status_view, "status_pesanan.xlsx")
     show_table(status_view, kinds={"Kontribusi": "pct"}, bold_label="Total", column_config=table_column_config(status_view))
-    offer_excel(status_view, "status_pesanan.xlsx")
     st.subheader("Kontribusi invoice batal")
     if not include_cancel:
         st.write("Nominal batal tidak dihitung karena status batal tidak dicentang.")
@@ -4581,7 +4581,6 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     else:
         total_invoice = int(contribution_table["Invoice"].sum())
         total_nominal = float(contribution_table["Nominal"].sum())
-        st.caption(f"{range_text} · {format_number(total_invoice)} invoice batal · total {format_idr(total_nominal)}")
         contribution_view = append_total_row(
             contribution_table,
             "Alasan pembatalan",
@@ -4590,6 +4589,8 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
         for column in ("Invoice", "Nominal", "Kontribusi invoice", "Kontribusi nominal"):
             contribution_view[column] = pd.to_numeric(contribution_view[column], errors="coerce")
         peak = float(contribution_table["Kontribusi nominal"].max() or 1.0)
+        excel_toolbar(contribution_view, "kontribusi_invoice_batal.xlsx",
+                      caption=f"{html.escape(range_text)} · {format_number(total_invoice)} invoice batal · total {format_idr(total_nominal)}")
         show_table(
             contribution_view,
             kinds={"Invoice": "count", "Nominal": "money", "Kontribusi invoice": "pct"},
@@ -4599,7 +4600,6 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
                 "Kontribusi nominal": st.column_config.ProgressColumn(format="%.1f%%", min_value=0.0, max_value=max(peak, 100.0 if peak > 100 else peak), help="Nominal batal ÷ seluruh nominal pada rentang"),
             },
         )
-        offer_excel(contribution_view, "kontribusi_invoice_batal.xlsx")
     show_region_analysis(source_raw)
     st.subheader("Pembeli batal karena belum bayar")
     unpaid_months = list(st.session_state.get("data_months") or [])
@@ -5066,8 +5066,15 @@ def show_folder_menu() -> None:
                 "Berhasil = Pesanan Diterima, Sedang Dikirim, Selesai, dan Telah Dikirim."
             ),
         )
-        show_table(folder, bold_label="Total", column_config=table_column_config(folder))
-        offer_excel(folder, "folder_data.xlsx")
+        is_total = folder.apply(lambda row: any(str(v).strip() == "Total" for v in row.values), axis=1)
+        folder_total, folder_body = folder.loc[is_total], folder.loc[~is_total].reset_index(drop=True)
+        folder_export = pd.concat([folder_total, folder_body], ignore_index=True)
+        batched_view(
+            len(folder_body), key="folder-data", noun="bulan",
+            render=lambda lo, hi: show_table(pd.concat([folder_total, folder_body.iloc[lo:hi]], ignore_index=True), bold_label="Total",
+                                             column_config=table_column_config(folder), max_height=10_000),
+            download=lambda: offer_excel(folder_export, "folder_data.xlsx"),
+        )
     st.subheader("Riwayat perubahan data")
     changes = history_frame()
     if changes.empty:
@@ -5079,8 +5086,11 @@ def show_folder_menu() -> None:
             return ", ".join(names[:2]) + (f" +{len(names) - 2} file" if len(names) > 2 else "")
 
         shown_changes = changes.assign(File=changes["File"].map(_short_files)) if "File" in changes.columns else changes
-        show_table(shown_changes, column_config={"Perubahan": st.column_config.TextColumn(width="large")})
-        offer_excel(changes, "riwayat_perubahan_data.xlsx")
+        batched_view(
+            len(shown_changes), key="folder-history", noun="perubahan",
+            render=lambda lo, hi: show_table(shown_changes.iloc[lo:hi], column_config={"Perubahan": st.column_config.TextColumn(width="large")}, max_height=10_000),
+            download=lambda: offer_excel(changes, "riwayat_perubahan_data.xlsx"),
+        )
 
 
 def show_metric(column, label: str, value: str, *, compact: bool = False, hint: str | None = None) -> None:
@@ -6411,6 +6421,7 @@ def show_top50_table(
     )
     keys = {row["key"] for row in rows}
     previous = str(st.session_state.get(f"{key}-value") or "")
+    excel_toolbar(export_frame, "top50_item_terlaris.xlsx")
     picked = _TOP50_TABLE(
         columns=columns,
         rows=rows,
@@ -6423,7 +6434,6 @@ def show_top50_table(
     )
     picked = str(picked or "")
     st.session_state[f"{key}-value"] = picked
-    offer_excel(export_frame, "top50_item_terlaris.xlsx")
     return picked if picked in keys else ""
 
 
@@ -6432,18 +6442,17 @@ def excel_bytes(frame: pd.DataFrame) -> bytes:
 
 
 def offer_excel(frame: pd.DataFrame, filename: str) -> None:
-    """Unduh tabel yang sedang ditampilkan sebagai file Excel."""
+    """Unduh tabel yang sedang ditampilkan sebagai file Excel (ringkas bila berada di bilah navigasi tabel)."""
     if not isinstance(frame, pd.DataFrame):
         return
     safe = filename if str(filename).endswith(".xlsx") else f"{filename}.xlsx"
-    st.download_button(
-        f"Unduh Excel · {len(frame):,} baris".replace(",", "."),
-        data=excel_bytes(frame),
-        file_name=safe,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"excel-{safe}",
-        icon=":material/download:",
-    )
+    download_excel(frame, safe, key=f"excel-{safe}")
+
+
+def excel_toolbar(frame: pd.DataFrame, filename: str, *, caption: str = "") -> None:
+    """Tombol Excel ringkas di atas tabel (kanan), sejajar keterangan tabel."""
+    if isinstance(frame, pd.DataFrame):
+        table_toolbar(lambda: offer_excel(frame, filename), key=f"tb-{filename}", caption=caption)
 
 
 def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
@@ -7659,8 +7668,8 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
         st.write("Belum ada SKU yang punya QTY terjual dan sales value sekaligus.")
         return
     display = leaderboard_frame(top, period)
+    excel_toolbar(display, "top10_prioritas_stok.xlsx")
     scroll_table(display, max_height=520)
-    offer_excel(display, "top10_prioritas_stok.xlsx")
 
 
 if not st.session_state.get("_autoload-done"):

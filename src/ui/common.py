@@ -212,6 +212,14 @@ def download_excel(frames: dict[str, pd.DataFrame] | pd.DataFrame, filename: str
     )
 
 
+def table_toolbar(download, *, key: str, caption: str = "") -> None:
+    """Bilah di atas tabel tanpa halaman: keterangan (opsional) di kiri, tombol Excel ringkas di kanan."""
+    left, right = st.columns([1.6 + 1.05 + 0.42, 0.42], vertical_alignment="center")
+    if caption:
+        left.markdown(f"<div class='field-hint'>{caption}</div>", unsafe_allow_html=True)
+    _compact_download(right, download, key)
+
+
 def _compact_download(target, download, key: str) -> None:
     """Tombol unduh ringkas di bilah navigasi tabel (sejajar pilihan baris & nomor halaman)."""
     if not download:

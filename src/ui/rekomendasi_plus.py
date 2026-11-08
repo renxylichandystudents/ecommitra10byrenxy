@@ -16,7 +16,7 @@ from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date
 from src.core.product_features import features_from_description, hook_for
 from src.core.promo import momentum_14d, product_label, promo_eligible
-from src.ui.common import batched_view, card, download_excel, explain, fmt_idr, fmt_num
+from src.ui.common import batched_view, card, download_excel, explain, fmt_idr, fmt_num, table_toolbar
 from src.ui.feature_data import FeatureData, bump, product_frame
 from src.core.ads import roas_estimate
 from src.utils.format import input_rupiah, parse_angka, rupiah as rupiah_text, show_table, wrap_layout
@@ -285,8 +285,8 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date) -> N
     else:
         view = schedule.copy()
         view["Tanggal"] = view["Tanggal"].map(fmt_date)
+        table_toolbar(lambda: download_excel(schedule, "jadwal_flash_sale.xlsx", key="xl-flash-new"), key="flash-new")
         show_table(view, kinds={"Harga normal": "money", "Harga flash": "money", "Kuota": "count"}, column_config={"SKU · produk · varian": st.column_config.TextColumn(width="large")})
-        download_excel(schedule, "jadwal_flash_sale.xlsx", key="xl-flash-new")
     if skipped:
         with st.expander(f"Tidak dijadwalkan · {fmt_num(len(skipped))} SKU"):
             show_table(pd.DataFrame(skipped).head(200), column_config={"SKU · produk · varian": st.column_config.TextColumn(width="large")})
