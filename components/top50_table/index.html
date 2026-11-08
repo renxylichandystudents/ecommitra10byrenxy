@@ -383,18 +383,19 @@
   /* Tinggi iframe mengikuti isi: diukur ulang setiap ukuran berubah (font selesai dimuat, baris bertambah,
      lebar kolom diubah). Tanpa ini, baris yang terlipat setelah font dimuat membuat tombol Muat lebih banyak
      dan scrollbar terpotong di bawah iframe. */
-  let lastHeight = 0;
+  // Tinggi selalu dikirim (tanpa dedup): pesan pertama bisa hilang bila Streamlit belum siap menerima,
+  // dan pada layar sempit baris terlipat lebih banyak sehingga tinggi akhir baru diketahui setelah layout stabil.
   function postHeight() {
     const root = document.getElementById("root");
-    const height = Math.ceil(root.getBoundingClientRect().height) + 6;
-    if (height !== lastHeight) {
-      lastHeight = height;
-      post("streamlit:setFrameHeight", { height: height });
-    }
+    const height = Math.ceil(root.scrollHeight || root.getBoundingClientRect().height) + 8;
+    post("streamlit:setFrameHeight", { height: height });
   }
   if (window.ResizeObserver) new ResizeObserver(() => postHeight()).observe(document.getElementById("root"));
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => postHeight());
   window.addEventListener("load", () => postHeight());
+  window.addEventListener("resize", () => postHeight());
+  // Kirim ulang beberapa kali di awal (layout iframe, font, dan lebar kolom bisa berubah setelah render pertama).
+  [150, 400, 800, 1500, 3000, 6000].forEach((ms) => setTimeout(postHeight, ms));
 
   function markDragged() {
     state.justDragged = true;
