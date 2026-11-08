@@ -231,13 +231,83 @@ def _snapshot_runs(features) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["id", "run_at"])
 
 
-def _comparison_for(features, runs: pd.DataFrame, lines: pd.DataFrame, day: date, stock: dict[str, float]) -> pd.DataFrame:
-    eligible = runs.loc[pd.to_datetime(runs["run_at"]) < pd.Timestamp(day)]
-    if eligible.empty:
+def _comparison_for(features, runs: pd.DataFrame, lines: pd.DataFrame, day: date, stock: dict[str, float], table: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Prediksi vs aktual untuk tanggal D. Pakai snapshot analisa yang dibuat sebelum D; bila belum ada,
+    pakai uji mundur (model harian yang sama, hanya data s.d. D−1). Kolom 'sumber' menandai asalnya."""
+    eligible = runs.loc[pd.to_datetime(runs["run_at"]) < pd.Timestamp(day)] if runs is not None and not runs.empty else pd.DataFrame()
+    if not eligible.empty:
+        run_id = int(eligible.loc[pd.to_datetime(eligible["run_at"]).idxmax(), "id"])
+        snap = features.read("prediction_snapshot", {"run_id": run_id, "target_date": day}).rename(columns={"target_date": "tanggal"})
+        if not snap.empty:
+            return daily_comparison(snap, lines, day, stock_by_sku=stock).assign(sumber="tersimpan")
+    snap = _backtest_cached(lines, table, day)
+    if snap.empty:
         return pd.DataFrame()
-    run_id = int(eligible.loc[pd.to_datetime(eligible["run_at"]).idxmax(), "id"])
-    snap = features.read("prediction_snapshot", {"run_id": run_id, "target_date": day}).rename(columns={"target_date": "tanggal"})
-    return daily_comparison(snap, lines, day, stock_by_sku=stock)
+    return daily_comparison(snap, lines, day, stock_by_sku=stock).assign(sumber="uji mundur")
+
+
+def _daily_matrix(lines: pd.DataFrame) -> pd.DataFrame:
+    """Matriks QTY harian per SKU (baris = tanggal, kolom = SKU) dari transaksi bersih."""
+    stamp = pd.to_datetime(lines["order_time"], errors="coerce").dt.normalize()
+    work = pd.DataFrame({"day": stamp, "sku": lines["sku"].astype(str), "qty": pd.to_numeric(lines["qty"], errors="coerce").fillna(0.0)})
+    work = work.dropna(subset=["day"])
+    matrix = work.pivot_table(index="day", columns="sku", values="qty", aggfunc="sum", fill_value=0.0)
+    return matrix.reindex(pd.date_range(matrix.index.min(), matrix.index.max(), freq="D"), fill_value=0.0)
+
+
+def _backtest_cached(lines: pd.DataFrame, table: pd.DataFrame | None, day: date) -> pd.DataFrame:
+    """Uji mundur disimpan per sesi (kunci: ukuran & jumlah data) agar tidak dihitung ulang tiap rerun."""
+    if lines is None or lines.empty or table is None or table.empty:
+        return pd.DataFrame(columns=["tanggal", "sku", "varian", "pred_qty", "pred_sales"])
+    sig = (len(lines), float(pd.to_numeric(lines["qty"], errors="coerce").sum()), str(pd.to_datetime(lines["order_time"]).max()), len(table))
+    store = st.session_state.setdefault("_backtest_cache", {})
+    if store.get("sig") != sig:
+        store.clear()
+        store["sig"] = sig
+        store["matrix"] = _daily_matrix(lines)
+    key = str(day)
+    if key not in store:
+        store[key] = _backtest_snapshot(store["matrix"], table, day)
+    return store[key]
+
+
+def _backtest_snapshot(matrix: pd.DataFrame, table: pd.DataFrame | None, day: date) -> pd.DataFrame:
+    """Prediksi 1 hari ke depan untuk tanggal D per SKU (uji mundur) dengan data s.d. D−1."""
+    from src.forecast import _robust_forecast
+
+    columns = ["tanggal", "sku", "varian", "pred_qty", "pred_sales"]
+    if matrix is None or matrix.empty or table is None or table.empty:
+        return pd.DataFrame(columns=columns)
+    stamp = pd.Timestamp(day)
+    history = matrix.loc[matrix.index < stamp]
+    if len(history) < 7:
+        return pd.DataFrame(columns=columns)
+    total = history.sum(axis=1)
+    profile = np.ones(7)
+    means = total.groupby(total.index.dayofweek).mean()
+    if means.mean() > 0:
+        for dow, value in means.items():
+            profile[int(dow)] = float(value) / float(means.mean())
+    info = table.drop_duplicates("sku").set_index(table.drop_duplicates("sku")["sku"].astype(str))
+    rows = []
+    # Hanya SKU yang terjual dalam 90 hari terakhir sebelum D (SKU tidur diprediksi ~0 dan memperlambat).
+    recent = history.iloc[-90:].sum(axis=0)
+    active = set(recent.index[recent > 0])
+    for sku in info.index:
+        if sku not in history.columns or sku not in active:
+            continue
+        series = history[sku].to_numpy(dtype=float)
+        nonzero = np.flatnonzero(series)
+        if len(nonzero) == 0:
+            continue
+        series = series[nonzero[0]:]
+        start = history.index[nonzero[0]]
+        qty = float(_robust_forecast(series, start, 1, profile, forecast_start=stamp))
+        if qty <= 0:
+            continue
+        price = float(info.at[sku, "harga_bersih"] or 0) if "harga_bersih" in info.columns else 0.0
+        rows.append({"tanggal": day, "sku": sku, "varian": str(info.at[sku, "variasi_tampil"] or ""), "pred_qty": qty, "pred_sales": qty * price})
+    return pd.DataFrame(rows, columns=columns)
 
 
 def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.DataFrame) -> None:
@@ -258,13 +328,16 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         partial_note = f" Data {fmt_date(last)} belum satu hari penuh, jadi yang dibandingkan {fmt_date(last - timedelta(days=1))}."
         last = last - timedelta(days=1)
     stock = {str(s): float(v) for s, v, k in zip(table["sku"], table["stok"], table["ada_data_stok"]) if k} if table is not None and not table.empty else {}
-    rows = _comparison_for(features, runs, lines, last, stock) if not runs.empty else pd.DataFrame()
+    with st.spinner("Menyiapkan prediksi vs aktual..."):
+        rows = _comparison_for(features, runs, lines, last, stock, table)
     if rows.empty:
-        st.info(
-            f"Belum ada snapshot prediksi yang dibuat sebelum {fmt_date(last)}. Setiap analisa kini menyimpan prediksi harian; "
-            "setelah transaksi hari berikutnya diunggah, perbandingan muncul di sini."
-        )
+        st.info(f"Belum cukup riwayat penjualan untuk membandingkan prediksi dengan aktual {fmt_date(last)}.")
         return
+    if str(rows["sumber"].iloc[0]) == "uji mundur":
+        st.caption(
+            f"Belum ada analisa tersimpan yang dibuat sebelum {fmt_date(last)}, jadi prediksi hari itu dihitung ulang (uji mundur): "
+            "model harian yang sama, hanya memakai data s.d. sehari sebelumnya."
+        )
     pred_sales, actual_sales = float(rows["pred_sales"].sum()), float(rows["aktual_sales"].sum())
     hit = int(rows["status"].isin(["Melebihi", "Tercapai"]).sum())
     cols = st.columns(4)
@@ -275,11 +348,12 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     if partial_note:
         st.caption(partial_note.strip())
     trend = []
-    for back in range(13, -1, -1):
-        day = last - timedelta(days=back)
-        part = _comparison_for(features, runs, lines, day, {})
-        if not part.empty and part["pred_sales"].sum() > 0:
-            trend.append((day, part["aktual_sales"].sum() / part["pred_sales"].sum() * 100))
+    with st.spinner("Menghitung tren pencapaian 7 hari..."):
+        for back in range(6, -1, -1):
+            day = last - timedelta(days=back)
+            part = _comparison_for(features, runs, lines, day, {}, table)
+            if not part.empty and part["pred_sales"].sum() > 0:
+                trend.append((day, part["aktual_sales"].sum() / part["pred_sales"].sum() * 100))
     if trend:
         fig = go.Figure(go.Scatter(x=[d for d, _ in trend], y=[v for _, v in trend], mode="lines+markers+text", text=[f"{v:.0f}%" for _, v in trend], textposition="top center", line=dict(color="#1b3da6")))
         fig.add_hline(y=100, line_dash="dot", line_color="#94a3b8")
