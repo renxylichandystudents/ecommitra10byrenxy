@@ -142,7 +142,8 @@ def require(menu: str, need: str = "view") -> User:
 
 def _hide_chrome() -> None:
     st.markdown(
-        "<style>section[data-testid='stSidebar'],[data-testid='stSidebarCollapsedControl']{display:none!important}</style>",
+        "<style>section[data-testid='stSidebar'],[data-testid='stSidebarCollapsedControl']{display:none!important}"
+        "[data-testid='InputInstructions']{display:none!important}</style>",
         unsafe_allow_html=True,
     )
 

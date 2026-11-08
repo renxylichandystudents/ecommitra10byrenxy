@@ -903,6 +903,8 @@ st.markdown(
     .qty-track.stock-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: #fff7ed; border-radius: 8px; padding: 5px 6px; height: auto; min-height: 1.85rem; overflow: visible; }
     .qty-track.stock-row.dc { background: #f0f9ff; }
     .stock-chip.info { background: #dbeafe; color: #1e3a8a; }
+    /* Tulisan "Press Enter to submit form/apply" di kolom isian mengganggu saat mengetik: disembunyikan. */
+    [data-testid="InputInstructions"] { display: none !important; }
     .stock-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 700; }
     .stock-chip.ok { background: #dcfce7; color: #166534; }
     .stock-chip.bad { background: #fee2e2; color: #991b1b; }
