@@ -344,7 +344,7 @@ def analysis(inp: Inputs, *, target_pct: float, qty_30: float | None = None, pre
     for step in fixes(inp, max(target_pct, 0.0) if pct >= 0 else 0.0, roas):
         notes.append(("warn", "Perbaiki: " + step))
     if qty_30:
-        notes.append(("info", "30 hari terakhir: " + f"{qty_30:,.0f}".replace(",", ".") + f" unit → margin bersih ±{_rp(value * qty_30)}."))
+        notes.append(("info", "Periode terpilih: " + f"{qty_30:,.0f}".replace(",", ".") + f" unit → margin bersih ±{_rp(value * qty_30)}."))
     if pred_qty_30:
         notes.append(("info", "Prediksi 30 hari: " + f"{pred_qty_30:,.0f}".replace(",", ".") + f" unit → margin bersih ±{_rp(value * pred_qty_30)}."))
     return notes

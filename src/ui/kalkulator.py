@@ -198,8 +198,8 @@ def _is_big(name: str) -> bool:
     return "packing kayu" in str(name).lower()
 
 
-def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | None, fees: pd.DataFrame, md=None) -> pd.DataFrame:
-    """Satu baris per SKU yang laku 30 hari terakhir: harga akhir rata-rata transaksi, voucher penjual, kategori, iklan, affiliate."""
+def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | None, fees: pd.DataFrame, md=None, start=None, end=None) -> pd.DataFrame:
+    """Satu baris per SKU yang laku pada periode [start, end] (bawaan 30 hari terakhir): harga akhir rata-rata transaksi, voucher penjual, kategori, iklan, affiliate."""
     from src.core.gudang import norm_sku
     from src.ui.feature_data import product_frame
 
@@ -212,7 +212,10 @@ def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | 
 
         work = work.loc[~cancelled_status_mask(work["status"])]
     stamp = pd.to_datetime(work["order_time"], errors="coerce")
-    work = work.loc[stamp >= stamp.max().normalize() - pd.Timedelta(days=29)]
+    if start is not None and end is not None:
+        work = work.loc[stamp.dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))]
+    else:
+        work = work.loc[stamp >= stamp.max().normalize() - pd.Timedelta(days=29)]
     grouped = work.assign(sku=work["sku"].astype(str)).groupby("sku").agg(
         qty=("qty", "sum"), omzet=("sales", "sum"),
         voucher=("seller_voucher", "sum") if "seller_voucher" in work.columns else ("qty", lambda s: 0.0),
@@ -321,9 +324,9 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
     card(k[0], f"Proyeksi penjualan {month_label}", fmt_idr(projection),
          hint=(f"target {fmt_idr(goals.target_sales)} · " + (f"kurang {fmt_idr(gap)}" if gap > 0 else "tercapai")) if has_target else "target belum diisi di Pengaturan bisnis")
     card(k[1], "Margin bersih rata-rata toko", fmt_pct(overall, 1) if np.isfinite(overall) else "–",
-         hint=(f"margin kotor {fmt_pct(kotor, 1)} − potongan Shopee & iklan · {fmt_idr(float(known['bersih_30'].sum()))}/30 hari") if np.isfinite(overall) else "butuh file margin")
-    card(k[2], "SKU rugi", fmt_num(len(rugi)), hint=f"rugi ±{fmt_idr(float(rugi['rugi_30'].sum()) if len(rugi) else 0)}/30 hari · omzet {fmt_idr(float(rugi['omzet_30'].sum()) if len(rugi) else 0)}")
-    card(k[3], "SKU margin rendah", fmt_num(len(low)), hint=f"untung di bawah {fmt_pct(acuan, 1)} · potensi +{fmt_idr(float(low['selisih_30'].sum()) if len(low) else 0)}/30 hari")
+         hint=(f"margin kotor {fmt_pct(kotor, 1)} − potongan Shopee & iklan · {fmt_idr(float(known['bersih_30'].sum()))}/periode") if np.isfinite(overall) else "butuh file margin")
+    card(k[2], "SKU rugi", fmt_num(len(rugi)), hint=f"rugi ±{fmt_idr(float(rugi['rugi_30'].sum()) if len(rugi) else 0)}/periode · omzet {fmt_idr(float(rugi['omzet_30'].sum()) if len(rugi) else 0)}")
+    card(k[3], "SKU margin rendah", fmt_num(len(low)), hint=f"untung di bawah {fmt_pct(acuan, 1)} · potensi +{fmt_idr(float(low['selisih_30'].sum()) if len(low) else 0)}/periode")
     chips = [status_line(md), f"Batas margin rendah <b>{fmt_pct(acuan, 1)}</b> (rata-rata SKU yang untung)", f"Realisasi s.d. tgl {last.day}: <b>{fmt_idr(mtd)}</b>"]
     if len(known):
         chips.insert(1, f"Potongan Shopee rata-rata <b>{fmt_pct(float((known['omzet_30'] * known['shopee_pct']).sum() / omzet), 1)}</b> · iklan <b>{fmt_pct(float((known['omzet_30'] * known['iklan_pct']).sum() / omzet), 1)}</b>")
@@ -337,10 +340,10 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
     if not md.ready:
         steps.append("<b>Unggah file margin</b> (sheet Margin Shopee & Margin Nasional) agar margin per SKU terbaca.")
     if len(rugi):
-        steps.append(f"<b>Hentikan kerugian di {fmt_num(len(rugi))} SKU rugi</b>, mulai 5 teratas (±{fmt_idr(float(rugi.head(5)['rugi_30'].sum()))} per 30 hari): "
+        steps.append(f"<b>Hentikan kerugian di {fmt_num(len(rugi))} SKU rugi</b>, mulai 5 teratas (±{fmt_idr(float(rugi.head(5)['rugi_30'].sum()))} per periode): "
                      "kurangi iklan/program opsional atau naikkan harga sesuai kolom <i>Yang perlu dikerjakan</i>.")
     if len(low):
-        steps.append(f"<b>Naikkan {fmt_num(len(low))} SKU margin rendah</b> ke batas {fmt_pct(acuan, 1)} — 5 teratas menambah ±{fmt_idr(float(low.head(5)['selisih_30'].sum()))} per 30 hari.")
+        steps.append(f"<b>Naikkan {fmt_num(len(low))} SKU margin rendah</b> ke batas {fmt_pct(acuan, 1)} — 5 teratas menambah ±{fmt_idr(float(low.head(5)['selisih_30'].sum()))} per periode.")
     if has_target and gap > 0 and not port.empty:
         safe = port.loc[port["status"] == "Tinggi"].sort_values("omzet_30", ascending=False).head(3)
         if not safe.empty:
@@ -362,16 +365,16 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
 STATUS_ICON = {"Rugi": "🔴 Rugi", "Rendah": "🟠 Rendah", "Tinggi": "🟢 Tinggi", "Tanpa data": "⚪ Tanpa data"}
 
 
-def _priority_table(port: pd.DataFrame) -> None:
-    st.markdown("<div class='section-title'>Daftar prioritas perbaikan margin · 30 hari terakhir</div>", unsafe_allow_html=True)
+def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir") -> None:
+    st.markdown(f"<div class='section-title'>Daftar prioritas perbaikan margin · {html.escape(period_label)}</div>", unsafe_allow_html=True)
     if port.empty:
-        st.info("Belum ada SKU terjual 30 hari terakhir (data transaksi belum termuat).")
+        st.info("Belum ada SKU terjual pada periode ini.")
         return
     acuan = port.attrs.get("acuan_pct", float("nan"))
     with st.expander("Cara membaca daftar ini"):
         st.markdown(
             "- **Margin bersih** = margin kotor (file margin) − potongan Shopee (administrasi kategori + program + proses pesanan) − iklan per unit, "
-            "dalam % harga akhir (harga transaksi rata-rata 30 hari setelah diskon & voucher penjual).\n"
+            "dalam % harga akhir (harga transaksi rata-rata periode terpilih setelah diskon & voucher penjual).\n"
             f"- **Status**: 🔴 Rugi = margin bersih di bawah 0 · 🟠 Rendah = untung tetapi di bawah {fmt_pct(acuan, 1)} (rata-rata margin bersih SKU yang untung) · 🟢 Tinggi = sama/di atas batas itu · "
             "⚪ Tanpa data = tidak ada di file margin.\n"
             "- **Urutan**: Rugi dari kerugian Rp terbesar → Rendah dari selisih Rp terbesar ke batas (omzet × selisih %) → Tinggi dari omzet terbesar.\n"
@@ -387,24 +390,24 @@ def _priority_table(port: pd.DataFrame) -> None:
         view = view.loc[view["sku"] == str(query).split(" · ")[0]]
     frame = pd.DataFrame({
         "Prioritas": range(1, len(view) + 1), "Status": view["status"].map(STATUS_ICON), "SKU": view["sku"], "Nama": view["nama"],
-        "Yang perlu dikerjakan": view["perbaikan"], "Omzet 30 hari": view["omzet_30"], "Terjual 30 hari": view["qty_30"],
+        "Yang perlu dikerjakan": view["perbaikan"], "Omzet periode": view["omzet_30"], "Terjual periode": view["qty_30"],
         "Margin kotor": view["kotor_pct"], "Potongan Shopee": view["shopee_pct"], "Iklan": view["iklan_pct"], "Margin bersih": view["bersih_pct"],
-        "Margin bersih/unit": view["bersih_unit"], "Margin bersih 30 hari": view["bersih_30"],
-        "Rugi / kurang 30 hari": np.where(view["status"] == "Rugi", view["rugi_30"], view["selisih_30"]),
+        "Margin bersih/unit": view["bersih_unit"], "Margin bersih periode": view["bersih_30"],
+        "Rugi / kurang periode": np.where(view["status"] == "Rugi", view["rugi_30"], view["selisih_30"]),
         "Harga akhir": view["harga_akhir"], "ROAS": view["roas"], "Komisi affiliate": view["affiliate_pct"],
         "Sumber margin": view["sumber"], "Kategori Shopee": view["kategori"],
     }).reset_index(drop=True)
     total = {c: np.nan for c in frame.columns}
-    omzet = frame["Omzet 30 hari"].sum()
-    bersih = frame["Margin bersih 30 hari"].sum(min_count=1)
+    omzet = frame["Omzet periode"].sum()
+    bersih = frame["Margin bersih periode"].sum(min_count=1)
     total.update({"Status": "Total", "SKU": f"{fmt_num(len(frame))} SKU", "Nama": "", "Yang perlu dikerjakan": "", "Sumber margin": "", "Kategori Shopee": "",
-                  "Omzet 30 hari": omzet, "Terjual 30 hari": frame["Terjual 30 hari"].sum(), "Margin bersih 30 hari": bersih,
-                  "Margin bersih": (bersih / frame.loc[frame["Margin bersih 30 hari"].notna(), "Omzet 30 hari"].sum() * 100) if pd.notna(bersih) else np.nan,
-                  "Rugi / kurang 30 hari": frame["Rugi / kurang 30 hari"].sum()})
+                  "Omzet periode": omzet, "Terjual periode": frame["Terjual periode"].sum(), "Margin bersih periode": bersih,
+                  "Margin bersih": (bersih / frame.loc[frame["Margin bersih periode"].notna(), "Omzet periode"].sum() * 100) if pd.notna(bersih) else np.nan,
+                  "Rugi / kurang periode": frame["Rugi / kurang periode"].sum()})
     full = pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
-    kinds = {"Omzet 30 hari": "money", "Margin bersih/unit": "money", "Margin bersih 30 hari": "money", "Rugi / kurang 30 hari": "money", "Harga akhir": "money",
+    kinds = {"Omzet periode": "money", "Margin bersih/unit": "money", "Margin bersih periode": "money", "Rugi / kurang periode": "money", "Harga akhir": "money",
              "Margin kotor": "pct", "Potongan Shopee": "pct", "Iklan": "pct", "Margin bersih": "pct", "Komisi affiliate": "pct", "ROAS": "dec",
-             "Terjual 30 hari": "count", "Prioritas": "count"}
+             "Terjual periode": "count", "Prioritas": "count"}
     batched_view(
         len(frame), key="calc-port", noun="SKU",
         render=lambda lo, hi: show_table(
@@ -428,13 +431,24 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     programs, order_fee, _old_limit = _programs(features)
     goals = _goals(features, user_root, orders)
     md = load_margin(features)
-    rows = _portfolio_rows(features, table, data, orders, fees, md)
+    tab_sum, tab_sim, tab_param = st.tabs(["📊 Ringkasan & prioritas", "🧮 Simulasi per SKU", "⚙️ Parameter biaya"])
+    start = end = None
+    period_label = "30 hari terakhir"
+    with tab_sum:
+        if orders is not None and not orders.empty:
+            from src.ui.common import date_range_picker, range_label
+
+            stamps = pd.to_datetime(orders["order_time"], errors="coerce").dropna()
+            lo, hi = stamps.min().date(), stamps.max().date()
+            default = (max(lo, hi - pd.Timedelta(days=29).to_pytimedelta()), hi)
+            start, end = date_range_picker(key="calc-cal", lo=lo, hi=hi, default=default, label="Periode analisa")
+            period_label = range_label(start, end)
+    rows = _portfolio_rows(features, table, data, orders, fees, md, start, end)
     port = fee.portfolio(rows, programs=programs, order_fee=order_fee, fallback_kotor_pct=md.store_kotor_pct) if not rows.empty else pd.DataFrame()
     acuan = port.attrs.get("acuan_pct", float("nan")) if not port.empty else float("nan")
-    tab_sum, tab_sim, tab_param = st.tabs(["📊 Ringkasan & prioritas", "🧮 Simulasi per SKU", "⚙️ Parameter biaya"])
     with tab_sum:
         _summary(goals, port, orders, features, md)
-        _priority_table(port)
+        _priority_table(port, period_label)
     with tab_param:
         _parameter_panel(features, may_edit=may_edit, username=username, require=require)
     with tab_sim:
@@ -507,7 +521,7 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
             st.markdown("<div style='font-weight:700;margin-bottom:.2rem'>Atur simulasi</div>", unsafe_allow_html=True)
             r1 = st.columns(2)
             with r1[0]:
-                harga = float(input_rupiah("Harga jual", int(round(harga0)), key=f"calc-price-{sku}", help="Bawaan = harga transaksi rata-rata 30 hari (sudah setelah diskon), atau harga data produk"))
+                harga = float(input_rupiah("Harga jual", int(round(harga0)), key=f"calc-price-{sku}", help="Bawaan = harga transaksi rata-rata periode terpilih di Ringkasan (sudah setelah diskon), atau harga data produk"))
             with r1[1]:
                 iklan = float(input_rupiah("Biaya iklan per unit", int(round(iklan0)), key=f"calc-ad-{sku}", help="Bawaan = biaya iklan SKU dari data iklan ÷ QTY terjual"))
             r2 = st.columns(2)
