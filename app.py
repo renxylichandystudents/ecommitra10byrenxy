@@ -1133,9 +1133,13 @@ st.markdown(
         .stApp::before, .stApp::after { display: none !important; }
     }
     /* Judul kolom Riwayat analisa tetap terlihat saat daftar di-scroll. */
+    /* Wadah ber-border punya padding atas ±1rem; tanpa offset negatif, baris yang di-scroll terlihat di celah
+       di atas judul kolom. Judul ditarik ke tepi atas wadah dan diberi latar penuh agar menutupi baris di bawahnya. */
     .st-key-run-history > :first-child {
-        position: sticky; top: 0; z-index: 3;
+        position: sticky; top: -1.05rem; z-index: 5;
+        margin-top: -1.05rem; padding-top: 1.05rem; padding-bottom: .45rem;
         background: #ffffff; border-bottom: 1px solid #e2e8f0;
+        box-shadow: 0 6px 8px -8px rgba(15, 23, 42, .25);
     }
     /* Pop-up (menu akun, pilihan dropdown) selalu di atas header yang dipaku (z-index 40) dan pelindungnya. */
     div[data-baseweb="popover"],
