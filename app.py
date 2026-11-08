@@ -952,6 +952,8 @@ st.markdown(
         white-space: nowrap !important; padding-left: .8rem !important; padding-right: .8rem !important;
     }
     div[class*="st-key-"][class*="-actions"] button p { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; }
+    div[class*="st-key-dlbar-"] [data-testid="stDownloadButton"], div[class*="st-key-dlbar-"] [data-testid="stDownloadButton"] button { width: 100% !important; }
+    div[class*="st-key-dlbar-"] button { min-height: 38px !important; border-radius: 10px !important; white-space: nowrap !important; padding: 0 .6rem !important; }
     div[class*="st-key-"][class*="-actions"] [data-testid="stDownloadButton"],
     div[class*="st-key-"][class*="-actions"] [data-testid="stButton"] { width: 100% !important; }
     /* Tulisan "Press Enter to submit form/apply" di kolom isian mengganggu saat mengetik: disembunyikan. */

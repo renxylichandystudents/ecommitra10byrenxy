@@ -189,10 +189,16 @@ def excel_bytes(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> bytes:
     return numeric_excel_bytes(frames)
 
 
+_COMPACT_DOWNLOAD = {"on": False}
+
+
 def download_excel(frames: dict[str, pd.DataFrame] | pd.DataFrame, filename: str, *, key: str | None = None, label: str = "Unduh Excel") -> None:
     name = filename if filename.endswith(".xlsx") else f"{filename}.xlsx"
     rows = len(frames) if isinstance(frames, pd.DataFrame) else sum(len(f) for f in frames.values() if isinstance(f, pd.DataFrame))
     text = label if "(" in label or not rows else f"{label} · {rows:,} baris".replace(",", ".")
+    if _COMPACT_DOWNLOAD["on"]:
+        # Di bilah navigasi tabel: label pendek (jumlah baris sudah tertulis di keterangan), lebar mengikuti kolom.
+        text = "Excel"
     # Gaya tombol unduh (hijau, ikon) diatur global lewat CSS [data-testid="stDownloadButton"] di app.py.
     st.download_button(
         text,
@@ -201,7 +207,21 @@ def download_excel(frames: dict[str, pd.DataFrame] | pd.DataFrame, filename: str
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=key or f"xl-{name}",
         icon=":material/download:",
+        use_container_width=_COMPACT_DOWNLOAD["on"],
+        help=f"Unduh Excel · {rows:,} baris".replace(",", ".") if _COMPACT_DOWNLOAD["on"] and rows else None,
     )
+
+
+def _compact_download(target, download, key: str) -> None:
+    """Tombol unduh ringkas di bilah navigasi tabel (sejajar pilihan baris & nomor halaman)."""
+    if not download:
+        return
+    with target.container(key=f"dlbar-{key}"):
+        _COMPACT_DOWNLOAD["on"] = True
+        try:
+            download()
+        finally:
+            _COMPACT_DOWNLOAD["on"] = False
 
 
 def month_label(key: str) -> str:
@@ -532,8 +552,8 @@ def batched_view(
     fragment: bool | None = None,
     download=None,
 ) -> None:
-    """Satu tabel per halaman: di atas tabel ada keterangan baris, pilihan Baris/hal. (5/10/20/50/100) dan
-    tombol halaman bernomor ‹ 1 2 3 … N ›; tombol Unduh Excel di bawah tabel.
+    """Satu tabel per halaman: di atas tabel satu bilah berisi keterangan baris, pilihan Baris/hal. (5/10/20/50/100),
+    tombol Excel, dan tombol halaman bernomor ‹ 1 2 3 … N ›.
 
     render(start, end) menggambar baris [start, end). Bila fragment=True (bawaan untuk tabel tampilan), ganti
     halaman hanya menjalankan ulang tabel ini sehingga halaman lain tidak ikut dimuat ulang. `step` tidak dipakai lagi
@@ -543,12 +563,14 @@ def batched_view(
 
     def _body() -> None:
         if total <= first:
+            if download:
+                info, _gap, dl = st.columns([1.05, 1.6, 0.42], vertical_alignment="center")
+                info.markdown(_page_caption(1 if total else 0, total, total, noun, 1, 1), unsafe_allow_html=True)
+                _compact_download(dl, download, key)
             render(0, total)
-            _action_bar(key, [], download)
             return
-        lo, hi = pager(total, key=key, noun=noun, default_size=first)
+        lo, hi = pager(total, key=key, noun=noun, default_size=first, download=download)
         render(lo, hi)
-        _action_bar(key, [], download)
 
     if fragment:
         st.fragment(_body)()
@@ -576,7 +598,7 @@ def excel_payload(frame: pd.DataFrame, filename: str) -> dict:
 
 
 def centered_download(key: str, download) -> None:
-    """Tombol Unduh Excel di tengah, gaya sama dengan bilah tombol tabel."""
+    """Tombol Unduh Excel di tengah, gaya sama dengan bilah tombol tabel (dipakai bila tabel tanpa navigasi halaman)."""
     _action_bar(key, [], download)
 
 
@@ -640,7 +662,7 @@ def _page_caption(lo_row: int, hi_row: int, total: int, noun: str, page: int, pa
     )
 
 
-def pager(total: int, *, key: str, noun: str = "baris", default_size: int = 5) -> tuple[int, int]:
+def pager(total: int, *, key: str, noun: str = "baris", default_size: int = 5, download=None) -> tuple[int, int]:
     """Satu baris: keterangan baris · pilihan Baris/hal. · ‹ 1 2 3 … N ›. Mengembalikan rentang baris [lo, hi)."""
     size_key, page_key = f"{key}-size", f"{key}-page"
     sizes = list(PAGE_SIZES) if default_size in PAGE_SIZES else sorted({*PAGE_SIZES, default_size})
@@ -648,7 +670,11 @@ def pager(total: int, *, key: str, noun: str = "baris", default_size: int = 5) -
     if st.session_state.get(f"{key}-total") != total:
         st.session_state[f"{key}-total"] = total
         st.session_state[f"{page_key}-n"] = 1
-    info, size_col, nav = st.columns([1.05, 0.42, 1.6], vertical_alignment="center")
+    if download:
+        info, size_col, dl, nav = st.columns([1.0, 0.42, 0.36, 1.6], vertical_alignment="center")
+        _compact_download(dl, download, key)
+    else:
+        info, size_col, nav = st.columns([1.05, 0.42, 1.6], vertical_alignment="center")
     size = int(
         size_col.selectbox(
             "Baris per halaman", options=sizes, index=sizes.index(default_size), key=size_key,
@@ -667,14 +693,21 @@ def pager(total: int, *, key: str, noun: str = "baris", default_size: int = 5) -
     return lo, hi
 
 
-def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: int, noun: str) -> int:
+def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: int, noun: str, download=None) -> int:
     """Navigasi halaman bernomor: ‹ 1 2 3 … 80 › + keterangan baris yang tampil. Mengembalikan halaman aktif."""
     lo_row = (page - 1) * page_size + 1 if total else 0
     hi_row = min(page * page_size, total)
-    if pages <= 1:
+    if download:
+        info, dl, nav = st.columns([1, 0.32, 1.25], vertical_alignment="center")
+        _compact_download(dl, download, key)
+    elif pages <= 1:
         st.markdown(_page_caption(lo_row, hi_row, total, noun, page, pages), unsafe_allow_html=True)
         return page
-    info, nav = st.columns([1, 1.25], vertical_alignment="center")
+    else:
+        info, nav = st.columns([1, 1.25], vertical_alignment="center")
+    if pages <= 1:
+        info.markdown(_page_caption(lo_row, hi_row, total, noun, page, pages), unsafe_allow_html=True)
+        return page
     info.markdown(_page_caption(lo_row, hi_row, total, noun, page, pages), unsafe_allow_html=True)
     _nav_buttons(nav, page, pages, key=key)
     return min(max(int(st.session_state.get(f"{key}-n", page)), 1), pages)

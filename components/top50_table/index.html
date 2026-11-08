@@ -97,6 +97,9 @@
   .btn.dl { background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border: 1px solid #6ee7b7; color: #065f46; }
   .btn.dl:hover { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); border-color: #34d399; color: #064e3b; }
   .btn svg { width: 18px; height: 18px; flex: 0 0 auto; }
+  /* Tombol Excel ringkas di bilah navigasi (sejajar pilihan baris & nomor halaman). */
+  .btn.sm { min-height: 34px; height: 34px; font-size: .88rem; border-radius: 9px; padding: 0 12px; gap: 6px; }
+  .btn.sm svg { width: 16px; height: 16px; }
   .done { border: 1px solid #a7f3d0; background: #ecfdf5; color: #047857; border-radius: 10px; padding: 6px 14px; text-align: center; font-size: var(--fs-sm); }
   /* Navigasi halaman (sama dengan page_navigator di Streamlit): keterangan kiri, Baris/hal. + nomor halaman kanan. */
   .pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 2px 2px 8px; }
@@ -188,7 +191,7 @@
   function downloadButton(args) {
     const d = args.download;
     if (!d || !d.b64) return "";
-    return `<button class="btn dl" data-act="download">${ICON_DL} ${esc(d.label || "Unduh Excel")}</button>`;
+    return `<button class="btn dl sm" data-act="download" title="${esc(d.label || "Unduh Excel")}">${ICON_DL} Excel</button>`;
   }
 
   function saveDownload(d) {
@@ -336,16 +339,15 @@
       const fmt = (n) => Number(n).toLocaleString("id-ID");
       pager =
         `<div class="pager"><div class="cap">Baris <b>${fmt(total ? lo + 1 : 0)}–${fmt(hi)}</b> dari <b>${fmt(total)}</b> ${noun} · hal. ${page}/${pages}</div>` +
-        `<div class="ctl"><select data-size title="Baris per halaman">${options}</select>` +
+        `<div class="ctl">${args.download ? downloadButton(args) : ""}<select data-size title="Baris per halaman">${options}</select>` +
         (pages > 1
           ? `<button class="pg" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""} title="Halaman sebelumnya">‹</button>${numbers}` +
             `<button class="pg" data-page="${page + 1}" ${page >= pages ? "disabled" : ""} title="Halaman berikutnya">›</button>`
           : "") +
         `</div></div>`;
-      if (args.download) foot = `<div class="foot"><div class="row">${downloadButton(args)}</div></div>`;
     } else {
       body = allRows.slice(0, limit).map(rowHtml).join("");
-      if (args.download) foot = `<div class="foot"><div class="row">${downloadButton(args)}</div></div>`;
+      if (args.download) pager = `<div class="pager"><div class="cap"></div><div class="ctl">${downloadButton(args)}</div></div>`;
     }
 
     const root = document.getElementById("root");

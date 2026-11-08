@@ -248,6 +248,24 @@ def help_columns(tips: dict[str, str], frame: pd.DataFrame, labels: dict[str, st
     return {name: st.column_config.Column(labels.get(name), help=text) for name, text in tips.items() if name in frame.columns}
 
 
+def _numeric_objects(frame: pd.DataFrame) -> pd.DataFrame:
+    """Kolom object yang isinya hanya angka/kosong (mis. setelah baris Total disisipkan) → numerik, agar tidak tampil "None"."""
+    import numbers
+
+    out = frame
+    for column in frame.columns:
+        series = frame[column]
+        if series.dtype != object:
+            continue
+        values = series.dropna()
+        if values.empty or not values.map(lambda v: isinstance(v, numbers.Number) and not isinstance(v, bool)).all():
+            continue
+        if out is frame:
+            out = frame.copy()
+        out[column] = pd.to_numeric(series, errors="coerce")
+    return out
+
+
 def show_table(
     frame: pd.DataFrame,
     max_height: int = 600,
@@ -272,6 +290,7 @@ def show_table(
     if frame.empty or not len(frame.columns):
         st.info("Belum ada data")
         return None
+    frame = _numeric_objects(frame)
     config = dict(column_config or {})
     preformatted = [name for name, cfg in config.items() if _has_own_format(cfg)]
     data = style_frame(frame, kinds=kinds, skip=preformatted, bold_label=bold_label) if styled else frame

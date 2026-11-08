@@ -15,7 +15,7 @@ from src.core.fmt import fmt_date, fmt_date_short
 from src.core.pred_actual import cause_group, daily_comparison, diagnose, lost_sales_from_stock, store_support
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
-from src.ui.common import batched_view, card, centered_download, page_navigator, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
+from src.ui.common import batched_view, card, page_navigator, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
 from src.ui.dashboard import status_badges
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table, table_height, wrap_layout
@@ -409,7 +409,10 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         st.session_state["pva-page-n"] = 1
     pages = max((len(view) - 1) // page_size + 1, 1)
     page = min(max(int(st.session_state.get("pva-page-n", 1)), 1), pages)
-    page = page_navigator(page, pages, key="pva-page", total=len(view), page_size=page_size, noun="SKU")
+    page = page_navigator(
+        page, pages, key="pva-page", total=len(view), page_size=page_size, noun="SKU",
+        download=lambda: download_excel(pd.concat([total_row, view], ignore_index=True), f"prediksi_vs_aktual_{last:%Y%m%d}.xlsx", key="xl-pva"),
+    )
     st.markdown(
         "<div class='field-hint'>Urutan: selisih omzet aktual vs prediksi terbesar (paling berdampak) lebih dulu. Baris Total (sesuai filter) di atas.</div>",
         unsafe_allow_html=True,
@@ -419,10 +422,6 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         bold_label="Total",
         kinds={"Prediksi omzet": "money", "Aktual omzet": "money", "Selisih omzet": "money", "% capaian": "pct"},
         max_height=10_000,
-    )
-    centered_download(
-        "pva-dl",
-        lambda: download_excel(pd.concat([total_row, view], ignore_index=True), f"prediksi_vs_aktual_{last:%Y%m%d}.xlsx", key="xl-pva"),
     )
 
 
