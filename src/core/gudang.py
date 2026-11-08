@@ -1,0 +1,400 @@
+"""Gudang Site 10037 (ECommerce Jakarta): denah, lokasi, data replenishment harian, dan analisa kapasitas.
+
+Sumber:
+- Denah & lokasi: dari file LAYOUT_ECOM (sheet "LAY OUT" dan "Location") yang diunggah sekali di menu
+  Kapasitas gudang dan disimpan di database aplikasi (tidak disimpan di repositori). Jarang berubah.
+- Replenishment: laporan "Replenishment Calculation by Date" dari sistem, diunggah harian. Kolom
+  "Pick Locatoin" = lokasi gondola untuk barang Kecil; barang Besar disimpan di racking menurut kategori.
+- Stok: data stok Site 10037 yang diunggah di aplikasi (kolom stok di tabel analisa); bila SKU tidak ada,
+  memakai Stock On Hand dari replenishment.
+
+Model kapasitas (dinyatakan di layar):
+- Gondola: 1 lokasi pick terisi bila dipetakan ke ≥1 SKU (dari Pick Location).
+- Racking: tidak ada pemetaan per lokasi, jadi diperkirakan per kategori: SKU Besar yang masih berstok ÷ lokasi rak
+  kategori itu (1 SKU ≈ 1 lokasi rak).
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import date, datetime
+
+import numpy as np
+import pandas as pd
+
+SITE = "10037"
+SITE_NAME = "ECommerce Jakarta"
+
+# Nama kategori di replenishment ↔ kategori lokasi (penulisan di file layout berbeda-beda).
+_CATEGORY_ALIASES = {
+    "FLOORING AND WALL": "FLOORING & WALL",
+    "DOORS AND WINDOWS": "DOOR AND WINDOWS",
+    "HOUSEWARE & HOBBIES": "HOUSEWARE & HOBBIES",
+    "HOUSWARE & HOBBIES": "HOUSEWARE & HOBBIES",
+    "BUILDING MATERILAL": "BUILDING MATERIAL",
+    "PAINT AND SUNDRIES": "PAINT & SUNDRIES",
+    "ELECTRICAL AND LIGHTING": "ELECTRICAL",
+}
+
+REPL_COLUMNS = {
+    "Item No": "sku",
+    "Item Name": "nama",
+    "Item Category": "kategori",
+    "Item Sub Category": "sub_kategori",
+    "Spesifikasi Barang": "spesifikasi",
+    "Pick Locatoin": "pick_location",
+    "Pick Location": "pick_location",
+    "Average Sales": "avg_sales",
+    "Minimum Stock": "min_stock",
+    "Maximum Stock": "max_stock",
+    "Reorder Point": "rop",
+    "Stock On Hand": "soh",
+    "Outstanding PO": "out_po",
+    "Outstanding TR": "out_tr",
+    "Over Stock Qty": "over_stock_qty",
+    "ABC Class": "abc",
+    "Stock Out": "stock_out",
+    "Vendor Name": "vendor",
+    "Date": "tanggal",
+}
+NUMERIC = ("avg_sales", "min_stock", "max_stock", "rop", "soh", "out_po", "out_tr", "over_stock_qty")
+
+
+def norm_sku(value) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\.0+$", "", text)
+    return text.lstrip("0") or text
+
+
+def norm_category(value) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip().upper())
+    return _CATEGORY_ALIASES.get(text, text)
+
+
+# Kolom sel bay → lorong per blok baris pada sheet "LAY OUT" (label R01/R02/GONDOLA di file LAYOUT_ECOM).
+_UPPER = (25, 54, {"H": "R01", "J": "R01", "M": "R02", "O": "R02", "R": "R03", "T": "R03", "W": "R04", "Y": "R04"})
+_LOWER = (60, 74, {"G": "R01", "H": "G01", "J": "G01", "K": "R01", "L": "R02", "M": "G02", "O": "G02", "P": "R02", "Q": "R03", "R": "G03"})
+_THEME_INDEX = ["lt1", "dk1", "lt2", "dk2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6"]
+_BORDER_W = {"thin": 1, "hair": 0.5, "dotted": 1, "dashed": 1, "dashDotDot": 1, "mediumDashDot": 2, "slantDashDot": 2, "mediumDashed": 2,
+             "medium": 2, "double": 2.5, "thick": 3}
+
+
+def _theme_colors(wb) -> dict[str, str]:
+    raw = wb.loaded_theme.decode() if isinstance(wb.loaded_theme, bytes) else (wb.loaded_theme or "")
+    scheme = re.search(r"<a:clrScheme.*?</a:clrScheme>", raw, re.S)
+    return dict(re.findall(r'<a:(\w+)>\s*<a:(?:srgbClr val|sysClr val="\w+" lastClr)="(\w+)"', scheme.group(0))) if scheme else {}
+
+
+def _tint(hex_rgb: str, tint: float) -> str:
+    import colorsys
+
+    r, g, b = (int(hex_rgb[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    h, light, sat = colorsys.rgb_to_hls(r, g, b)
+    light = light * (1 + tint) if tint < 0 else light * (1 - tint) + tint
+    r, g, b = colorsys.hls_to_rgb(h, light, sat)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
+def _cell_color(color, theme: dict[str, str]) -> str | None:
+    if color is None:
+        return None
+    if color.type == "rgb" and isinstance(color.rgb, str) and color.rgb != "00000000":
+        return "#" + color.rgb[-6:].lower()
+    if color.type == "theme" and color.theme is not None and color.theme < len(_THEME_INDEX):
+        base = theme.get(_THEME_INDEX[color.theme])
+        return _tint(base, float(color.tint or 0)) if base else None
+    return None
+
+
+def build_denah(wb) -> dict | None:
+    """Sheet "LAY OUT" → geometri sel (ukuran kolom/baris asli), warna, garis, dan kode bay per sel angka."""
+    from openpyxl.utils import get_column_letter
+
+    if "LAY OUT" not in wb.sheetnames:
+        return None
+    ws = wb["LAY OUT"]
+    theme = _theme_colors(wb)
+    first_col, last_col, first_row, last_row = 5, 29, 1, min(ws.max_row, 100)  # kolom E..AC
+    widths, heights = [], []
+    for c in range(first_col, last_col + 1):
+        dim = ws.column_dimensions.get(get_column_letter(c))
+        width = dim.width if dim and dim.width else ws.sheet_format.defaultColWidth or 8.43
+        widths.append(round(width * 7 + 5, 1))
+    for r in range(first_row, last_row + 1):
+        dim = ws.row_dimensions.get(r)
+        heights.append(round((dim.height if dim and dim.height else 15.0) * 4 / 3, 1))
+    xs, ys = [0.0], [0.0]
+    for w in widths:
+        xs.append(round(xs[-1] + w, 1))
+    for h in heights:
+        ys.append(round(ys[-1] + h, 1))
+    bays = {}
+    for top, bottom, cols in (_UPPER, _LOWER):
+        for letter, lorong in cols.items():
+            for r in range(top, bottom + 1):
+                value = ws[f"{letter}{r}"].value
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    bays[(r, letter)] = f"{lorong}-{int(value):03d}"
+    cells = []
+    for r in range(first_row, last_row + 1):
+        for c in range(first_col, last_col + 1):
+            cell = ws.cell(r, c)
+            fill = _cell_color(cell.fill.fgColor, theme) if cell.fill and cell.fill.fill_type == "solid" else None
+            fill = None if fill == "#ffffff" else fill
+            border = []
+            for side in ("top", "right", "bottom", "left"):
+                spec = getattr(cell.border, side)
+                border.append(_BORDER_W.get(spec.style, 0) if spec and spec.style else 0)
+            value = cell.value
+            text = "" if value is None else (str(int(value)) if isinstance(value, float) and value.is_integer() else str(value))
+            letter = get_column_letter(c)
+            key = bays.get((r, letter))
+            if not (fill or any(border) or text):
+                continue
+            i, j = c - first_col, r - first_row
+            entry = {"x": xs[i], "y": ys[j], "w": widths[i], "h": heights[j], "f": fill, "b": border, "t": text, "k": key}
+            # Sel pengisi di kolom bay (warna kategori asli file) → diberi warna netral saat denah diwarnai status.
+            if not key and any(top <= r <= bottom and letter in cols for top, bottom, cols in (_UPPER, _LOWER)):
+                entry["s"] = 1
+            cells.append(entry)
+    return {"w": xs[-1], "h": ys[-1], "cells": cells}
+
+
+def _prepare_locations(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    out["lokasi"] = out["lokasi"].astype(str).str.strip()
+    out["area"] = np.where(out["rak"].astype(str).str.upper().str.startswith("G"), "Gondola", "Racking")
+    out["lorong_kode"] = out["rak"].astype(str).str.upper().str[0] + out["lorong"].astype(str).str.zfill(2)
+    out["bay_kode"] = out["lorong_kode"] + "-" + out["bay"].astype(str).str.zfill(3)
+    out["kategori"] = out["kategori"].map(norm_category)
+    return out
+
+
+def parse_location_sheet(raw: pd.DataFrame) -> pd.DataFrame:
+    """Sheet "Location" (Rack, Lorong, Bay, Level, Slot, Location, Category) → tabel lokasi."""
+    work = raw.iloc[:, :7].copy()
+    work.columns = ["rak", "lorong", "bay", "level", "slot", "lokasi", "kategori"]
+    work = work.dropna(subset=["lokasi"]).astype(str)
+    return _prepare_locations(work)
+
+
+def parse_replenishment(raw: pd.DataFrame) -> tuple[pd.DataFrame, date | None]:
+    """Laporan Replenishment Calculation by Date (baris judul di atas tabel) → satu baris per SKU."""
+    header_row = None
+    for index in range(min(len(raw), 40)):
+        values = [str(v).strip() for v in raw.iloc[index].tolist()]
+        if "Item No" in values:
+            header_row = index
+            break
+    if header_row is None:
+        raise ValueError("Kolom 'Item No' tidak ditemukan. Unggah laporan Replenishment Calculation by Date dari sistem.")
+    table = raw.iloc[header_row + 1 :].copy()
+    table.columns = [str(v).strip() for v in raw.iloc[header_row].tolist()]
+    table = table.loc[:, [c for c in table.columns if c in REPL_COLUMNS]]
+    table = table.rename(columns=REPL_COLUMNS)
+    table = table.loc[:, ~table.columns.duplicated()]
+    if "sku" not in table.columns:
+        raise ValueError("Kolom 'Item No' kosong.")
+    table = table.dropna(subset=["sku"])
+    table["sku"] = table["sku"].map(norm_sku)
+    table = table.loc[table["sku"].ne("") & table["sku"].str.lower().ne("nan")]
+    for column in NUMERIC:
+        if column in table.columns:
+            table[column] = pd.to_numeric(table[column], errors="coerce").fillna(0.0)
+        else:
+            table[column] = 0.0
+    for column in ("nama", "kategori", "sub_kategori", "spesifikasi", "pick_location", "abc", "stock_out", "vendor"):
+        table[column] = table[column].fillna("").astype(str).str.strip() if column in table.columns else ""
+    table["pick_location"] = table["pick_location"].str.upper().replace({"NAN": "", "NONE": ""})
+    table["kategori"] = table["kategori"].map(norm_category)
+    snapshot = None
+    if "tanggal" in table.columns:
+        stamp = pd.to_datetime(table["tanggal"], errors="coerce").dropna()
+        snapshot = stamp.max().date() if not stamp.empty else None
+    if snapshot is None:
+        title = " ".join(str(v) for v in raw.iloc[: header_row].fillna("").to_numpy().ravel())
+        found = re.search(r"Replenishment Date:\s*(\d{1,2} \w{3} \d{4})", title)
+        if found:
+            snapshot = pd.to_datetime(found.group(1), errors="coerce").date()
+    table = table.drop(columns=["tanggal"], errors="ignore").drop_duplicates("sku", keep="last").reset_index(drop=True)
+    return table, snapshot
+
+
+def read_layout_workbook(data) -> dict:
+    """File LAYOUT_ECOM atau laporan replenishment (xlsx) → {"denah", "locations", "repl", "snapshot"} (yang ditemukan saja)."""
+    from io import BytesIO
+
+    import openpyxl
+
+    out: dict = {"denah": None, "locations": None, "repl": None, "snapshot": None}
+    try:
+        wb = openpyxl.load_workbook(BytesIO(data), data_only=True)
+        out["denah"] = build_denah(wb)
+    except Exception:  # noqa: BLE001 - file .xls atau bukan workbook openpyxl: lewati denah
+        out["denah"] = None
+    book = pd.read_excel(BytesIO(data), sheet_name=None, header=None, dtype=object)
+    for name, sheet in book.items():
+        if name.strip().lower() == "location" and sheet.shape[1] >= 7:
+            head = sheet.iloc[0].astype(str).str.strip().tolist()
+            if "Location" in head:
+                body = sheet.iloc[1:].copy()
+                body.columns = head
+                out["locations"] = parse_location_sheet(body)
+        if out["repl"] is None:
+            try:
+                out["repl"], out["snapshot"] = parse_replenishment(sheet)
+            except ValueError:
+                continue
+    return out
+
+
+# --------------------------------------------------------------------------- analisa
+
+
+def build_view(
+    locations: pd.DataFrame,
+    repl: pd.DataFrame,
+    *,
+    stock: dict[str, float] | None = None,
+    names: dict[str, str] | None = None,
+    pred_daily: dict[str, float] | None = None,
+) -> dict:
+    """Gabungkan lokasi + replenishment + stok 10037 + prediksi aplikasi → tabel SKU, lokasi gondola, kategori, bay."""
+    stock = stock or {}
+    names = names or {}
+    pred_daily = pred_daily or {}
+    items = repl.copy() if repl is not None else pd.DataFrame(columns=["sku", *NUMERIC])
+    if items.empty:
+        items = pd.DataFrame(columns=["sku", "nama", "kategori", "spesifikasi", "pick_location", *NUMERIC])
+    items["stok"] = [float(stock[s]) if s in stock else float(soh) for s, soh in zip(items["sku"], items["soh"])]
+    items["sumber_stok"] = ["Data stok 10037" if s in stock else "SOH replenishment" for s in items["sku"]]
+    items["nama"] = [names.get(s) or n for s, n in zip(items["sku"], items["nama"])]
+    items["pred_30"] = [float(pred_daily.get(s, np.nan)) * 30 if s in pred_daily else np.nan for s in items["sku"]]
+    known = set(locations["lokasi"])
+    items["lokasi_valid"] = items["pick_location"].isin(known)
+    loc_cat = locations.set_index("lokasi")["kategori"].to_dict()
+    items["kategori_lokasi"] = items["pick_location"].map(loc_cat).fillna("")
+    items["status"] = [_item_status(r) for r in items.itertuples(index=False)]
+    items["saran"] = [_item_action(r) for r in items.itertuples(index=False)]
+
+    # Lokasi gondola: SKU yang menempati (bisa >1 per lokasi).
+    small = items.loc[items["pick_location"].ne("")]
+    occupants = small.groupby("pick_location").agg(
+        sku_list=("sku", lambda s: list(s)), n_sku=("sku", "size"), stok=("stok", "sum")
+    )
+    loc = locations.copy()
+    loc = loc.join(occupants, on="lokasi")
+    loc["n_sku"] = loc["n_sku"].fillna(0).astype(int)
+    loc["stok"] = loc["stok"].fillna(0.0)
+    loc["terisi"] = loc["n_sku"] > 0
+
+    # Kategori: lokasi rak/gondola vs SKU besar/kecil.
+    rows = []
+    for category in sorted(set(loc["kategori"]) | set(items["kategori"].replace("", np.nan).dropna())):
+        part_loc = loc.loc[loc["kategori"] == category]
+        rack_n = int((part_loc["area"] == "Racking").sum())
+        gon = part_loc.loc[part_loc["area"] == "Gondola"]
+        gon_n, gon_used = int(len(gon)), int(gon["terisi"].sum())
+        part_items = items.loc[items["kategori"] == category]
+        big = part_items.loc[part_items["spesifikasi"].str.lower().eq("besar")]
+        small_items = part_items.loc[~part_items["spesifikasi"].str.lower().eq("besar")]
+        big_stocked = int((big["stok"] > 0).sum())
+        rows.append({
+            "kategori": category,
+            "lokasi_rak": rack_n,
+            "sku_besar": int(len(big)),
+            "sku_besar_berstok": big_stocked,
+            "rak_pct": big_stocked / rack_n * 100 if rack_n else (np.nan if big_stocked == 0 else 999.0),
+            "lokasi_gondola": gon_n,
+            "gondola_terisi": gon_used,
+            "gondola_pct": gon_used / gon_n * 100 if gon_n else np.nan,
+            "sku_kecil": int(len(small_items)),
+            "kecil_tanpa_lokasi": int((small_items["pick_location"].eq("")).sum()),
+            "stok": float(part_items["stok"].sum()),
+            "over_unit": float((part_items["stok"] - part_items["max_stock"]).clip(lower=0).where(part_items["max_stock"] > 0, 0).sum()),
+            "perlu_replenish": int(part_items["status"].isin(["Kosong", "Di bawah ROP"]).sum()),
+        })
+    categories = pd.DataFrame(rows)
+
+    # Bay (untuk denah): ringkasan per bay_kode.
+    bay = loc.groupby("bay_kode").agg(
+        area=("area", "first"), kategori=("kategori", lambda s: ", ".join(sorted(set(s)))),
+        lokasi=("lokasi", "size"), terisi=("terisi", "sum"), stok=("stok", "sum"),
+    )
+    status_by_loc = small.groupby("pick_location")["status"].agg(list).to_dict()
+    bay["masalah"] = [
+        sum(1 for l in loc.loc[loc["bay_kode"] == b, "lokasi"] for s in status_by_loc.get(l, []) if s in ("Kosong", "Di bawah ROP"))
+        for b in bay.index
+    ]
+    cat_rack_pct = categories.set_index("kategori")["rak_pct"].to_dict()
+    bay["rak_pct"] = [cat_rack_pct.get(str(k).split(", ")[0], np.nan) for k in bay["kategori"]]
+    return {"items": items, "locations": loc, "categories": categories, "bays": bay}
+
+
+def _item_status(row) -> str:
+    stock, max_stock, rop, min_stock = float(row.stok), float(row.max_stock), float(row.rop), float(row.min_stock)
+    if stock <= 0:
+        return "Kosong"
+    if (rop > 0 and stock <= rop) or (min_stock > 0 and stock < min_stock):
+        return "Di bawah ROP"
+    if max_stock > 0 and stock > max_stock:
+        return "Lebih dari Max"
+    return "Aman"
+
+
+def _item_action(row) -> str:
+    stock, max_stock = float(row.stok), float(row.max_stock)
+    incoming = float(row.out_po) + float(row.out_tr)
+    notes = []
+    if row.status in ("Kosong", "Di bawah ROP"):
+        need = max(max_stock - stock - incoming, 0)
+        notes.append(f"Replenish ±{need:,.0f} unit (sampai Max {max_stock:,.0f}, sudah dalam perjalanan {incoming:,.0f})".replace(",", ".")
+                     if need > 0 else "Menunggu PO/TR yang sedang berjalan")
+    elif row.status == "Lebih dari Max":
+        notes.append(f"Kelebihan {stock - max_stock:,.0f} unit memakan ruang — tahan replenish / dorong promo".replace(",", "."))
+    if str(row.spesifikasi).lower() != "besar" and not row.pick_location:
+        notes.append("Barang kecil belum punya pick location — tetapkan lokasi gondola")
+    elif row.pick_location and not row.lokasi_valid:
+        notes.append(f"Pick location {row.pick_location} tidak ada di denah")
+    elif row.pick_location and row.kategori_lokasi and row.kategori and row.kategori_lokasi != row.kategori:
+        notes.append(f"Lokasi zona {row.kategori_lokasi.title()}, kategori barang {row.kategori.title()}")
+    pred = float(row.pred_30) if row.pred_30 == row.pred_30 else np.nan
+    if np.isfinite(pred) and max_stock > 0:
+        if pred > max_stock * 1.2:
+            notes.append(f"Prediksi 30 hari {pred:,.0f} > Max {max_stock:,.0f}: naikkan Max agar tidak kosong".replace(",", "."))
+        elif pred * 3 < max_stock and max_stock >= 6:
+            notes.append(f"Max {max_stock:,.0f} ≫ prediksi 30 hari {pred:,.0f}: Max bisa diturunkan untuk hemat ruang".replace(",", "."))
+    return "; ".join(notes) or "—"
+
+
+def capacity_card(view: dict) -> tuple[str, str]:
+    """(nilai, keterangan) untuk kartu Kapasitas gudang di dashboard."""
+    loc = view["locations"]
+    gon = loc.loc[loc["area"] == "Gondola"]
+    cat = view["categories"]
+    rack_total = int(cat["lokasi_rak"].sum())
+    rack_used = int(np.minimum(cat["sku_besar_berstok"], cat["lokasi_rak"]).sum())
+    used = int(gon["terisi"].sum()) + rack_used
+    total = int(len(loc))
+    pct = used / total * 100 if total else np.nan
+    note = f"{used:,} dari {total:,} lokasi · gondola {int(gon['terisi'].sum())}/{len(gon)} · rak ±{rack_used}/{rack_total}".replace(",", ".")
+    return (f"{pct:.1f}%".replace(".", ",") if np.isfinite(pct) else "–"), note
+
+
+def location_of(view: dict | None, sku: str) -> str:
+    """Teks lokasi SKU di gudang 10037 untuk dialog analisa."""
+    if not view:
+        return ""
+    items = view["items"]
+    row = items.loc[items["sku"] == norm_sku(sku)]
+    if row.empty:
+        return ""
+    r = row.iloc[0]
+    where = f"pick {r['pick_location']}" if r["pick_location"] else ("racking zona " + str(r["kategori"]).title() if str(r["spesifikasi"]).lower() == "besar" else "belum ada pick location")
+    return f"{where} · Min {r['min_stock']:,.0f} / ROP {r['rop']:,.0f} / Max {r['max_stock']:,.0f} · {r['status']}".replace(",", ".")
+
+
+def snapshot_stamp(value) -> str:
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%Y-%m-%d")
+    return str(value or "")

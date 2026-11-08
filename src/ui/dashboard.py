@@ -8,7 +8,6 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from src.core import warehouse
 from src.core.access import ROLE_LABELS, setting_tabs
 from src.core.decision_table import stock_shortage
 from src.core.fmt import fmt_date, fmt_rp
@@ -33,25 +32,19 @@ def status_badges(frame: pd.DataFrame, column: str = "Status") -> pd.DataFrame:
 
 
 def capacity_summary(features, table: pd.DataFrame) -> tuple[str, str]:
-    """(nilai kartu, keterangan) Kapasitas DC dari layout + dimensi karton."""
+    """(nilai kartu, keterangan) Kapasitas gudang Site 10037: lokasi terpakai dari denah + replenishment harian."""
     if features is None:
-        return "–", "Layout gudang belum diunggah"
+        return "–", "Data replenishment belum diunggah"
     try:
-        racks = features.read("warehouse_rack")
-        cartons = features.read("carton_dimension")
+        from src.core import gudang
+        from src.ui.gudang_view import cached_view
+
+        view = cached_view(features, table)
     except Exception:
-        return "–", "Layout gudang belum diunggah"
-    if racks.empty:
-        return "–", "Layout gudang belum diunggah (Setting › Kapasitas gudang)"
-    latest = racks.loc[racks["layout_version"] == racks["layout_version"].max()]
-    capacity = warehouse.zone_capacity(latest)
-    used, missing = warehouse.zone_usage(table, warehouse.unit_volume(cartons), list(capacity.index))
-    total_cap = float(capacity.sum())
-    pct = float(used.sum()) / total_cap * 100 if total_cap > 0 else float("nan")
-    note = f"{fmt_num(used.sum(), 1)} dari {fmt_num(total_cap, 1)} m³"
-    if not missing.empty:
-        note += f" · {fmt_num(len(missing))} SKU belum ada dimensi karton"
-    return (f"{fmt_num(pct, 1)}%" if pd.notna(pct) else "–"), note
+        return "–", "Data replenishment belum diunggah"
+    if not view or not view.get("has_repl"):
+        return "–", "Unggah replenishment Site 10037 (Setting › Kapasitas gudang)"
+    return gudang.capacity_card(view)
 
 
 def last_actual(orders: pd.DataFrame | None, keys: list[str], today: date) -> tuple[float, date | None]:
@@ -120,7 +113,7 @@ def show_priority_dashboard(
         gaps.append(f"{fmt_num(shortage['tanpa_data'])} tanpa data stok")
     card(cols[2], "SKU Top 50 stok kurang", fmt_num(shortage["kurang"]), hint="Stok di bawah prediksi + SS · " + " · ".join(gaps))
     cap_value, cap_note = capacity_summary(features, table)
-    card(cols[3], "Kapasitas DC", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
+    card(cols[3], "Kapasitas gudang 10037", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
 
     priority = restock_priority(top, today, po=data.po)
     basis = "Sales value" if metric == "sales" else "QTY terjual"

@@ -7,16 +7,14 @@ import html
 from datetime import date, datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 from src.core import margin as margin_core
 from src.core import warehouse
 from src.core.access import allowed, setting_tabs
 from src.core.feature_store import IMPORT_STATUSES
-from src.core.fmt import fmt_date, fmt_date_short
+from src.core.fmt import fmt_date_short
 from src.core.periods import last_full_month
 from src.core.promo import exclusion_suggestions, product_label
 from src.ui.common import ID_MONTHS, button_tabs, card, download_excel, fmt_idr, fmt_num, fmt_pct
@@ -329,105 +327,10 @@ def _margin_report_tab(table: pd.DataFrame, data: FeatureData, orders: pd.DataFr
 
 
 def _capacity_tab(features, table: pd.DataFrame, data: FeatureData, role: str, username: str, today: date, user_root: Path) -> None:
-    st.markdown("**Kapasitas gudang**")
-    may_upload = allowed(role, "setting_kapasitas_gudang", "upload")
-    with st.expander("Unggah layout rak, dimensi karton, dan denah", expanded=False):
-        if not may_upload:
-            st.caption("Role Anda hanya melihat. Unggahan oleh Team DC atau Super user.")
-        t1, t2 = st.columns(2)
-        with t1:
-            download_excel(pd.DataFrame(columns=list(warehouse.LAYOUT_COLUMNS)), "template_layout_rak.xlsx", key="xl-layout-tpl", label="Unduh template layout")
-            layout_file = st.file_uploader("Layout rak (kode_rak, zona, panjang_cm, lebar_cm, tinggi_cm, faktor_isi)", type=["xlsx", "csv"], key="layout-upload", disabled=not may_upload)
-            if layout_file is not None and may_upload and st.button("Simpan layout", key="layout-save", type="primary"):
-                _require("setting_kapasitas_gudang", "upload")
-                good, bad = warehouse.normalize_layout(_read_upload(layout_file))
-                if not bad.empty:
-                    show_table(bad)
-                if not good.empty:
-                    version = datetime.now().strftime("%Y%m%d%H%M%S")
-                    features.insert("warehouse_rack", good.assign(layout_version=version), username=username, action="unggah:layout_gudang")
-                    bump(st.session_state)
-                    st.success(f"Layout {fmt_num(len(good))} rak disimpan (versi {version}).")
-        with t2:
-            download_excel(pd.DataFrame(columns=list(warehouse.CARTON_COLUMNS)), "template_dimensi_karton.xlsx", key="xl-carton-tpl", label="Unduh template karton")
-            carton_file = st.file_uploader("Dimensi karton (sku, varian, panjang_cm, lebar_cm, tinggi_cm, isi_per_karton)", type=["xlsx", "csv"], key="carton-upload", disabled=not may_upload)
-            if carton_file is not None and may_upload and st.button("Simpan dimensi karton", key="carton-save", type="primary"):
-                _require("setting_kapasitas_gudang", "upload")
-                raw = _read_upload(carton_file)
-                raw.columns = [str(c).strip().lower() for c in raw.columns]
-                missing = [c for c in warehouse.CARTON_COLUMNS if c not in raw.columns and c != "varian"]
-                if missing:
-                    st.error("Kolom hilang: " + ", ".join(missing))
-                else:
-                    raw["varian"] = raw.get("varian", "").fillna("") if "varian" in raw.columns else ""
-                    raw["sku"] = raw["sku"].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True)
-                    for column in ("panjang_cm", "lebar_cm", "tinggi_cm", "isi_per_karton"):
-                        raw[column] = pd.to_numeric(raw[column].astype(str).str.replace(",", "."), errors="coerce")
-                    raw["isi_per_karton"] = raw["isi_per_karton"].fillna(1)
-                    clean = raw.dropna(subset=["panjang_cm", "lebar_cm", "tinggi_cm"])
-                    features.replace("carton_dimension", clean[list(warehouse.CARTON_COLUMNS)], keys=["sku", "varian"], username=username, action="unggah:dimensi_karton")
-                    bump(st.session_state)
-                    st.success(f"{fmt_num(len(clean))} dimensi karton disimpan; {fmt_num(len(raw) - len(clean))} baris tanpa dimensi dilewati.")
-        plan_file = st.file_uploader("Lampiran denah (gambar/PDF, hanya ditampilkan)", type=["png", "jpg", "jpeg", "pdf"], key="plan-upload", disabled=not may_upload)
-        if plan_file is not None and may_upload:
-            folder = Path(user_root) / "denah"
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / plan_file.name).write_bytes(plan_file.getvalue())
-            st.success("Denah disimpan.")
-    folder = Path(user_root) / "denah"
-    plans = sorted(folder.glob("*")) if folder.exists() else []
-    images = [p for p in plans if p.suffix.lower() in (".png", ".jpg", ".jpeg")]
-    if images:
-        st.image(str(images[-1]), caption=f"Denah: {images[-1].name}", use_container_width=True)
-    racks = features.read("warehouse_rack")
-    if racks.empty:
-        st.info("Layout gudang belum diunggah.")
-        return
-    latest = racks.loc[racks["layout_version"] == racks["layout_version"].max()]
-    capacity = warehouse.zone_capacity(latest)
-    zones = list(capacity.index)
-    volumes = warehouse.unit_volume(features.read("carton_dimension"))
-    used, missing = warehouse.zone_usage(table, volumes, zones)
-    rows = []
-    for zone, cap in capacity.items():
-        pct = float(used.get(zone, 0.0)) / cap * 100 if cap > 0 else np.nan
-        rows.append({"Zona": zone, "Kapasitas (m³)": cap, "Terpakai (m³)": float(used.get(zone, 0.0)), "Sisa (m³)": cap - float(used.get(zone, 0.0)), "Terpakai (%)": pct})
-    zone_frame = pd.DataFrame(rows)
-    cols = st.columns(min(len(zone_frame), 4) or 1)
-    for index, row in zone_frame.iterrows():
-        color = warehouse.capacity_color(row["Terpakai (%)"])
-        cols[index % len(cols)].markdown(
-            f"<div class='stat-card' style='border-left:6px solid {color}'><div class='readable-metric-label'>{html.escape(row['Zona'])}</div>"
-            f"<div class='readable-metric-value' style='color:{color}'>{fmt_pct(row['Terpakai (%)'], 1)}</div>"
-            f"<div class='metric-hint'>{fmt_num(row['Terpakai (m³)'], 1)} / {fmt_num(row['Kapasitas (m³)'], 1)} m³</div></div>",
-            unsafe_allow_html=True,
-        )
-    st.caption("Hijau < 75%, oranye 75–90%, merah > 90%. Terpakai = Σ stok DC × volume unit (dimensi karton ÷ isi per karton).")
-    projection = warehouse.weekly_projection(table, volumes, capacity, zones, data.import_po, today)
-    if not projection.empty:
-        fig = go.Figure()
-        for zone, part in projection.groupby("zona"):
-            fig.add_scatter(x=part["minggu"], y=part["pct"], mode="lines+markers", name=str(zone))
-        fig.add_hline(y=100, line_dash="dot", line_color="#dc2626")
-        fig.update_layout(height=320, yaxis_title="% kapasitas", margin=dict(l=30, r=20, t=20, b=30), legend=dict(orientation="h", y=-0.25), xaxis=dict(tickformat="%d/%m"))
-        st.plotly_chart(fig, use_container_width=True, key="cap-projection")
-        full = warehouse.first_full(projection)
-        st.markdown(f"**Zona pertama penuh:** {html.escape(full[0])} pada {fmt_date(full[1])}" if full else "**Zona pertama penuh:** tidak ada dalam 12 minggu proyeksi.")
-    if not data.import_po.empty and volumes:
-        inbound = data.import_po.loc[data.import_po["status"].astype(str) != "Diterima DC"].copy()
-        if not inbound.empty:
-            names = table.drop_duplicates("sku").set_index(table["sku"].astype(str).drop_duplicates())["product_name"].to_dict() if not table.empty else {}
-            inbound["m3"] = inbound["sku"].astype(str).map(volumes).fillna(0) * pd.to_numeric(inbound["qty"], errors="coerce").fillna(0)
-            inbound["zona"] = [warehouse.zone_for(names.get(str(s), ""), zones) for s in inbound["sku"]]
-            spare = zone_frame.set_index("Zona")["Sisa (m³)"]
-            best = spare.idxmax() if not spare.empty else "-"
-            inbound["Sisa zona"] = inbound["zona"].map(spare)
-            inbound["Rekomendasi"] = np.where(inbound["m3"] > inbound["Sisa zona"].fillna(0), f"Pindah ke {best}", "Muat")
-            st.markdown("**Rencana inbound vs ruang**")
-            show_table(inbound[["no_po", "sku", "qty", "eta_terbaru", "zona", "m3", "Sisa zona", "Rekomendasi"]].rename(columns={"no_po": "No PO", "sku": "SKU", "qty": "QTY", "eta_terbaru": "ETA terbaru", "zona": "Zona", "m3": "Volume (m³)"}))
-    if not missing.empty:
-        with st.expander(f"Data belum lengkap · {fmt_num(len(missing))} SKU tanpa dimensi karton"):
-            show_table(missing.rename(columns={"sku": "SKU"}))
+    """Gudang Site 10037: denah bawaan + replenishment harian + stok 10037 (lihat src/ui/gudang_view.py)."""
+    from src.ui.gudang_view import show_capacity
+
+    show_capacity(features, table, may_upload=allowed(role, "setting_kapasitas_gudang", "upload"), username=username, require=_require)
 
 
 # ---------------------------------------------------------------- Kedatangan impor

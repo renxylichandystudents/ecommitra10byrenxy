@@ -110,7 +110,14 @@ def _dc_block(row: pd.Series) -> str:
             f"Site 10037 kurang {fmt_qty(shortfall)} unit dan kedua DC kosong, jadi seluruhnya perlu PO ke supplier."
         )
     plan = str(row.get("sumber_restock") or "").strip()
-    return (
+    try:
+        from src.ui.gudang_view import location_text
+
+        where = location_text(str(row.get("sku", "")))
+    except Exception:
+        where = ""
+    where_html = f"<p class='insight-copy'><b>Gudang Site 10037</b>: {html.escape(where)}</p>" if where else ""
+    return where_html + (
         "<p class='insight-copy'><b>Stok DC</b> (urutan ambil: Site 10062 dulu karena satu kawasan dengan Site 10037, lalu Site 10036)</p>"
         + table
         + f"<p class='insight-copy'>{html.escape(verdict)}" + (f" Rencana: <b>{html.escape(plan)}</b>." if plan else "") + "</p>"

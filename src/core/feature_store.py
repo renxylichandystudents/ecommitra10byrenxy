@@ -113,6 +113,54 @@ warehouse_rack = Table(
     UniqueConstraint("layout_version", "kode_rak", name="warehouse_rack_version_kode"),
 )
 
+# Gudang Site 10037: data replenishment harian dari sistem (satu snapshot per tanggal) dan lokasi denah (bila diperbarui).
+warehouse_replenishment = Table(
+    "warehouse_replenishment",
+    metadata,
+    _id(),
+    Column("snapshot_date", Date, nullable=False, index=True),
+    Column("sku", String(64), nullable=False),
+    Column("nama", String(300), nullable=False, default=""),
+    Column("kategori", String(120), nullable=False, default=""),
+    Column("sub_kategori", String(120), nullable=False, default=""),
+    Column("spesifikasi", String(40), nullable=False, default=""),
+    Column("pick_location", String(40), nullable=False, default=""),
+    Column("avg_sales", Float),
+    Column("min_stock", Float),
+    Column("max_stock", Float),
+    Column("rop", Float),
+    Column("soh", Float),
+    Column("out_po", Float),
+    Column("out_tr", Float),
+    Column("over_stock_qty", Float),
+    Column("abc", String(10), nullable=False, default=""),
+    Column("stock_out", String(10), nullable=False, default=""),
+    Column("vendor", String(200), nullable=False, default=""),
+    Column("uploaded_by", String(80), nullable=False, default=""),
+    Column("uploaded_at", DateTime, nullable=False),
+)
+
+warehouse_denah = Table(
+    "warehouse_denah",
+    metadata,
+    _id(),
+    Column("created_at", DateTime, nullable=False),
+    Column("uploaded_by", String(80), nullable=False, default=""),
+    Column("content", Text, nullable=False),
+)
+
+warehouse_location = Table(
+    "warehouse_location",
+    metadata,
+    Column("lokasi", String(40), primary_key=True),
+    Column("rak", String(10), nullable=False),
+    Column("lorong", String(10), nullable=False),
+    Column("bay", String(10), nullable=False),
+    Column("level", String(10), nullable=False),
+    Column("slot", String(10), nullable=False),
+    Column("kategori", String(120), nullable=False, default=""),
+)
+
 import_po = Table(
     "import_po",
     metadata,
@@ -305,6 +353,25 @@ class FeatureStore:
         with self.engine.connect() as conn:
             rows = conn.execute(query).mappings().all()
         return pd.DataFrame(rows, columns=list(table.columns.keys()))
+
+    def snapshot_dates(self, name: str, column: str = "snapshot_date") -> list:
+        """Tanggal snapshot yang tersimpan (terbaru di depan)."""
+        from sqlalchemy import distinct
+
+        table = self._table(name)
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(distinct(table.c[column])).order_by(table.c[column].desc())).all()
+        return [row[0] for row in rows if row[0] is not None]
+
+    def prune_snapshots(self, name: str, keep: int, column: str = "snapshot_date") -> int:
+        """Simpan hanya `keep` snapshot terbaru agar tabel harian tidak terus membesar."""
+        dates = self.snapshot_dates(name, column)
+        if len(dates) <= keep:
+            return 0
+        table = self._table(name)
+        with self.engine.begin() as conn:
+            count = conn.execute(delete(table).where(table.c[column] < dates[keep - 1])).rowcount or 0
+        return int(count)
 
     def save_prediction_snapshot(self, run_id: int, frame: pd.DataFrame, *, username: str = "") -> int:
         """frame: target_date, sku, varian, pred_qty, pred_sales (satu baris per SKU × tanggal window)."""
