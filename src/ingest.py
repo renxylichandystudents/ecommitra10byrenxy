@@ -131,14 +131,10 @@ VALID_STATUS_HINTS = (
     "dibayar",
 )
 
-CANCEL_HINTS = (
-    "batal",
-    "cancel",
-    "cancelled",
-    "canceled",
-    "unpaid",
-    "belum bayar",
-)
+CANCEL_ONLY_HINTS = ("batal", "cancel")
+OPEN_UNPAID_HINTS = ("unpaid", "belum bayar")
+# Tidak dihitung terjual: batal + pesanan yang masih menunggu pembayaran.
+CANCEL_HINTS = (*CANCEL_ONLY_HINTS, "cancelled", "canceled", *OPEN_UNPAID_HINTS)
 
 SUCCESS_STATUSES = (
     "pesanan diterima",
@@ -684,7 +680,26 @@ def _cancelled_values(series: pd.Series) -> pd.Series:
 
 
 def cancelled_status_mask(series: pd.Series) -> pd.Series:
+    """Tidak dihitung terjual: status batal atau masih Belum Bayar."""
     return via_unique(series, _cancelled_values).astype(bool)
+
+
+def _hint_values(series: pd.Series, hints: tuple[str, ...]) -> pd.Series:
+    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
+    mask = pd.Series(False, index=series.index)
+    for hint in hints:
+        mask = mask | text.str.contains(hint, regex=False)
+    return mask
+
+
+def cancel_only_mask(series: pd.Series) -> pd.Series:
+    """Benar-benar dibatalkan (untuk jumlah & tingkat batal). Belum Bayar yang masih terbuka tidak termasuk."""
+    return via_unique(series, lambda part: _hint_values(part, CANCEL_ONLY_HINTS)).astype(bool)
+
+
+def open_unpaid_mask(series: pd.Series) -> pd.Series:
+    """Pesanan masih menunggu pembayaran (status Belum Bayar): bukan batal, belum terjual."""
+    return via_unique(series, lambda part: _hint_values(part, OPEN_UNPAID_HINTS) & ~_hint_values(part, CANCEL_ONLY_HINTS)).astype(bool)
 
 
 def success_status_mask(series: pd.Series) -> pd.Series:

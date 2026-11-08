@@ -4862,12 +4862,15 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     show_metric(resume_row[3], "QTY semua status" if select_all else "QTY", format_qty(qty_shown),
                 hint=f"termasuk batal & retur · QTY bersih {format_qty(facts['qty_bersih'])}" if select_all else "QTY pada status yang dicentang")
     row_two = st.columns(4)
-    metric_card(row_two[0], "pesanan_batal", format_number(summary["invoice_cancel"]))
+    waiting = int(facts.get("pesanan_menunggu_bayar", 0))
+    metric_card(row_two[0], "pesanan_batal", format_number(summary["invoice_cancel"]),
+                hint=(f"{format_number(waiting)} pesanan masih Belum Bayar ({format_idr(facts.get('nominal_menunggu_bayar', 0))}) tidak dihitung batal"
+                      if waiting else None))
     metric_card(row_two[1], "nominal_batal", format_idr(summary["nominal_cancel"]))
     metric_card(row_two[2], "retur_unit", format_qty(summary["sales_return"]))
     metric_card(row_two[3], "nominal_retur", format_idr(summary["nominal_return"]))
     row_three = st.columns(4)
-    net_hint = "Selalu tanpa pesanan batal & retur, apa pun centang status di atas"
+    net_hint = "Selalu tanpa pesanan batal, Belum Bayar & retur, apa pun centang status di atas"
     metric_card(row_three[0], "pesanan_bersih", format_number(facts["pesanan_bersih"]), hint=net_hint)
     reach = achievement_line(facts["sales_bersih"], period_start_day, period_end_day, get_features())
     metric_card(row_three[1], "sales_bersih", format_idr(facts["sales_bersih"]), hint=net_hint + (f"<br>{reach}" if reach else ""))

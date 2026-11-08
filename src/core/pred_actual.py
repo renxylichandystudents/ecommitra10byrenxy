@@ -254,10 +254,10 @@ def diagnose(
     max_order = today_lines.groupby(["sku", today_lines.get("order_id", today_lines.index).astype(str)])["q"].sum().groupby(level=0).max() if not today_lines.empty else pd.Series(dtype=float)
     cancel = {}
     if lines_all is not None and not lines_all.empty and "status" in lines_all.columns:
-        from src.ingest import cancelled_status_mask
+        from src.ingest import cancel_only_mask
 
         stamp = pd.to_datetime(lines_all["order_time"], errors="coerce").dt.date
-        part = lines_all.loc[(stamp == day) & cancelled_status_mask(lines_all["status"])]
+        part = lines_all.loc[(stamp == day) & cancel_only_mask(lines_all["status"])]
         if not part.empty:
             gq = pd.to_numeric(part.get("gross_qty", part["qty"]), errors="coerce").fillna(0.0)
             reasons = part.get("cancel_reason", pd.Series("", index=part.index)).fillna("").astype(str).str.replace(r"^.*Alasan:\s*", "", regex=True)

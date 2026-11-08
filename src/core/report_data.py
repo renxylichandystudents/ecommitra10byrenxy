@@ -106,12 +106,13 @@ def daily_orders(frame: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
     lines = lines.assign(day=pd.to_datetime(lines["order_time"]).dt.normalize())
     once = lines.groupby("order_key", sort=False).agg(day=("day", "first"), amount=("order_amount", "first"), line=("line_value", "sum"), cancel=("is_cancel", "any"))
     once["money"] = once["amount"].where(once["amount"].fillna(0) > 0, once["line"]).fillna(0)
-    active = lines.loc[~lines["is_cancel"]]
+    once = once.assign(gone=once.index.map(lines.groupby("order_key")["is_open"].any()) | once["cancel"])
+    active = lines.loc[~lines["is_cancel"] & ~lines["is_open"]]
     per_day = pd.DataFrame({
         "Pesanan": once.groupby("day").size(),
         "Pesanan batal": once.loc[once["cancel"]].groupby("day").size(),
         "bruto": once.groupby("day")["money"].sum(),
-        "batal": once.loc[once["cancel"]].groupby("day")["money"].sum(),
+        "batal": once.loc[once["gone"]].groupby("day")["money"].sum(),
         "retur": active.groupby("day")["return_value"].sum(),
         "Sales produk bersih": (active["line_value"] - active["return_value"]).groupby(active["day"]).sum(),
         "QTY bersih": (active["gross_qty"] - np.minimum(active["returned_qty"], active["gross_qty"])).groupby(active["day"]).sum(),

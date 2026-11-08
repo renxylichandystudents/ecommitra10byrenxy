@@ -6,7 +6,9 @@ import pandas as pd
 from src.aggregate import period_start
 from src.core.cancel_reasons import short_reason
 from src.ingest import (
+    cancel_only_mask,
     cancelled_status_mask,
+    open_unpaid_mask,
     clean_sku_series,
     clean_text_series,
     item_key_series,
@@ -128,7 +130,8 @@ def ledger_from_raw(raw: pd.DataFrame) -> pd.DataFrame:
     frame["sales"] = frame["line_value"]
     frame = frame.dropna(subset=["order_time"])
     frame = frame[frame["product_name"].ne("") | frame["sku"].ne("")]
-    frame["is_cancel"] = cancelled_status_mask(frame["status"])
+    frame["is_cancel"] = cancel_only_mask(frame["status"])
+    frame["is_open"] = open_unpaid_mask(frame["status"])
     frame["is_success"] = success_status_mask(frame["status"])
     frame["item_key"] = item_key_series(frame)
     frame = frame.drop_duplicates(
@@ -202,7 +205,7 @@ def scope_ledger(
         return ledger
     work = ledger
     if not include_cancel and "is_cancel" in work.columns:
-        work = work.loc[~work["is_cancel"]]
+        work = work.loc[~work["is_cancel"] & ~work.get("is_open", False)]
     if not include_return and "returned_qty" in work.columns:
         work = work.copy()
         work["qty"] = (work["qty"] - work["returned_qty"]).clip(lower=0)
@@ -245,7 +248,7 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
         return summary, empty_status, empty_sku
 
     cancel = ledger.loc[ledger["is_cancel"]]
-    active = ledger.loc[~ledger["is_cancel"]]
+    active = ledger.loc[~ledger["is_cancel"] & ~ledger.get("is_open", False)]
     sold = active.loc[active["qty"] > 0]
     summary = {
         "orders": _unique_orders(ledger),
@@ -485,7 +488,7 @@ def unpaid_buyer_table(
     if not bool(in_period.any()):
         return empty
     reason = frame["cancel_reason"].str.lower()
-    unpaid = cancelled_status_mask(frame["status"]) & (
+    unpaid = cancel_only_mask(frame["status"]) & (
         reason.str.contains("belum dibayar", regex=False) | reason.str.contains("belum bayar", regex=False)
     )
     frame["unpaid"] = unpaid
@@ -561,7 +564,7 @@ def unpaid_buyer_table(
 
 def region_lines(source: pd.DataFrame) -> pd.DataFrame:
     """Baris pesanan dengan provinsi dan kota/kabupaten pembeli (dari kolom Provinsi & Kota/Kabupaten Shopee)."""
-    columns = ["order_id", "order_time", "month", "province", "city", "cancelled", "qty", "returned_qty", "unit_price"]
+    columns = ["order_id", "order_time", "month", "province", "city", "cancelled", "menunggu", "qty", "returned_qty", "unit_price"]
     if source is None or source.empty:
         return pd.DataFrame(columns=columns)
     table = source.drop(columns=["Nama file"], errors="ignore")
@@ -578,7 +581,8 @@ def region_lines(source: pd.DataFrame) -> pd.DataFrame:
     frame["province"] = clean_text_series(table[mapping["province"]]).str.upper() if "province" in mapping else ""
     frame["city"] = clean_text_series(table[mapping["city"]]).str.upper() if "city" in mapping else ""
     status = normalize_status_series(table[mapping["status"]]) if "status" in mapping else pd.Series("", index=table.index)
-    frame["cancelled"] = cancelled_status_mask(status)
+    frame["cancelled"] = cancel_only_mask(status)
+    frame["menunggu"] = open_unpaid_mask(status)
     frame["qty"] = _parse_number(table[mapping["qty"]]).fillna(0).clip(lower=0)
     # Kolom retur hanya dipakai bila benar-benar kolom tersendiri (bukan kolom Jumlah yang sama).
     if "returned_qty" in mapping and mapping["returned_qty"] != mapping["qty"]:
@@ -618,13 +622,15 @@ def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
     if lines is None or lines.empty:
         return pd.DataFrame(columns=out_cols)
     work = lines.copy()
-    work["net_qty"] = (work["qty"] - work["returned_qty"]).clip(lower=0).where(~work["cancelled"], 0.0)
+    if "menunggu" not in work.columns:
+        work["menunggu"] = False
+    work["net_qty"] = (work["qty"] - work["returned_qty"]).clip(lower=0).where(~work["cancelled"] & ~work["menunggu"], 0.0)
     work["net_sales"] = work["net_qty"] * work["unit_price"]
     orders = work.groupby(["order_id"] + keys, as_index=False).agg(
-        cancelled=("cancelled", "all"), returned=("returned_qty", "sum"), net_qty=("net_qty", "sum"), net_sales=("net_sales", "sum")
+        cancelled=("cancelled", "all"), menunggu=("menunggu", "all"), returned=("returned_qty", "sum"), net_qty=("net_qty", "sum"), net_sales=("net_sales", "sum")
     )
-    orders["retur"] = ~orders["cancelled"] & orders["returned"].gt(0)
-    orders["bersih"] = ~orders["cancelled"] & ~orders["retur"]
+    orders["retur"] = ~orders["cancelled"] & ~orders["menunggu"] & orders["returned"].gt(0)
+    orders["bersih"] = ~orders["cancelled"] & ~orders["menunggu"] & ~orders["retur"]
     result = orders.groupby(keys).agg(
         total=("order_id", "nunique"), batal=("cancelled", "sum"), retur=("retur", "sum"), bersih=("bersih", "sum"),
         qty=("net_qty", "sum"), sales=("net_sales", "sum"),

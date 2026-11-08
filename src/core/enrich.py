@@ -71,10 +71,11 @@ def cancel_stats(orders_all: pd.DataFrame) -> pd.DataFrame:
     columns = ["item_key", "batal_pct", "batal_belum_bayar_pct", "alasan_batal"]
     if orders_all is None or orders_all.empty or not {"item_key", "status"} <= set(orders_all.columns):
         return pd.DataFrame(columns=columns)
-    from src.ingest import cancelled_status_mask
+    from src.ingest import cancel_only_mask, open_unpaid_mask
 
+    orders_all = orders_all.loc[~open_unpaid_mask(orders_all["status"]).to_numpy(dtype=bool)]
     work = orders_all[["item_key", "status"]].copy()
-    work["batal"] = cancelled_status_mask(work["status"]).astype(float)
+    work["batal"] = cancel_only_mask(work["status"]).astype(float)
     reason = orders_all["cancel_reason"].fillna("").astype(str) if "cancel_reason" in orders_all.columns else pd.Series("", index=orders_all.index)
     work["reason"] = reason
     work["unpaid"] = (work["batal"] > 0) & reason.str.lower().str.contains("bayar|pembayaran", regex=True)

@@ -82,10 +82,10 @@ def product_labels(
                     labels[index].append("Paling diminati")
 
     if orders is not None and not orders.empty and {"item_key", "status"} <= set(orders.columns):
-        from src.ingest import cancelled_status_mask
+        from src.ingest import cancel_only_mask, open_unpaid_mask
 
-        work = orders[["item_key", "status"]].copy()
-        work["batal"] = cancelled_status_mask(work["status"]).astype(float)
+        work = orders.loc[~open_unpaid_mask(orders["status"]).to_numpy(dtype=bool), ["item_key", "status"]].copy()
+        work["batal"] = cancel_only_mask(work["status"]).astype(float)
         grouped = work.groupby("item_key")["batal"]
         rate, count = grouped.mean(), grouped.size()
         median = float(rate[rate > 0].median()) if (rate > 0).any() else 0.0

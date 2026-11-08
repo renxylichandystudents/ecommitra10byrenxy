@@ -158,7 +158,10 @@ class October2026Test(unittest.TestCase):
         summary_page = order_metrics(_analysis_frame(self.raw.drop_duplicates()), "2026-10-01", "2026-10-31")
         for key, value in data_page.items():
             self.assertAlmostEqual(float(value), float(summary_page[key]), places=2, msg=key)
-        self.assertAlmostEqual(data_page["sales_bersih"], data_page["sales_bruto"] - data_page["nominal_batal"] - data_page["nominal_retur"])
+        self.assertAlmostEqual(data_page["sales_bersih"], data_page["sales_bruto"] - data_page["nominal_batal"] - data_page["nominal_menunggu_bayar"]
+                               - data_page["nominal_retur"])
+        self.assertAlmostEqual(data_page["sales_bersih"], 2_848_905_957, places=0)
+        self.assertEqual(data_page["pesanan_menunggu_bayar"], 6)
         unpaid = unpaid_buyer_table(self.raw, months=["2026-10"])
         self.assertEqual(unpaid["No. Pesanan"].nunique(), data_page["belum_bayar"])
 

@@ -15,7 +15,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from src.ingest import cancelled_status_mask, item_key_series
+from src.ingest import cancel_only_mask, item_key_series, open_unpaid_mask
 
 BLANK_IDS = {"", "nan", "none", "-"}
 UNPAID_HINTS = ("belum dibayar", "belum bayar")
@@ -23,7 +23,7 @@ UNPAID_HINTS = ("belum dibayar", "belum bayar")
 METRIC_DEFINITIONS: dict[str, str] = {
     "pesanan_semua": "Jumlah No. Pesanan unik pada periode, semua status.",
     "sales_bruto": "Total Pembayaran semua status, dihitung sekali tiap No. Pesanan.",
-    "pesanan_batal": "Jumlah No. Pesanan unik berstatus batal (termasuk pembatalan otomatis karena belum bayar).",
+    "pesanan_batal": "Jumlah No. Pesanan unik berstatus Batal (termasuk pembatalan otomatis karena belum bayar). Pesanan Belum Bayar yang masih terbuka tidak termasuk.",
     "nominal_batal": "Total Pembayaran pesanan batal, sekali tiap No. Pesanan.",
     "belum_bayar": (
         "Pesanan batal karena belum dibayar. Pembeli yang punya pesanan terbayar untuk SKU yang sama "
@@ -33,8 +33,9 @@ METRIC_DEFINITIONS: dict[str, str] = {
     "retur_unit": "Jumlah unit pada baris pengembalian yang disetujui (kolom Returned quantity di laporan Shopee).",
     "nominal_retur": "Jumlah retur × Harga Setelah Diskon pada baris pengembalian.",
     "pesanan_retur_penuh": "Pesanan yang semua baris produknya diretur penuh.",
-    "pesanan_bersih": "Pesanan semua status − pesanan batal − pesanan retur penuh.",
-    "sales_bersih": "Sales bruto − nominal batal − nominal retur.",
+    "pesanan_menunggu_bayar": "Pesanan berstatus Belum Bayar yang masih terbuka (belum batal, belum terjual).",
+    "pesanan_bersih": "Pesanan semua status − pesanan batal − pesanan menunggu bayar − pesanan retur penuh.",
+    "sales_bersih": "Sales bruto − nominal batal − nominal menunggu bayar − nominal retur.",
     "qty_bersih": "QTY pesanan selain batal − unit retur.",
     "tingkat_batal": "Pesanan batal ÷ pesanan semua status.",
     "biaya_iklan": "Biaya iklan toko menurut Semua Laporan Iklan (all iklan) pada periode yang sama, diprorata per hari laporan.",
@@ -56,6 +57,7 @@ METRIC_LABELS: dict[str, str] = {
     "retur_unit": "Unit retur",
     "nominal_retur": "Nominal retur",
     "pesanan_retur_penuh": "Pesanan retur penuh",
+    "pesanan_menunggu_bayar": "Menunggu bayar",
     "pesanan_bersih": "Pesanan bersih",
     "sales_bersih": "Sales bersih",
     "qty_bersih": "QTY bersih",
@@ -81,6 +83,8 @@ EMPTY_ORDER_METRICS: dict[str, float] = {
     "nominal_retur": 0.0,
     "pesanan_retur": 0,
     "pesanan_retur_penuh": 0,
+    "pesanan_menunggu_bayar": 0,
+    "nominal_menunggu_bayar": 0.0,
     "pesanan_bersih": 0,
     "sales_bersih": 0.0,
     "qty_bersih": 0.0,
@@ -110,7 +114,7 @@ def normalize_lines(frame: pd.DataFrame | None) -> pd.DataFrame:
     """Satu baris per produk pada pesanan, dengan kolom baku untuk semua metrik."""
     columns = [
         "order_id", "order_key", "order_time", "sku", "item_key", "product_name", "variation",
-        "status", "is_cancel", "cancel_reason", "buyer", "gross_qty", "returned_qty",
+        "status", "is_cancel", "is_open", "cancel_reason", "buyer", "gross_qty", "returned_qty",
         "line_value", "return_value", "order_amount",
     ]
     if frame is None or frame.empty:
@@ -123,10 +127,11 @@ def normalize_lines(frame: pd.DataFrame | None) -> pd.DataFrame:
     for column in ("sku", "product_name", "variation", "status", "cancel_reason", "buyer"):
         out[column] = _text(work, column)
     out["item_key"] = work["item_key"].astype(str) if "item_key" in work.columns else item_key_series(out)
+    out["is_open"] = open_unpaid_mask(out["status"])
     if "is_cancel" in work.columns:
-        out["is_cancel"] = work["is_cancel"].fillna(False).astype(bool)
+        out["is_cancel"] = work["is_cancel"].fillna(False).astype(bool).to_numpy() & ~out["is_open"]
     else:
-        out["is_cancel"] = cancelled_status_mask(out["status"])
+        out["is_cancel"] = cancel_only_mask(out["status"])
 
     gross = _num(work, "gross_qty") if "gross_qty" in work.columns else _num(work, "qty")
     out["gross_qty"] = gross.clip(lower=0)
@@ -182,7 +187,7 @@ def _unpaid(lines: pd.DataFrame) -> tuple[int, int, int]:
     buyer = named["buyer"].str.casefold()
     buyer = buyer.where(buyer.ne(""), "order:" + named["order_id"])
     keys = [buyer, named["item_key"]]
-    paid_any = (~named["is_cancel"]).groupby(keys).transform("any")
+    paid_any = (~named["is_cancel"] & ~named["is_open"]).groupby(keys).transform("any")
     picked = unpaid & ~paid_any
     orders = int(named.loc[picked, "order_id"].nunique())
     accounts = int(buyer.loc[picked].nunique())
@@ -196,12 +201,15 @@ def order_metrics(frame: pd.DataFrame | None, start=None, end=None, *, normalize
     if lines is None or lines.empty:
         return dict(EMPTY_ORDER_METRICS)
     cancel = lines.loc[lines["is_cancel"]]
-    active = lines.loc[~lines["is_cancel"]]
+    waiting = lines.loc[lines["is_open"]]
+    active = lines.loc[~lines["is_cancel"] & ~lines["is_open"]]
     returned = active.loc[active["returned_qty"] > 0]
     pesanan_semua = int(lines["order_key"].nunique())
     pesanan_batal = int(cancel["order_key"].nunique())
     sales_bruto = _order_money(lines)
     nominal_batal = _order_money(cancel)
+    nominal_menunggu = _order_money(waiting)
+    pesanan_menunggu = int(waiting["order_key"].nunique())
     retur_unit = float(returned["returned_qty"].sum())
     nominal_retur = float(returned["return_value"].sum())
     if active.empty:
@@ -222,8 +230,10 @@ def order_metrics(frame: pd.DataFrame | None, start=None, end=None, *, normalize
         "nominal_retur": nominal_retur,
         "pesanan_retur": int(returned["order_key"].nunique()),
         "pesanan_retur_penuh": full_orders,
-        "pesanan_bersih": pesanan_semua - pesanan_batal - full_orders,
-        "sales_bersih": sales_bruto - nominal_batal - nominal_retur,
+        "pesanan_menunggu_bayar": pesanan_menunggu,
+        "nominal_menunggu_bayar": nominal_menunggu,
+        "pesanan_bersih": pesanan_semua - pesanan_batal - pesanan_menunggu - full_orders,
+        "sales_bersih": sales_bruto - nominal_batal - nominal_menunggu - nominal_retur,
         "qty_bersih": float(active["gross_qty"].sum()) - retur_unit,
         "tingkat_batal": pesanan_batal / pesanan_semua if pesanan_semua else 0.0,
     }
@@ -235,7 +245,7 @@ def net_sku_sales(frame: pd.DataFrame | None, start=None, end=None, *, normalize
     lines = slice_dates(lines, start, end)
     if lines is None or lines.empty:
         return pd.DataFrame(columns=["sku", "order_time", "sales", "qty"])
-    active = lines.loc[~lines["is_cancel"]]
+    active = lines.loc[~lines["is_cancel"] & ~lines["is_open"]]
     return pd.DataFrame(
         {
             "sku": active["sku"],
@@ -288,7 +298,7 @@ def sku_coverage(
 ) -> dict[str, int]:
     """Empat definisi jumlah SKU yang dipakai di aplikasi."""
     lines = slice_dates(normalize_lines(frame), start, end)
-    active = lines.loc[~lines["is_cancel"]] if not lines.empty else lines
+    active = lines.loc[~lines["is_cancel"] & ~lines["is_open"]] if not lines.empty else lines
     if active.empty:
         sold, non_cancel = 0, 0
     else:
@@ -296,7 +306,7 @@ def sku_coverage(
         sold = int((net_qty > 0).sum())
         non_cancel = int(active["item_key"].nunique())
     train_lines = normalize_lines(training) if training is not None else normalize_lines(frame)
-    train_active = train_lines.loc[~train_lines["is_cancel"]] if not train_lines.empty else train_lines
+    train_active = train_lines.loc[~train_lines["is_cancel"] & ~train_lines["is_open"]] if not train_lines.empty else train_lines
     catalog_count = 0
     if catalog is not None and not catalog.empty and "sku" in catalog.columns:
         snap = catalog
@@ -317,7 +327,7 @@ def legacy_summary_sales(frame: pd.DataFrame | None, start=None, end=None, *, no
     lines = slice_dates(frame if normalized else normalize_lines(frame), start, end)
     if lines.empty:
         return 0.0
-    kept = lines.loc[~lines["is_cancel"] & (lines["gross_qty"] > lines["returned_qty"])]
+    kept = lines.loc[~lines["is_cancel"] & ~lines["is_open"] & (lines["gross_qty"] > lines["returned_qty"])]
     return _order_money(kept)
 
 
@@ -330,7 +340,7 @@ def sales_gap_breakdown(frame: pd.DataFrame | None, start=None, end=None) -> dic
     lines = slice_dates(normalize_lines(frame), start, end)
     metrics = order_metrics(lines, normalized=True)
     legacy = legacy_summary_sales(lines, normalized=True)
-    active = lines.loc[~lines["is_cancel"]] if not lines.empty else lines
+    active = lines.loc[~lines["is_cancel"] & ~lines["is_open"]] if not lines.empty else lines
     detail = pd.DataFrame(columns=["No. Pesanan", "Jenis", "Total Pembayaran", "Nominal retur", "Pengaruh ke selisih"])
     partial_sum = full_sum = 0.0
     if not active.empty:

@@ -12,12 +12,12 @@ import pandas as pd
 
 from src.core.cancel_reasons import short_reason
 from src.core.metrics import UNPAID_HINTS
-from src.ingest import _exact_column, _parse_datetime, _parse_number, cancelled_status_mask, clean_sku_series, clean_text_series, map_columns, normalize_status_series
+from src.ingest import _exact_column, _parse_datetime, _parse_number, cancel_only_mask, clean_sku_series, clean_text_series, map_columns, normalize_status_series, open_unpaid_mask
 
 INSTANT_GROUPS = ("Instant", "Instant Prioritas", "Same Day")
 SERVICE_ORDER = ("Instant", "Instant Prioritas", "Same Day", "Next Day", "Reguler", "Hemat Kargo / Trucking", "Kirim toko", "Lainnya")
 SLOW_HOURS = 2.0
-LINE_COLUMNS = ["order_id", "order_time", "pay_time", "ship_time", "done_time", "status", "cancelled", "cancel_reason", "shipping", "layanan", "kurir",
+LINE_COLUMNS = ["order_id", "order_time", "pay_time", "ship_time", "done_time", "status", "cancelled", "menunggu", "cancel_reason", "shipping", "layanan", "kurir",
                 "instan", "city", "buyer", "sku", "product_name", "qty", "returned_qty", "net_price", "payment_total", "payment_method", "weight_kg",
                 "ship_deadline"]
 
@@ -91,7 +91,8 @@ def instant_lines(source: pd.DataFrame) -> pd.DataFrame:
     frame["ship_time"] = when(("waktu pengiriman diatur",))
     frame["done_time"] = when(("waktu pesanan selesai",))
     frame["status"] = normalize_status_series(table[mapping["status"]]) if "status" in mapping else ""
-    frame["cancelled"] = cancelled_status_mask(frame["status"]) if "status" in mapping else False
+    frame["cancelled"] = cancel_only_mask(frame["status"]) if "status" in mapping else False
+    frame["menunggu"] = open_unpaid_mask(frame["status"]) if "status" in mapping else False
     frame["cancel_reason"] = text("cancel_reason")
     frame["shipping"] = clean_text_series(table[shipping_col])
     frame["layanan"] = frame["shipping"].map(service_of)
@@ -119,7 +120,7 @@ def instant_lines(source: pd.DataFrame) -> pd.DataFrame:
 
 def order_frame(lines: pd.DataFrame) -> pd.DataFrame:
     """Satu baris per pesanan: nilai, batal, retur, sales bersih, jam proses (bayar → pengiriman diatur)."""
-    cols = ["order_id", "order_time", "day", "hour", "layanan", "kurir", "instan", "city", "buyer", "cancelled", "cancel_reason", "unpaid",
+    cols = ["order_id", "order_time", "day", "hour", "layanan", "kurir", "instan", "city", "buyer", "cancelled", "menunggu", "cancel_reason", "unpaid",
             "returned", "qty_bersih", "sales_bersih", "nilai", "proses_jam", "selesai_jam", "payment_method", "weight_kg", "ship_time", "ship_deadline", "terlambat"]
     if lines is None or lines.empty:
         return pd.DataFrame(columns=cols)
@@ -128,19 +129,20 @@ def order_frame(lines: pd.DataFrame) -> pd.DataFrame:
     grouped = work.groupby("order_id", sort=False)
     out = grouped.agg(order_time=("order_time", "first"), pay_time=("pay_time", "first"), ship_time=("ship_time", "first"), done_time=("done_time", "first"),
                       layanan=("layanan", "first"), kurir=("kurir", "first"), instan=("instan", "first"), city=("city", "first"), buyer=("buyer", "first"),
-                      cancelled=("cancelled", "any"), cancel_reason=("cancel_reason", "first"), payment=("payment_total", "first"),
+                      cancelled=("cancelled", "any"), menunggu=("menunggu", "any"), cancel_reason=("cancel_reason", "first"), payment=("payment_total", "first"),
                       line_value=("line_value", "sum"), return_value=("return_value", "sum"), returned_qty=("returned_qty", "sum"), qty_net=("qty_net", "sum"),
                       payment_method=("payment_method", "first"), weight_kg=("weight_kg", "first"), ship_deadline=("ship_deadline", "first"))
     out["nilai"] = out["payment"].where(out["payment"] > 0, out["line_value"])
     out["returned"] = out["returned_qty"] > 0
-    out["sales_bersih"] = np.where(out["cancelled"], 0.0, out["nilai"] - out["return_value"])
-    out["qty_bersih"] = np.where(out["cancelled"], 0.0, out["qty_net"])
+    gone = out["cancelled"] | out["menunggu"]
+    out["sales_bersih"] = np.where(gone, 0.0, out["nilai"] - out["return_value"])
+    out["qty_bersih"] = np.where(gone, 0.0, out["qty_net"])
     out["unpaid"] = out["cancelled"] & out["cancel_reason"].str.lower().str.contains("|".join(UNPAID_HINTS), regex=True)
     hours = (out["ship_time"] - out["pay_time"]).dt.total_seconds() / 3600
     out["proses_jam"] = hours.where(hours >= 0)
     done = (out["done_time"] - out["order_time"]).dt.total_seconds() / 3600
     out["selesai_jam"] = done.where(done >= 0)
-    out["terlambat"] = (out["ship_time"] > out["ship_deadline"]) & out["ship_time"].notna() & out["ship_deadline"].notna()
+    out["terlambat"] = ~out["cancelled"] & (out["ship_time"] > out["ship_deadline"]) & out["ship_time"].notna() & out["ship_deadline"].notna()
     out["day"] = out["order_time"].dt.normalize()
     out["hour"] = out["order_time"].dt.hour
     return out.reset_index()[cols]
@@ -148,7 +150,7 @@ def order_frame(lines: pd.DataFrame) -> pd.DataFrame:
 
 def _summary(part: pd.DataFrame) -> dict:
     n = len(part)
-    active = part.loc[~part["cancelled"]]
+    active = part.loc[~part["cancelled"] & ~part["menunggu"]]
     net = active.loc[~(active["qty_bersih"] <= 0)]
     return {
         "invoice": n, "invoice_bersih": int(len(net)), "batal": int(part["cancelled"].sum()), "belum_bayar": int(part["unpaid"].sum()),

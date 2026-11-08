@@ -40,7 +40,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from src.intelligence.preprocess import clean_frame, clean_series
-from src.ingest import cancelled_status_mask
+from src.ingest import cancel_only_mask, open_unpaid_mask
 
 MAX_CLASS_ROWS = 4000
 LAGS = 7
@@ -179,7 +179,8 @@ def _cancel_matrix(orders: pd.DataFrame, method: str):
     if len(needed) < 2:
         return None, "Uji batal dilewati karena qty atau sales tidak ada."
     cleaned, _report = clean_frame(orders, method, ("qty", "sales"))
-    target = cancelled_status_mask(cleaned["status"]).astype(int)
+    cleaned = cleaned.loc[~open_unpaid_mask(cleaned["status"]).to_numpy(dtype=bool)]
+    target = cancel_only_mask(cleaned["status"]).astype(int)
     if target.nunique() < 2 or int(target.sum()) < 8 or int((target == 0).sum()) < 8:
         return None, "Uji batal dilewati karena salah satu kelas kurang dari 8 pesanan."
     features = cleaned.loc[:, ["qty", "sales"]].astype(float)
