@@ -8050,25 +8050,59 @@ with PAGE_ROOT.container(key="page-root"):
             st.write("Tidak ada item untuk ditampilkan.")
         else:
             label_legend()
-            f1, f2, f3, f4 = st.columns([2.2, 1.4, 1.4, 1])
-            query = f1.text_input("Cari SKU atau nama produk", placeholder="Cari SKU atau nama produk..", key="pred-search")
+            f1, f2, f3 = st.columns([2.4, 1.3, 1.3])
+            # Cari: saat diketik, daftar menampilkan SKU · nama produk · varian sehingga SKU yang tidak sesuai terlihat.
+            labels_all = (
+                enriched["sku"].astype(str) + " · " + enriched["product_name"].astype(str)
+                + np.where(enriched["variasi_tampil"].fillna("").astype(str).str.len() > 0, " · " + enriched["variasi_tampil"].fillna("").astype(str), "")
+            )
+            choice_keys = dict(zip(labels_all, enriched["item_key"].astype(str)))
+            choices = list(choice_keys)
+            query = f1.selectbox(
+                "Cari SKU atau nama produk",
+                options=choices,
+                index=None,
+                placeholder="Ketik SKU atau nama produk…",
+                accept_new_options=True,
+                key="pred-search",
+            )
             label_pick = f2.multiselect("Label", options=list(LABEL_ICONS), key="pred-labels", placeholder="Pilih")
             status_pick = f3.multiselect("Status stok (bulan ini)", options=["Aman", "Kurang", "Kosong", "Tanpa data stok"], key="pred-status", placeholder="Pilih")
-            page_size = int(f4.selectbox("Tampilkan", options=[10, 50, 100, 200], index=1, key="pred-size"))
             work = enriched
-            needle = " ".join(str(query or "").lower().split())
-            if needle:
-                blob = (work["sku"].astype(str) + " " + work["product_name"].astype(str) + " " + work["variasi_tampil"].astype(str)).str.lower()
-                work = work.loc[blob.str.contains(needle, regex=False)]
+            if query:
+                if query in choice_keys:
+                    work = work.loc[work["item_key"].astype(str) == choice_keys[query]]
+                else:
+                    needle = " ".join(str(query).lower().split())
+                    blob = (work["sku"].astype(str) + " " + work["product_name"].astype(str) + " " + work["variasi_tampil"].astype(str)).str.lower()
+                    work = work.loc[blob.str.contains(needle, regex=False)]
             if label_pick:
                 work = work.loc[work["label"].map(lambda names: any(name in (names or []) for name in label_pick))]
             if status_pick:
                 work = work.loc[work["m_status"].map(lambda value: str(value).split(" · ")[0]).isin(status_pick)]
+            # Urutan dampak: prediksi bulan (sales value bila parameter sales, QTY bila parameter QTY) terbesar dulu.
+            impact_col = ("m_sales_exp" if "m_sales_exp" in work.columns else "m_sales") if metric == "sales" else ("m_qty_exp" if "m_qty_exp" in work.columns else "m_qty")
+            work = work.sort_values(impact_col, ascending=False, kind="mergesort")
             total = len(work)
+            filter_sig = (str(query), tuple(label_pick), tuple(status_pick))
+            if st.session_state.get("pred-filter-sig") != filter_sig:
+                st.session_state["pred-filter-sig"] = filter_sig
+                st.session_state["pred-page-n"] = 1
+            n1, n2, n3, n4 = st.columns([1.1, 1, 1.6, 1], vertical_alignment="bottom")
+            page_size = int(n1.selectbox("Baris per halaman", options=[5, 10, 20, 50, 100], index=0, key="pred-size"))
             pages = max((total - 1) // page_size + 1, 1)
-            p1, p2 = st.columns([3, 1])
-            page = int(p1.number_input("Halaman", min_value=1, max_value=pages, value=1, step=1, key="pred-page")) if pages > 1 else 1
-            p2.markdown(f"<div class='field-hint' style='text-align:right;margin-top:1.8rem'><b>{format_number(total, 0)}</b> SKU</div>", unsafe_allow_html=True)
+            page = min(max(int(st.session_state.get("pred-page-n", 1)), 1), pages)
+            if n2.button("‹ Sebelumnya", key="pred-prev", disabled=page <= 1, use_container_width=True):
+                st.session_state["pred-page-n"] = page - 1
+                st.rerun()
+            n3.markdown(
+                f"<div style='text-align:center;padding:.55rem 0;font-weight:700'>Halaman {page} dari {pages}"
+                f"<span class='field-hint'> · {format_number(total, 0)} SKU</span></div>",
+                unsafe_allow_html=True,
+            )
+            if n4.button("Berikutnya ›", key="pred-next", disabled=page >= pages, use_container_width=True):
+                st.session_state["pred-page-n"] = page + 1
+                st.rerun()
             page_view = work.iloc[(page - 1) * page_size : page * page_size].reset_index(drop=True)
             if page_view.empty:
                 st.write("Tidak ada SKU yang cocok dengan filter.")
@@ -8083,6 +8117,7 @@ with PAGE_ROOT.container(key="page-root"):
                     key=f"allpred-{metric}-{period}-{page}-{page_size}",
                     filename="prediksi_semua_produk.xlsx",
                     height=720,
+                    sort="",
                 )
                 if picked:
                     show_sku_detail(page_view, picked, key=f"allpred-chart-{picked}")

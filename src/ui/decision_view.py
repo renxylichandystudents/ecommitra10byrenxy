@@ -217,6 +217,7 @@ def show_decision_table(
     filename: str,
     height: int = 680,
     step: int | None = None,
+    sort: str = "rank",
 ) -> str:
     """Tabel bersama R8 dan Prediksi semua produk. Mengembalikan item_key yang dicentang di kolom Grafik.
 
@@ -236,7 +237,7 @@ def show_decision_table(
         limit=0,
         batch=batch,
         download=excel_payload(export, filename),
-        sort="rank",
+        sort=sort,
         key=key,
         default=previous if previous in keys else "",
     )
