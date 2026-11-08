@@ -221,6 +221,17 @@ def current_params() -> dict:
         lead["impor_rata_hari"], lead["impor_maks_hari"] = int(round(stats[0])), int(round(stats[1]))
         lead["impor_sumber"] = "Kedatangan impor"
         params = {**params, "lead_time": lead}
+    # Margin tidak diatur di Pengaturan bisnis: margin kotor toko dari File margin (Setting › Laporan margin) bila sudah diunggah.
+    try:
+        from src.ui.margin_data import load_margin
+
+        md = load_margin(get_features())
+        kotor = md.store_kotor_pct if md.ready else float("nan")
+        if kotor == kotor:
+            margin = {**(params.get("margin") or {}), "hpp_pct_harga": round(100.0 - kotor, 1), "margin_min_pct": 0, "sumber": f"File margin {md.periode}"}
+            params = {**params, "margin": margin}
+    except Exception:
+        pass
     return params
 
 

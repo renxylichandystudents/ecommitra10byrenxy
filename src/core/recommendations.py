@@ -215,8 +215,14 @@ def flash_sale_plan(
     params: dict,
     days: int = 30,
     per_day: int = 5,
+    margin_kotor: dict[str, float] | None = None,
+    potongan_pct: float = 0.0,
 ) -> pd.DataFrame:
     """Rencana flash sale harian 1 bulan dari SKU dengan surplus stok setelah kebutuhan + SS.
+
+    Harga flash minimal per SKU: bila margin kotor SKU ada di File margin (margin_kotor: sku_key → %), harga flash setelah
+    potongan Shopee (potongan_pct) harus tetap ≥ modal + pajak = harga × (1 − margin kotor) ÷ (1 − potongan); selain itu
+    memakai perkiraan bawaan harga × hpp × (1 + margin minimum).
 
     Bila tidak ada surplus tetapi ada penjualan, SKU dengan sisa stok terbesar tetap ditampilkan
     (urut skor flash sale yang sama) dengan alasan berawalan "Stok terbatas" dan kuota kecil.
@@ -266,7 +272,13 @@ def flash_sale_plan(
             price = float(row["harga_bersih"])
             if price <= 0:
                 continue
-            floor = price * hpp_pct * (1 + margin_min)
+            from src.core.margin_file import sku_key
+
+            kotor = (margin_kotor or {}).get(sku_key(row["sku"]))
+            if kotor is not None and np.isfinite(kotor):
+                floor = price * (1 - kotor / 100.0) / max(1 - potongan_pct / 100.0, 0.05) * (1 + margin_min)
+            else:
+                floor = price * hpp_pct * (1 + margin_min)
             disc = next((d for d in sorted(discounts, reverse=True) if price * (1 - d) >= floor), None)
             if disc is None:
                 continue
@@ -279,7 +291,7 @@ def flash_sale_plan(
                 reason.append(f"dilihat {int(row['dilihat'])}, klik {int(row.get('klik', 0))}")
             if pd.notna(row["konversi"]):
                 reason.append(f"konversi iklan {persen(row['konversi'] * 100, 1)}")
-            reason.append(f"margin tetap ≥ {persen(margin_min * 100, 0)}")
+            reason.append("tetap tidak rugi setelah potongan Shopee" if margin_kotor and margin_min <= 0 else f"margin tetap ≥ {persen(margin_min * 100, 0)}")
             if promo:
                 reason.append("tanggal promo")
             rows.append(

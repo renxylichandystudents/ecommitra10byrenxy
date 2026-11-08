@@ -33,16 +33,42 @@ def test_parse_affiliate_and_suggest():
     assert fees.loc[idx, "sub_kategori"] == "Kamar Mandi"
 
 
-def test_portfolio_priority_by_leak():
+def _row(sku, iklan, qty, kotor, **extra):
+    base = {"sku": sku, "nama": sku.lower(), "kategori": "x", "harga": 100_000, "diskon_unit": 0, "voucher_unit": 0, "admin_pct": 11.7,
+            "affiliate_pct": 0, "iklan_unit": iklan, "roas": 100_000 / iklan if iklan else float("nan"), "qty_30": qty, "omzet_30": qty * 100_000,
+            "ukuran_khusus": False, "margin_kotor_pct": kotor, "pajak_share": 1 - 1 / 1.1, "sumber": "Shopee"}
+    base.update(extra)
+    return base
+
+
+def test_portfolio_status_and_priority():
     rows = pd.DataFrame([
-        {"sku": "A", "nama": "a", "kategori": "x", "harga": 100_000, "diskon_unit": 0, "voucher_unit": 0, "admin_pct": 11.7, "affiliate_pct": 0,
-         "iklan_unit": 30_000, "roas": 3.3, "qty_30": 10, "omzet_30": 1_000_000, "ukuran_khusus": False},
-        {"sku": "B", "nama": "b", "kategori": "x", "harga": 100_000, "diskon_unit": 0, "voucher_unit": 0, "admin_pct": 11.7, "affiliate_pct": 0,
-         "iklan_unit": 20_000, "roas": 5, "qty_30": 100, "omzet_30": 10_000_000, "ukuran_khusus": False},
-        {"sku": "C", "nama": "c", "kategori": "x", "harga": 100_000, "diskon_unit": 0, "voucher_unit": 0, "admin_pct": 11.7, "affiliate_pct": 0,
-         "iklan_unit": 0, "roas": float("nan"), "qty_30": 1, "omzet_30": 100_000, "ukuran_khusus": False},
+        _row("A", 30_000, 1, 35.0),            # iklan 30% → rugi besar per unit, omzet kecil
+        _row("B", 5_000, 30, 35.0),           # rugi tipis tapi omzet besar → kerugian Rp terbesar
+        _row("C", 0, 50, 45.0),                # tanpa iklan, margin tinggi
+        _row("D", 0, 50, 33.0),                # untung tipis → rendah
+        _row("E", 0, 5, float("nan"), sumber=""),  # tidak ada di file → rata-rata toko
     ])
-    out = fee.portfolio(rows, programs=fee.DEFAULT_PROGRAMS, order_fee=1250, limit_pct=30)
-    assert out["sku"].tolist()[:2] == ["B", "A"]  # B bocor lebih besar karena omzetnya besar
-    assert out.iloc[0]["status"] == "Melebihi batas"
-    assert "iklan" in out.iloc[0]["perbaikan"]
+    out = fee.portfolio(rows, programs=fee.DEFAULT_PROGRAMS, order_fee=1250, fallback_kotor_pct=float("nan"))
+    assert out["sku"].tolist()[:2] == ["B", "A"]
+    assert out.iloc[0]["status"] == "Rugi" and "iklan" in out.iloc[0]["perbaikan"].lower()
+    status = dict(zip(out["sku"], out["status"]))
+    assert status["C"] == "Tinggi" and status["D"] == "Rendah" and status["E"] == "Tanpa data"
+    acuan = out.attrs["acuan_pct"]
+    assert out.loc[out["sku"] == "D", "bersih_pct"].iloc[0] < acuan < out.loc[out["sku"] == "C", "bersih_pct"].iloc[0]
+    # Kotor 45% (harga termasuk pajak) − potongan Shopee ≈ margin bersih C
+    c = out.loc[out["sku"] == "C"].iloc[0]
+    assert abs(c["kotor_pct"] - c["shopee_pct"] - c["bersih_pct"]) < 1e-6
+    filled = fee.portfolio(rows, programs=fee.DEFAULT_PROGRAMS, order_fee=1250, fallback_kotor_pct=40.0)
+    assert filled.loc[filled["sku"] == "E", "sumber"].iloc[0] == "Rata-rata toko"
+
+
+def test_modal_stays_fixed_when_price_changes():
+    inp = fee.Inputs(harga=100_000, admin_pct=10, programs={}, order_fee=0, pajak_share=0.1, hpp=60_000)
+    assert round(fee.kotor_pct(inp), 6) == 30.0
+    higher = fee.margin(fee.Inputs(harga=120_000, admin_pct=10, programs={}, order_fee=0, pajak_share=0.1, hpp=60_000))[0]
+    assert round(higher) == round(120_000 * 0.9 - 60_000 - 12_000)
+    rows = fee.breakdown(inp)
+    assert rows["Komponen"].iloc[-1] == "Margin bersih" and round(rows.loc[rows["Komponen"] == "Margin kotor", "Rp per unit"].iloc[0]) == 30_000
+    notes = fee.analysis(inp, target_pct=15)
+    assert notes[0][0] == "ok"

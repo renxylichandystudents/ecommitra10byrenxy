@@ -240,14 +240,32 @@ def _stock_date_text(table: pd.DataFrame) -> str:
     return fmt_date(stamps.max()) if not stamps.empty else ""
 
 
-def _flash_tab(table: pd.DataFrame, params: dict, today: date, user_root: Path) -> pd.DataFrame:
+def _flash_margin(features) -> tuple[dict[str, float] | None, float]:
+    """Margin kotor per SKU dari File margin + potongan Shopee bawaan (admin 11,70% + program yang diikuti)."""
+    try:
+        from src.core import shopee_fee as fee
+        from src.ui.kalkulator import _programs
+        from src.ui.margin_data import load_margin
+
+        md = load_margin(features)
+        if not md.ready:
+            return None, 0.0
+        programs, order_fee, _ = _programs(features)
+        inp = fee.Inputs(harga=100_000.0, programs=programs, order_fee=order_fee)
+        return md.kotor_map(), fee.shopee_fees(inp) / inp.harga_akhir * 100
+    except Exception:
+        return None, 0.0
+
+
+def _flash_tab(table: pd.DataFrame, params: dict, today: date, user_root: Path, features=None) -> pd.DataFrame:
     start = st.date_input("Mulai rencana flash sale (1 bulan)", value=today + timedelta(days=1), key="flash-start", format="DD/MM/YYYY")
     has_stock = bool(table.get("ada_data_stok", pd.Series(dtype=bool)).fillna(False).any())
     if not has_stock:
         st.info("Data stok belum pernah diunggah (menu Data stok Site 10037), jadi kuota flash sale belum bisa dihitung tanpa mengganggu kebutuhan prediksi + SS.")
         return pd.DataFrame()
     stamp = _stock_date_text(table)
-    plan = flash_sale_plan(table, start=start, params=params)
+    kotor, potongan = _flash_margin(features)
+    plan = flash_sale_plan(table, start=start, params=params, margin_kotor=kotor, potongan_pct=potongan)
     if plan.empty:
         st.info("Belum ada SKU yang laku dengan stok tersisa dan margin aman untuk flash sale.")
         return plan
@@ -332,7 +350,7 @@ def show_recommendations(
         elif picked == "flash-sale":
             plus.show_flash_sale(table, data=data, today=today)
             with st.expander("Rencana flash sale harian & template Shopee (perhitungan sebelumnya)"):
-                _flash_tab(table, params, today, user_root)
+                _flash_tab(table, params, today, user_root, features)
         elif picked == "exposure":
             plus.show_exposure(table, features=features, data=data, orders=orders, frames=frames, today=today, username=username, can_edit=can_edit)
         elif picked == "ranking-kategori":

@@ -10,14 +10,12 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.core import margin as margin_core
 from src.core import warehouse
 from src.core.access import allowed, setting_tabs
 from src.core.feature_store import IMPORT_STATUSES
 from src.core.fmt import fmt_date_short
-from src.core.periods import last_full_month
 from src.core.promo import exclusion_suggestions
-from src.ui.common import ID_MONTHS, button_tabs, card, download_excel, fmt_idr, fmt_num
+from src.ui.common import button_tabs, card, download_excel, fmt_idr, fmt_num
 from src.ui.confirm import confirm_action
 from src.ui.feature_data import FeatureData, bump
 from src.utils.format import show_table
@@ -56,7 +54,7 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
     elif picked == "kalkulator-biaya":
         _calculator_tab(features, table, data, username, today, user_root=user_root, orders=orders)
     elif picked == "laporan-margin":
-        _margin_report_tab(table, data, orders, today)
+        _margin_report_tab(features, table, data, username)
     elif picked == "kapasitas-gudang":
         _capacity_tab(features, table, data, role, username, today, user_root, orders)
     elif picked == "kedatangan-impor":
@@ -211,56 +209,19 @@ def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: 
 # ---------------------------------------------------------------- Laporan margin
 
 
-def _margin_report_tab(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | None, today: date) -> None:
-    st.markdown("**Laporan margin**")
-    if data.components.empty:
-        st.info(
-            "Komponen biaya belum diunggah. Langkah: buka Setting › Kalkulator biaya → Unduh template → isi HPP, komisi, "
-            "biaya layanan, packing, dan ongkir per SKU → unggah. Laporan margin muncul otomatis setelahnya."
-        )
-        return
-    if orders is None or orders.empty:
-        st.info("Belum ada transaksi.")
-        return
-    stamps = pd.to_datetime(orders["order_time"], errors="coerce")
-    months = sorted(stamps.dt.to_period("M").dropna().astype(str).unique())
-    default_lo, _hi = last_full_month(stamps.max().date())
-    default = f"{default_lo.year:04d}-{default_lo.month:02d}"
-    month = st.selectbox("Periode", months[::-1], index=months[::-1].index(default) if default in months else 0, format_func=lambda k: f"{ID_MONTHS[int(k[5:]) - 1]} {k[:4]}", key="margin-month")
-    lines = orders.loc[stamps.dt.to_period("M").astype(str) == month].assign(sku=lambda f: f["sku"].astype(str))
-    rows = margin_core.transaction_margins(lines, data.components, data.ad_per_unit)
-    if rows.empty:
-        st.info("Tidak ada transaksi bersih dengan komponen biaya yang berlaku pada periode ini.")
-        return
-    per_sku = rows.groupby("sku").agg(qty=("qty", "sum"), margin_total=("margin_total", "sum"), harga=("harga", "mean"), margin_unit=("margin_unit", "mean")).reset_index()
-    per_sku["margin_pct"] = per_sku["margin_unit"] / per_sku["harga"] * 100
-    minus = per_sku.loc[per_sku["margin_total"] < 0]
-    thin = per_sku.loc[(per_sku["margin_pct"] >= 0) & (per_sku["margin_pct"] < margin_core.THIN_MARGIN_PCT)]
-    cols = st.columns(4)
-    card(cols[0], "Margin kotor", fmt_idr(rows["margin_total"].sum()), hint="Σ margin × QTY bersih")
-    card(cols[1], "SKU margin minus", fmt_num(len(minus)))
-    card(cols[2], "Kerugian", fmt_idr(minus["margin_total"].sum()), hint="Σ margin negatif")
-    card(cols[3], "SKU margin tipis (< 5%)", fmt_num(len(thin)))
-    cost_cols = ["Komisi & biaya Shopee", "HPP", "Packing", "Iklan", "Voucher", "Ongkir penjual"]
-    names = table.drop_duplicates("sku").set_index(table["sku"].astype(str).drop_duplicates())["product_name"].to_dict() if not table.empty else {}
-    if not minus.empty:
-        avg = rows[cost_cols].div(rows["harga"], axis=0).mean()
-        causes = []
-        for sku in minus["sku"]:
-            part = rows.loc[rows["sku"] == sku, cost_cols].div(rows.loc[rows["sku"] == sku, "harga"], axis=0).mean()
-            excess = (part - avg).sort_values(ascending=False)
-            causes.append(excess.index[0] if not excess.empty else "-")
-        view = minus.assign(Produk=minus["sku"].map(names).fillna(""), Penyebab=causes)
-        view = view.rename(columns={"sku": "SKU", "qty": "QTY bersih", "harga": "Harga rata-rata", "margin_unit": "Margin per unit", "margin_pct": "Margin (%)", "margin_total": "Total margin"})
-        st.markdown("**Item margin minus** · penyebab = komponen biaya terbesar di atas rata-rata")
-        show_table(view[["SKU", "Produk", "QTY bersih", "Harga rata-rata", "Margin per unit", "Margin (%)", "Total margin", "Penyebab"]].sort_values("Total margin"))
-        st.caption("SKU margin minus otomatis \"Tahan · margin minus\" di Iklan, Flash sale, dan Exposure.")
-    pick = st.selectbox("Rincian per unit SKU", per_sku["sku"].tolist(), format_func=lambda s: f"{s} · {names.get(s, '')}", key="margin-detail")
-    comp = margin_core.effective_components(data.components, pick, on=today)
-    if comp:
-        price = float(per_sku.loc[per_sku["sku"] == pick, "harga"].iloc[0])
-        show_table(margin_core.breakdown(price, comp, data.ad_per_unit.get(pick, 0.0)), kinds={"Rp per unit": "money", "% harga": "pct"})
-        st.caption(f"Harga minimal margin 8%: {fmt_idr(margin_core.harga_minimal(comp, data.ad_per_unit.get(pick, 0.0), 8.0))}")
+def _margin_report_tab(features, table: pd.DataFrame, data: FeatureData, username: str) -> None:
+    """Laporan margin dari File margin (tanpa HPP; lihat src/ui/laporan_margin.py)."""
+    from src.ui.laporan_margin import show_margin_report
+
+    may_edit = False
+    try:
+        from auth.ui import current_user
+
+        user = current_user()
+        may_edit = allowed(getattr(user, "role", ""), "setting_kalkulator_biaya", "edit") if user else True
+    except Exception:
+        pass
+    show_margin_report(features, table, data, username=username, may_edit=may_edit, require=_require)
 
 
 # ---------------------------------------------------------------- Kapasitas gudang

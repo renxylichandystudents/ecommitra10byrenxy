@@ -43,7 +43,8 @@ def _bulan_label(day: date) -> str:
 def _margin_of(data: FeatureData, sku: str, fallback: float) -> tuple[float, bool]:
     value = data.margin_pct.get(str(sku))
     if value is None or not np.isfinite(value):
-        return fallback, False
+        typical = getattr(data, "margin_fallback", None)
+        return (float(typical) if typical is not None and np.isfinite(typical) else fallback), False
     return float(value), True
 
 
@@ -87,10 +88,10 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
             help="Bawaan dari Pengaturan bisnis; simpan di sini untuk mengganti khusus bulan ini.",
         ))
     margin_min = float(c2.number_input(
-        "Margin minimum (%)", min_value=0.0, max_value=60.0, value=float(goals.margin_min_pct), step=0.5, key=f"tgt-margin-{periode}",
-        help="Bawaan dari Pengaturan bisnis.",
+        "Margin bersih minimum promo (%)", min_value=0.0, max_value=60.0, value=float(goals.margin_min_pct), step=0.5, key=f"tgt-margin-{periode}",
+        help="Syarat SKU boleh diiklankan/dipromosikan. Margin per SKU dari File margin (setelah potongan Shopee & iklan). 0 = asal tidak rugi.",
     ))
-    st.caption(f"Sumber target: {goals.target_source} · margin minimum: {goals.margin_source}. Nilai yang sama dipakai di Laporan dan Kalkulator biaya.")
+    st.caption(f"Sumber target: {goals.target_source} · margin minimum: {goals.margin_source}. Target yang sama dipakai di Laporan dan Kalkulator biaya.")
     c3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
     if c3.button("Simpan target", key="tgt-save", type="primary", disabled=not can_edit, use_container_width=True):
         from auth.ui import require
@@ -147,7 +148,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
             ]
         )
     if not known.empty and not known["known_margin"].any():
-        st.caption(f"HPP per SKU tidak dipakai: margin semua SKU memakai margin minimum {fmt_num(margin_min, 1)}% dari Pengaturan bisnis. Lihat Setting › Kalkulator biaya untuk SKU yang potongannya melebihi batas.")
+        st.caption(f"File margin belum diunggah: margin semua SKU dianggap {fmt_num(margin_min, 1)}%. Unggah di Setting › Laporan margin agar margin per SKU terbaca.")
     choice = st.radio("Strategi", list(plans), index=list(plans).index("Efisien"), horizontal=True, key="tgt-strategy")
     plan = plans.get(choice, {})
     rows = []
@@ -247,6 +248,15 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date) -> N
         floor = margin_core.harga_minimal(comp, ad, 0.0) if comp else None
         flash = promo_calendar.flash_price(price, 0.10, floor)
         flash_margin = margin_core.unit_margin(flash, comp, ad)[1] if comp and flash > 0 else None
+        if comp is None and sku in getattr(data, "margin_inputs", {}):
+            from dataclasses import replace as _replace
+
+            from src.core import shopee_fee as fee
+
+            inp = data.margin_inputs[sku]
+            floor = fee.min_price(inp, 0.0)
+            flash = promo_calendar.flash_price(price, 0.10, floor if np.isfinite(floor) else None)
+            flash_margin = fee.margin(_replace(inp, harga=flash))[1] if flash > 0 else None
         ok, reasons, _decision = promo_eligible(row, excluded=data.excluded, margin_pct=data.margin_pct.get(sku), cancel_pct=row.get("batal_pct"), mode="flash", flash_margin_pct=flash_margin)
         stok = float(row["stok"]) if bool(row.get("ada_data_stok", False)) else 0.0
         quota = promo_calendar.flash_quota(stok, float(row["ss"]), float(row["pred_harian"]), float(row["m_qty"]))
@@ -293,7 +303,7 @@ def _ranked_for_exposure(table: pd.DataFrame, data: FeatureData, orders: pd.Data
         ok, _reasons, _decision = promo_eligible(row, excluded=data.excluded, margin_pct=data.margin_pct.get(sku), cancel_pct=row.get("batal_pct"))
         if not ok:
             continue
-        margin_pct, _known = _margin_of(data, sku, 8.0)
+        margin_pct, _known = _margin_of(data, sku, 0.0)
         rows.append(
             {
                 "sku": sku,

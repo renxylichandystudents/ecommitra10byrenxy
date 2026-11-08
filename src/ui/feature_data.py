@@ -25,6 +25,9 @@ class FeatureData:
     po: dict[str, dict] = field(default_factory=dict)
     ad_per_unit: dict[str, float] = field(default_factory=dict)
     target: dict | None = None
+    margin_fallback: float | None = None  # margin bersih tipikal toko (dari File margin) untuk SKU tanpa data
+    margin_source: str = ""
+    margin_inputs: dict = field(default_factory=dict)  # sku → shopee_fee.Inputs (modal dari File margin) untuk harga flash
 
 
 SEED_ACTION = "seed:excluded_sku"
@@ -100,9 +103,34 @@ def load_feature_data(features, table: pd.DataFrame, today: date, *, periode: st
         data.margin = margin_core.sku_margin_table(product_frame(table), data.components, iklan_per_unit=data.ad_per_unit, on=today)
         valid = data.margin.dropna(subset=["margin_pct"])
         data.margin_pct = {str(s): float(v) for s, v in zip(valid["sku"], valid["margin_pct"])}
+        data.margin_source = "komponen biaya"
+    else:
+        _margin_from_file(features, table, data)
     if periode:
         data.target = target_for(features, periode)
     return data
+
+
+def _margin_from_file(features, table: pd.DataFrame, data: FeatureData) -> None:
+    """Margin bersih per SKU dari File margin (margin kotor − potongan Shopee − iklan), untuk iklan & promo."""
+    try:
+        from src.core import shopee_fee as fee
+        from src.ui.kalkulator import KEY_SKU_CAT, _category_fees, _programs
+        from src.ui.margin_data import _load
+
+        md = _load(features, None)
+        if not md.ready:
+            return
+        programs, order_fee, _limit = _programs(features)
+        values, typical = fee.net_margin_map(
+            product_frame(table), md.kotor_map(), programs=programs, order_fee=order_fee, fees=_category_fees(features),
+            sku_cat=features.get_json(KEY_SKU_CAT, {}) or {}, ad_per_unit=data.ad_per_unit, inputs=data.margin_inputs,
+        )
+        data.margin_pct = values
+        data.margin_fallback = typical if np.isfinite(typical) else None
+        data.margin_source = f"File margin {md.periode}"
+    except Exception:
+        return
 
 
 def cached_feature_data(state, features, table: pd.DataFrame, today: date, *, periode: str, stamp: object) -> FeatureData:

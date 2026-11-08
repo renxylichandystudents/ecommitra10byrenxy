@@ -171,6 +171,22 @@ warehouse_location = Table(
     Column("kategori", String(120), nullable=False, default=""),
 )
 
+margin_item = Table(
+    "margin_item",
+    metadata,
+    _id(),
+    Column("sumber", String(20), nullable=False, index=True),
+    Column("periode", String(40), nullable=False, index=True),
+    Column("sku", String(64), nullable=False, index=True),
+    Column("item_code", String(64), nullable=False, default=""),
+    Column("nama", String(300), nullable=False, default=""),
+    Column("sales_incl", Float, nullable=False, default=0.0),
+    Column("sales_excl", Float, nullable=False, default=0.0),
+    Column("gm_value", Float, nullable=False, default=0.0),
+    Column("uploaded_at", DateTime, nullable=False),
+    Column("uploaded_by", String(80), nullable=False, default=""),
+)
+
 import_po = Table(
     "import_po",
     metadata,
