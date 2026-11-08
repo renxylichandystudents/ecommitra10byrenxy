@@ -125,6 +125,15 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Jalankan analisa harian (Beranda / halaman hasil) memakai setelan analisa terakhir dan rentang bulannya diperpanjang ke bulan tersimpan terbaru (sebelumnya bulan baru bisa tertinggal).
 - Halaman hasil: baris status di atas menu (analisa mana, transaksi s.d., terbaru / ada data baru + tombol Jalankan analisa / analisa lama + tombol Buka analisa terakhir).
 - Rumus prediksi dan safety stock tidak berubah.
+- Perbaikan: analisa terakhir kini dimuat ulang bila pemuatan pertama terputus (sebelumnya sesi bisa tertahan di Upload data tanpa hasil).
+
+## Iklan: pemilihan produk & budget satu alur (8 Nov 2026)
+
+- Masalah: langkah 3 (pemilihan produk) dan langkah 4 (budget per iklan) dihitung terpisah, dan omzet iklan rencana bisa melebihi prediksi omzet produknya. Pada data 8 Nov: rencana mengandaikan omzet iklan Rp 155 jt/hari, di atas prediksi omzet seluruh produk (Rp 122 jt/hari); 21 dari 53 iklan melampaui prediksi produk anggotanya. Penyebab: produk yang sama di banyak grup dihitung berkali-kali, dan kurva iklan yang diaktifkan kembali tidak dibatasi permintaan.
+- Sekarang `ads_strategy.build_plan`: pemilihan produk → `restructure` (anggota keluar/dijeda dilepas dan biaya/omzet grup dikurangi porsinya; andalan dipisah jadi iklan tunggal dengan budget dari grup; iklan tunggal baru untuk produk laris belum diiklankan) → `allocate_target`. Usulan iklan tunggal yang tidak kebagian budget dikembalikan ke grup, lalu dihitung ulang. Langkah 3 menampilkan "Iklan di rencana" dan "Budget usulan iklan/hari".
+- Satu produk = satu iklan (iklan dengan omzet tertinggi). Duplikat di iklan dijeda/berakhir masuk "Sudah di iklan lain" (tanpa tindakan); duplikat di iklan aktif → Keluarkan/Pindahkan.
+- Batas permintaan `DEMAND_LIFT = 0.5`: tambahan omzet sebuah iklan maks. +50% prediksi omzet produk anggotanya. Langkah 4 menampilkan prediksi omzet produk dan omzet iklan usulan; di bawah kartu ada baris "Cek angka" (omzet iklan sekarang → rencana = budget × ROAS → selisih × sisa hari = tambahan pada proyeksi).
+- Tes: `UnifiedPlanTest` di `tests/test_ads_target.py`.
 
 ## Hasil pemeriksaan
 

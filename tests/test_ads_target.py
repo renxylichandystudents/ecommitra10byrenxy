@@ -121,6 +121,57 @@ class ProductSelectionTest(unittest.TestCase):
         self.assertNotIn("8", sel.index)
 
 
+class UnifiedPlanTest(unittest.TestCase):
+    def setUp(self):
+        import pandas as pd
+
+        self.group = A.Unit(key="grup:Kloset", nama="Kloset", jenis="Grup", status="Berjalan", mode="GMV Max", daily_cost=60_000, daily_sales=900_000,
+                            a=1_500_000, b=60_000, spread=0.2, members=["1", "2", "3", "4"])
+        self.old = A.Unit(key="grup:Lama", nama="Lama", jenis="Grup", status="Berakhir", mode="GMV Max", daily_cost=40_000, daily_sales=300_000,
+                          a=600_000, b=40_000, spread=0.2, members=["1", "4"])
+        self.single = A.Unit(key="produk:5", nama="Habis", jenis="Produk tunggal", status="Berjalan", mode="GMV Max", daily_cost=30_000,
+                             daily_sales=300_000, a=500_000, b=30_000, spread=0.2, members=["5"])
+        rows = [("grup:Kloset", "1", "Bintang", 20_000, 600_000), ("grup:Kloset", "2", "Kosong", 15_000, 0),
+                ("grup:Kloset", "3", "Lemah", 20_000, 60_000), ("grup:Kloset", "4", "Biasa", 5_000, 240_000),
+                ("grup:Lama", "1", "Bintang", 20_000, 100_000), ("grup:Lama", "4", "Biasa", 20_000, 50_000),
+                ("produk:5", "5", "Habis", 30_000, 300_000)]
+        self.members = pd.DataFrame([{"unit": u, "periode": "2026-10", "product_code": c, "nama": n, "biaya": b, "omzet": o, "terjual": 1}
+                                     for u, c, n, b, o in rows])
+        self.products = pd.DataFrame([
+            {"product_code": "1", "nama": "Bintang", "omzet_harian": 900_000, "stok_room": 1e6, "stok": 50},
+            {"product_code": "4", "nama": "Biasa", "omzet_harian": 300_000, "stok_room": 1e6, "stok": 50},
+            {"product_code": "5", "nama": "Habis", "omzet_harian": 400_000, "stok_room": 0, "stok": 0},
+            {"product_code": "9", "nama": "Laris belum iklan", "omzet_harian": 2_000_000, "stok_room": 1e6, "stok": 20},
+        ])
+
+    def test_steps_3_and_4_agree(self):
+        units, plan, sel = A.build_plan([self.group, self.old, self.single], self.members, self.products, {},
+                                        gap_daily=5_000_000, target_roas=4, budget_daily=None)
+        sel = sel.set_index("Kode produk")
+        by = {u.key: u for u in units}
+        self.assertEqual(sel.loc["5", "Saran"], "Jeda sampai restock")
+        self.assertTrue(by["produk:5"].locked)
+        self.assertEqual(plan.cost["produk:5"], 0)
+        acts = A.target_actions(units, plan, target_roas=4).set_index("key")
+        self.assertEqual(acts.loc["produk:5", "Tindakan"], "Jeda")
+        self.assertEqual(sel.loc[(sel.index == "1") & (sel["_unit"] == "grup:Kloset"), "Saran"].iloc[0], "Jadikan iklan tunggal")
+        self.assertEqual(acts.loc["pisah:1", "Tindakan"], "Pisahkan jadi iklan tunggal")
+        self.assertIn("baru:9", acts.index)
+        self.assertEqual(sel.loc["9", "Saran"], "Buat iklan tunggal")
+        self.assertAlmostEqual(sel.loc["9", "Budget usulan iklan/hari"], plan.cost["baru:9"])
+        dup = sel.loc[sel["Saran"] == "Sudah di iklan lain"]
+        self.assertEqual(set(dup.index), {"1", "4"})
+        self.assertNotIn("1", by["grup:Kloset"].members)
+        self.assertAlmostEqual(by["grup:Kloset"].demand, 300_000)
+
+    def test_uplift_capped_by_product_demand(self):
+        units, plan, _sel = A.build_plan([self.group, self.old, self.single], self.members, self.products, {},
+                                         gap_daily=1e9, target_roas=1, budget_daily=None)
+        for u in units:
+            if not u.locked:
+                self.assertLessEqual(A.ad_sales(u, plan.cost[u.key]) - A._now_sales(u), A.DEMAND_LIFT * u.demand + 1)
+
+
 class RestockCapacityTest(unittest.TestCase):
     def test_room_to_max_per_sku(self):
         import pandas as pd

@@ -120,11 +120,8 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
     products = (pd.DataFrame(rows).groupby(["product_code"], as_index=False).agg(nama=("nama", "first"), omzet_harian=("omzet_harian", "sum"), stok=("stok", lambda v: v.sum(min_count=1)))
                 if rows else pd.DataFrame(columns=["product_code", "nama", "omzet_harian", "stok"]))
     products["stok_room"] = products["product_code"].map(room)
-    running = [u for u in units if u.daily_cost > 0]
-    store_roas = sum(u.daily_sales for u in running) / sum(u.daily_cost for u in running) if running else 8.0
-    # Fokus kejar target: hanya iklan produk tunggal & grup; margin dan stok dicatat, tidak menyaring.
+    # Fokus kejar target: hanya iklan produk tunggal & grup; iklan baru diusulkan oleh pemilihan produk (A.build_plan).
     units = [u for u in units if u.jenis in A.TARGET_KINDS]
-    units += A.new_single_candidates(units, products, contribution, store_roas=store_roas, require_margin=False, require_stock=False)
     del latest
     return units, members, contribution, products
 

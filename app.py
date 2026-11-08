@@ -8011,14 +8011,16 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
 
 
 if not st.session_state.get("_autoload-done"):
-    st.session_state["_autoload-done"] = True
+    # Tanda "selesai" baru dipasang setelah analisa terakhir termuat: bila rerun pertama terputus (klik / sambung ulang),
+    # rerun berikutnya mencoba lagi, bukan terjebak di halaman Upload data tanpa hasil.
     if "analysis" not in st.session_state and not st.session_state.get("pending-run"):
         try:
             last_ok = run_repository().last_success()
         except Exception:
             last_ok = None
-        if last_ok is not None:
-            open_saved_run(last_ok.id, navigate=False)
+        if last_ok is not None and open_saved_run(last_ok.id, navigate=False):
+            st.session_state.pop("editing-input", None)
+    st.session_state["_autoload-done"] = True
 
 
 ROUTE_CHANGED = sync_route(st.session_state, st.query_params, allowed_sheets(AUTH_USER.role, APP_SHEETS))
