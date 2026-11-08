@@ -4293,6 +4293,47 @@ def show_qty_forecast_board(
                 _qty_insight_dialog(_insight_markup(match.iloc[0], briefs[selected]))
 
 
+def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: int, noun: str) -> int:
+    """Navigasi halaman bernomor: « ‹ 1 2 3 … 80 › » + keterangan baris yang tampil. Mengembalikan halaman aktif."""
+    state = f"{key}-n"
+
+    def _go(target: int) -> None:
+        st.session_state[state] = max(1, min(pages, target))
+
+    lo_row = (page - 1) * page_size + 1 if total else 0
+    hi_row = min(page * page_size, total)
+    st.markdown(
+        f"<div class='field-hint' style='text-align:center'>Menampilkan baris <b>{format_number(lo_row)}–{format_number(hi_row)}</b> "
+        f"dari <b>{format_number(total)}</b> {noun} · halaman {page} dari {pages}</div>",
+        unsafe_allow_html=True,
+    )
+    if pages <= 1:
+        return page
+    # Nomor halaman: selalu 1 dan terakhir, plus 2 di kiri-kanan halaman aktif; celah ditulis "…".
+    numbers = sorted({1, pages, *range(max(1, page - 2), min(pages, page + 2) + 1)})
+    items: list = []
+    for number in numbers:
+        if items and isinstance(items[-1], int) and number - items[-1] > 1:
+            items.append("…")
+        items.append(number)
+    slots = ["prev", *items, "next"]
+    side = max(0.2, (12 - len(slots)) / 2)
+    cols = st.columns([side, *[0.9 if s in ("prev", "next") else 0.55 for s in slots], side])
+    for col, item in zip(cols[1:-1], slots):
+        if item == "prev":
+            col.button("‹", key=f"{key}-prev", disabled=page <= 1, on_click=_go, args=(page - 1,), use_container_width=True, help="Halaman sebelumnya")
+        elif item == "next":
+            col.button("›", key=f"{key}-next", disabled=page >= pages, on_click=_go, args=(page + 1,), use_container_width=True, help="Halaman berikutnya")
+        elif item == "…":
+            col.markdown("<div style='text-align:center;padding-top:.5rem'>…</div>", unsafe_allow_html=True)
+        else:
+            col.button(
+                str(item), key=f"{key}-p{item}", type="primary" if item == page else "secondary",
+                on_click=_go, args=(item,), use_container_width=True,
+            )
+    return min(max(int(st.session_state.get(state, page)), 1), pages)
+
+
 def show_section_title(text: str) -> None:
     st.markdown(f"<div class='chart-heading'>{text}</div>", unsafe_allow_html=True)
 
@@ -8088,21 +8129,12 @@ with PAGE_ROOT.container(key="page-root"):
             if st.session_state.get("pred-filter-sig") != filter_sig:
                 st.session_state["pred-filter-sig"] = filter_sig
                 st.session_state["pred-page-n"] = 1
-            n1, n2, n3, n4 = st.columns([1.1, 1, 1.6, 1], vertical_alignment="bottom")
-            page_size = int(n1.selectbox("Baris per halaman", options=[5, 10, 20, 50, 100], index=0, key="pred-size"))
+            page_size = int(
+                st.columns([1, 3])[0].selectbox("Baris per halaman", options=[5, 10, 20, 50, 100], index=0, key="pred-size")
+            )
             pages = max((total - 1) // page_size + 1, 1)
             page = min(max(int(st.session_state.get("pred-page-n", 1)), 1), pages)
-            if n2.button("‹ Sebelumnya", key="pred-prev", disabled=page <= 1, use_container_width=True):
-                st.session_state["pred-page-n"] = page - 1
-                st.rerun()
-            n3.markdown(
-                f"<div style='text-align:center;padding:.55rem 0;font-weight:700'>Halaman {page} dari {pages}"
-                f"<span class='field-hint'> · {format_number(total, 0)} SKU</span></div>",
-                unsafe_allow_html=True,
-            )
-            if n4.button("Berikutnya ›", key="pred-next", disabled=page >= pages, use_container_width=True):
-                st.session_state["pred-page-n"] = page + 1
-                st.rerun()
+            page = page_navigator(page, pages, key="pred-page", total=total, page_size=page_size, noun="SKU")
             page_view = work.iloc[(page - 1) * page_size : page * page_size].reset_index(drop=True)
             if page_view.empty:
                 st.write("Tidak ada SKU yang cocok dengan filter.")

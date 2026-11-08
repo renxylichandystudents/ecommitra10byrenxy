@@ -197,11 +197,9 @@
     let out = `<div class="main" title="${esc(cell.t)}">${esc(cell.t)}</div>`;
     if (cell.d) out += `<div class="move ${esc(cell.dc || "flat")}">${esc(cell.d)}</div>`;
     if (cell.s) out += `<div class="sub">${esc(cell.s)}</div>`;
-    // Satu label utama + "+n" (label lain di tooltip) agar baris tidak memanjang 2 baris karena lencana.
+    // Semua label ditampilkan (tidak disembunyikan di tooltip).
     if (cell.l && cell.l.length) {
-      const rest = cell.l.slice(1);
-      const more = rest.length ? `<span class="chip more" title="${esc(rest.join(" · "))}">+${rest.length}</span>` : "";
-      out += `<div class="labels"><span class="chip">${esc(cell.l[0])}</span>${more}</div>`;
+      out += `<div class="labels">${cell.l.map((name) => `<span class="chip">${esc(name)}</span>`).join("")}</div>`;
     }
     return out;
   }
