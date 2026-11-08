@@ -906,6 +906,17 @@ st.markdown(
     .qty-track.stock-row.dc { background: #f0f9ff; }
     .stock-chip.info { background: #dbeafe; color: #1e3a8a; }
     /* Tombol unduh Excel: hijau lembut, ikon unduh, sudut membulat (sama di semua halaman). */
+    div[class*="-nav"][class*="st-key-"] button {
+        min-height: 34px !important;
+        height: 34px;
+        padding: 0 .35rem !important;
+        border-radius: 9px !important;
+        font-size: .9rem;
+    }
+    div[class*="-nav"][class*="st-key-"] [data-testid="stHorizontalBlock"] {
+        gap: .35rem !important;
+        flex-wrap: nowrap !important;
+    }
     [data-testid="stDownloadButton"] button {
         background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%) !important;
         color: #065f46 !important;
@@ -4302,12 +4313,12 @@ def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: in
 
     lo_row = (page - 1) * page_size + 1 if total else 0
     hi_row = min(page * page_size, total)
-    st.markdown(
-        f"<div class='field-hint' style='text-align:center'>Menampilkan baris <b>{format_number(lo_row)}–{format_number(hi_row)}</b> "
-        f"dari <b>{format_number(total)}</b> {noun} · halaman {page} dari {pages}</div>",
-        unsafe_allow_html=True,
+    caption = (
+        f"<div class='field-hint' style='padding-top:.45rem'>Baris <b>{format_number(lo_row)}–{format_number(hi_row)}</b> "
+        f"dari <b>{format_number(total)}</b> {noun} · hal. {page}/{pages}</div>"
     )
     if pages <= 1:
+        st.markdown(caption, unsafe_allow_html=True)
         return page
     # Nomor halaman: selalu 1 dan terakhir, plus 2 di kiri-kanan halaman aktif; celah ditulis "…".
     numbers = sorted({1, pages, *range(max(1, page - 2), min(pages, page + 2) + 1)})
@@ -4317,20 +4328,22 @@ def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: in
             items.append("…")
         items.append(number)
     slots = ["prev", *items, "next"]
-    side = max(0.2, (12 - len(slots)) / 2)
-    cols = st.columns([side, *[0.9 if s in ("prev", "next") else 0.55 for s in slots], side])
-    for col, item in zip(cols[1:-1], slots):
-        if item == "prev":
-            col.button("‹", key=f"{key}-prev", disabled=page <= 1, on_click=_go, args=(page - 1,), use_container_width=True, help="Halaman sebelumnya")
-        elif item == "next":
-            col.button("›", key=f"{key}-next", disabled=page >= pages, on_click=_go, args=(page + 1,), use_container_width=True, help="Halaman berikutnya")
-        elif item == "…":
-            col.markdown("<div style='text-align:center;padding-top:.5rem'>…</div>", unsafe_allow_html=True)
-        else:
-            col.button(
-                str(item), key=f"{key}-p{item}", type="primary" if item == page else "secondary",
-                on_click=_go, args=(item,), use_container_width=True,
-            )
+    info, nav = st.columns([1, 1.25], vertical_alignment="center")
+    info.markdown(caption, unsafe_allow_html=True)
+    with nav.container(key=f"{key}-nav"):
+        cols = st.columns(len(slots), gap="small")
+        for col, item in zip(cols, slots):
+            if item == "prev":
+                col.button("‹", key=f"{key}-prev", disabled=page <= 1, on_click=_go, args=(page - 1,), use_container_width=True, help="Halaman sebelumnya")
+            elif item == "next":
+                col.button("›", key=f"{key}-next", disabled=page >= pages, on_click=_go, args=(page + 1,), use_container_width=True, help="Halaman berikutnya")
+            elif item == "…":
+                col.markdown("<div style='text-align:center;color:#6b7280'>…</div>", unsafe_allow_html=True)
+            else:
+                col.button(
+                    str(item), key=f"{key}-p{item}", type="primary" if item == page else "secondary",
+                    on_click=_go, args=(item,), use_container_width=True,
+                )
     return min(max(int(st.session_state.get(state, page)), 1), pages)
 
 
@@ -8091,7 +8104,7 @@ with PAGE_ROOT.container(key="page-root"):
             st.write("Tidak ada item untuk ditampilkan.")
         else:
             label_legend()
-            f1, f2, f3 = st.columns([2.4, 1.3, 1.3])
+            f1, f2, f3, f4 = st.columns([2.4, 1.2, 1.2, 0.8])
             # Cari: saat diketik, daftar menampilkan SKU · nama produk · varian sehingga SKU yang tidak sesuai terlihat.
             labels_all = (
                 enriched["sku"].astype(str) + " · " + enriched["product_name"].astype(str)
@@ -8129,9 +8142,7 @@ with PAGE_ROOT.container(key="page-root"):
             if st.session_state.get("pred-filter-sig") != filter_sig:
                 st.session_state["pred-filter-sig"] = filter_sig
                 st.session_state["pred-page-n"] = 1
-            page_size = int(
-                st.columns([1, 3])[0].selectbox("Baris per halaman", options=[5, 10, 20, 50, 100], index=0, key="pred-size")
-            )
+            page_size = int(f4.selectbox("Baris/halaman", options=[5, 10, 20, 50, 100], index=0, key="pred-size"))
             pages = max((total - 1) // page_size + 1, 1)
             page = min(max(int(st.session_state.get("pred-page-n", 1)), 1), pages)
             page = page_navigator(page, pages, key="pred-page", total=total, page_size=page_size, noun="SKU")

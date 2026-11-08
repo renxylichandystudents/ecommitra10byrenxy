@@ -247,15 +247,25 @@ def show_decision_table(
 
 
 def label_legend() -> None:
-    explain(
-        [
-            ("🏆 Terlaris", "10 besar QTY dan sales sekaligus"),
-            ("👁 Populer", "10% teratas dilihat"),
-            ("👆 Paling diminati", "10% teratas klik/CTR"),
-            ("⚠ Perlu perhatian", "batal > 15% atau > 2× median toko"),
-            "Dilihat/klik berasal dari laporan iklan; produk tanpa iklan tidak mendapat label Populer/Paling diminati.",
-        ],
-        title="Label",
+    """Keterangan label ringkas: satu baris kartu kecil + catatan sumber data (semua tetap terlihat)."""
+    items = [
+        ("🏆", "Terlaris", "10 besar QTY & sales sekaligus"),
+        ("👁", "Populer", "10% teratas dilihat"),
+        ("👆", "Paling diminati", "10% teratas klik/CTR"),
+        ("⚠", "Perlu perhatian", "batal > 15% atau > 2× median toko"),
+    ]
+    cards = "".join(
+        f"<div class='lg-item'><span class='lg-ico'>{icon}</span><div><b>{name}</b><br><span>{text}</span></div></div>"
+        for icon, name, text in items
+    )
+    st.markdown(
+        "<style>.lg-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.4rem;margin:.1rem 0 .3rem}"
+        ".lg-item{display:flex;gap:.5rem;align-items:flex-start;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:.4rem .6rem;font-size:.82rem;line-height:1.25}"
+        ".lg-item span{color:#6b7280}.lg-ico{font-size:1rem;line-height:1.2}"
+        ".lg-note{font-size:.75rem;color:#6b7280;margin-bottom:.4rem}</style>"
+        f"<div class='lg-wrap'>{cards}</div>"
+        "<div class='lg-note'>Dilihat/klik berasal dari laporan iklan; produk tanpa iklan tidak mendapat label Populer/Paling diminati.</div>",
+        unsafe_allow_html=True,
     )
 
 
