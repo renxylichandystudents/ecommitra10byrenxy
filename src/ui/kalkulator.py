@@ -280,40 +280,19 @@ def _goals(features, user_root, orders, ref: date | None = None):
     return business_targets(params, saved)
 
 
-def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, md, ref: date | None = None) -> None:
+def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, md, ref: date | None = None, *,
+             month_port: pd.DataFrame | None = None, period_label: str = "periode terpilih") -> None:
     """Kondisi margin toko + target penjualan + langkah yang disarankan (berurutan).
 
     Bulan acuan = bulan tanggal akhir periode terpilih. Bulan berjalan (bulan data terakhir) → proyeksi
     (realisasi s.d. hari ini + prediksi sisa hari); bulan yang sudah lewat → penjualan aktual sebulan penuh."""
-    import calendar
-
     from src.ui.margin_data import status_line
+    from src.ui.targets_view import month_outlook
 
-    data_last = _month_of(orders)
-    running = ref is None or (ref.year, ref.month) == (data_last.year, data_last.month)
-    last = data_last if running else (pd.Timestamp(ref) + pd.offsets.MonthEnd(0)).date()
+    outlook = month_outlook(orders, features, ref)
+    running, last, mtd, rest = outlook["running"], outlook["last"], outlook["mtd"], outlook["rest"]
+    pred_daily, projection = outlook["pred_daily"], outlook["projection"]
     month_label = f"{['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][last.month - 1]} {last.year}"
-    mtd = 0.0
-    if orders is not None and not orders.empty:
-        work = orders
-        if "status" in work.columns:
-            from src.ingest import cancelled_status_mask
-
-            work = work.loc[~cancelled_status_mask(work["status"])]
-        stamp = pd.to_datetime(work["order_time"], errors="coerce")
-        mtd = float(pd.to_numeric(work.loc[(stamp.dt.year == last.year) & (stamp.dt.month == last.month), "sales"], errors="coerce").sum())
-    rest = calendar.monthrange(last.year, last.month)[1] - last.day if running else 0
-    pred_daily = 0.0
-    try:
-        from src.ui.gudang_view import latest_prediction
-
-        _q, sales_daily, _at = latest_prediction(features)
-        pred_daily = float(sum(sales_daily.values())) if sales_daily else 0.0
-    except Exception:
-        pred_daily = 0.0
-    if pred_daily <= 0 and last.day:
-        pred_daily = mtd / last.day
-    projection = mtd + pred_daily * rest if running else mtd
     has_target = goals.target_sales > 0
     gap = goals.target_sales - projection if has_target else 0.0
     acuan = port.attrs.get("acuan_pct", float("nan")) if not port.empty else float("nan")
@@ -326,14 +305,40 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
 
     if not md.ready:
         st.warning("File margin belum diunggah: margin per SKU belum bisa dihitung. Unggah di tab **⚙️ Parameter biaya › File margin**.", icon=":material/upload_file:")
+    # Margin toko mengacu ke penjualan aktual bulan acuan (tgl 1 s.d. data terakhir); bila belum ada, pakai periode terpilih.
+    mp = month_port if month_port is not None and not month_port.empty else port
+    m_known = mp.loc[mp["bersih_30"].notna()] if not mp.empty else mp
+    m_omzet = float(m_known["omzet_30"].sum()) if len(m_known) else 0.0
+    m_overall = mp.attrs.get("overall_pct", float("nan")) if not mp.empty else float("nan")
+    m_kotor = float((m_known["omzet_30"] * m_known["kotor_pct"]).sum() / m_omzet) if m_omzet else float("nan")
+    m_bersih = float(m_known["bersih_30"].sum()) if len(m_known) else 0.0
+    actual_span = f"1–{last.day} {month_label}"
+    from src.ui.targets_view import achievement_line
+
+    reach = achievement_line(mtd, last.replace(day=1), last, features)
     k = st.columns(4)
-    card(k[0], f"Proyeksi penjualan {month_label}" if running else f"Penjualan aktual {month_label}", fmt_idr(projection),
-         hint=(f"target {fmt_idr(goals.target_sales)} · " + (f"kurang {fmt_idr(gap)}" if gap > 0 else "tercapai")) if has_target else "target belum diisi di Pengaturan bisnis")
-    card(k[1], "Margin bersih rata-rata toko", fmt_pct(overall, 1) if np.isfinite(overall) else "–",
-         hint=(f"margin kotor {fmt_pct(kotor, 1)} − potongan Shopee & iklan · {fmt_idr(float(known['bersih_30'].sum()))}/periode") if np.isfinite(overall) else "butuh file margin")
-    card(k[2], "SKU rugi", fmt_num(len(rugi)), hint=f"rugi ±{fmt_idr(float(rugi['rugi_30'].sum()) if len(rugi) else 0)}/periode · omzet {fmt_idr(float(rugi['omzet_30'].sum()) if len(rugi) else 0)}")
-    card(k[3], "SKU margin rendah", fmt_num(len(low)), hint=f"untung di bawah {fmt_pct(acuan, 1)} · potensi +{fmt_idr(float(low['selisih_30'].sum()) if len(low) else 0)}/periode")
-    chips = [status_line(md), f"Batas margin rendah <b>{fmt_pct(acuan, 1)}</b> (rata-rata SKU yang untung)", (f"Realisasi s.d. tgl {last.day}: <b>{fmt_idr(mtd)}</b>" if running else f"Bulan {month_label} sudah lewat: angka aktual, bukan proyeksi")]
+    card(k[0], f"Penjualan aktual {month_label}", fmt_idr(mtd),
+         hint=(f"realisasi {actual_span}" if running else "bulan sudah lewat · angka aktual") + (f"<br>{reach}" if reach else ""))
+    card(k[1], f"Margin bersih aktual {month_label}", fmt_pct(m_overall, 1) if np.isfinite(m_overall) else "–",
+         hint=(f"{actual_span} · margin kotor {fmt_pct(m_kotor, 1)} − potongan Shopee & iklan = {fmt_idr(m_bersih)}") if np.isfinite(m_overall) else "butuh file margin")
+    if running:
+        rest_text = f"aktual + prediksi {rest} hari sisa" if rest else "bulan sudah penuh"
+        card(k[2], f"Prediksi penjualan {month_label}", fmt_idr(projection),
+             hint=(f"{rest_text} · target {fmt_idr(goals.target_sales)} · prediksi pencapaian "
+                   f"<b style='color:{'#1d4ed8' if gap <= 0 else '#dc2626'}'>{fmt_pct(projection / goals.target_sales * 100, 1)}</b>"
+                   + (f" · kurang {fmt_idr(gap)}" if gap > 0 else " · target tercapai")) if has_target else f"{rest_text} · target {month_label} belum diunggah")
+        proj_margin = projection * m_overall / 100 if np.isfinite(m_overall) else float("nan")
+        card(k[3], f"Prediksi margin bersih {month_label}", fmt_idr(proj_margin) if np.isfinite(proj_margin) else "–",
+             hint=(f"prediksi penjualan × margin aktual {fmt_pct(m_overall, 1)} · sisa {rest} hari {fmt_idr(proj_margin - m_bersih)}") if np.isfinite(proj_margin) else "butuh file margin")
+        k = st.columns(4)
+    card(k[2] if not running else k[0], "SKU rugi", fmt_num(len(rugi)),
+         hint=f"{html.escape(period_label)} · rugi ±{fmt_idr(float(rugi['rugi_30'].sum()) if len(rugi) else 0)} · omzet {fmt_idr(float(rugi['omzet_30'].sum()) if len(rugi) else 0)}")
+    card(k[3] if not running else k[1], "SKU margin rendah", fmt_num(len(low)),
+         hint=f"{html.escape(period_label)} · untung di bawah {fmt_pct(acuan, 1)} · potensi +{fmt_idr(float(low['selisih_30'].sum()) if len(low) else 0)}")
+    if running and np.isfinite(overall):
+        card(k[2], "Margin bersih periode terpilih", fmt_pct(overall, 1),
+             hint=f"{html.escape(period_label)} · margin kotor {fmt_pct(kotor, 1)} · {fmt_idr(float(known['bersih_30'].sum()))}")
+    chips = [status_line(md), f"Batas margin rendah <b>{fmt_pct(acuan, 1)}</b> (rata-rata SKU yang untung)", (f"Prediksi sisa {rest} hari: <b>{fmt_idr(projection - mtd)}</b> (±{fmt_idr(pred_daily)}/hari)" if running else f"Bulan {month_label} sudah lewat: angka aktual, bukan proyeksi")]
     if len(known):
         chips.insert(1, f"Potongan Shopee rata-rata <b>{fmt_pct(float((known['omzet_30'] * known['shopee_pct']).sum() / omzet), 1)}</b> · iklan <b>{fmt_pct(float((known['omzet_30'] * known['iklan_pct']).sum() / omzet), 1)}</b>")
     st.markdown(
@@ -454,8 +459,21 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     rows = _portfolio_rows(features, table, data, orders, fees, md, start, end)
     port = fee.portfolio(rows, programs=programs, order_fee=order_fee, fallback_kotor_pct=md.store_kotor_pct) if not rows.empty else pd.DataFrame()
     acuan = port.attrs.get("acuan_pct", float("nan")) if not port.empty else float("nan")
+    month_port = pd.DataFrame()
+    if orders is not None and not orders.empty:
+        data_last = _month_of(orders)
+        ref = end or data_last
+        running = (ref.year, ref.month) == (data_last.year, data_last.month)
+        m_end = data_last if running else (pd.Timestamp(ref) + pd.offsets.MonthEnd(0)).date()
+        m_start = m_end.replace(day=1)
+        if (start, end) == (m_start, m_end):
+            month_port = port
+        else:
+            m_rows = _portfolio_rows(features, table, data, orders, fees, md, m_start, m_end)
+            if not m_rows.empty:
+                month_port = fee.portfolio(m_rows, programs=programs, order_fee=order_fee, fallback_kotor_pct=md.store_kotor_pct)
     with tab_sum:
-        _summary(goals, port, orders, features, md, end)
+        _summary(goals, port, orders, features, md, end, month_port=month_port, period_label=period_label)
         _priority_table(port, period_label)
     with tab_param:
         _parameter_panel(features, may_edit=may_edit, username=username, require=require)

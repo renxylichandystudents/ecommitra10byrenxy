@@ -21,6 +21,7 @@ from src.core.metrics import ads_metrics
 from src.core.periods import format_period_label, last_full_month
 from src.core.restock import recommendation_records, records_display
 from src.utils.format import show_table
+from src.ui.targets_view import achievement_line, monthly_targets
 from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, explain, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key, table_toolbar
 
 ALL_SECTIONS = "Semua bagian (untuk dibaca berurutan / dicetak)"
@@ -131,7 +132,8 @@ def _month_label(stamp: pd.Timestamp) -> str:
     return f"{ID_MONTHS[stamp.month - 1][:3]} {stamp.year}"
 
 
-def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, month_pred: float, pred_label: str, exclude: bool) -> None:
+def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, month_pred: float, pred_label: str, exclude: bool,
+                targets: dict | None = None) -> None:
     """Tren bulanan dengan dua dasar yang jelas dan bulan berjalan ditandai (tidak ikut moving average)."""
     times = pd.to_datetime(orders["order_time"])
     monthly = orders.assign(m=times.dt.to_period("M").dt.to_timestamp()).groupby("m")["sales"].sum()
@@ -164,6 +166,13 @@ def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, 
     fig.add_scatter(x=labels[: len(ma)], y=ma.values / 1e9, name="Moving average 3 bulan (bulan penuh)", mode="lines+markers", line=dict(color="#0f766e"))
     if bersih:
         fig.add_scatter(x=labels, y=[bersih[m] / 1e9 for m in monthly.index], name="Sales bersih (kartu Ringkasan)", mode="lines+markers", line=dict(color="#64748b", dash="dot"))
+    targets = targets or {}
+    month_keys = [f"{m.year:04d}-{m.month:02d}" for m in monthly.index]
+    if any(targets.get(k, 0) > 0 for k in month_keys):
+        fig.add_scatter(
+            x=labels, y=[targets[k] / 1e9 if targets.get(k, 0) > 0 else None for k in month_keys], name="Target sales bulanan",
+            mode="lines+markers", line=dict(color="#f59e0b", dash="dash"), marker=dict(symbol="line-ew-open", size=14),
+        )
     if month_pred > 0:
         fig.add_scatter(x=[labels[-1]], y=[month_pred / 1e9], name=pred_label, mode="markers+text", marker=dict(color="#ee4d2d", size=14, symbol="diamond"), text=[fmt_idr_short(month_pred)], textposition="top center")
     fig.update_layout(height=440, separators=",.", legend=dict(orientation="h", y=-0.22), yaxis_title="Miliar rupiah", margin=dict(l=40, r=20, t=30, b=40))
@@ -173,8 +182,21 @@ def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, 
             (basis, "Harga setelah diskon × QTY" + (" (tanpa batal & retur)" if exclude else " (termasuk pesanan batal)") + "; dasar yang sama dengan prediksi"),
             ("Sales bersih", "Total Pembayaran per pesanan dikurangi batal & retur; sama dengan kartu Ringkasan eksekutif"),
             ("Kenapa berbeda", "Total Pembayaran sudah dipotong voucher dan termasuk ongkir, sedangkan sales produk tidak"),
+            ("Target sales bulanan", "target per bulan dari Pengaturan bisnis; pencapaian = sales bersih ÷ target bulan itu"),
         ]
     )
+    if bersih and any(targets.get(k, 0) > 0 for k in month_keys):
+        rows = []
+        for stamp, key, label in zip(monthly.index, month_keys, labels):
+            goal = float(targets.get(key, 0) or 0)
+            actual = bersih.get(stamp, 0.0)
+            rows.append({
+                "Bulan": label, "Sales bersih": fmt_idr(actual), "Target": fmt_idr(goal) if goal > 0 else "belum diunggah",
+                "Pencapaian": fmt_pct(actual / goal * 100, 1) if goal > 0 else "–",
+                "Status": ("✅ Tercapai" if actual >= goal else ("⏳ Bulan berjalan" if partial and stamp == monthly.index[-1] else "🔴 Tidak tercapai")) if goal > 0 else "",
+            })
+        st.markdown("**Pencapaian target sales per bulan**")
+        show_table(pd.DataFrame(rows))
     if len(full) >= 2:
         last, before = float(full.iloc[-1]), float(full.iloc[-2])
         change = (last - before) / before * 100 if before > 0 else float("nan")
@@ -244,6 +266,7 @@ def show_report(
     from src.core.business import business_targets
 
     target = business_targets(params, saved_target).target_sales
+    month_targets = monthly_targets(features)
     month_col = "m_sales_exp" if table is not None and "m_sales_exp" in table.columns else "m_sales"
     month_pred = float(table[month_col].sum()) if table is not None and not table.empty and month_col in table.columns else 0.0
     pred_label = format_period_label("prediksi", window_start)
@@ -285,7 +308,8 @@ def show_report(
             try:
                 if section == SECTIONS[0]:
                     cols = st.columns(4)
-                    metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada"))
+                    reach = achievement_line(sales_now, report_lo.date(), report_hi.date(), targets=month_targets)
+                    metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada") + (f"<br>{reach}" if reach else ""))
                     window_text = f"{fmt_date(window_start, short=True)} – {fmt_date(window_end, short=True)}"
                     card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"{window_text} · target {fmt_idr(target)}" if target > 0 else window_text)
                     metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
@@ -304,7 +328,7 @@ def show_report(
                         st.markdown("**Rekomendasi utama**")
                         show_table(records_display(records.head(5)), kinds={"Stok Site 10037": "count", "Kebutuhan": "count", "Restock": "count"})
                 elif section == SECTIONS[1]:
-                    _show_trend(orders, orders_all, today=today, month_pred=month_pred, pred_label=pred_label, exclude=exclude)
+                    _show_trend(orders, orders_all, today=today, month_pred=month_pred, pred_label=pred_label, exclude=exclude, targets=month_targets)
                 elif section == SECTIONS[2]:
                     cols = ["peringkat", "sku", "product_name", "qty_total", "sales_total", "m_qty", "m_sales", "label_text"]
                     view = top[[c for c in cols if c in top.columns]].head(20).rename(
@@ -462,7 +486,7 @@ def show_report(
                         }
                     )
                     if target <= 0:
-                        st.caption(f"Acuan panduan = {pred_label} (target belum diisi di Rekomendasi › Iklan).")
+                        st.caption(f"Acuan panduan = {pred_label} (target bulan ini belum diunggah di Pengaturan bisnis).")
                     for name, tasks in guide.items():
                         st.markdown(f"**{name}**")
                         show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))

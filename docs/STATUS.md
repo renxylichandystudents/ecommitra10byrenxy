@@ -73,6 +73,33 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Upload ditolak bila Store Code di file tidak sama dengan site menu yang dipilih. Snapshot DC disimpan 4 terakhir.
 - Logika: `src/core/dc_stock.py`; tes: `tests/test_dc_stock.py`.
 
+## Kalkulator margin: aktual dan prediksi bulan berjalan (8 Nov 2026)
+
+- Kartu Ringkasan untuk bulan berjalan: **Penjualan aktual** (tgl 1 s.d. data terakhir), **Margin bersih aktual** (dihitung dari penjualan aktual bulan itu), **Prediksi penjualan** (aktual + prediksi sisa hari), dan **Prediksi margin bersih** (prediksi penjualan × margin aktual).
+- SKU rugi, SKU margin rendah, dan daftar prioritas tetap mengikuti Periode analisa; margin periode itu tampil di kartu terpisah.
+- Bulan yang sudah lewat: penjualan dan margin aktual bulan penuh, tanpa kartu prediksi.
+- Kode: `src/ui/kalkulator.py` (`_summary`, `show_calculator`).
+
+## Target sales bulanan & pencapaian (8 Nov 2026)
+
+- Pengaturan bisnis › **Target sales bulanan**: unduh template (Bulan, Target (Rp)), isi, unggah, simpan. Disimpan per bulan di tabel `sales_target` (bulan yang sama diganti; margin minimum & strategi iklan bulan itu tetap).
+- Kolom lama "Target sales bulanan (Rp)" (satu angka untuk semua bulan) dihapus; `business_targets` tidak lagi memakai angka itu. Bulan tanpa target = "belum diunggah".
+- Pencapaian = sales aktual ÷ target bulan yang sama. Rentang sebagian bulan memakai target prorata per hari kalender (contoh 1–8 Nov = target Nov × 8/30); persen ≥ 100% biru, di bawahnya merah.
+- Tampil di: Ringkasan (kartu Sales bersih), Data (kartu Sales bersih), Laporan (kartu Sales bersih + garis target di grafik tren + tabel pencapaian per bulan), Prediksi vs aktual (omzet seluruh toko hari itu vs target harian), Folder data (kolom Target & Pencapaian target, baris Total), Kalkulator biaya (penjualan aktual & prediksi pencapaian).
+- Kode: `src/core/targets.py` (parsing & prorata), `src/ui/targets_view.py` (unggah & baris pencapaian); tes: `tests/test_business.py`.
+- Lokal: jalankan `streamlit run app.py --server.fileWatcherType auto` agar perubahan kode cukup Rerun (config repo mematikan file watcher untuk Cloud). Catatan: setelah file berubah, kadang semua menu tertulis "tidak punya akses" karena objek login lama tidak cocok dengan modul yang dimuat ulang; restart server lalu muat ulang halaman.
+
+## Rekomendasi › Iklan: strategi kejar target (8 Nov 2026)
+
+- Dirombak total. Hanya **iklan produk tunggal** dan **iklan grup** (plus usulan iklan produk tunggal baru); iklan otomatis tidak dihitung.
+- Setelan di halaman ini (disimpan per bulan di `sales_target.budget_json`): **Target sales** (bawaan dari target bulanan), **Target ROAS**, **Budget iklan sisa bulan**. "Margin bersih minimum" dihapus; "Budget iklan maksimum" dihapus dari Pengaturan bisnis (Target ROAS di sana hanya nilai awal).
+- Target ROAS = ROAS **rata-rata** seluruh iklan di rencana (arti yang sama dengan Target ROAS Shopee). Urutan: pindahkan budget dari iklan kurang efektif ke yang efektif → pangkas bila melebihi budget/ROAS → tambah ke iklan paling efektif sampai gap target tertutup (maks. 3× budget sekarang per iklan; iklan baru maks. Rp 100 rb/hari). Iklan dijeda dihitung dari omzet 0.
+- Stok dan margin **tidak** membatasi rencana; tampil sebagai catatan per iklan (⚠️ stok kurang, margin minus) dan kotak catatan.
+- Kesimpulan otomatis: bila target belum tercapai, tombol "Pakai budget …", "Pakai ROAS …", atau "Pakai ROAS … + budget" mengisi setelan; bila iklan saja tidak cukup, sisa gap diarahkan ke flash sale/voucher. Expander "Bandingkan target ROAS lain".
+- Tabel per iklan: tindakan, budget harian sekarang → usulan, Target ROAS Shopee per iklan (ROAS rata-rata iklan itu pada budget usulan), tambahan omzet/hari, catatan; filter jenis & tindakan; Excel.
+- Expander lama "Rencana iklan per periode (perhitungan sebelumnya)" dihapus.
+- Kode: `src/core/ads_strategy.py` (`allocate_target`, `plan_effect`, `target_actions`, `budget_needed`, `roas_for_budget`, `ad_sales`), `src/ui/ads_target.py`; proyeksi bulan berjalan `src/ui/targets_view.py::month_outlook` (dipakai juga Kalkulator biaya). Tes: `tests/test_ads_target.py`.
+
 ## Hasil pemeriksaan
 
 - Lint (`ruff`, aturan F dan E9): bersih, tidak ada nama tak terdefinisi.

@@ -14,10 +14,9 @@ import pandas as pd
 import streamlit as st
 
 from src.core.nlp_competitor import build_name_recommendations, clean_text
-from src.core.recommendations import ads_plan, flash_sale_plan, flash_sale_template
-from src.core.segmentation import association_rules
-from src.ui.common import batched_view, button_tabs, card, download_excel, explain, fmt_date, fmt_idr, fmt_num, reset_batches, table_toolbar
-from src.utils.format import input_rupiah, show_table
+from src.core.recommendations import flash_sale_plan, flash_sale_template
+from src.ui.common import batched_view, button_tabs, card, download_excel, fmt_date, fmt_num, reset_batches
+from src.utils.format import show_table
 
 STATUS_TONES = {"Poor": "#fee2e2", "Standard": "#fef9c3", "Excellence": "#dcfce7"}
 # Nilai tersimpan tetap Poor/Standard/Excellence; tampilan memakai label Indonesia.
@@ -345,68 +344,6 @@ def _name_detail(item: pd.Series, history: pd.DataFrame | None = None) -> None:
         st.code(item["Rekomendasi deskripsi"], language=None, wrap_lines=True)
 
 
-ADS_VIEWS = ("Iklan produk", "Iklan grup", "Tidak perlu diiklankan")
-
-
-def _ads_cards(plan: dict, view: str, target: float) -> None:
-    summary = plan.get("ringkasan") or {}
-    part = plan.get({"Iklan produk": "produk", "Iklan grup": "grup"}.get(view, "tidak"), pd.DataFrame())
-    cols = st.columns(4)
-    if view == "Tidak perlu diiklankan":
-        reasons = part["Alasan"].str.split(":").str[0].value_counts() if not part.empty else pd.Series(dtype=int)
-        card(cols[0], "Tidak perlu diiklankan", fmt_num(len(part)))
-        for column, (reason, count) in zip(cols[1:], reasons.head(3).items()):
-            card(column, reason, fmt_num(count), hint="SKU")
-        return
-    budget = float(part["Budget"].sum()) if not part.empty else 0.0
-    sales = float(part["Estimasi sales iklan"].sum()) if not part.empty else 0.0
-    card(cols[0], f"Budget {view.lower()}", fmt_idr(budget), hint=f"dari total {fmt_idr(summary.get('budget_input', 0))} · sisa {fmt_idr(summary.get('sisa_budget', 0))}")
-    card(cols[1], "Estimasi sales dari iklan", fmt_idr(sales))
-    card(cols[2], "Estimasi ROAS", fmt_num(sales / budget, 2) if budget > 0 else "–", hint=f"target {fmt_num(target, 2)}")
-    card(cols[3], "Item diiklankan", fmt_num(len(part)))
-
-
-def _ads_tab(table: pd.DataFrame, orders: pd.DataFrame, params: dict, today: date) -> dict:
-    cfg = params.get("iklan", {})
-    c1, c2, c3 = st.columns([1.6, 1, 1.2])
-    span = c1.date_input("Periode beriklan", value=(today, today + timedelta(days=29)), key="ads-span", format="DD/MM/YYYY")
-    start, end = (span if isinstance(span, (list, tuple)) and len(span) == 2 else (today, today + timedelta(days=29)))
-    target = float(c2.number_input("Target ROAS", min_value=1.0, max_value=100.0, value=float(cfg.get("target_roas", 8)), step=0.5, key="ads-roas"))
-    with c3:
-        budget = float(input_rupiah("Total budget maksimal", int(cfg.get("budget_maks_rp", 5_000_000)), key="ads-budget-rp"))
-    try:
-        rules = association_rules(orders)
-    except Exception:
-        rules = pd.DataFrame()
-    if rules is None or rules.empty:
-        rules = _similar_name_rules(table)
-    plan = ads_plan(table, orders=orders, start=start, end=end, target_roas=target, budget_max=budget, params=params, rules=rules)
-    summary = plan["ringkasan"]
-    view = st.radio("Jenis rekomendasi", ADS_VIEWS, horizontal=True, key="ads-view", label_visibility="collapsed")
-    if summary:
-        _ads_cards(plan, view, target)
-        explain(
-            [
-                ("Dialokasikan", f"{fmt_idr(summary['budget'])} dari {fmt_idr(summary['budget_input'])} ({fmt_num(summary['item_diiklankan'])} SKU)"),
-                ("Sisa budget", "tidak dialokasikan bila permintaan atau stok di atas SS tidak cukup menyerapnya"),
-            ]
-        )
-        if summary.get("tanggal"):
-            st.caption("Tanggal permintaan tinggi: " + ", ".join(fmt_date(d, short=True) for d in summary["tanggal"]))
-    if not table.get("biaya_iklan", pd.Series(dtype=float)).fillna(0).gt(0).any():
-        st.caption("Laporan iklan belum diunggah atau belum terpetakan ke SKU: ROAS memakai nilai default dari Pengaturan bisnis.")
-    kinds = {"Budget": "money", "Estimasi sales iklan": "money", "Estimasi ROAS": "dec"}
-    table_toolbar(lambda: download_excel({"Iklan produk": plan["produk"], "Iklan grup": plan["grup"], "Tidak perlu diiklankan": plan["tidak"]}, "rekomendasi_iklan.xlsx", key="xl-ads"), key="ads")
-    if view == "Iklan produk":
-        show_table(plan["produk"], kinds=kinds)
-    elif view == "Iklan grup":
-        st.caption("Kelompok dari produk yang sering dibeli bersamaan (association rules) atau nama sejenis.")
-        show_table(plan["grup"], kinds=kinds)
-    else:
-        show_table(plan["tidak"])
-    return plan
-
-
 def _stock_date_text(table: pd.DataFrame) -> str:
     if not {"stock_snapshot_at", "ada_data_stok"} <= set(table.columns):
         return ""
@@ -519,9 +456,7 @@ def show_recommendations(
         if picked == "nama-deskripsi":
             _names_tab(table, frames, params, features)
         elif picked == "iklan":
-            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit, frames=frames)
-            with st.expander("Rencana iklan per periode (perhitungan sebelumnya)"):
-                _ads_tab(table, orders, params, today)
+            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit, frames=frames, orders=orders)
         elif picked == "flash-sale":
             plus.show_flash_sale(table, data=data, today=today)
             with st.expander("Rencana flash sale harian & template Shopee (perhitungan sebelumnya)"):

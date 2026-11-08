@@ -15,9 +15,7 @@ FIELDS = (
     # (path, label, min, max, step, keterangan)
     ("lead_time.lokal_hari", "Lead time lokal (hari)", 0, 120, 1, "Site 10037 ke pembeli, dipakai pada safety stock dan ROP."),
     ("gudang.kapasitas_unit", "Kapasitas gudang (unit)", 0, 10_000_000, 100, "Batas optimasi pembelian."),
-    ("target.sales_bulanan_rp", "Target sales bulanan (Rp)", 0, 100_000_000_000, 1_000_000, "Target bawaan setiap bulan; bisa diganti per bulan di Rekomendasi. 0 = memakai prediksi."),
-    ("iklan.target_roas", "Target ROAS", 1, 100, 1, "Dipakai rekomendasi iklan."),
-    ("iklan.budget_maks_rp", "Budget iklan maksimum (Rp)", 0, 10_000_000_000, 100_000, "Batas alokasi budget per periode."),
+    ("iklan.target_roas", "Target ROAS bawaan", 1, 100, 1, "Nilai awal di Rekomendasi › Iklan sebelum target ROAS bulan itu disimpan."),
 )
 
 # Tidak tampil di form; selalu memakai nilai config/business_params.yaml.
@@ -25,6 +23,10 @@ HIDDEN = (
     # Margin tidak lagi diatur di sini: margin per SKU dari File margin (Setting › Kalkulator biaya / Laporan margin).
     "margin.hpp_pct_harga",
     "margin.margin_min_pct",
+    # Target sales tidak lagi satu angka untuk semua bulan: diunggah per bulan (tabel sales_target).
+    "target.sales_bulanan_rp",
+    # Budget iklan diatur per bulan di Rekomendasi › Iklan.
+    "iklan.budget_maks_rp",
     "lead_time.lokal_sigma_hari",
     "lead_time.impor_rata_hari",
     "lead_time.impor_maks_hari",
@@ -54,9 +56,16 @@ def _set(params: dict, path: str, value) -> None:
     current[parts[-1]] = value
 
 
-def show_business_settings(params: dict, user_root: Path) -> dict:
+def show_business_settings(params: dict, user_root: Path, *, features=None, username: str = "", today=None) -> dict:
     """Tampilkan expander dan simpan perubahan ke folder pengguna. Mengembalikan parameter terbaru."""
     with st.expander("Pengaturan bisnis"):
+        if features is not None:
+            from datetime import date
+
+            from src.ui.targets_view import show_target_uploader
+
+            show_target_uploader(features, username=username, today=today or date.today())
+            st.divider()
         st.caption("Parameter di luar laporan Shopee. Nilai yang belum diubah ditandai " f"“{DEFAULT_NOTE}”.")
         draft = copy.deepcopy(params)
         cols = st.columns(2)

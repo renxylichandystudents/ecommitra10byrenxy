@@ -76,6 +76,7 @@ from src.ui.decision_view import (
 )
 from src.ui.region import show_region_analysis
 from src.ui.settings import show_business_settings
+from src.ui.targets_view import achievement_line, monthly_targets
 from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
@@ -2905,7 +2906,7 @@ def show_prediction_inputs() -> None:
             orders_raw = rebuilt
 
     with settings_box:
-        params = show_business_settings(current_params(), USER_ROOT)
+        params = show_business_settings(current_params(), USER_ROOT, features=get_features(), username=AUTH_USER.username)
     training_months = len(st.session_state.get("active-library-keys", tuple()))
     with st.container(border=True):
         st.markdown("<div class='side-section'>Periode prediksi</div>", unsafe_allow_html=True)
@@ -4564,7 +4565,8 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     row_three = st.columns(4)
     net_hint = "Selalu tanpa pesanan batal & retur (tidak bergantung saklar)"
     metric_card(row_three[0], "pesanan_bersih", format_number(facts["pesanan_bersih"]), hint=net_hint)
-    metric_card(row_three[1], "sales_bersih", format_idr(facts["sales_bersih"]), hint=net_hint)
+    reach = achievement_line(facts["sales_bersih"], period_start_day, period_end_day, get_features())
+    metric_card(row_three[1], "sales_bersih", format_idr(facts["sales_bersih"]), hint=net_hint + (f"<br>{reach}" if reach else ""))
     metric_card(row_three[2], "belum_bayar", format_number(facts["belum_bayar"]), hint=f"{format_number(facts['belum_bayar_akun'])} akun")
     metric_card(row_three[3], "tingkat_batal", format_pct_id(facts["tingkat_batal"] * 100))
     st.subheader("Status pesanan")
@@ -5069,6 +5071,17 @@ def show_folder_menu() -> None:
         # Filter kalender (bulan yang tersentuh rentang); bawaan 12 bulan terakhir. Total di atas, tinggi baris tetap.
         keys = [item["key"] for item in saved]
         folder = folder.assign(_key=keys[: len(folder)])
+        goals = monthly_targets(get_features())
+        if "Sales bersih (Rp)" in folder.columns:
+            goal_values = folder["_key"].map(lambda k: goals.get(str(k), 0.0))
+            sales_values = pd.to_numeric(folder["Sales bersih (Rp)"], errors="coerce").fillna(0)
+            at = folder.columns.get_loc("Sales bersih (Rp)") + 1
+            folder.insert(at, "Target (Rp)", [format_number(g) if g > 0 else "–" for g in goal_values])
+            month_goal = dict(zip(folder["Bulan"], goal_values))
+            folder.insert(at + 1, "Pencapaian target", [
+                f"{format_pct_id(s / g * 100)} {'✅' if s >= g else '🔴'}" if g > 0 else "belum diunggah"
+                for s, g in zip(sales_values, goal_values)
+            ])
         dated = sorted(k for k in keys if str(k)[:4].isdigit())
         if dated:
             lo = pd.Period(dated[0], freq="M").start_time.date()
@@ -5088,6 +5101,16 @@ def show_folder_menu() -> None:
         def _with_total(frame: pd.DataFrame) -> pd.DataFrame:
             total = {c: (frame[c].sum() if c in sums else "") for c in frame.columns}
             total["Bulan"] = f"Total · {len(frame)} bulan"
+            if "Pencapaian target" in frame.columns:
+                goal_raw = frame["Bulan"].map(month_goal).fillna(0.0)
+                has_goal = goal_raw > 0
+                goal_sum = float(goal_raw[has_goal].sum())
+                sales_sum = float(pd.to_numeric(frame.loc[has_goal, "Sales bersih (Rp)"], errors="coerce").sum())
+                total["Target (Rp)"] = format_number(goal_sum) if goal_sum > 0 else "–"
+                total["Pencapaian target"] = (
+                    f"{format_pct_id(sales_sum / goal_sum * 100)} {'✅' if sales_sum >= goal_sum else '🔴'} · {int(has_goal.sum())} bulan bertarget"
+                    if goal_sum > 0 else ""
+                )
             return pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
 
         shown, rest = folder.head(12), folder.iloc[12:]
@@ -6508,6 +6531,8 @@ def table_column_config(frame: pd.DataFrame, *, roomy: bool = False) -> dict:
         "No. Pesanan": 220,
         "Tanggal pembelian": 160,
         "Kontribusi": 140,
+        "Target (Rp)": 150,
+        "Pencapaian target": 250,
         "File terakhir": 360,
         "Perubahan": 520,
         "Tanggal perubahan": 180,
@@ -8064,7 +8089,8 @@ with PAGE_ROOT.container(key="page-root"):
         cols = st.columns(4)
         metric_card(cols[0], "pesanan_bersih", format_number(facts["pesanan_bersih"], 0), hint=f"{label} · dari {format_number(facts['pesanan_semua'], 0)} pesanan semua status", tone=tone)
         metric_card(cols[1], "sku_terjual_bersih", format_number(coverage["sku_terjual_bersih"], 0), hint=label, tone=tone)
-        metric_card(cols[2], "sales_bersih", format_idr(facts["sales_bersih"]), hint=f"Bruto {format_idr(facts['sales_bruto'])}", tone=tone)
+        reach = achievement_line(facts["sales_bersih"], start, end, FEATURES)
+        metric_card(cols[2], "sales_bersih", format_idr(facts["sales_bersih"]), hint=f"Bruto {format_idr(facts['sales_bruto'])}" + (f"<br>{reach}" if reach else ""), tone=tone)
         metric_card(cols[3], "qty_bersih", format_qty(facts["qty_bersih"]), hint=label, tone=tone)
         return facts
 

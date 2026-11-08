@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import json
 from datetime import date
 
 import numpy as np
@@ -16,10 +15,10 @@ from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date
 from src.core.product_features import features_from_description, hook_for
 from src.core.promo import momentum_14d, product_label, promo_eligible
-from src.ui.common import batched_view, card, download_excel, explain, fmt_idr, fmt_num, table_toolbar
-from src.ui.feature_data import FeatureData, bump, product_frame
+from src.ui.common import batched_view, download_excel, explain, fmt_num, table_toolbar
+from src.ui.feature_data import FeatureData, product_frame
 from src.core.ads import roas_estimate
-from src.utils.format import input_rupiah, show_table
+from src.utils.format import show_table
 
 STEP = 20
 CANDIDATE_LIMIT = 300
@@ -119,175 +118,22 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
     contribution = {c: sum(v * w for v, w in vals) / sum(w for _v, w in vals) for c, vals in contrib.items()}
     A.attach_economics(units, members, contribution, room)
     products = pd.DataFrame(rows).groupby(["product_code"], as_index=False).agg(nama=("nama", "first"), omzet_harian=("omzet_harian", "sum")) if rows else pd.DataFrame(columns=["product_code", "nama", "omzet_harian"])
-    products["stok_room"] = products["product_code"].map(room).fillna(0.0)
+    products["stok_room"] = products["product_code"].map(room)
     running = [u for u in units if u.daily_cost > 0]
     store_roas = sum(u.daily_sales for u in running) / sum(u.daily_cost for u in running) if running else 8.0
-    units += A.new_single_candidates(units, products, contribution, store_roas=store_roas)
+    # Fokus kejar target: hanya iklan produk tunggal & grup; margin dan stok dicatat, tidak menyaring.
+    units = [u for u in units if u.jenis in A.TARGET_KINDS]
+    units += A.new_single_candidates(units, products, contribution, store_roas=store_roas, require_margin=False, require_stock=False)
     del latest
     return units, members, contribution, products
 
 
-def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, params: dict, window_start: date, username: str, can_edit: bool, frames=None) -> None:
-    import calendar
+def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, params: dict, window_start: date, username: str, can_edit: bool,
+                      frames=None, orders: pd.DataFrame | None = None) -> None:
+    from src.ui.ads_target import show_target_strategy
 
-    from src.core import ads_strategy as A
-
-    st.markdown("<div class='section-title'>Target penjualan & strategi iklan</div>", unsafe_allow_html=True)
-    if table is None or table.empty:
-        st.write("Jalankan analisa terlebih dahulu.")
-        return
-    periode = _periode(window_start)
-    saved = data.target or {}
-    from src.core.business import business_targets
-
-    goals = business_targets(params, saved)
-    c1, c2, c3, c4 = st.columns([1.5, 0.9, 0.9, 0.9])
-    with c1:
-        target = float(input_rupiah(
-            f"Target sales bersih {_bulan_label(window_start)}", int(goals.target_sales), key=f"tgt-rp-{periode}",
-            help="Bawaan dari Pengaturan bisnis; simpan di sini untuk mengganti khusus bulan ini.",
-        ))
-    roas_min = float(c2.number_input(
-        "ROAS minimum", min_value=1.0, max_value=100.0, value=float(saved.get("roas_min", 0) or 8.0) if isinstance(saved, dict) else 8.0, step=0.5,
-        key=f"tgt-roas-{periode}", help="Batas bawah ROAS marginal: di bawah ini tambahan iklan dianggap boros (dipakai strategi Kejar target).",
-    ))
-    margin_min = float(c3.number_input(
-        "Margin bersih minimum promo (%)", min_value=0.0, max_value=60.0, value=float(goals.margin_min_pct), step=0.5, key=f"tgt-margin-{periode}",
-        help="Syarat SKU boleh diiklankan/dipromosikan di Flash sale & Exposure. 0 = asal tidak rugi.",
-    ))
-    c4.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
-    if c4.button("Simpan target", key="tgt-save", type="primary", disabled=not can_edit, use_container_width=True):
-        from auth.ui import require
-
-        require("rekomendasi", "edit")
-        features.replace(
-            "sales_target",
-            [{"periode": periode, "target_sales_bersih": target, "margin_min_pct": margin_min, "strategi": saved.get("strategi", ""), "budget_json": saved.get("budget_json", "{}"), "set_by": username}],
-            keys=["periode"], username=username, action="simpan:target_sales",
-        )
-        bump(st.session_state)
-        st.success("Target disimpan. Laporan & Kalkulator biaya memakai target ini.")
-        st.rerun()
-    st.caption(f"Sumber target: {goals.target_source}. Strategi dihitung untuk sisa hari {_bulan_label(window_start)}.")
-    month_end = date(window_start.year, window_start.month, calendar.monthrange(window_start.year, window_start.month)[1])
-    days_left = max((month_end - window_start).days + 1, 1)
-    predicted = float(table["m_sales_exp"].sum() if "m_sales_exp" in table.columns else table["m_sales"].sum())
-    gap = target - predicted
-    if frames is None or not any(isinstance(f, pd.DataFrame) and not f.empty for f in (getattr(frames, "ads", []) or [])):
-        st.info("Laporan iklan (grup / keseluruhan / otomatis) belum diunggah: strategi iklan butuh riwayat biaya & omzet iklan.")
-        return
-    with st.spinner("Menghitung kurva respons tiap iklan & menyusun strategi..."):
-        units, members, contribution, _products = _ads_inputs(table, features, frames, days_left)
-    if not units:
-        st.info("Tidak ada iklan aktif/terbaru di laporan iklan.")
-        return
-    active = [u for u in units if u.daily_cost > 0]
-    cost_now = sum(u.daily_cost for u in active)
-    sales_now = sum(u.daily_sales for u in active)
-    known = [u for u in active if np.isfinite(u.contribution)]
-    contrib_avg = sum(u.contribution * u.daily_sales for u in known) / max(sum(u.daily_sales for u in known), 1) if known else float("nan")
-    k = st.columns(4)
-    card(k[0], "Target", fmt_idr(target), hint=f"sisa {days_left} hari di bulan ini")
-    card(k[1], "Prediksi sales (pola iklan saat ini)", fmt_idr(predicted), hint="semua SKU, jendela prediksi")
-    card(k[2], "Gap", fmt_idr(max(gap, 0)) if gap > 0 else "Tercapai", hint=f"≈ {fmt_idr(max(gap, 0) / days_left)}/hari" if gap > 0 else f"lebih {fmt_idr(-gap)}")
-    card(k[3], "Iklan berjalan", f"{fmt_num(len(active))} iklan", hint=f"{fmt_idr(cost_now)}/hari → omzet {fmt_idr(sales_now)}/hari · ROAS {fmt_num(sales_now / cost_now if cost_now else 0, 1)}")
-    losing = [u for u in known if u.contribution <= 0]
-    if known and sum(u.daily_sales for u in losing) / max(sum(u.daily_sales for u in known), 1) > 0.5:
-        st.warning(
-            f"Untuk {fmt_num(len(losing))} dari {fmt_num(len(known))} iklan berjalan, margin kotor (File margin) lebih kecil dari potongan Shopee "
-            f"(kontribusi sebelum iklan rata-rata {fmt_num(contrib_avg * 100, 1)}%). Artinya tambahan omzet dari iklan menambah rugi: "
-            "strategi Efisien/Seimbang tidak menambah budget pada iklan ini; Kejar target tetap bisa dipilih dengan dampak margin di tabel.",
-            icon=":material/warning:",
-        )
-    plans = {name: A.allocate(units, name, gap_daily=gap / days_left, roas_min=roas_min) for name in A.STRATEGIES}
-    summary = pd.DataFrame([A.summarize(units, plans[name], days=days_left, target=target, predicted=predicted) for name in A.STRATEGIES])
-    reach = summary.set_index("Strategi")["% target"]
-    recommended = next((n for n in ("Efisien", "Seimbang") if reach.get(n, 0) >= 100), None) or (
-        "Kejar target" if reach.get("Kejar target", 0) > reach.get("Seimbang", 0) else "Seimbang")
-    view = summary.drop(columns=["margin_lengkap"]).copy()
-    view["Rentang omzet"] = view["Rentang omzet"].map(lambda v: f"{fmt_idr(v[0])} – {fmt_idr(v[1])}")
-    view.insert(0, "", ["⭐" if n == recommended else "" for n in view["Strategi"]])
-    show_table(view, kinds={"Perubahan budget": "money", "Budget iklan total": "money", "Omzet tambahan": "money", "ROAS tambahan": "dec", "% target": "pct", "Dampak margin": "money"},
-               column_config={"Dampak margin": st.column_config.Column(help="Tambahan omzet × kontribusi sebelum iklan − tambahan biaya iklan, sisa bulan ini"),
-                              "Perubahan budget": st.column_config.Column(help="Selisih total biaya iklan sisa bulan dibanding pola saat ini (negatif = penghematan)")})
-    reason = {
-        "Efisien": "target bisa dicapai tanpa menurunkan margin",
-        "Seimbang": "iklan ditambah hanya sampai titik impas, sisanya perlu promo/harga",
-        "Kejar target": "target hanya terkejar dengan mengorbankan margin — pastikan ini keputusan bisnis",
-    }[recommended]
-    st.markdown(f"<div class='field-hint'>⭐ Disarankan: <b>{recommended}</b> — {reason}. Semua angka untuk sisa {days_left} hari; rentang = p10–p90 dari selisih kurva vs riwayat.</div>", unsafe_allow_html=True)
-    choice = st.radio("Strategi yang dijalankan", list(A.STRATEGIES), index=list(A.STRATEGIES).index(recommended), horizontal=True, key="tgt-strategy")
-    acts = A.actions(units, plans[choice])
-    hygiene = A.group_hygiene(members, units, contribution)
-    f1, f2 = st.columns([1.2, 1.8])
-    kinds_pick = f1.multiselect("Jenis iklan", ["Grup", "Produk tunggal", "Produk tunggal (baru)", "Otomatis"], key="tgt-jenis", placeholder="Semua jenis")
-    act_pick = f2.multiselect("Tindakan", ["Naikkan budget", "Aktifkan kembali", "Buat iklan produk tunggal", "Turunkan budget", "Jeda", "Pertahankan"], key="tgt-act", placeholder="Semua tindakan")
-    shown = acts
-    if kinds_pick:
-        shown = shown.loc[shown["Jenis"].isin(kinds_pick)]
-    if act_pick:
-        shown = shown.loc[shown["Tindakan"].isin(act_pick)]
-    st.markdown(f"<div class='section-title'>Rencana per iklan · {html.escape(choice)}</div>", unsafe_allow_html=True)
-    table_cols = ["Tindakan", "Unit iklan", "Jenis", "Status", "Anggota", "Budget harian sekarang", "Budget harian usulan", "Target ROAS Shopee",
-                  "Tambahan omzet harian", "ROAS bulan terakhir", "ROAS impas", "Alasan"]
-    kinds = {"Budget harian sekarang": "money", "Budget harian usulan": "money", "Tambahan omzet harian": "money", "Anggota": "count",
-             "ROAS bulan terakhir": "dec", "ROAS impas": "dec", "Target ROAS Shopee": "dec"}
-    batched_view(
-        len(shown), key=f"tgt-units-{choice}", noun="iklan",
-        render=lambda lo, hi: show_table(shown.iloc[lo:hi][table_cols], kinds=kinds, max_height=10_000,
-                                         column_config={"Unit iklan": st.column_config.TextColumn(width="medium"), "Alasan": st.column_config.TextColumn(width="large"),
-                                                        "Target ROAS Shopee": st.column_config.Column(help="Isi di pengaturan iklan GMV Max ROAS Shopee")}),
-        download=lambda: download_excel({"Ringkasan strategi": view, "Rencana per iklan": acts[table_cols], "Rapikan grup": hygiene}, f"strategi_iklan_{periode}.xlsx", key="xl-tgt"),
-    )
-    if not hygiene.empty:
-        with st.expander(f"Rapikan iklan grup · {fmt_num(len(hygiene))} produk perlu ditinjau"):
-            st.caption("Dari 2 bulan terakhir laporan grup: anggota yang memakan biaya tanpa omzet atau rugi per unit dikeluarkan; anggota andalan dipisah jadi iklan produk tunggal.")
-            batched_view(len(hygiene), key="tgt-hygiene", noun="produk",
-                         render=lambda lo, hi: show_table(hygiene.iloc[lo:hi], kinds={"Biaya/hari": "money", "Omzet/hari": "money", "ROAS": "dec", "Porsi omzet grup": "pct"},
-                                                          max_height=10_000, column_config={"Saran": st.column_config.TextColumn(width="large")}),
-                         download=lambda: download_excel(hygiene, f"rapikan_grup_iklan_{periode}.xlsx", key="xl-hygiene"))
-    up = acts.loc[acts["Tindakan"].isin(["Naikkan budget", "Aktifkan kembali", "Buat iklan produk tunggal"])]
-    down = acts.loc[acts["Tindakan"].isin(["Turunkan budget", "Jeda"])]
-    sel = summary.set_index("Strategi").loc[choice]
-    steps = [
-        f"<b>Hari ini</b> — {fmt_num(len(up))} iklan dinaikkan/diaktifkan/dibuat dan {fmt_num(len(down))} diturunkan/dijeda sesuai tabel; isi <i>Target ROAS Shopee</i> pada iklan GMV Max ROAS.",
-        f"<b>Hari ini</b> — rapikan grup: keluarkan {fmt_num(int(hygiene['Saran'].str.startswith('Keluarkan').sum()) if not hygiene.empty else 0)} produk boros/rugi, pisahkan produk andalan jadi iklan tunggal.",
-        "<b>Hari ke-7</b> — unggah laporan iklan terbaru lalu buka menu ini: iklan dengan ROAS < 80% target ROAS → turunkan budget 20%; ROAS ≥ target & stok cukup → naikkan 20%.",
-        f"<b>Hari ke-14</b> — bandingkan omzet aktual vs prediksi + tambahan strategi ({fmt_idr(predicted + float(sel['Omzet tambahan']))}); bila tertinggal > 10%, pertimbangkan pindah strategi.",
-        "<b>Akhir bulan</b> — evaluasi di Laporan › Iklan dan Prediksi vs aktual; simpan target bulan berikutnya.",
-    ]
-    st.markdown(
-        "<div style='border:1px solid #e2e8f0;border-left:4px solid #ee4d2d;border-radius:12px;background:#fff;padding:.7rem 1rem;margin:.6rem 0'>"
-        "<div style='font-weight:700;margin-bottom:.3rem'>Tindak lanjut</div><ol style='margin:0 0 0 1.1rem;padding:0;line-height:1.6;font-size:.92rem'>"
-        + "".join(f"<li>{t}</li>" for t in steps) + "</ol></div>",
-        unsafe_allow_html=True,
-    )
-    with st.expander("Metode perhitungan"):
-        explain([
-            ("Unit iklan", "iklan grup (dengan anggota produknya), iklan produk tunggal, iklan otomatis — dari laporan iklan bulanan; usulan iklan tunggal baru untuk produk laris tanpa iklan"),
-            ("Kurva respons", "omzet iklan harian = a·ln(1 + biaya/b), b = median biaya harian; a dari riwayat biaya vs omzet per bulan (kuadrat terkecil)"),
-            ("ROAS marginal", "tambahan omzet dari tambahan Rp 1 biaya pada tingkat biaya saat itu = a ÷ (b + biaya)"),
-            ("ROAS impas", "1 ÷ (margin kotor File margin − potongan Shopee); di bawah ini tambahan iklan menurunkan margin"),
-            ("Efisien", "tambah budget selama ROAS marginal ≥ 1,2 × ROAS impas dan ≥ ROAS minimum"),
-            ("Seimbang", "tambah selama ROAS marginal ≥ ROAS impas dan ≥ ROAS minimum, berhenti saat target tercapai"),
-            ("Kejar target", "tambah selama ROAS marginal ≥ ROAS minimum sampai target tercapai (dampak margin ditampilkan)"),
-            ("Batas", "tambahan per iklan maks. 3× biaya saat ini dan sebesar stok yang tersedia setelah kebutuhan prediksi"),
-        ])
-    if st.button("Simpan rencana iklan", key="tgt-send", type="primary", disabled=not can_edit):
-        from auth.ui import require
-
-        require("rekomendasi", "edit")
-        budget = {"strategi": choice, "roas_min": roas_min, "hari": days_left,
-                  "iklan": {r["Unit iklan"]: {"tindakan": r["Tindakan"], "budget_harian": r["Budget harian usulan"], "target_roas": r["Target ROAS Shopee"]}
-                            for r in acts.to_dict("records") if r["Tindakan"] != "Pertahankan"},
-                  "total_harian": float(sum(plans[choice].cost.values()))}
-        features.replace(
-            "sales_target",
-            [{"periode": periode, "target_sales_bersih": target, "margin_min_pct": margin_min, "strategi": choice, "budget_json": json.dumps(budget, default=float), "set_by": username}],
-            keys=["periode"], username=username, action="kirim:rencana_iklan",
-        )
-        bump(st.session_state)
-        st.success(f"Rencana iklan {choice} disimpan untuk {periode}.")
+    show_target_strategy(table, features=features, params=params, username=username, can_edit=can_edit, frames=frames, orders=orders,
+                         inputs=_ads_inputs)
 
 
 # ---------------------------------------------------------------- Flash sale (4D)

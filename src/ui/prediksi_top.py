@@ -342,8 +342,14 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     hit = int(rows["status"].isin(["Melebihi", "Tercapai"]).sum())
     cols = st.columns(4)
     card(cols[0], f"Prediksi omzet {fmt_date(last)}", fmt_idr(pred_sales))
-    card(cols[1], "Aktual omzet bersih", fmt_idr(actual_sales))
-    card(cols[2], "% pencapaian", fmt_pct(actual_sales / pred_sales * 100 if pred_sales > 0 else float("nan"), 1))
+    day_stamp = pd.to_datetime(lines["order_time"]).dt.date
+    day_total = float(pd.to_numeric(lines.loc[day_stamp == last, "sales"], errors="coerce").sum())
+    from src.ui.targets_view import achievement_line
+
+    reach = achievement_line(day_total, last, last, features)
+    card(cols[1], "Aktual omzet bersih", fmt_idr(actual_sales),
+         hint=f"SKU berprediksi · seluruh toko {fmt_idr(day_total)}" + (f"<br>{reach}" if reach else ""))
+    card(cols[2], "% pencapaian prediksi", fmt_pct(actual_sales / pred_sales * 100 if pred_sales > 0 else float("nan"), 1))
     card(cols[3], "SKU tercapai + melebihi", f"{fmt_num(hit)} / {fmt_num(len(rows))}", hint="SKU yang punya prediksi pada hari itu")
     if partial_note:
         st.caption(partial_note.strip())

@@ -198,21 +198,27 @@ def attach_economics(units: list[Unit], members: pd.DataFrame, contribution_by_c
 
 
 def new_single_candidates(units: list[Unit], products: pd.DataFrame, contribution_by_code: dict[str, float], *, limit: int = 15,
-                          store_roas: float = 8.0) -> list[Unit]:
-    """Produk laris tanpa iklan sama sekali, kontribusi positif & stok ada → usulan iklan produk tunggal baru.
+                          store_roas: float = 8.0, require_margin: bool = True, require_stock: bool = True) -> list[Unit]:
+    """Produk laris tanpa iklan sama sekali → usulan iklan produk tunggal baru.
 
-    products: product_code, nama, omzet_harian (organik), stok_room (Rp/hari)."""
+    Bawaan: kontribusi positif & stok ada. Mode kejar target (require_* = False): margin dan stok tidak menyaring,
+    hanya dicatat. products: product_code, nama, omzet_harian (organik), stok_room (Rp/hari)."""
     advertised = {c for u in units for c in u.members}
     out = []
     pool = products.loc[~products["product_code"].isin(advertised)].sort_values("omzet_harian", ascending=False)
     for row in pool.itertuples(index=False):
         contrib = contribution_by_code.get(row.product_code)
-        if contrib is None or contrib <= 0 or row.omzet_harian <= 0 or row.stok_room <= 0:
+        if row.omzet_harian <= 0:
+            continue
+        if require_margin and (contrib is None or contrib <= 0):
+            continue
+        if require_stock and not (row.stok_room > 0):
             continue
         roas0 = max(store_roas * 0.7, 1.0)  # iklan baru: ROAS konservatif 70% ROAS toko
         a = roas0 * NEW_DAILY / math.log(2)
+        room = float("inf") if pd.isna(row.stok_room) else float(row.stok_room)
         unit = Unit(f"baru:{row.product_code}", row.nama, "Produk tunggal (baru)", "Usulan", "GMV Max ROAS", 0.0, 0.0, a, NEW_DAILY, 0.5,
-                    [row.product_code], [], float(contrib), float(row.stok_room))
+                    [row.product_code], [], float(contrib) if contrib is not None else float("nan"), room)
         out.append(unit)
         if len(out) >= limit:
             break
@@ -279,6 +285,211 @@ def allocate(units: list[Unit], strategy: str, *, gap_daily: float, roas_min: fl
         spent += STEP_DAILY
         target_left -= best.sales_at(cost[best.key]) - before
     return Plan(strategy, cost, floor)
+
+
+# ---------------------------------------------------------------- Kejar target: ROAS & budget dari pengguna
+
+TARGET_KINDS = ("Produk tunggal", "Grup", "Produk tunggal (baru)")
+
+
+def _running(u: Unit) -> bool:
+    return u.status.lower().startswith(("berjalan", "aktif", "ongoing"))
+
+
+def _base(u: Unit) -> float:
+    """Biaya harian yang sedang berjalan; iklan dijeda/selesai saat ini tidak menghasilkan omzet."""
+    return u.daily_cost if _running(u) else 0.0
+
+
+def _now_sales(u: Unit) -> float:
+    return u.daily_sales if _running(u) else 0.0
+
+
+def ad_sales(u: Unit, cost: float) -> float:
+    """Omzet iklan harian pada biaya `cost`: omzet aktual sekarang + perubahan menurut kurva respons."""
+    return max(_now_sales(u) + u.sales_at(cost) - u.sales_at(_base(u)), 0.0)
+
+
+def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, budget_daily: float | None = None,
+                    max_multiple: float = MAX_MULTIPLE) -> Plan:
+    """Rencana mengejar target dengan ROAS & budget yang ditetapkan pengguna (margin dan stok tidak membatasi).
+
+    Target ROAS = ROAS rata-rata seluruh iklan di rencana (total omzet iklan / total biaya iklan), sama dengan arti
+    Target ROAS di Shopee.
+    1. Budget dipindah dari iklan dengan tambahan omzet per Rp terendah ke yang tertinggi selama omzet naik.
+    2. Bila biaya di atas budget atau ROAS rata-rata di bawah target, iklan yang paling tidak efektif dipangkas dulu.
+    3. Sisa budget ditambahkan bertahap (Rp 25 rb/hari) ke iklan paling efektif sampai kekurangan omzet harian
+       tertutup, selama ROAS rata-rata tetap ≥ target dan tambahan per iklan ≤ `max_multiple` × biaya saat ini.
+    """
+    floor = {u.key: float(target_roas) for u in units}
+    cost = {u.key: _base(u) for u in units}
+    caps = {u.key: max(u.daily_cost * (1 + max_multiple) if u.daily_cost > 0 else NEW_DAILY * 2, cost[u.key]) for u in units}
+    sales = {u.key: ad_sales(u, cost[u.key]) for u in units}
+    total_cost, total_sales = sum(cost.values()), sum(sales.values())
+    target_left = gap_daily - sum(sales[u.key] - _now_sales(u) for u in units)
+
+    def gain(u: Unit, step: float) -> float:
+        return ad_sales(u, cost[u.key] + step) - sales[u.key]
+
+    def loss(u: Unit, step: float) -> float:
+        return sales[u.key] - ad_sales(u, cost[u.key] - step)
+
+    def move(u: Unit, delta: float) -> None:
+        nonlocal total_cost, total_sales, target_left
+        before = sales[u.key]
+        cost[u.key] = max(cost[u.key] + delta, 0.0)
+        sales[u.key] = ad_sales(u, cost[u.key])
+        total_cost += delta
+        total_sales += sales[u.key] - before
+        target_left -= sales[u.key] - before
+
+    for _ in range(8000):
+        live = [u for u in units if cost[u.key] > 0]
+        if not live:
+            break
+        donor = min(live, key=lambda u: loss(u, min(STEP_DAILY, cost[u.key])) / min(STEP_DAILY, cost[u.key]))
+        step = min(STEP_DAILY, cost[donor.key])
+        lost = loss(donor, step)
+        best, best_gain = None, 0.0
+        for u in units:
+            if u.key != donor.key and cost[u.key] + step <= caps[u.key] + 1e-6:
+                g = gain(u, step)
+                if g > best_gain:
+                    best, best_gain = u, g
+        if best is None or best_gain <= lost + 1.0:
+            break
+        move(donor, -step)
+        move(best, step)
+
+    for _ in range(20_000):
+        over_budget = budget_daily is not None and total_cost > budget_daily + 1e-6
+        under_roas = total_cost > 0 and total_sales / total_cost < target_roas
+        if not (over_budget or under_roas):
+            break
+        live = [u for u in units if cost[u.key] > 0]
+        if not live:
+            break
+        worst = min(live, key=lambda u: loss(u, min(STEP_DAILY, cost[u.key])) / min(STEP_DAILY, cost[u.key]))
+        cut = min(STEP_DAILY, cost[worst.key])
+        if over_budget and not under_roas:
+            cut = min(cut, total_cost - budget_daily)
+        move(worst, -cut)
+
+    for _ in range(8000):
+        if target_left <= 0:
+            break
+        room = None if budget_daily is None else budget_daily - total_cost
+        if room is not None and room < 1:
+            break
+        step = STEP_DAILY if room is None else min(STEP_DAILY, room)
+        best, best_gain = None, 0.0
+        for u in units:
+            if cost[u.key] + step <= caps[u.key] + 1e-6:
+                g = gain(u, step)
+                if g > best_gain:
+                    best, best_gain = u, g
+        if best is None or (total_sales + best_gain) < target_roas * (total_cost + step):
+            break
+        move(best, step)
+    return Plan("Kejar target", cost, floor)
+
+
+def plan_effect(units: list[Unit], plan: Plan, *, days: int) -> dict:
+    """Angka sisa bulan: biaya total, tambahan biaya, tambahan omzet (+ rentang), ROAS rencana, dampak margin (info)."""
+    d_cost = sum(plan.cost[u.key] - _base(u) for u in units) * days
+    d_sales_daily = [ad_sales(u, plan.cost[u.key]) - _now_sales(u) for u in units]
+    d_sales = sum(d_sales_daily) * days
+    lo = sum(d * (1 - u.spread) for d, u in zip(d_sales_daily, units)) * days
+    hi = sum(d * (1 + u.spread) for d, u in zip(d_sales_daily, units)) * days
+    total_cost = sum(plan.cost.values()) * days
+    total_sales = sum(ad_sales(u, plan.cost[u.key]) for u in units) * days
+    margin, known = 0.0, True
+    for d, u in zip(d_sales_daily, units):
+        dc = (plan.cost[u.key] - _base(u)) * days
+        if np.isfinite(u.contribution):
+            margin += d * days * u.contribution - dc
+        else:
+            known = False
+            margin -= dc
+    return {
+        "biaya_total": total_cost, "biaya_tambahan": d_cost, "omzet_tambahan": d_sales, "rentang": (min(lo, hi), max(lo, hi)),
+        "omzet_iklan": total_sales, "roas_rencana": total_sales / total_cost if total_cost > 0 else float("nan"),
+        "dampak_margin": margin, "margin_lengkap": known,
+    }
+
+
+def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.DataFrame:
+    """Tindakan per iklan untuk rencana Kejar target: urut Naikkan → Buat baru → Aktifkan → Turunkan → Jeda → Pertahankan."""
+    rows = []
+    for u in units:
+        new, now = plan.cost[u.key], _base(u)
+        running = _running(u)
+        if u.jenis.endswith("(baru)"):
+            if new <= 0:
+                continue
+            act = "Buat iklan baru"
+        elif new <= 0 and now > 0:
+            act = "Jeda"
+        elif new <= 0:
+            continue
+        elif not running:
+            act = "Aktifkan kembali"
+        elif new > now * 1.05:
+            act = "Naikkan budget"
+        elif new < now * 0.95:
+            act = "Turunkan budget"
+        else:
+            act = "Pertahankan"
+        d_sales = ad_sales(u, new) - _now_sales(u)
+        notes = []
+        if act in {"Turunkan budget", "Jeda"}:
+            notes.append(f"tiap Rp 1 terakhir hanya kembali Rp {u.marginal(new):.1f}: dananya dipindah ke iklan yang lebih efektif".replace(".", ","))
+        elif act in {"Naikkan budget", "Aktifkan kembali", "Buat iklan baru"}:
+            notes.append(f"tiap Rp 1 tambahan kembali ±Rp {u.marginal(new):.1f}".replace(".", ","))
+        if np.isfinite(u.stock_room) and d_sales > u.stock_room + 1:
+            notes.append("⚠️ stok kurang untuk tambahan omzet ini: siapkan restock/PO")
+        if np.isfinite(u.contribution) and u.contribution <= 0 and d_sales > 0:
+            notes.append("margin minus: tambahan omzet ikut menambah rugi")
+        planned = ad_sales(u, new)
+        rows.append({
+            "key": u.key, "Tindakan": act, "Iklan": u.nama, "Jenis": "Produk tunggal" if u.jenis.startswith("Produk tunggal") else u.jenis,
+            "Anggota": len(u.members), "Budget harian sekarang": now, "Budget harian usulan": new,
+            "Perubahan/hari": new - now, "Target ROAS Shopee": round(planned / new, 1) if new > 0 else np.nan,
+            "ROAS bulan terakhir": u.roas, "Tambahan omzet/hari": d_sales, "Catatan": "; ".join(notes),
+        })
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    order = {"Naikkan budget": 0, "Buat iklan baru": 1, "Aktifkan kembali": 2, "Turunkan budget": 3, "Jeda": 4, "Pertahankan": 5}
+    frame["_o"] = frame["Tindakan"].map(order).fillna(9)
+    frame["_v"] = frame["Tambahan omzet/hari"].abs()
+    return frame.sort_values(["_o", "_v"], ascending=[True, False]).drop(columns=["_o", "_v"]).reset_index(drop=True)
+
+
+def _extra(units: list[Unit], plan: Plan) -> float:
+    return sum(ad_sales(u, plan.cost[u.key]) - _now_sales(u) for u in units)
+
+
+def budget_needed(units: list[Unit], *, gap_daily: float, target_roas: float) -> tuple[float | None, float]:
+    """Budget harian yang dibutuhkan untuk menutup gap pada target ROAS ini (None bila tidak terkejar), dan omzet tambahan harian maksimal."""
+    plan = allocate_target(units, gap_daily=gap_daily, target_roas=target_roas, budget_daily=None)
+    extra = _extra(units, plan)
+    return (sum(plan.cost.values()) if extra >= gap_daily - 1 else None), extra
+
+
+def roas_for_budget(units: list[Unit], *, gap_daily: float, budget_daily: float, lo: float = 1.0, hi: float = 50.0) -> float | None:
+    """Target ROAS tertinggi yang masih menutup gap dengan budget harian ini (None bila ROAS 1 pun tidak cukup)."""
+    def closes(roas: float) -> bool:
+        return _extra(units, allocate_target(units, gap_daily=gap_daily, target_roas=roas, budget_daily=budget_daily)) >= gap_daily - 1
+
+    if not closes(lo):
+        return None
+    if closes(hi):
+        return hi
+    for _ in range(14):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if closes(mid) else (lo, mid)
+    return math.floor(lo * 2) / 2
 
 
 def summarize(units: list[Unit], plan: Plan, *, days: int, target: float, predicted: float) -> dict:
