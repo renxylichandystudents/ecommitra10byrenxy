@@ -432,10 +432,9 @@ BATCH_STEP = 10
 
 BATCH_CSS = """
 <style>
-.more-info { text-align:center; color:#64748b; font-size:.82rem; font-weight:600; margin:6px 0 2px; }
-.batch-done { border:1px solid #a7f3d0; background:#ecfdf5; border-radius:12px; padding:10px 14px; text-align:center;
-  color:#047857; font-size:.85rem; margin:6px auto 2px; max-width:520px; }
-.batch-done b { display:block; }
+.batch-done { border:1px solid #a7f3d0; background:#ecfdf5; border-radius:10px; padding:6px 14px; text-align:center;
+  color:#047857; font-size:.82rem; margin:4px auto 6px; max-width:420px; }
+.batch-done b { margin-right:6px; }
 </style>
 """
 
@@ -474,23 +473,29 @@ def batched_view(
         st.rerun()
 
     rest = total - shown
-    if rest > 0:
-        st.markdown(f"<div class='more-info'>Menampilkan {shown} dari {total} {noun}</div>", unsafe_allow_html=True)
-    else:
+    if rest <= 0:
         st.markdown(
             f"<div class='batch-done'><b>✓ Semua data telah ditampilkan</b>{total} dari {total} {noun}</div>",
             unsafe_allow_html=True,
         )
-    _l, more_col, close_col, _r = st.columns([0.6, 1.5, 1, 0.6])
-    if rest > 0 and more_col.button(
-        f"Muat lebih banyak · {min(step, rest)} {noun} berikutnya",
-        key=f"{key}-more",
-        icon=":material/expand_more:",
-        use_container_width=True,
-        type="primary",
-    ):
-        st.session_state[shown_key] = shown + step
-        _rerun()
-    if shown > first and close_col.button("Tutup", key=f"{key}-close", icon=":material/expand_less:", use_container_width=True):
-        st.session_state[shown_key] = first
-        _rerun()
+    # Tombol selalu di tengah: satu tombol = satu kolom tengah, dua tombol = dua kolom tengah sama lebar.
+    actions = (["more"] if rest > 0 else []) + (["close"] if shown > first else [])
+    if len(actions) == 1:
+        slots = [st.columns([1, 1.3, 1])[1]]
+    else:
+        _a, left, right, _b = st.columns([0.7, 1.3, 1.3, 0.7])
+        slots = [left, right]
+    for slot, action in zip(slots, actions):
+        if action == "more":
+            if slot.button(
+                f"Muat lebih banyak · {min(step, rest)} {noun} berikutnya",
+                key=f"{key}-more",
+                icon=":material/expand_more:",
+                use_container_width=True,
+                type="primary",
+            ):
+                st.session_state[shown_key] = shown + step
+                _rerun()
+        elif slot.button("Tutup", key=f"{key}-close", icon=":material/expand_less:", use_container_width=True):
+            st.session_state[shown_key] = first
+            _rerun()
