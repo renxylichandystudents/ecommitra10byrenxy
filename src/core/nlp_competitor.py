@@ -407,7 +407,7 @@ def synthesize_title(name: str, variation: str, primary: list[str], brands: list
     warranty = warranty_match.group(0) if warranty_match else ""
     used |= {model}
     product_words = [w for w in tokens(name) if w not in used and w not in brand.lower().split() and not SIZE_PATTERN.fullmatch(w)]
-    product_type = " ".join(product_words[:4])
+    product_type = " ".join(product_words[:6])
     keyword = next((k for k in primary if k not in low), "")
     parts = [brand, product_type, model, material, size, usage, keyword, warranty]
     title = _title_case(" ".join(part for part in parts if part))
@@ -430,12 +430,16 @@ def description_strengths(description: str) -> dict[str, bool]:
 
 
 def _spec_lines(description: str, name: str, variation: str) -> list[str]:
+    """Baris spesifikasi "Atribut: nilai" (atribut pendek) atau ukuran; kalimat fitur panjang tidak termasuk."""
     lines = []
     for raw in re.split(r"[\n\r]+", str(description or "")):
         line = " ".join(raw.replace("•", "-").split()).strip("-* ")
         if not line or len(line) > 120:
             continue
-        if ":" in line or SIZE_PATTERN.search(line):
+        head = line.split(":", 1)[0]
+        if ":" in line and len(head) <= 28 and len(head.split()) <= 4 and line.split(":", 1)[1].strip():
+            lines.append(line)
+        elif SIZE_PATTERN.search(line) and len(line) <= 60:
             lines.append(line)
     if not lines:
         size = SIZE_PATTERN.search(f"{name} {variation}")
@@ -444,6 +448,145 @@ def _spec_lines(description: str, name: str, variation: str) -> list[str]:
         if variation and variation.lower() not in {"", "tanpa variasi"}:
             lines.append(f"Varian: {variation}")
     return lines[:8]
+
+
+# --------------------------------------------------------------------------- USP & SEO
+
+STORE_HINTS = ("selamat datang", "toko kami", "jam operasional", "harga dapat berubah", "follow", "chat admin", "whatsapp", "wa ", "http", "www.",
+               "kebijakan", "komplain", "retur", "pengembalian", "video unboxing", "klaim")
+CONTACT = re.compile(r"(https?://|www\.|\b08\d{8,}\b|\+62\d{8,}|@[a-z0-9_.]{3,})", re.IGNORECASE)
+
+
+def _sentences(text: str) -> list[str]:
+    out = []
+    for piece in re.split(r"[\n\r]+|(?<=[.!?])\s+", str(text or "")):
+        sentence = " ".join(piece.replace("•", " ").split()).strip(" -*:")
+        low = sentence.lower()
+        if len(sentence) < 12 or any(h in low for h in STORE_HINTS) or CONTACT.search(sentence):
+            continue
+        out.append(sentence)
+    return out
+
+
+def _years(text: str) -> float:
+    match = re.search(r"(\d+)\s*(tahun|thn|bulan|bln)", str(text).lower())
+    if not match:
+        return 0.0
+    value = float(match.group(1))
+    return value / 12 if match.group(2).startswith("b") else value
+
+
+def usp_points(name: str, description: str, variation: str, comp_titles: list[str], brands: list[str], *, limit: int = 5) -> list[tuple[str, bool]]:
+    """Keunggulan (USP) dari fakta produk sendiri; (kalimat, unik) — unik = jarang disebut judul kompetitor di daftar yang sama.
+
+    Tidak mengarang klaim: setiap poin berasal dari nama, variasi, atau deskripsi produk itu sendiri."""
+    clean_name, tag = extract_packing_tag(name)
+    description = strip_packing_words(description)
+    name_low = clean_text(f"{clean_name} {variation}")
+    low = clean_text(f"{clean_name} {variation} {description}")
+    comp_low = [clean_text(t) for t in comp_titles]
+
+    def rare(*words: str) -> bool:
+        words = [w for w in words if w]
+        if not comp_low or not words:
+            return False
+        hits = sum(1 for t in comp_low if any(w.lower() in t for w in words))
+        return hits / len(comp_low) < 0.2
+
+    points: list[tuple[str, bool]] = []
+    warranty = WARRANTY.search(f"{clean_name} {description}")
+    if warranty:
+        years = _years(warranty.group(0))
+        comp_years = [_years(m.group(0)) for t in comp_titles for m in [WARRANTY.search(t)] if m]
+        longest = max(comp_years) if comp_years else 0
+        period = warranty.group(0).lower().replace("garansi", "").strip()
+        if comp_years and years > longest:
+            points.append((f"Garansi resmi {period} — lebih panjang dari produk sejenis teratas (maks. {longest:g} tahun)", True))
+        else:
+            points.append((f"Garansi resmi {period} — perlindungan jangka panjang setelah pembelian", rare("garansi")))
+    # Material: utamakan yang tertulis di nama, baru deskripsi (urutan kemunculan, bukan urutan daftar).
+    def _first_material(text: str) -> str:
+        found = [(m.start(), mat) for mat in MATERIALS for m in [re.search(rf"\b{mat}\b", text)] if m]
+        return min(found)[1] if found else ""
+
+    # Material hanya dari kalimat yang memang menyebut bahan, atau nama produk untuk bahan yang tidak ambigu
+    # ("sendok semen" bukan berbahan semen; "pasang keramik" bukan berbahan keramik).
+    english = {"ceramic": "keramik", "brass": "kuningan", "wood": "kayu", "stainless steel": "stainless", "aluminum": "aluminium", "glass": "kaca", "copper": "tembaga"}
+    material = ""
+    for sentence in _sentences(description):
+        sl = clean_text(sentence)
+        if any(k in sl for k in ("bahan", "material", "terbuat dari")):
+            for eng, ind in english.items():
+                sl = sl.replace(eng, ind)
+            material = _first_material(sl)
+            if material:
+                break
+    if not material:
+        candidate = _first_material(name_low)
+        material = "" if candidate in {"semen", "beton", "keramik", "kayu", "kaca", "granit", "marmer", "gypsum", "gipsum"} else candidate
+    grade = re.search(r"\b(?:sus|stainless(?: steel)?)\s?(304|316|201)\b", low)
+    if grade:
+        points.append((f"Material stainless {grade.group(1)} — tahan karat untuk pemakaian harian", rare(grade.group(1))))
+    elif material:
+        points.append((f"Bahan {material} — kuat dan awet", rare(material)))
+    model = next((w for w in tokens(clean_name) if MODEL_CODE.fullmatch(w) and not SIZE_PATTERN.fullmatch(w) and not w.startswith("sus")), "")
+    if model:
+        points.append((f"Kode tipe {model.upper()} tercantum jelas — mudah dicocokkan dengan kebutuhan & suku cadang", rare(model)))
+    size = SIZE_PATTERN.search(f"{clean_name} {variation}")
+    if size:
+        points.append((f"Ukuran/isi {size.group(0)} — sesuaikan dengan area atau kebutuhan pemakaian", rare(size.group(0))))
+    for sentence in _sentences(description):
+        sl = sentence.lower()
+        if any(k in sl for k in ("anti ", "tahan ", "hemat", "kedap", "mudah dipasang", "mudah dibersihkan", "sni", "food grade", "otomatis", "soft clos", "dual flush")):
+            text = re.sub(r"^(keunggulan|fitur|kelebihan|unggulan)\s*[:\-–]?\s*", "", sentence, flags=re.IGNORECASE)
+            text = re.sub(r"^[A-Za-z &/]{3,30}\s[-–:]\s", "", text)
+            if 15 <= len(text) <= 140 and not any(text.lower()[:40] in p[0].lower() for p in points):
+                distinct = [w for w in tokens(text) if w not in STOPWORDS and len(w) > 3]
+                points.append((text[0].upper() + text[1:], rare(*distinct[:2])))
+        if len(points) >= limit + 3:
+            break
+    if tag:
+        points.append(("Dikirim dengan packing kayu — aman untuk barang besar/mudah pecah sampai tujuan", rare("packing kayu")))
+    brand = _brand(clean_name, brands)
+    if brand:
+        points.append((f"Produk original {brand} dari Mitra10 Official Store", False))
+    # Pembeda (jarang di kompetitor) diletakkan paling atas.
+    points.sort(key=lambda p: not p[1])
+    seen, out = set(), []
+    for text, unique in points:
+        key = text.lower()[:30]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((text, unique))
+    return out[:limit]
+
+
+def hashtags(primary: list[str], supporting: list[str], brand: str, *, limit: int = 8, title: str = "") -> list[str]:
+    """5–10 hashtag relevan (tanpa spasi), dari kata kunci yang juga ada di judul produk (tidak menyesatkan)."""
+    out: list[str] = []
+    allowed = set(clean_text(title).split()) if title else None
+    type_words = [w for w in clean_text(title).split() if w not in STOPWORDS and not any(ch.isdigit() for ch in w) and w != clean_text(brand)][:3] if title else []
+    phrases = [brand, *primary, " ".join(type_words[:2]), *supporting, *type_words]
+    for phrase in phrases:
+        if allowed is not None and not all(w in allowed for w in clean_text(phrase).split()):
+            continue
+        tag = re.sub(r"[^a-z0-9]", "", str(phrase).lower())
+        if 3 <= len(tag) <= 30 and tag not in out and not any(ch.isdigit() for ch in tag):
+            out.append(tag)
+        if len(out) >= limit:
+            break
+    return ["#" + t for t in out]
+
+
+def _usage_line(description: str, name: str) -> str:
+    """Kalimat kegunaan dari deskripsi sendiri (tidak dikarang)."""
+    for sentence in _sentences(description):
+        sl = sentence.lower()
+        if any(k in sl for k in ("cocok untuk", "digunakan untuk", "ideal untuk", "untuk area", "fungsi:", "sempurna untuk")) and len(sentence) <= 220:
+            return sentence
+    usage = [hint for hint in USAGE_HINTS if hint in clean_text(name)][:3]
+    return f"Cocok untuk kebutuhan {', '.join(usage)} di rumah maupun proyek." if len(usage) >= 2 else ""
 
 
 def generate_description(
@@ -456,54 +599,156 @@ def generate_description(
     supporting: list[str],
     cancel_reasons: list[str],
     max_chars: int,
+    usp: list[tuple[str, bool]] | None = None,
+    variants: list[str] | None = None,
+    brands: list[str] | None = None,
 ) -> str:
-    """Deskripsi teks polos siap tempel ke Shopee (tanpa HTML/markdown)."""
-    low = clean_text(name)
-    usage = [hint for hint in USAGE_HINTS if hint in low][:3]
-    material = next((m for m in MATERIALS if re.search(rf"\b{m}\b", low)), "")
-    key_main = primary[0] if primary else " ".join(tokens(name)[:3])
-    usage_text = ", ".join(usage) if usage else "kebutuhan renovasi dan perbaikan rumah"
-    intro = (
-        f"{title} adalah pilihan {key_main} untuk {usage_text}. "
-        f"Produk ini dikirim dari gudang Mitra10 sehingga stok dan kualitasnya terjaga."
-    )
-    sections = [intro, ""]
-    sections += ["FITUR DAN MANFAAT"]
-    features = [f"- {k.capitalize()} sesuai kebutuhan proyek" for k in (primary[1:3] or [])]
-    if material:
-        features.insert(0, f"- Bahan {material} yang kuat dan awet")
-    features.append("- Produk resmi, kondisi baru, dikemas aman untuk pengiriman")
-    sections += features + [""]
-    sections += ["KEGUNAAN", f"Cocok untuk {usage_text}. Dapat dipakai untuk proyek rumah tinggal, ruko, maupun kontraktor.", ""]
-    specs = _spec_lines(description, name, variation)
+    """Deskripsi teks polos siap tempel ke Shopee: unik per produk (USP & detail dari deskripsi sendiri), kata kunci utama
+    di kalimat pertama, subjudul jelas, spesifikasi, varian, dan 5–8 hashtag di akhir. Tanpa HTML/markdown/link/kontak."""
+    clean_name, tag = extract_packing_tag(name)
+    usp = usp if usp is not None else usp_points(name, description, variation, [], brands or [])
+    key_main = primary[0] if primary else " ".join(tokens(clean_name)[:3])
+    lead_usp = [t.split(" — ")[0] for t, _u in usp if not t.startswith("Produk original")][:2]
+    first = f"Jual {title} original di Mitra10 Official Store" + (f": {', '.join(u[0].lower() + u[1:] for u in lead_usp)}." if lead_usp else ".")
+    if key_main not in clean_text(first):
+        first = f"{key_main.capitalize()} — {first}"
+    specs = _spec_lines(description, clean_name, variation)
+    own_sentences = [s for s in _sentences(strip_packing_words(description))
+                     if not s.lower().startswith(("pilihan varian", "spesifikasi", "keunggulan utama", "fitur utama"))
+                     and not any(s.strip(" .") in line or line.strip(" .") in s for line in specs) and len(s.split()) >= 4]
+    intro = " ".join(own_sentences[:2])[:400] if own_sentences else ""
+    if not intro:
+        usage = _usage_line(description, clean_name)
+        intro = f"{usage} Dikirim langsung dari gudang Mitra10, stok dan kualitas terjaga.".strip()
+    sections = [first, intro, ""]
+    if usp:
+        sections += ["KEUNGGULAN UTAMA"] + [f"- {t}" for t, _u in usp] + [""]
+    if variants and len(variants) > 1:
+        sections += ["PILIHAN VARIAN"] + [f"- {v}" for v in variants[:10]] + [""]
     if specs:
         sections += ["SPESIFIKASI"] + [f"- {line}" for line in specs] + [""]
-    sections += [
-        "CARA PEMASANGAN / PENGAPLIKASIAN",
-        "1. Pastikan permukaan atau area pemasangan bersih dan kering.",
-        "2. Ikuti petunjuk pada kemasan atau gunakan tenaga tukang berpengalaman.",
-        "3. Periksa kembali hasil pemasangan sebelum digunakan.",
-        "",
-        "KENAPA MEMILIH PRODUK INI",
-        "- Harga bersaing dengan kualitas terjamin dari Mitra10",
-        "- Stok tersedia dan dikirim cepat",
-        "- Dapat konsultasi produk melalui chat sebelum membeli",
-        "",
-    ]
+    usage = _usage_line(description, clean_name)
+    if usage and usage not in intro:
+        sections += ["KEGUNAAN", usage, ""]
+    detail = [s for s in own_sentences[2:] if s not in usage and not any(s[:30] in t for t, _u in usp)]
+    if detail:
+        sections += ["DETAIL PRODUK"] + detail[:6] + [""]
+    shipping = ["PENGIRIMAN"]
+    shipping.append("- Dikemas dengan packing kayu agar aman sampai tujuan." if tag else "- Dikemas aman dan dikirim dari gudang Mitra10.")
     reason_text = " ".join(cancel_reasons).lower()
-    shipping = ["INFORMASI PENGIRIMAN", "- Produk berat atau besar dikirim dengan ekspedisi yang sesuai."]
     if any(word in reason_text for word in ("ongkir", "pengiriman", "kirim", "alamat", "lama")):
-        shipping.append("- Ongkos kirim dihitung otomatis di checkout; tanyakan estimasi pengiriman melalui chat.")
+        shipping.append("- Ongkos kirim dan estimasi tiba tampil otomatis saat checkout.")
     if any(word in reason_text for word in ("bayar", "pembayaran")):
-        shipping.append("- Selesaikan pembayaran agar pesanan langsung kami proses hari ini.")
+        shipping.append("- Selesaikan pembayaran agar pesanan langsung diproses hari ini.")
     sections += shipping + [""]
-    if supporting:
-        sections += ["Kata kunci: " + ", ".join(supporting[:6]), ""]
-    sections += ["Pesan sekarang dan pastikan proyek Anda selesai tepat waktu."]
+    sections += ["Pesan sekarang di Mitra10 Official Store — stok dari gudang Mitra10, dikirim cepat."]
+    tags = hashtags(primary, supporting, _brand(clean_name, brands or []), title=f"{title} {clean_name}")
+    tail = ("\n\n" + " ".join(tags)) if tags else ""
     text = "\n".join(sections).strip()
-    if len(text) > max_chars:
-        text = text[: max_chars - 3].rsplit("\n", 1)[0]
-    return text
+    budget = max_chars - len(tail)
+    if len(text) > budget:
+        text = text[: budget - 1].rsplit("\n", 1)[0].rstrip()
+    return text + tail
+
+
+def seo_title_checks(title: str, primary: list[str], brands: list[str], *, max_len: int) -> dict[str, bool]:
+    """Kaidah judul Shopee: kata kunci utama di 40 karakter awal, 60–maks karakter, merek, tanpa pengulangan/simbol/huruf kapital semua."""
+    low = clean_text(title)
+    words = [w for w in low.split() if len(w) > 2 and not w.isdigit()]
+    head = clean_text(title[:40])
+    return {
+        "Kata kunci di awal judul": bool(primary) and any(k in head for k in primary[:2]),
+        f"Panjang 60–{max_len} karakter": 60 <= len(title) <= max_len,
+        "Ada merek": bool(_brand(title, brands)),
+        "Ada ukuran/tipe/material": bool(SIZE_PATTERN.search(title) or MODEL_CODE.search(low) or any(re.search(rf"\b{m}\b", low) for m in MATERIALS)),
+        "Tanpa kata berulang": len(words) == len(set(words)),
+        "Tanpa simbol/emoji/kapital berlebih": not EMOJI_PATTERN.search(title) and not re.search(r"[!?*#~]{1,}|\b[A-Z]{8,}\b", title.replace("[INCLUDE PACKING KAYU]", "")),
+    }
+
+
+def seo_description_checks(text: str, primary: list[str], *, max_chars: int, similarity: float = 0.0) -> dict[str, bool]:
+    body = str(text or "")
+    first = clean_text(body.split("\n", 1)[0])
+    low = clean_text(body)
+    tags = re.findall(r"#\w+", body)
+    density = (sum(low.count(k) for k in primary[:1]) * max(len(primary[0].split()), 1) / max(len(low.split()), 1) * 100) if primary else 0
+    return {
+        "Kata kunci di kalimat pertama": bool(primary) and primary[0] in first,
+        "Panjang 600–3.000 karakter": 600 <= len(body) <= max_chars,
+        "Ada subjudul & poin": bool(re.search(r"^[A-Z ]{6,}$", body, re.M)) and "\n- " in body,
+        "Ada spesifikasi/ukuran": "SPESIFIKASI" in body or bool(SIZE_PATTERN.search(body)),
+        "Hashtag 3–10": 3 <= len(tags) <= 10,
+        "Kata kunci tidak berlebihan (≤3%)": density <= 3.0,
+        "Tanpa link/kontak": not CONTACT.search(body.replace("#", " ")),
+        "Unik (mirip ≤60% dengan produk lain)": similarity <= 0.60,
+    }
+
+
+def description_similarity(texts: list[str]) -> tuple[list[float], list[int]]:
+    """Kemiripan tertinggi tiap deskripsi dengan deskripsi produk lain (TF-IDF cosine, tanpa hashtag)."""
+    if len(texts) < 2:
+        return [0.0] * len(texts), [-1] * len(texts)
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    clean = [re.sub(r"#\w+", " ", t or "") for t in texts]
+    matrix = TfidfVectorizer(analyzer="word", ngram_range=(1, 2), min_df=1, sublinear_tf=True).fit_transform(clean)
+    sims = (matrix @ matrix.T).toarray()
+    np.fill_diagonal(sims, 0.0)
+    idx = sims.argmax(axis=1)
+    return [float(sims[i, j]) for i, j in enumerate(idx)], [int(j) for j in idx]
+
+
+def competitor_lists(own: pd.DataFrame, competitors: pd.DataFrame) -> tuple[dict[str, dict], pd.DataFrame]:
+    """Kompetitor per produk dari daftar peringkat Shopee yang sama (kolom Daftar).
+
+    1) Produk sendiri yang tercantum di daftar (Toko sendiri = True) → pembanding = produk lain di daftar itu, posisi kita tercatat.
+    2) Selain itu → daftar yang judulnya paling mirip (TF-IDF), pembanding = 5 produk termirip di daftar itu.
+    Bobot pembanding = 1 ÷ log2(peringkat + 1): peringkat atas lebih berpengaruh pada kata kunci."""
+    comp = competitors.copy() if competitors is not None else pd.DataFrame()
+    if comp.empty or "product_name" not in comp.columns:
+        return {}, comp
+    comp["product_name"] = comp["product_name"].fillna("").astype(str)
+    comp["_rank"] = pd.to_numeric(comp.get("rank", pd.Series(np.nan, index=comp.index)), errors="coerce")
+    comp["_change"] = pd.to_numeric(comp.get("rank_change", pd.Series(np.nan, index=comp.index)), errors="coerce")
+    comp["_list"] = comp["Daftar"].astype(str) if "Daftar" in comp.columns else "1"
+    own_flag = comp["own_shop"].astype(str).str.lower().isin({"true", "1"}) if "own_shop" in comp.columns else pd.Series(False, index=comp.index)
+    comp["_own"] = own_flag
+    comp["_w"] = 1.0 / np.log2(comp["_rank"].fillna(50).clip(lower=1) + 1)
+    others = comp.loc[~comp["_own"]]
+    mine = comp.loc[comp["_own"]]
+    names = own["product_name"].fillna("").astype(str).tolist()
+    keys = own["item_key"].astype(str).tolist()
+    vec = _vectorize([strip_packing_words(n) for n in names] + [strip_packing_words(n) for n in comp["product_name"]])
+    m = vec.matrix
+    own_m, comp_m = m[: len(names)], m[len(names):]
+    sims = (own_m @ comp_m.T).toarray() if vec.name == "TF-IDF" else np.asarray(own_m) @ np.asarray(comp_m).T
+    pos = {idx: i for i, idx in enumerate(comp.index)}
+    out: dict[str, dict] = {}
+    for row, key in enumerate(keys):
+        info = {"daftar": "", "posisi": np.nan, "perubahan": np.nan, "pembanding": [], "bobot": [], "sumber": ""}
+        own_hits = [(sims[row, pos[i]], i) for i in mine.index if sims[row, pos[i]] >= 0.75]
+        if own_hits:
+            _sim, hit = max(own_hits)
+            lst = comp.at[hit, "_list"]
+            part = others.loc[others["_list"] == lst].sort_values("_rank")
+            info.update(daftar=lst, posisi=comp.at[hit, "_rank"], perubahan=comp.at[hit, "_change"], sumber="Produk kita ada di daftar ini")
+        else:
+            cand = [(sims[row, pos[i]], i) for i in others.index]
+            cand = [c for c in cand if c[0] > 0.1]
+            if not cand:
+                out[key] = info
+                continue
+            score: dict[str, float] = {}
+            for sim, i in cand:
+                score[comp.at[i, "_list"]] = score.get(comp.at[i, "_list"], 0.0) + sim
+            lst = max(score, key=score.get)
+            ranked = sorted([c for c in cand if comp.at[c[1], "_list"] == lst], reverse=True)[:5]
+            part = others.loc[[i for _s, i in ranked]].sort_values("_rank")
+            info.update(daftar=lst, sumber="Daftar paling mirip")
+        info["pembanding"] = [pos[i] for i in part.index[:10]]
+        info["bobot"] = part["_w"].tolist()[:10]
+        out[key] = info
+    return out, comp
 
 
 def description_summary(text: str, limit: int = 60) -> str:
@@ -514,6 +759,29 @@ def description_summary(text: str, limit: int = 60) -> str:
     return first[: limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
+def _distinct_words(name: str, other: str) -> list[str]:
+    """Kata/kode/ukuran di nama ini yang tidak ada di nama produk pembanding (urutan asli)."""
+    theirs = set(clean_text(strip_packing_words(other)).split())
+    words = strip_packing_words(name).replace(" - ", " ").split()
+    out = []
+    for i, word in enumerate(words):
+        low = clean_text(word)
+        if low and low not in theirs and low not in STOPWORDS:
+            # Angka saja ("5") dibawa bersama kata berikutnya ("5 Hook") agar bermakna.
+            phrase = f"{word} {words[i + 1]}" if word.isdigit() and i + 1 < len(words) else word
+            if phrase not in out:
+                out.append(phrase)
+    return out[:6]
+
+
+def _fit_long_title(clean_name: str, max_len: int) -> str:
+    """Nama lama yang terlalu panjang: buang bagian 'Variasi …' / setelah ' - ', lalu potong per kata."""
+    base = re.split(r"\s+-\s+Variasi\b|\bVariasi\b", clean_name, maxsplit=1, flags=re.IGNORECASE)[0].strip(" -")
+    if len(base) > max_len:
+        base = base[:max_len].rsplit(" ", 1)[0]
+    return base
+
+
 def build_name_recommendations(
     own: pd.DataFrame,
     descriptions: pd.DataFrame | None,
@@ -521,7 +789,9 @@ def build_name_recommendations(
     cancel_reasons: dict[str, list[str]] | None,
     params: dict,
 ) -> tuple[pd.DataFrame, str]:
-    """Satu baris per SKU: skor nama lama, nama baru, kata kunci, deskripsi siap upload, analisa."""
+    """Satu baris per produk (item_key): skor nama lama, nama baru, kata kunci, USP, deskripsi unik siap upload, cek SEO.
+
+    own boleh berisi kolom: item_key, sku, product_name, variasi_tampil, qty_total, harga_bersih, product_code, variants (list), skus (list)."""
     shopee = params.get("shopee", {})
     max_len = int(shopee.get("judul_maks_karakter", 120))
     min_len = int(shopee.get("judul_min_karakter", 25))
@@ -530,64 +800,70 @@ def build_name_recommendations(
     brands = sorted(brand_set(own.get("product_name", pd.Series(dtype=str)).astype(str).tolist(), desc_texts, [str(b) for b in params.get("merek", [])]))
     desc_map: dict[str, str] = {}
     if descriptions is not None and not descriptions.empty and "description" in descriptions.columns:
-        key_col = "sku" if "sku" in descriptions.columns else None
         for _, row in descriptions.iterrows():
-            if key_col and str(row.get(key_col, "")).strip():
-                desc_map[str(row[key_col]).strip()] = str(row.get("description", ""))
+            text = str(row.get("description", "") or "")
+            for col in ("product_code", "sku"):
+                value = str(row.get(col, "") or "").strip()
+                if value and value.lower() not in {"none", "nan"}:
+                    desc_map.setdefault(f"{col}:{value}", text)
             name_key = clean_text(row.get("product_name", ""))
             if name_key:
-                desc_map.setdefault(name_key, str(row.get("description", "")))
-    comp = competitors if competitors is not None else pd.DataFrame()
-    if not comp.empty and "own_shop" in comp.columns:
-        comp = comp.loc[~comp["own_shop"].astype(str).str.lower().isin({"true", "1"})].reset_index(drop=True)
-    matches, _scores, vec_note = match_competitors(own, comp)
-    if not comp.empty and "sold" in comp.columns:
-        comp_sold = comp["sold"].map(_sold_number).tolist()
-    elif not comp.empty and "rank" in comp.columns:
-        ranks = pd.to_numeric(comp["rank"], errors="coerce").fillna(20.0)
-        comp_sold = (21.0 - ranks.clip(1, 20)).tolist()
+                desc_map.setdefault(f"name:{name_key}", text)
+    lists, comp = competitor_lists(own, competitors if competitors is not None else pd.DataFrame())
+    vec_note = "Pembanding dari daftar peringkat Shopee yang sama (kolom Daftar); kecocokan judul TF-IDF + cosine; bobot 1/log2(peringkat+1)" if lists else "Data kompetitor kosong"
+    if comp is not None and not comp.empty and "sold" in comp.columns:
+        sold_all = comp["sold"].map(_sold_number).tolist()
     else:
-        comp_sold = [1.0] * len(comp)
+        sold_all = None
     rows = []
     for _, item in own.iterrows():
         key = str(item["item_key"])
         name = str(item.get("product_name", ""))
         clean_name, tag = extract_packing_tag(name)
         variation = str(item.get("variasi_tampil", item.get("variation", "")) or "")
-        picked = matches.get(key, [])
+        info = lists.get(key, {})
+        picked = info.get("pembanding", [])
         titles = [strip_packing_words(comp.iloc[i]["product_name"]) for i in picked] if picked else []
-        sold = [comp_sold[i] for i in picked] if picked else []
-        current_desc = desc_map.get(str(item.get("sku", "")).strip()) or desc_map.get(clean_text(name), "")
+        weights = [sold_all[i] for i in picked] if picked and sold_all else [w * 10 for w in info.get("bobot", [])]
+        code = str(item.get("product_code", "") or "").strip()
+        current_desc = (desc_map.get(f"product_code:{code}") if code else None) or desc_map.get(f"sku:{str(item.get('sku', '')).strip()}") \
+            or desc_map.get(f"name:{clean_text(name)}", "")
         vocab = vocabulary(clean_name, current_desc, variation, set(brands))
-        primary, supporting = keyword_set(clean_name, titles, sold)
+        primary, supporting = keyword_set(clean_name, titles, weights)
         primary = [k for k in primary if allowed_keyword(k, vocab)] or [k for k in tokens(clean_name)[:3] if allowed_keyword(k, vocab)]
         supporting = [k for k in supporting if allowed_keyword(k, vocab) and k not in primary]
         old = score_name(clean_name, primary, brands, min_len=min_len, max_len=max_len)
         room = max_len - (len(tag) + 1 if tag else 0)
-        new_title = synthesize_title(clean_name, variation, primary, brands, max_len=room)
+        new_title = synthesize_title(clean_name, variation if not item.get("variants") else "", primary, brands, max_len=room)
         rejected = foreign_words(new_title, vocab)
         status = "Siap pakai"
         if rejected:
             new_title, status = clean_name, MANUAL_CHECK
         new_score = score_name(new_title, primary, brands, min_len=min_len, max_len=max_len)
-        if new_score.points < old.points:
+        # Judul baru tidak boleh membuang kata yang dicari pembeli: bila < 75% kata penting nama lama masih ada, pakai nama lama.
+        old_words = {w for w in clean_text(clean_name).split() if len(w) > 2 and w not in STOPWORDS and not w.isdigit()}
+        kept = len(old_words & set(clean_text(new_title).split())) / max(len(old_words), 1)
+        if new_score.points < old.points or (kept < 0.75 and len(clean_name) <= max_len):
             new_title, new_score = clean_name, old
+        elif kept < 0.75:
+            fitted = _fit_long_title(clean_name, room)
+            fitted_kept = len(old_words & set(clean_text(fitted).split())) / max(len(old_words), 1)
+            if fitted_kept > kept:
+                new_title, new_score = fitted, score_name(fitted, primary, brands, min_len=min_len, max_len=max_len)
         final_title = with_tag(new_title, tag, max_len)
-        strengths = description_strengths(current_desc)
+        variants = [v for v in (item.get("variants") or []) if str(v).strip() and str(v).lower() not in {"nan", "none"}]
+        usp = usp_points(name, current_desc, variation, titles, brands)
         description = generate_description(
-            title=new_title,
-            name=clean_name,
-            variation=variation,
-            description=current_desc,
-            primary=primary,
-            supporting=supporting,
-            cancel_reasons=(cancel_reasons or {}).get(key, []),
-            max_chars=max_desc,
+            title=new_title, name=name, variation=variation, description=current_desc, primary=primary, supporting=supporting,
+            cancel_reasons=(cancel_reasons or {}).get(key, []), max_chars=max_desc, usp=usp, variants=variants, brands=brands,
         )
+        posisi = info.get("posisi", np.nan)
         rows.append(
             {
                 "item_key": key,
                 "SKU": str(item.get("sku", "")),
+                "Kode produk": code,
+                "Jumlah SKU": int(item.get("n_sku", 1) or 1),
                 "Nama produk saat ini": name,
                 "Status skor": old.label,
                 "Poin skor": old.points,
@@ -598,12 +874,53 @@ def build_name_recommendations(
                 "Tag packing": tag or "",
                 "Kata kunci utama": ", ".join(primary),
                 "Kata kunci pendukung": ", ".join(supporting),
+                "USP": usp,
                 "Rekomendasi deskripsi": description,
                 "Alasan skor": "; ".join(old.reasons) or "Semua kriteria terpenuhi",
                 "Kriteria": old.checks,
-                "Kekuatan deskripsi lama": strengths,
+                "Kekuatan deskripsi lama": description_strengths(current_desc),
                 "Ada deskripsi lama": bool(current_desc.strip()),
                 "Kompetitor dibandingkan": len(titles),
+                "Daftar kompetitor": info.get("daftar", ""),
+                "Peringkat kita": posisi,
+                "Perubahan peringkat": info.get("perubahan", np.nan),
+                "Sumber pembanding": info.get("sumber", ""),
+                "Pembanding teratas": [(comp.iloc[i]["product_name"], comp.iloc[i]["_rank"], comp.iloc[i].get("shop_name", "")) for i in picked[:3]] if picked else [],
+                "SEO judul": seo_title_checks(final_title, primary, brands, max_len=max_len),
             }
         )
-    return pd.DataFrame(rows), vec_note
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out, vec_note
+    sims, partner = description_similarity(out["Rekomendasi deskripsi"].tolist())
+    # Produk satu seri (beda ukuran/kode/warna) sering berbagi deskripsi: tambahkan baris pembeda dari nama masing-masing.
+    texts = out["Rekomendasi deskripsi"].tolist()
+    changed = False
+    for i, (sim, j) in enumerate(zip(sims, partner)):
+        if sim <= 0.60 or j < 0:
+            continue
+        mine_words = _distinct_words(out.iloc[i]["Nama produk saat ini"], out.iloc[j]["Nama produk saat ini"])
+        other_words = _distinct_words(out.iloc[j]["Nama produk saat ini"], out.iloc[i]["Nama produk saat ini"])
+        if not mine_words:
+            continue
+        line = f"Pembeda tipe ini: {', '.join(mine_words)}" + (f" (produk serupa: {', '.join(other_words)})" if other_words else "") + " — pastikan memilih tipe yang sesuai kebutuhan."
+        head, _sep, rest = texts[i].partition("\n")
+        texts[i] = f"{head}\n{line}\n{rest}"
+        if len(texts[i]) > max_desc:
+            body, _s, tags = texts[i].rpartition("\n\n")
+            texts[i] = body[: max_desc - len(tags) - 3].rsplit("\n", 1)[0] + "\n\n" + tags
+        changed = True
+    if changed:
+        out["Rekomendasi deskripsi"] = texts
+        sims, partner = description_similarity(texts)
+    out["Kemiripan deskripsi"] = [s * 100 for s in sims]
+    out["Paling mirip dengan"] = [out.iloc[j]["Nama produk saat ini"] if j >= 0 else "" for j in partner]
+    out["SEO deskripsi"] = [
+        seo_description_checks(text, [k.strip() for k in str(kw).split(",") if k.strip()], max_chars=max_desc, similarity=sim)
+        for text, kw, sim in zip(out["Rekomendasi deskripsi"], out["Kata kunci utama"], sims)
+    ]
+    out["Skor SEO"] = [
+        round((sum(a.values()) + sum(b.values())) / max(len(a) + len(b), 1) * 100)
+        for a, b in zip(out["SEO judul"], out["SEO deskripsi"])
+    ]
+    return out, vec_note

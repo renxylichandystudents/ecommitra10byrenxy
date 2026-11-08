@@ -199,7 +199,9 @@ class ExpertNlpTests(unittest.TestCase):
         self.assertTrue(note)
         for text in names["Rekomendasi deskripsi"]:
             self.assertLessEqual(len(text), params["shopee"]["deskripsi_maks_karakter"])
-            self.assertNotRegex(text, r"<[a-z]+|\*\*|#")
+            body, _sep, last = text.rpartition("\n\n")
+            self.assertNotRegex(body or text, r"<[a-z]+|\*\*|#")  # hashtag hanya di baris terakhir
+            self.assertTrue(all(w.startswith("#") for w in last.split()) or "#" not in last)
 
 
 class LabelsConfigRecommendationTests(unittest.TestCase):

@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.core.nlp_competitor import build_name_recommendations, clean_text, description_summary
+from src.core.nlp_competitor import build_name_recommendations, clean_text
 from src.core.recommendations import ads_plan, flash_sale_plan, flash_sale_template
 from src.core.segmentation import association_rules
 from src.ui.common import batched_view, button_tabs, card, download_excel, explain, fmt_date, fmt_idr, fmt_num, reset_batches, table_toolbar
@@ -30,17 +30,58 @@ def _cancel_reason_map(table: pd.DataFrame) -> dict[str, list[str]]:
     return {str(k): list(v or []) for k, v in zip(table["item_key"], table["alasan_batal"])}
 
 
-NAME_LIMIT = 300
+def _product_frame(table: pd.DataFrame, frames) -> pd.DataFrame:
+    """Satu baris per produk aktif (Kode Produk di unggahan stok terakhir), varian SKU digabung; penjualan dari tabel analisa.
+
+    Nama & deskripsi di Shopee melekat pada produk (bukan per SKU varian), jadi penilaian SEO dihitung per produk."""
+    from src.core.margin_file import sku_key
+
+    stock = getattr(frames, "stock", pd.DataFrame())
+    if stock is None or stock.empty or not {"product_code", "sku", "product_name"} <= set(stock.columns):
+        base = table.copy()
+        base["product_code"] = ""
+        base["n_sku"] = 1
+        base["variants"] = [[] for _ in range(len(base))]
+        return base
+    if "_submitted_at" in stock.columns:
+        stock = stock.loc[stock["_submitted_at"].astype(str).eq(stock["_submitted_at"].astype(str).max())]
+    work = stock.assign(
+        product_code=stock["product_code"].astype(str).str.strip(),
+        key=stock["sku"].astype(str).map(sku_key),
+        variation=stock.get("variation", pd.Series("", index=stock.index)).fillna("").astype(str),
+    )
+    sales = pd.DataFrame()
+    if table is not None and not table.empty:
+        base = table if "harga_bersih" in table.columns else table.assign(harga_bersih=0.0)
+        sales = base.assign(key=base["sku"].astype(str).map(sku_key)).groupby("key").agg(qty_total=("qty_total", "sum"), harga_bersih=("harga_bersih", "mean"))
+    work = work.join(sales, on="key") if not sales.empty else work.assign(qty_total=0.0, harga_bersih=0.0)
+    grouped = work.groupby("product_code", sort=False).agg(
+        product_name=("product_name", "first"), sku=("key", "first"), skus=("key", list), variants=("variation", lambda v: [x for x in v if x.strip()]),
+        n_sku=("key", "nunique"), qty_total=("qty_total", "sum"), harga_bersih=("harga_bersih", "mean"),
+    ).reset_index()
+    grouped["item_key"] = grouped["product_code"]
+    grouped["variasi_tampil"] = ""
+    return grouped.sort_values("qty_total", ascending=False, kind="mergesort").reset_index(drop=True)
 
 
 def _name_recs(table: pd.DataFrame, frames, params: dict) -> tuple[pd.DataFrame, str]:
-    table = table.head(NAME_LIMIT)
-    stamp = (len(table), float(table["qty_total"].sum()), len(frames.descriptions), len(frames.competitors))
+    products = _product_frame(table, frames)
+    stamp = (len(products), float(pd.to_numeric(products.get("qty_total"), errors="coerce").fillna(0).sum()), len(frames.descriptions), len(frames.competitors), "v2")
     cached = st.session_state.get("_name-recs")
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1], cached[2]
-    with st.spinner("Membandingkan nama produk dengan kompetitor..."):
-        recs, note = build_name_recommendations(table, frames.descriptions, frames.competitors, _cancel_reason_map(table), params)
+    reasons: dict[str, list[str]] = {}
+    if "skus" in products.columns and table is not None and "alasan_batal" in table.columns:
+        from src.core.margin_file import sku_key
+
+        by_sku = {sku_key(s): list(v or []) for s, v in zip(table["sku"].astype(str), table["alasan_batal"])}
+        reasons = {code: sum((by_sku.get(k, []) for k in skus), []) for code, skus in zip(products["item_key"], products["skus"])}
+    else:
+        reasons = _cancel_reason_map(table)
+    with st.spinner("Membandingkan nama & deskripsi semua produk dengan daftar peringkat kompetitor..."):
+        recs, note = build_name_recommendations(products, frames.descriptions, frames.competitors, reasons, params)
+    if not recs.empty and "qty_total" in products.columns:
+        recs["Terjual"] = recs["item_key"].map(dict(zip(products["item_key"], products["qty_total"]))).fillna(0)
     st.session_state["_name-recs"] = (stamp, recs, note)
     return recs, note
 
@@ -56,6 +97,17 @@ def _similar_name_rules(table: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["antecedent", "consequent"])
 
 
+def _rank_text(row) -> str:
+    if not row.get("Daftar kompetitor"):
+        return "–"
+    pos = row.get("Peringkat kita")
+    if pos == pos and pos is not None and pos != "":
+        change = row.get("Perubahan peringkat")
+        move = f" ({'+' if change > 0 else ''}{int(change)})" if change == change and change is not None and change != 0 else ""
+        return f"Daftar {row['Daftar kompetitor']} · #{int(pos)}{move}"
+    return f"Daftar {row['Daftar kompetitor']} · belum masuk"
+
+
 def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
     recs, note = _name_recs(table, frames, params)
     if recs.empty:
@@ -63,7 +115,14 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
         return recs
     if frames.competitors.empty:
         st.caption("Data Produk kompetitor belum diunggah: kata kunci dibaca dari nama produk sendiri.")
-    st.caption(f"Dinilai {fmt_num(len(recs))} SKU teratas menurut rank (maks. {NAME_LIMIT}).", help=f"Metode: {note}")
+    n_sku = int(pd.to_numeric(recs.get("Jumlah SKU"), errors="coerce").fillna(1).sum())
+    ranked = int(recs["Peringkat kita"].notna().sum()) if "Peringkat kita" in recs.columns else 0
+    similar = int((recs.get("Kemiripan deskripsi", pd.Series(dtype=float)) > 60).sum())
+    st.caption(
+        f"Dinilai semua {fmt_num(len(recs))} produk aktif ({fmt_num(n_sku)} SKU varian) dari unggahan stok terakhir · "
+        f"{fmt_num(ranked)} produk kita masuk daftar peringkat kompetitor · {fmt_num(similar)} deskripsi masih mirip produk lain (>60%).",
+        help=f"Metode: {note}. Nama & deskripsi Shopee melekat pada produk, jadi varian (SKU) satu produk dinilai sekali.",
+    )
     counts = recs["Status skor"].value_counts()
     current = st.session_state.get("name-filter", "Semua")
     cols = st.columns(4)
@@ -74,10 +133,18 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
             st.rerun()
     view = recs if current == "Semua" else recs.loc[recs["Status skor"].eq(current)]
     page = view.reset_index(drop=True)
-    columns = ["SKU", "Nama produk saat ini", "Status skor", "Rekomendasi nama baru", "Kata kunci utama"]
-    display = page[columns].copy()
-    display["Ringkasan deskripsi"] = page["Rekomendasi deskripsi"].map(description_summary)
-    display["Status skor"] = display["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v))
+    display = pd.DataFrame({
+        "Kode produk": page["Kode produk"].where(page["Kode produk"].astype(str).str.len() > 0, page["SKU"]),
+        "Nama produk saat ini": page["Nama produk saat ini"],
+        "SKU varian": page.get("Jumlah SKU", 1),
+        "Status skor": page["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v)),
+        "Skor SEO": page.get("Skor SEO"),
+        "Rekomendasi nama baru": page["Rekomendasi nama baru"],
+        "Kata kunci utama": page["Kata kunci utama"],
+        "Peringkat kompetitor": [_rank_text(r) for r in page.to_dict("records")],
+        "Keunikan deskripsi": 100 - page.get("Kemiripan deskripsi", 0),
+        "USP utama": page["USP"].map(lambda items: ("⭐ " if items and items[0][1] else "") + (items[0][0].split(" — ")[0] if items else "–")),
+    })
     if st.session_state.get("name-filter-was") != current:
         st.session_state["name-filter-was"] = current
         reset_batches("names")
@@ -86,34 +153,41 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
     def _render_names(lo: int, hi: int) -> None:
         event = show_table(
             display.iloc[lo:hi],
+            kinds={"Skor SEO": "count", "SKU varian": "count", "Keunikan deskripsi": "pct"},
             on_select="rerun",
             selection_mode="single-row",
             key=f"name-table-{current}-{hi}",
-            column_config={"Ringkasan deskripsi": st.column_config.TextColumn(width="medium")},
+            column_config={"USP utama": st.column_config.TextColumn(width="medium", help="Keunggulan paling menonjol; ⭐ = jarang disebut produk pembanding"),
+                           "Skor SEO": st.column_config.Column(help="% kaidah SEO judul & deskripsi yang terpenuhi (rinciannya di bawah tabel)"),
+                           "Keunikan deskripsi": st.column_config.Column(help="100% − kemiripan tertinggi dengan deskripsi produk lain; di bawah 40% berisiko dianggap duplikat")},
         )
         rows = getattr(getattr(event, "selection", None), "rows", []) or []
         if rows:
             st.session_state["name-picked"] = lo + int(rows[0])
 
-    # Tabel selebar penuh per kelompok; detail baris terpilih tampil di bawahnya.
+    def _export() -> pd.DataFrame:
+        out = page[["Kode produk", "SKU", "Jumlah SKU", "Nama produk saat ini", "Rekomendasi nama baru", "Kata kunci utama", "Kata kunci pendukung",
+                    "Rekomendasi deskripsi"]].copy()
+        out.insert(4, "Skor SEO", page.get("Skor SEO"))
+        out["Peringkat kompetitor"] = display["Peringkat kompetitor"]
+        out["Keunikan deskripsi (%)"] = display["Keunikan deskripsi"].round(0)
+        out["USP"] = page["USP"].map(lambda items: "; ".join(t for t, _u in (items or [])))
+        return out
+
     batched_view(
         len(display),
         key="names",
         render=_render_names,
-        noun="SKU",
+        noun="produk",
         fragment=False,  # pilihan baris menampilkan rincian di bawah tabel (rerun penuh)
-        download=lambda: download_excel(
-            view[["SKU", "Nama produk saat ini", "Rekomendasi nama baru", "Kata kunci utama", "Kata kunci pendukung", "Rekomendasi deskripsi"]],
-            "rekomendasi_nama_deskripsi.xlsx",
-            key="xl-names",
-        ),
+        download=lambda: download_excel(_export(), "rekomendasi_nama_deskripsi.xlsx", key="xl-names"),
     )
     picked_row = st.session_state.get("name-picked")
     with st.container(border=True):
         if picked_row is not None and 0 <= int(picked_row) < len(page):
             _name_detail(page.iloc[int(picked_row)])
         else:
-            st.caption("Pilih satu baris untuk melihat nama rekomendasi, kata kunci, dan deskripsi lengkap.")
+            st.caption("Pilih satu baris untuk melihat nama rekomendasi, USP, pembanding kompetitor, cek SEO, dan deskripsi lengkap.")
     return recs
 
 
@@ -162,6 +236,33 @@ def _name_detail(item: pd.Series) -> None:
         checks = item["Kriteria"] if isinstance(item["Kriteria"], dict) else {}
         if checks:
             st.caption(" · ".join(f"{'✅' if ok else '❌'} {name}" for name, ok in checks.items()))
+        usp = item.get("USP") or []
+        left, right = st.columns(2)
+        with left:
+            st.markdown("<div style='font-weight:700;margin-top:.4rem'>Keunggulan (USP)</div>", unsafe_allow_html=True)
+            if usp:
+                st.markdown("".join(f"<div style='font-size:var(--fs-sm)'>{'⭐ ' if unique else '• '}{html.escape(t)}</div>" for t, unique in usp)
+                            + "<div style='font-size:var(--fs-xs);color:#64748b;margin-top:.2rem'>⭐ = jarang disebut produk pembanding (pembeda utama)</div>",
+                            unsafe_allow_html=True)
+            else:
+                st.caption("Belum ada fakta pembeda di nama/deskripsi produk ini.")
+            comps = item.get("Pembanding teratas") or []
+            st.markdown(f"<div style='font-weight:700;margin-top:.6rem'>Pembanding · {html.escape(_rank_text(item.to_dict()))}</div>", unsafe_allow_html=True)
+            if comps:
+                st.markdown("".join(f"<div style='font-size:var(--fs-sm)'>#{int(r) if r == r else '–'} · {html.escape(str(n)[:90])} <span style='color:#64748b'>({html.escape(str(shop))})</span></div>"
+                                    for n, r, shop in comps), unsafe_allow_html=True)
+                st.caption(str(item.get("Sumber pembanding", "")))
+            else:
+                st.caption("Tidak ada produk kompetitor serupa di data peringkat.")
+        with right:
+            st.markdown(f"<div style='font-weight:700;margin-top:.4rem'>Cek SEO · {int(item.get('Skor SEO', 0) or 0)}%</div>", unsafe_allow_html=True)
+            for label, checks in (("Judul", item.get("SEO judul") or {}), ("Deskripsi", item.get("SEO deskripsi") or {})):
+                st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b;margin-top:.2rem'>{label}</div>"
+                            + "".join(f"<div style='font-size:var(--fs-sm)'>{'✅' if ok else '❌'} {html.escape(name)}</div>" for name, ok in checks.items()),
+                            unsafe_allow_html=True)
+            sim = item.get("Kemiripan deskripsi", 0) or 0
+            if sim > 60:
+                st.caption(f"Deskripsi {fmt_num(sim, 0)}% mirip dengan: {str(item.get('Paling mirip dengan', ''))[:80]}. Tambahkan detail khas produk ini (ukuran, kode, warna, kegunaan khusus).")
         if not item["Ada deskripsi lama"]:
             st.caption("Deskripsi lama belum diunggah; deskripsi baru disusun dari nama, variasi, dan kata kunci.")
         with st.container(height=360):
