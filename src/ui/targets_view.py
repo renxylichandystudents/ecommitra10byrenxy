@@ -56,10 +56,14 @@ def achievement_line(actual: float, start: date | None, end: date | None, featur
 
 
 def month_outlook(orders: pd.DataFrame | None, features, ref: date | None = None) -> dict:
-    """Bulan acuan: penjualan aktual tgl 1 s.d. data terakhir + prediksi sisa hari (bulan berjalan), atau aktual penuh (bulan lewat).
+    """Bulan acuan: sales bersih aktual tgl 1 s.d. data terakhir + prediksi sisa hari (bulan berjalan), atau aktual penuh (bulan lewat).
 
-    Sales = harga setelah diskon × QTY tanpa pesanan batal (sama dengan Kalkulator biaya)."""
+    Sales bersih = Total Pembayaran − batal − Belum Bayar − retur (sama dengan tab Data & Laporan). Prediksi harian dihitung
+    dari harga setelah diskon × QTY, jadi dikonversi dengan `faktor` = sales bersih ÷ sales produk bersih bulan itu
+    (selisihnya terutama voucher Shopee dan ongkir)."""
     import calendar
+
+    from src.core.metrics import net_sku_sales, normalize_lines, order_metrics
 
     data_last = date.today()
     if orders is not None and not orders.empty:
@@ -68,15 +72,14 @@ def month_outlook(orders: pd.DataFrame | None, features, ref: date | None = None
             data_last = stamp.date()
     running = ref is None or (ref.year, ref.month) == (data_last.year, data_last.month)
     last = data_last if running else (pd.Timestamp(ref) + pd.offsets.MonthEnd(0)).date()
-    mtd = 0.0
+    first = last.replace(day=1)
+    mtd, product, factor = 0.0, 0.0, 1.0
     if orders is not None and not orders.empty:
-        work = orders
-        if "status" in work.columns:
-            from src.ingest import cancelled_status_mask
-
-            work = work.loc[~cancelled_status_mask(work["status"])]
-        stamp = pd.to_datetime(work["order_time"], errors="coerce")
-        mtd = float(pd.to_numeric(work.loc[(stamp.dt.year == last.year) & (stamp.dt.month == last.month), "sales"], errors="coerce").sum())
+        lines = normalize_lines(orders)
+        mtd = float(order_metrics(lines, first, last, normalized=True)["sales_bersih"])
+        product = float(net_sku_sales(lines, first, last, normalized=True)["sales"].sum())
+        if product > 0 and mtd > 0:
+            factor = float(min(max(mtd / product, 0.5), 1.2))
     month_days = calendar.monthrange(last.year, last.month)[1]
     rest = month_days - last.day if running else 0
     pred_daily = 0.0
@@ -84,14 +87,14 @@ def month_outlook(orders: pd.DataFrame | None, features, ref: date | None = None
         from src.ui.gudang_view import latest_prediction
 
         _q, sales_daily, _at = latest_prediction(features)
-        pred_daily = float(sum(sales_daily.values())) if sales_daily else 0.0
+        pred_daily = float(sum(sales_daily.values())) * factor if sales_daily else 0.0
     except Exception:
         pred_daily = 0.0
     if pred_daily <= 0 and last.day:
         pred_daily = mtd / last.day
     return {
-        "last": last, "running": running, "mtd": mtd, "rest": rest, "month_days": month_days, "pred_daily": pred_daily,
-        "projection": mtd + pred_daily * rest if running else mtd, "periode": T.month_key(last),
+        "last": last, "running": running, "mtd": mtd, "mtd_produk": product, "faktor": factor, "rest": rest, "month_days": month_days,
+        "pred_daily": pred_daily, "projection": mtd + pred_daily * rest if running else mtd, "periode": T.month_key(last),
     }
 
 

@@ -388,7 +388,8 @@ def show_recommendations(
         if picked == "nama-deskripsi":
             _names_tab(table, frames, params, features)
         elif picked == "iklan":
-            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit, frames=frames, orders=orders)
+            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit, frames=frames,
+                                  orders=orders_all if isinstance(orders_all, pd.DataFrame) and not orders_all.empty else orders)
         elif picked == "flash-sale":
             plus.show_flash_sale(table, data=data, today=today, orders=orders, features=features, username=username, can_edit=can_edit)
         elif picked == "exposure":

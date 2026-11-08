@@ -289,9 +289,10 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
     from src.ui.margin_data import status_line
     from src.ui.targets_view import month_outlook
 
-    outlook = month_outlook(orders, features, ref)
+    every = (st.session_state.get("analysis") or {}).get("orders_all")
+    outlook = month_outlook(every if isinstance(every, pd.DataFrame) and not every.empty else orders, features, ref)
     running, last, mtd, rest = outlook["running"], outlook["last"], outlook["mtd"], outlook["rest"]
-    pred_daily, projection = outlook["pred_daily"], outlook["projection"]
+    pred_daily, projection, factor = outlook["pred_daily"], outlook["projection"], float(outlook.get("faktor") or 1.0)
     month_label = f"{['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][last.month - 1]} {last.year}"
     has_target = goals.target_sales > 0
     gap = goals.target_sales - projection if has_target else 0.0
@@ -317,21 +318,22 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
 
     reach = achievement_line(mtd, last.replace(day=1), last, features)
     k = st.columns(4)
-    card(k[0], f"Sales produk aktual {month_label}", fmt_idr(mtd),
+    card(k[0], f"Sales bersih aktual {month_label}", fmt_idr(mtd),
          hint=(f"realisasi {actual_span}" if running else "bulan sudah lewat · angka aktual")
-              + " · harga setelah diskon × QTY, tanpa batal (lebih tinggi dari Sales bersih di Ringkasan karena belum dikurangi voucher Shopee)"
+              + f" · sama dengan tab Data · sales produk {fmt_idr(outlook.get('mtd_produk', 0))}"
               + (f"<br>{reach}" if reach else ""))
     card(k[1], f"Margin bersih aktual {month_label}", fmt_pct(m_overall, 1) if np.isfinite(m_overall) else "–",
          hint=(f"{actual_span} · margin kotor {fmt_pct(m_kotor, 1)} − potongan Shopee & iklan = {fmt_idr(m_bersih)}") if np.isfinite(m_overall) else "butuh file margin")
     if running:
         rest_text = f"aktual + prediksi {rest} hari sisa" if rest else "bulan sudah penuh"
-        card(k[2], f"Prediksi penjualan {month_label}", fmt_idr(projection),
+        card(k[2], f"Prediksi sales bersih {month_label}", fmt_idr(projection),
              hint=(f"{rest_text} · target {fmt_idr(goals.target_sales)} · prediksi pencapaian "
                    f"<b style='color:{'#1d4ed8' if gap <= 0 else '#dc2626'}'>{fmt_pct(projection / goals.target_sales * 100, 1)}</b>"
                    + (f" · kurang {fmt_idr(gap)}" if gap > 0 else " · target tercapai")) if has_target else f"{rest_text} · target {month_label} belum diunggah")
-        proj_margin = projection * m_overall / 100 if np.isfinite(m_overall) else float("nan")
+        proj_margin = projection / factor * m_overall / 100 if np.isfinite(m_overall) else float("nan")
         card(k[3], f"Prediksi margin bersih {month_label}", fmt_idr(proj_margin) if np.isfinite(proj_margin) else "–",
-             hint=(f"prediksi penjualan × margin aktual {fmt_pct(m_overall, 1)} · sisa {rest} hari {fmt_idr(proj_margin - m_bersih)}") if np.isfinite(proj_margin) else "butuh file margin")
+             hint=(f"prediksi sales produk {fmt_idr(projection / factor)} × margin aktual {fmt_pct(m_overall, 1)} · sisa {rest} hari {fmt_idr(proj_margin - m_bersih)}")
+             if np.isfinite(proj_margin) else "butuh file margin")
         k = st.columns(4)
     card(k[2] if not running else k[0], "SKU rugi", fmt_num(len(rugi)),
          hint=f"{html.escape(period_label)} · rugi ±{fmt_idr(float(rugi['rugi_30'].sum()) if len(rugi) else 0)} · omzet {fmt_idr(float(rugi['omzet_30'].sum()) if len(rugi) else 0)}")

@@ -153,6 +153,15 @@ class October2026Test(unittest.TestCase):
 
         cls.raw, _ = load_months(["2026-10"])
 
+    def test_target_outlook_uses_sales_bersih(self):
+        from datetime import date
+
+        from src.ui.targets_view import month_outlook
+
+        outlook = month_outlook(_analysis_frame(self.raw.drop_duplicates()), None, date(2026, 10, 15))
+        self.assertAlmostEqual(outlook["mtd"], 2_848_905_957, places=0)
+        self.assertAlmostEqual(outlook["faktor"], outlook["mtd"] / outlook["mtd_produk"], places=6)
+
     def test_pages_identical_on_real_data(self):
         data_page = order_metrics(ledger_from_raw(self.raw), "2026-10-01", "2026-10-31")
         summary_page = order_metrics(_analysis_frame(self.raw.drop_duplicates()), "2026-10-01", "2026-10-31")
