@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core import gudang
-from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct
+from src.ui.common import batched_view, card, centered_download, download_excel, explain, fmt_num, fmt_pct
 from src.utils.format import show_table
 
 STATUS_ICON = {"Kosong": "🔴 Kosong", "Hampir habis": "🟠 Hampir habis", "Stok berlebih": "🟣 Stok berlebih", "Aman": "🟢 Aman"}
@@ -473,34 +473,102 @@ def _lane_detail(view: dict) -> None:
     )
 
 
+PRIORITY_LABEL = {0: "🔴 Tinggi", 1: "🟠 Sedang", 2: "🟢 Rendah"}
+
+
+def _category_priority(r) -> tuple[int, str]:
+    """(tingkat 0/1/2, daftar pekerjaan) per kategori — aturan ditulis juga di layar."""
+    jobs, level = [], 2
+    rak = r.rak_pct if np.isfinite(r.rak_pct) and r.rak_pct < 999 else np.nan
+    if r.lokasi_rak == 0 and r.sku_besar_berstok > 0:
+        level = 0
+        jobs.append(f"{fmt_num(r.sku_besar_berstok)} SKU besar tanpa lokasi rak — siapkan lokasi rak untuk kategori ini")
+    elif np.isfinite(rak) and rak > 100:
+        level = 0
+        jobs.append(f"Rak penuh ({fmt_pct(rak, 0)}): kurangi stok berlebih / pindahkan SKU lambat, atau tambah lokasi rak")
+    elif np.isfinite(rak) and rak >= 75:
+        level = min(level, 1)
+        jobs.append(f"Rak hampir penuh ({fmt_pct(rak, 0)}): jangan tambah SKU besar baru")
+    if np.isfinite(r.gondola_pct) and r.gondola_pct >= 100:
+        level = min(level, 0 if r.kecil_tanpa_lokasi > 0 else 1)
+        jobs.append("Gondola penuh: kosongkan lokasi SKU yang stoknya habis/lambat")
+    if r.kecil_tanpa_lokasi > 0:
+        level = min(level, 1)
+        jobs.append(f"Tetapkan lokasi ambil untuk {fmt_num(r.kecil_tanpa_lokasi)} SKU kecil")
+    if r.perlu_replenish >= 15:
+        level = 0
+    elif r.perlu_replenish >= 5:
+        level = min(level, 1)
+    if r.perlu_replenish > 0:
+        jobs.append(f"Isi ulang {fmt_num(r.perlu_replenish)} SKU kosong / hampir habis")
+    if r.stok > 0 and r.over_unit / r.stok >= 0.3:
+        level = min(level, 1)
+        jobs.append(f"Tahan pengisian: {fmt_num(r.over_unit)} unit berlebih ({fmt_pct(r.over_unit / r.stok * 100, 0)} stok)")
+    return level, "; ".join(jobs) or "Tidak ada tindakan"
+
+
 def _category_table(view: dict) -> None:
     st.markdown("<div class='section-title'>Kapasitas per kategori</div>", unsafe_allow_html=True)
     cats = view["categories"].copy()
-    explain([
-        ("Rak", "SKU Besar yang masih berstok ÷ lokasi racking kategori itu (perkiraan 1 SKU ≈ 1 lokasi). Di atas 100% = barang melebihi lokasi rak yang disediakan"),
-        ("Gondola", "lokasi gondola yang punya pick location ÷ lokasi gondola kategori itu"),
-        ("Stok berlebih", "Σ (stok − Max) untuk SKU yang stoknya di atas Maximum Stock: ruang yang bisa dibebaskan"),
-    ])
+    if cats.empty:
+        st.caption("Belum ada data.")
+        return
+    levels = [_category_priority(r) for r in cats.itertuples(index=False)]
+    cats["_lvl"] = [lv for lv, _ in levels]
+    cats["_job"] = [job for _, job in levels]
+    with st.container(border=True):
+        st.markdown("**Cara membaca tabel ini**")
+        st.markdown(
+            "<div class='field-hint'>"
+            "<b>1. Lihat kolom Prioritas</b> lalu kerjakan isi kolom <b>Yang perlu dikerjakan</b>, mulai dari 🔴 Tinggi.<br>"
+            "<b>2. Rak terpakai</b> = SKU barang besar yang masih ada stoknya ÷ lokasi rak kategori itu (anggapan 1 SKU = 1 lokasi). "
+            "Di atas 100% berarti barang lebih banyak daripada lokasi rak yang disediakan.<br>"
+            "<b>3. Gondola terpakai</b> = lokasi gondola yang sudah ditempati barang kecil ÷ lokasi gondola kategori itu.<br>"
+            "<b>4. Unit berlebih</b> = jumlah stok di atas batas Max: ruang yang bisa dibebaskan dengan menahan pengisian atau promo.<br>"
+            "<b>5. SKU perlu diisi ulang</b> = SKU kosong atau hampir habis (di bawah titik pesan ulang).<br>"
+            "<span style='color:#64748b'>Prioritas 🔴 Tinggi: rak > 100%, barang besar tanpa lokasi rak, gondola penuh sementara ada barang kecil tanpa lokasi, "
+            "atau ≥ 15 SKU perlu diisi ulang. 🟠 Sedang: rak 75–100%, gondola penuh, barang kecil tanpa lokasi, 5–14 SKU perlu diisi ulang, "
+            "atau unit berlebih ≥ 30% stok. Selain itu 🟢 Rendah.</span></div>",
+            unsafe_allow_html=True,
+        )
+    groups = {lv: cats.loc[cats["_lvl"] == lv, "kategori"].str.title().tolist() for lv in (0, 1, 2)}
+    st.markdown(
+        "<div class='field-hint' style='margin:.2rem 0 .5rem'>"
+        + " · ".join(f"<b>{PRIORITY_LABEL[lv]}</b> ({len(names)}): {', '.join(names) if names else '–'}" for lv, names in groups.items())
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    def pct(value) -> str:
+        return "–" if not np.isfinite(value) or value >= 999 else fmt_pct(value, 0)
+
+    cats = cats.sort_values("kategori").reset_index(drop=True)  # urut abjad
     frame = pd.DataFrame({
         "Kategori": cats["kategori"].str.title(),
-        "Lokasi rak": cats["lokasi_rak"], "SKU besar berstok": cats["sku_besar_berstok"], "Rak terpakai": cats["rak_pct"].where(cats["rak_pct"] < 999),
-        "Lokasi gondola": cats["lokasi_gondola"], "Gondola terisi": cats["gondola_terisi"], "Gondola terpakai": cats["gondola_pct"],
-        "SKU kecil tanpa lokasi": cats["kecil_tanpa_lokasi"], "Stok 10037": cats["stok"], "Unit berlebih": cats["over_unit"],
-        "SKU perlu diisi ulang": cats["perlu_replenish"],
-    }).sort_values("Rak terpakai", ascending=False, na_position="last").reset_index(drop=True)
+        "Prioritas": cats["_lvl"].map(PRIORITY_LABEL),
+        "Yang perlu dikerjakan": cats["_job"],
+        "Rak terpakai": cats["rak_pct"].map(pct),
+        "Lokasi rak": cats["lokasi_rak"], "SKU besar berstok": cats["sku_besar_berstok"],
+        "Gondola terpakai": cats["gondola_pct"].map(pct),
+        "Lokasi gondola": cats["lokasi_gondola"], "Gondola terisi": cats["gondola_terisi"],
+        "SKU kecil tanpa lokasi": cats["kecil_tanpa_lokasi"], "SKU perlu diisi ulang": cats["perlu_replenish"],
+        "Unit berlebih": cats["over_unit"], "Stok 10037": cats["stok"],
+    })
+    rack_total, rack_sku = int(frame["Lokasi rak"].sum()), int(frame["SKU besar berstok"].sum())
+    gon_total, gon_used = int(frame["Lokasi gondola"].sum()), int(frame["Gondola terisi"].sum())
     total = {
-        "Kategori": "Total", "Lokasi rak": frame["Lokasi rak"].sum(), "SKU besar berstok": frame["SKU besar berstok"].sum(),
-        "Lokasi gondola": frame["Lokasi gondola"].sum(), "Gondola terisi": frame["Gondola terisi"].sum(),
-        "SKU kecil tanpa lokasi": frame["SKU kecil tanpa lokasi"].sum(), "Stok 10037": frame["Stok 10037"].sum(),
-        "Unit berlebih": frame["Unit berlebih"].sum(), "SKU perlu diisi ulang": frame["SKU perlu diisi ulang"].sum(),
+        "Kategori": "Total", "Prioritas": f"{len(groups[0])} tinggi · {len(groups[1])} sedang", "Yang perlu dikerjakan": "",
+        "Rak terpakai": pct(rack_sku / rack_total * 100) if rack_total else "–", "Lokasi rak": rack_total, "SKU besar berstok": rack_sku,
+        "Gondola terpakai": pct(gon_used / gon_total * 100) if gon_total else "–", "Lokasi gondola": gon_total, "Gondola terisi": gon_used,
+        "SKU kecil tanpa lokasi": frame["SKU kecil tanpa lokasi"].sum(), "SKU perlu diisi ulang": frame["SKU perlu diisi ulang"].sum(),
+        "Unit berlebih": frame["Unit berlebih"].sum(), "Stok 10037": frame["Stok 10037"].sum(),
     }
-    total["Rak terpakai"] = total["SKU besar berstok"] / total["Lokasi rak"] * 100 if total["Lokasi rak"] else np.nan
-    total["Gondola terpakai"] = total["Gondola terisi"] / total["Lokasi gondola"] * 100 if total["Lokasi gondola"] else np.nan
     full = pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
-    show_table(full, bold_label="Total", kinds={"Rak terpakai": "pct", "Gondola terpakai": "pct", "Stok 10037": "count", "Unit berlebih": "count"}, max_height=10_000)
-    no_rack = cats.loc[(cats["lokasi_rak"] == 0) & (cats["sku_besar_berstok"] > 0), "kategori"].tolist()
-    if no_rack:
-        st.caption("Kategori dengan SKU Besar berstok tetapi tanpa lokasi racking di denah: " + ", ".join(c.title() for c in no_rack) + ".")
+    show_table(
+        full, bold_label="Total", kinds={"Stok 10037": "count", "Unit berlebih": "count"}, max_height=10_000,
+        column_config={"Yang perlu dikerjakan": st.column_config.TextColumn(width="large")},
+    )
+    centered_download("gudang-cat-dl", lambda: download_excel(full, "kapasitas_per_kategori.xlsx", key="xl-gudang-cat"))
 
 
 def _sku_table(view: dict) -> None:
