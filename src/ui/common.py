@@ -336,11 +336,13 @@ _DATE_VERSION = hashlib.md5((_DATE_DIR / "index.html").read_bytes()).hexdigest()
 _DATE_RANGE = components.declare_component(f"date_range_{_DATE_VERSION}", path=str(_DATE_DIR))
 
 
-def date_range_picker(*, key: str, lo: date, hi: date, default: tuple[date, date], label: str = "Periode") -> tuple[date, date]:
+def date_range_picker(*, key: str, lo: date, hi: date, default: tuple[date, date], label: str = "Periode",
+                      presets: list[tuple[str, date, date]] | None = None) -> tuple[date, date]:
     """Filter tanggal gaya Shopee: satu kolom tanggal; diklik muncul pilihan cepat (Hari Ini, Kemarin, 1 Minggu,
     1 Bulan, 3 Bulan, Bulan Ini, Bulan Lalu, Semua Data) dan kalender dua bulan untuk memilih rentang.
 
-    Pilihan disimpan (tetap sama walau pindah halaman). Tanggal di luar data [lo, hi] tidak bisa dipilih."""
+    presets: pilihan cepat pengganti (mis. untuk rencana ke depan). Pilihan disimpan (tetap sama walau pindah halaman).
+    Tanggal di luar [lo, hi] tidak bisa dipilih."""
     def _fit(pair) -> tuple[date, date]:
         a, b = pair
         a, b = (b, a) if a > b else (a, b)
@@ -348,7 +350,8 @@ def date_range_picker(*, key: str, lo: date, hi: date, default: tuple[date, date
 
     saved = _kept(f"{key}-range")
     current = _fit(saved if isinstance(saved, tuple) and len(saved) == 2 else default)
-    value = _DATE_RANGE(lo=lo.isoformat(), hi=hi.isoformat(), start=current[0].isoformat(), end=current[1].isoformat(), label=label, key=key, default=None)
+    value = _DATE_RANGE(lo=lo.isoformat(), hi=hi.isoformat(), start=current[0].isoformat(), end=current[1].isoformat(), label=label, key=key, default=None,
+                        presets=[[name, a.isoformat(), b.isoformat()] for name, a, b in presets or []])
     if isinstance(value, dict) and value.get("start") and value.get("end"):
         raw = (value["start"], value["end"])
         # Komponen terus mengirim nilai terakhir; pakai hanya bila berbeda dari klik sebelumnya.

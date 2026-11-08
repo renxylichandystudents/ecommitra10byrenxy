@@ -13,6 +13,7 @@ from src.core import ads_plan, ranking_score
 from src.core import exposure as expo
 from src.core import flash_sale as flash
 from src.core import margin as margin_core
+from src.core.campaigns import as_date
 from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date
 from src.core.product_features import features_from_description
@@ -174,50 +175,37 @@ def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | 
 
 
 FLASH_ICON = {flash.DRIVER: "🔥", flash.CLEAR: "📦"}
+FLASH_RULES = ("Prioritas omzet", "Tidak di bawah impas")
 
 
-def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orders: pd.DataFrame | None = None, features=None,
-                    username: str = "", can_edit: bool = False) -> None:
+def _chip(icon: str, name: str, color: str, text: str) -> str:
+    return (f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:.85rem;background:#fff'>{icon} "
+            f"<b style='color:{color}'>{name}</b> {text}</span>")
+
+
+def _flash_render(plan: pd.DataFrame, skipped: pd.DataFrame, start: date, end: date, *, key: str) -> None:
+    """Kartu, kalender, tabel, unduhan, transfer DC, dan SKU tidak dijadwalkan untuk satu jadwal flash sale."""
     from datetime import timedelta
 
     from src.ui.common import card
 
-    st.markdown("<div class='section-title'>Flash sale toko</div>", unsafe_allow_html=True)
-    if table is None or table.empty:
-        st.write("Jalankan analisa terlebih dahulu.")
-        return
-    st.caption("Jadwal flash sale toko Shopee yang tetap jalan walau stok terbatas: tiap SKU diberi sumber stok yang memungkinkan "
-               "(stok toko → transfer DC → kuota kecil), harga tidak di bawah impas.")
-    with st.container(border=True):
-        c1, c2, c3, c4 = st.columns([1.1, 1, 1, 1.2])
-        start = c1.date_input("Mulai", value=today + timedelta(days=1), key="fs-start", format="DD/MM/YYYY")
-        days = int(c2.selectbox("Lama rencana", (7, 14, 30), index=1, key="fs-days", format_func=lambda d: f"{d} hari"))
-        per_day = int(c3.number_input("SKU per hari", min_value=2, max_value=20, value=5, step=1, key="fs-per-day",
-                                      help="Tanggal kembar, gajian (25), dan Harbolnas mendapat +3 SKU."))
-        share = c4.slider("Porsi habiskan stok lebih", 0, 70, 40, step=10, key="fs-share", format="%d%%",
-                          help="Sisa slot diisi produk pendorong omzet (laris). Bila kandidat salah satu habis, slot diisi yang lain.") / 100
-        rule = st.radio("Aturan harga flash", ("Prioritas omzet", "Tidak di bawah impas"), horizontal=True, key="fs-rule",
-                        help="Prioritas omzet: produk yang harga impasnya (File margin, tanpa biaya iklan) di atas harga sekarang tetap ikut "
-                             "dengan diskon minimal 5% dan rugi per unit dicatat. Tidak di bawah impas: produk itu tidak dijadwalkan.")
-    cands, skipped = flash.candidates(_flash_items(table, data, orders, today), excluded=data.excluded, below_floor=rule == "Prioritas omzet")
-    plan = flash.schedule(cands, start, today=today, days=days, per_day=per_day, clear_share=share)
+    days = (end - start).days + 1
     if plan.empty:
         st.warning("Belum ada SKU yang bisa dijadwalkan: semua SKU laku kehabisan stok di toko dan DC, atau harganya tidak memberi ruang diskon. "
                    "Lihat daftar alasan di bawah dan ajukan restock.")
     else:
-        by_source = cands["sumber"].value_counts().to_dict()
-        chips = [(flash.SRC_SITE, "✅", "#1d4ed8"), (flash.SRC_DC, "🚚", "#b45309"), (flash.SRC_THIN, "⚠️", "#b45309")]
-        parts = [f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:.85rem;background:#fff'>{icon} "
-                 f"<b style='color:{color}'>{name}</b> {fmt_num(by_source.get(name, 0))} SKU</span>" for name, icon, color in chips if by_source.get(name)]
-        if not skipped.empty:
-            parts.append(f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:.85rem;background:#fff'>⛔ "
-                         f"<b style='color:#dc2626'>Tidak bisa</b> {fmt_num(len(skipped))} SKU</span>")
-        st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + "".join(parts) + "</div>", unsafe_allow_html=True)
+        by_source = plan.drop_duplicates("SKU")["Sumber stok"].value_counts().to_dict()
+        chips = [_chip(icon, name, color, f"{fmt_num(by_source.get(name, 0))} SKU")
+                 for name, icon, color in ((flash.SRC_SITE, "✅", "#1d4ed8"), (flash.SRC_DC, "🚚", "#b45309"), (flash.SRC_THIN, "⚠️", "#b45309")) if by_source.get(name)]
+        if skipped is not None and not skipped.empty:
+            chips.append(_chip("⛔", "Tidak dijadwalkan", "#dc2626", f"{fmt_num(len(skipped))} SKU"))
+        st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + "".join(chips) + "</div>", unsafe_allow_html=True)
         moves = flash.transfers(plan)
         k = st.columns(4)
         card(k[0], "Slot flash sale", fmt_num(len(plan)), hint=f"{fmt_num(plan['SKU'].nunique())} SKU berbeda · {days} hari")
-        loss = plan["Margin/unit"].fillna(0.0).clip(upper=0) * plan["Kuota"]
-        below = int((plan["Margin/unit"] < 0).sum())
+        margin = pd.to_numeric(plan.get("Margin/unit", pd.Series(dtype=float)), errors="coerce")
+        loss = margin.fillna(0.0).clip(upper=0) * pd.to_numeric(plan["Kuota"], errors="coerce").fillna(0)
+        below = int((margin < 0).sum())
         card(k[1], "Estimasi omzet maks.", fmt_idr(plan["Estimasi omzet maks."].sum()),
              hint="bila semua kuota terjual di harga flash" + (f" · <b style='color:#dc2626'>{fmt_num(below)} slot di bawah impas, rugi maks. {fmt_idr(-loss.sum())}</b>"
                                                               if below else ""))
@@ -244,45 +232,109 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
                     + items + "</div>", unsafe_allow_html=True)
         st.caption("🔥 pendorong omzet · 📦 habiskan stok lebih · 🚚 stok ditransfer dari DC")
         f1, f2 = st.columns(2)
-        goal_pick = f1.multiselect("Tujuan", [flash.DRIVER, flash.CLEAR], key="fs-goal", placeholder="Semua tujuan")
-        src_pick = f2.multiselect("Sumber stok", [flash.SRC_SITE, flash.SRC_DC, flash.SRC_THIN], key="fs-src", placeholder="Semua sumber")
+        goal_pick = f1.multiselect("Tujuan", [flash.DRIVER, flash.CLEAR], key=f"{key}-goal", placeholder="Semua tujuan")
+        src_pick = f2.multiselect("Sumber stok", [flash.SRC_SITE, flash.SRC_DC, flash.SRC_THIN], key=f"{key}-src", placeholder="Semua sumber")
         view = plan
         if goal_pick:
             view = view.loc[view["Tujuan"].isin(goal_pick)]
         if src_pick:
             view = view.loc[view["Sumber stok"].isin(src_pick)]
-        view = view.assign(Tanggal=view["Tanggal"].map(fmt_date), **{"Kirim dari DC paling lambat": view["Kirim dari DC paling lambat"].map(lambda d: fmt_date(d) if d else "")})
+        view = view.assign(Tanggal=view["Tanggal"].map(fmt_date),
+                           **{"Kirim dari DC paling lambat": view["Kirim dari DC paling lambat"].map(lambda d: fmt_date(d) if isinstance(d, date) else "")})
         batched_view(
-            len(view), key="fs-plan", noun="slot",
+            len(view), key=f"{key}-plan", noun="slot",
             render=lambda lo, hi: show_table(view.iloc[lo:hi], kinds={"Harga normal": "money", "Harga flash": "money", "Diskon (%)": "pct", "Kuota": "count",
                                                                      "Batas beli/pembeli": "count", "Estimasi omzet maks.": "money", "Margin/unit": "money"},
                                              max_height=10_000,
                                              column_config={"Produk": st.column_config.TextColumn(width="large"), "Alasan": st.column_config.TextColumn(width="large"),
                                                             "Margin/unit": st.column_config.Column(help="Harga flash − harga impas (File margin, tanpa biaya iklan); minus = rugi per unit")}),
-            download=lambda: download_excel({"Jadwal": plan, "Transfer DC": moves, "Tidak dijadwalkan": skipped}, f"flash_sale_{start.isoformat()}.xlsx", key="xl-fs"),
+            download=lambda: download_excel({"Jadwal": plan, "Transfer DC": moves, "Tidak dijadwalkan": skipped}, f"flash_sale_{start.isoformat()}.xlsx", key=f"xl-{key}"),
         )
-        b1, b2 = st.columns(2)
-        with b1:
-            download_excel(flash.shopee_template(plan), f"template_flash_sale_shopee_{start.isoformat()}.xlsx", key="xl-fs-tpl", label="Unduh template Shopee")
-        if features is not None and b2.button("Simpan rencana flash sale", key="fs-save", type="primary", disabled=not can_edit, use_container_width=True):
-            from auth.ui import require
-
-            require("rekomendasi", "edit")
-            features.set_json(f"flash_plan:{start.isoformat()}", {"oleh": username, "hari": days,
-                                                                   "jadwal": plan.assign(Tanggal=plan["Tanggal"].astype(str)).to_dict("records")}, username=username)
-            st.success(f"Rencana flash sale mulai {fmt_date(start)} disimpan.")
+        download_excel(flash.shopee_template(plan), f"template_flash_sale_shopee_{start.isoformat()}.xlsx", key=f"xl-{key}-tpl", label="Unduh template Shopee")
         if not moves.empty:
             st.markdown("**Transfer DC → toko (Site 10037)**")
             show_table(moves.assign(**{"Kirim paling lambat": moves["Kirim paling lambat"].map(fmt_date)}), kinds={"Unit transfer": "count", "Jumlah slot": "count"},
                        column_config={"Produk": st.column_config.TextColumn(width="large")})
             st.caption(f"Ajukan transfer dari DC 10062/10036 paling lambat {flash.TRANSFER_DAYS} hari sebelum slot; SKU dari DC tidak dijadwalkan di {flash.TRANSFER_DAYS} hari pertama.")
-    if not skipped.empty:
+    if skipped is not None and not skipped.empty:
         with st.expander(f"Tidak dijadwalkan · {fmt_num(len(skipped))} SKU"):
-            counts = skipped["Alasan"].str.split(":").str[0].value_counts()
+            counts = skipped["Alasan"].astype(str).str.split(":").str[0].value_counts()
             st.caption(" · ".join(f"{name}: {fmt_num(n)}" for name, n in counts.items()))
-            show_table(skipped.head(300), kinds={"Stok toko": "count", "Stok DC": "count"}, column_config={"SKU · produk · varian": st.column_config.TextColumn(width="large")})
+            batched_view(
+                len(skipped), key=f"{key}-skip", noun="SKU",
+                render=lambda lo, hi: show_table(skipped.iloc[lo:hi], kinds={"Stok toko": "count", "Stok DC": "count"}, max_height=10_000,
+                                                 column_config={"SKU · produk · varian": st.column_config.TextColumn(width="large"),
+                                                                "Alasan": st.column_config.TextColumn(width="large")}),
+                download=lambda: download_excel(skipped, f"flash_sale_tidak_dijadwalkan_{start.isoformat()}.xlsx", key=f"xl-{key}-skip",
+                                                label="Unduh SKU tidak dijadwalkan"),
+            )
+
+
+def _flash_describe(c: dict) -> str:
+    s = c.get("setelan", {}) or {}
+    return (f"{fmt_num(s.get('per_hari', 0))} SKU/hari · porsi habiskan stok {fmt_num(float(s.get('porsi', 0)) * 100)}% · aturan harga {html.escape(str(s.get('aturan', '-')))}"
+            f" · {fmt_num(len(c.get('jadwal') or []))} slot · estimasi omzet maks. {fmt_idr(sum(float(r.get('Estimasi omzet maks.') or 0) for r in c.get('jadwal') or []))}")
+
+
+def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orders: pd.DataFrame | None = None, features=None,
+                    username: str = "", can_edit: bool = False) -> None:
+    from datetime import timedelta
+
+    from src.ui import campaign_ui as cmp
+
+    st.markdown("<div class='section-title'>Flash sale toko</div>", unsafe_allow_html=True)
+    if table is None or table.empty:
+        st.write("Jalankan analisa terlebih dahulu.")
+        return
+    st.caption("Jadwal flash sale toko Shopee yang tetap jalan walau stok terbatas: tiap SKU diberi sumber stok yang memungkinkan "
+               "(stok toko → transfer DC → kuota kecil). Simpan sebagai campaign agar jadwal terkunci; tiap hari dicek ulang dengan stok terbaru.")
+    cmp.flash_message("flash")
+    mode, cur = cmp.panel("flash", features=features, today=today, can_edit=can_edit, username=username, describe=_flash_describe)
+    items = _flash_items(table, data, orders, today)
+    if mode == cmp.SAVED and cur is not None:
+        start, end = as_date(cur["mulai"]), as_date(cur["selesai"])
+        plan = cmp.frame_of(cur.get("jadwal"), ("Tanggal", "Kirim dari DC paling lambat"))
+        skipped = cmp.frame_of(cur.get("tidak_dijadwalkan"))
+        s = cur.get("setelan", {}) or {}
+        cands, fresh_skipped = flash.candidates(items, excluded=data.excluded, below_floor=s.get("aturan", FLASH_RULES[0]) == FLASH_RULES[0])
+        reasons = dict(zip(fresh_skipped["SKU · produk · varian"].astype(str).str.split(" · ").str[0], fresh_skipped["Alasan"])) if not fresh_skipped.empty else {}
+        upcoming = plan.loc[plan["Tanggal"] >= today] if not plan.empty else plan
+        bad = upcoming.loc[~upcoming["SKU"].astype(str).isin(set(cands["sku"].astype(str)))] if not upcoming.empty else upcoming
+        if bad.empty:
+            st.markdown(f"<div class='field-hint'>✅ <b>Campaign masih bisa dijalankan.</b> Dicek dengan data {fmt_date(today)}: "
+                        f"{fmt_num(len(upcoming))} slot mendatang masih punya stok/sumber dan tidak melewati batas batal.</div>", unsafe_allow_html=True)
+        else:
+            st.warning(f"{fmt_num(len(bad))} dari {fmt_num(len(upcoming))} slot mendatang tidak bisa dijalankan dengan data {fmt_date(today)} "
+                       "(stok habis, batal tinggi, atau harga). Ganti SKU di Shopee atau buat campaign baru dari saran.")
+            show_table(bad.assign(Tanggal=bad["Tanggal"].map(fmt_date), **{"Kendala hari ini": bad["SKU"].astype(str).map(reasons).fillna("tidak lolos seleksi hari ini")})
+                       [["Tanggal", "SKU", "Produk", "Kuota", "Kendala hari ini"]],
+                       kinds={"Kuota": "count"}, column_config={"Produk": st.column_config.TextColumn(width="large"), "Kendala hari ini": st.column_config.TextColumn(width="large")})
+            st.button("Buat campaign baru dari saran", key="fs-renew", on_click=cmp.switch_to_new, args=("flash",), type="primary")
+        _flash_render(plan, skipped, start, end, key="fs-saved")
+    else:
+        tomorrow = today + timedelta(days=1)
+        with st.container(border=True):
+            start, end = cmp.period_picker(key="fs-period", today=today, default=(tomorrow, tomorrow + timedelta(days=13)))
+            c2, c3, c4 = st.columns([1, 1.2, 1.4])
+            per_day = int(c2.number_input("SKU per hari", min_value=2, max_value=20, value=5, step=1, key="fs-per-day",
+                                          help="Tanggal kembar, gajian (25), dan Harbolnas mendapat +3 SKU."))
+            share = c3.slider("Porsi habiskan stok lebih", 0, 70, 40, step=10, key="fs-share", format="%d%%",
+                              help="Sisa slot diisi produk pendorong omzet (laris). Bila kandidat salah satu habis, slot diisi yang lain.") / 100
+            rule = c4.radio("Aturan harga flash", FLASH_RULES, horizontal=True, key="fs-rule",
+                            help="Prioritas omzet: produk yang harga impasnya (File margin, tanpa biaya iklan) di atas harga sekarang tetap ikut "
+                                 "dengan diskon minimal 5% dan rugi per unit dicatat. Tidak di bawah impas: produk itu tidak dijadwalkan.")
+        cands, skipped = flash.candidates(items, excluded=data.excluded, below_floor=rule == FLASH_RULES[0])
+        plan = flash.schedule(cands, start, today=today, days=(end - start).days + 1, per_day=per_day, clear_share=share)
+        _flash_render(plan, skipped, start, end, key="fs-new")
+        if not plan.empty and features is not None:
+            cmp.save_controls("flash", features=features, today=today, start=start, end=end, cur=cur, can_edit=can_edit, username=username,
+                              default_name=f"Flash sale {fmt_date(start)} – {fmt_date(end)}",
+                              payload={"setelan": {"per_hari": per_day, "porsi": share, "aturan": rule},
+                                       "jadwal": cmp.records_of(plan), "tidak_dijadwalkan": cmp.records_of(skipped)})
     with st.expander("Cara jadwal disusun"):
         explain([
+            ("Campaign", "jadwal yang disimpan terkunci untuk periodenya dan menjadi acuan harian. Tiap hari slot mendatang dicek dengan stok & batal terbaru; "
+                         "bila ada kendala, ganti SKU atau buat campaign baru (campaign lama otomatis dihentikan)"),
             ("Tujuan", f"habiskan stok lebih bila stok di atas SS cukup ≥ {flash.OVERSTOCK_DAYS} hari; selain itu pendorong omzet (urut prediksi omzet × tren 14 hari)"),
             ("Kuota", "pendorong: maks(3, 3 × prediksi harian); habiskan stok: 20% kelebihan stok 30 hari (5–100 unit)"),
             ("Sumber stok", "stok toko di atas SS + kebutuhan 7 hari → transfer DC 10062/10036 (H-3) → kuota kecil maks. separuh stok di atas SS"),
@@ -292,7 +344,7 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
                        "jam ramai 12.00–14.00 dan 20.00–22.00"),
             ("Batal", "batas = maks(15%, 1,5 × rata-rata batal toko tertimbang omzet), karena produk bulky wajar batal 25–35%; "
                       "SKU dengan batal > 15% diberi batas beli 1/pembeli dan perlu dikejar bayar"),
-            ("Tidak dijadwalkan", "SKU jasa, tidak terjual 90 hari, batal di atas batas, stok 0 dan DC kosong, atau harga impas tanpa ruang diskon"),
+            ("Tidak dijadwalkan", "SKU jasa, tidak terjual 90 hari, batal di atas batas, stok 0 dan DC kosong, atau harga impas tanpa ruang diskon; unduh daftarnya untuk restock"),
         ])
 
 
@@ -319,104 +371,177 @@ def _exposure_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame
 SEGMENT_ICON = {expo.HERO: "⭐", expo.RISING: "📈", expo.OVERSTOCK: "📦", expo.LOW_CONV: "🎯"}
 
 
-def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: pd.DataFrame | None, frames, today: date, username: str, can_edit: bool) -> None:
+def _brief_picker(plan: pd.DataFrame, start: date, *, key: str) -> None:
+    """Pilih konten untuk brief: saring per minggu, segmen, kategori, atau cari nama/SKU, lalu pilih dari daftar yang tersisa."""
+    from datetime import timedelta
+
+    st.markdown("**Brief konten**")
+    monday = start - timedelta(days=start.weekday())
+    week_no = plan["Tanggal"].map(lambda d: (d - monday).days // 7 + 1).astype(int)
+    weeks = sorted(int(w) for w in week_no.unique())
+    week_label = {w: f"Minggu {w} · {fmt_date(monday + timedelta(days=7 * (w - 1)))}" for w in weeks}
+    f1, f2, f3, f4 = st.columns([1.1, 1.2, 1.2, 1.5])
+    week = f1.selectbox("Minggu", [0] + weeks, key=f"{key}-week", format_func=lambda w: "Semua minggu" if w == 0 else week_label[w])
+    segs = f2.multiselect("Segmen", [s for s in expo.SEGMENTS if (plan["Segmen"] == s).any()], key=f"{key}-seg", placeholder="Semua segmen",
+                          format_func=lambda s: f"{SEGMENT_ICON.get(s, '')} {s}")
+    cats = f3.multiselect("Kategori", sorted(plan["Kategori"].astype(str).unique()), key=f"{key}-cat", placeholder="Semua kategori")
+    query = f4.text_input("Cari produk / SKU", key=f"{key}-q", placeholder="mis. kloset, FSA0089").strip().lower()
+    mask = pd.Series(True, index=plan.index)
+    if week:
+        mask &= week_no == week
+    if segs:
+        mask &= plan["Segmen"].isin(segs)
+    if cats:
+        mask &= plan["Kategori"].astype(str).isin(cats)
+    if query:
+        mask &= (plan["Produk"].astype(str).str.lower().str.contains(query, regex=False) | plan["SKU"].astype(str).str.lower().str.contains(query, regex=False))
+    options = plan.index[mask].tolist()
+    if not options:
+        st.info("Tidak ada konten yang cocok dengan saringan ini.")
+        return
+    chosen = st.selectbox(f"Pilih konten · {fmt_num(len(options))} cocok", options, key=f"{key}-pick",
+                          format_func=lambda i: f"{SEGMENT_ICON.get(plan.loc[i, 'Segmen'], '')} {plan.loc[i, 'Hari']} {plan.loc[i, 'Tanggal'].day}/{plan.loc[i, 'Tanggal'].month} "
+                                                f"{plan.loc[i, 'Jam tayang']} · {plan.loc[i, 'Produk']}")
+    if chosen not in plan.index:
+        chosen = options[0]
+    row = plan.loc[chosen]
+    with st.container(border=True):
+        st.markdown(f"{SEGMENT_ICON.get(row['Segmen'], '')} **{html.escape(str(row['Segmen']))}** · {html.escape(str(row['Produk']))}")
+        st.markdown(f"**Kenapa produk ini:** {html.escape(str(row['Alasan dipilih']))}  \n"
+                    f"**Format:** {html.escape(str(row['Format']))}  \n"
+                    f"**Tayang:** {row['Hari']} {fmt_date(row['Tanggal'])}, {row['Jam tayang']} (unggah ±1 jam sebelumnya)  \n"
+                    f"**Hook:** _{html.escape(str(row['Hook']))}_  \n"
+                    f"**Poin jual:** {html.escape(str(row['Poin jual']))}  \n"
+                    f"**Ajakan:** {html.escape(str(row['Ajakan']))}  \n"
+                    f"**Hashtag:** {html.escape(str(row['Hashtag']))}")
+        st.caption("Naskah 30 detik (salin lewat ikon di pojok kanan):")
+        st.code(str(row["Naskah 30 dtk"]) + "\n\n" + str(row["Hashtag"]), language=None, wrap_lines=True)
+
+
+def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end: date, *, key: str, per_week: int, peak: str) -> None:
     from datetime import timedelta
 
     from src.ui.common import card
 
-    st.markdown("<div class='section-title'>Exposure Shopee Video & media sosial</div>", unsafe_allow_html=True)
-    if table is None or table.empty:
-        st.write("Jalankan analisa terlebih dahulu.")
-        return
-    st.caption("Produk yang paling layak dibuatkan konten minggu ini, jadwal tayang mengikuti jam ramai pesanan, dan brief siap pakai "
-               "(hook, poin jual, ajakan, hashtag, naskah 30 detik). Hanya produk dengan stok siap ≥ 14 hari (toko + DC).")
-    next_monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
-    with st.container(border=True):
-        c1, c2, c3 = st.columns(3)
-        start = c1.date_input("Mulai (Senin)", value=next_monday, key="ex-start", format="DD/MM/YYYY")
-        start = start - timedelta(days=start.weekday())
-        weeks = int(c2.selectbox("Lama", (1, 2, 4), index=2, key="ex-weeks", format_func=lambda w: f"{w} minggu"))
-        per_week = int(c3.number_input("Konten per minggu", min_value=2, max_value=14, value=5, step=1, key="ex-per-week"))
-    items = _exposure_items(table, data, orders, frames, today)
-    cands, delayed = expo.pick(items)
-    cat_by_sku = dict(zip(items["sku"], items["nama"].map(expo.category_of)))
-    times = expo.timing(orders.assign(sku=orders["sku"].astype(str)) if orders is not None and not orders.empty and "sku" in orders.columns else None, cat_by_sku)
-    plan = expo.calendar(cands, start, weeks=weeks, per_week=per_week, times=times)
     if plan.empty:
-        st.warning("Belum ada produk yang siap dibuatkan konten (terjual 90 hari terakhir dan stok ≥ 14 hari). Lihat daftar ditunda di bawah.")
+        st.warning("Belum ada produk yang siap dibuatkan konten di periode ini (terjual 90 hari terakhir dan stok ≥ 14 hari). Lihat daftar ditunda di bawah.")
     else:
-        counts = cands["segmen"].value_counts().to_dict()
-        chips = "".join(
-            f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:.85rem;background:#fff'>{SEGMENT_ICON[s]} "
-            f"<b>{s}</b> {fmt_num(counts.get(s, 0))} produk</span>" for s in expo.SEGMENTS if counts.get(s))
+        counts = plan.drop_duplicates("SKU")["Segmen"].value_counts().to_dict()
+        chips = "".join(_chip(SEGMENT_ICON[s], s, "#0f172a", f"{fmt_num(counts.get(s, 0))} produk") for s in expo.SEGMENTS if counts.get(s))
         st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + chips + "</div>", unsafe_allow_html=True)
-        dow, hours = times["*"]
         k = st.columns(4)
-        card(k[0], "Konten terjadwal", fmt_num(len(plan)), hint=f"{weeks} minggu · {per_week} per minggu")
+        card(k[0], "Konten terjadwal", fmt_num(len(plan)), hint=f"{(end - start).days + 1} hari · {per_week} per minggu")
         card(k[1], "Produk diangkat", fmt_num(plan["SKU"].nunique()), hint="tidak diulang dalam 14 hari")
         card(k[2], "Omzet 30 hari produknya", fmt_idr(plan.drop_duplicates("SKU")["Omzet 30 hari"].sum()), hint="prediksi analisa: yang dijaga & didorong konten")
-        card(k[3], "Jam ramai toko", f"{expo.WEEKDAYS[dow]} {hours}", hint="dari riwayat pesanan; unggah ±1 jam sebelumnya")
+        card(k[3], "Jam ramai toko", peak, hint="dari riwayat pesanan; unggah ±1 jam sebelumnya")
         st.markdown("**Kalender konten**")
         head = st.columns(7)
         for column, name in zip(head, expo.WEEKDAYS):
             column.markdown(f"<div style='text-align:center;font-size:var(--fs-xs);color:#64748b;font-weight:700'>{name}</div>", unsafe_allow_html=True)
-        for week in range(weeks):
+        monday = start - timedelta(days=start.weekday())
+        for week in range(((end - monday).days // 7) + 1):
             cols = st.columns(7)
             for offset, column in enumerate(cols):
-                day = start + timedelta(days=7 * week + offset)
+                day = monday + timedelta(days=7 * week + offset)
+                inside = start <= day <= end
                 part = plan.loc[plan["Tanggal"] == day]
                 lines = "".join(
                     f"<div title='{html.escape(str(p))}' style='font-size:var(--fs-xs);line-height:1.3;margin-top:4px;overflow-wrap:anywhere'>"
                     f"{SEGMENT_ICON.get(s, '')} <b>{html.escape(j)}</b><br>{html.escape(str(p).split(' · ')[1][:44] if ' · ' in str(p) else str(p)[:44])}</div>"
                     for p, s, j in zip(part["Produk"], part["Segmen"], part["Jam tayang"]))
                 empty = "<div style='color:#cbd5e1;font-size:var(--fs-xs)'>–</div>"
-                column.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:110px;background:#fff'>"
-                                f"<b>{day.day}/{day.month}</b>{lines or empty}</div>", unsafe_allow_html=True)
-        st.caption("⭐ produk andalan · 📈 sedang naik · 📦 stok lebih · 🎯 banyak dilihat, jarang dibeli")
-        st.markdown("**Brief konten**")
-        options = list(range(len(plan)))
-        chosen = st.selectbox("Pilih konten", options, key="ex-pick",
-                              format_func=lambda i: f"{fmt_date(plan.loc[i, 'Tanggal'])} · {plan.loc[i, 'Hari']} {plan.loc[i, 'Jam tayang']} · {plan.loc[i, 'Produk']}")
-        row = plan.loc[chosen]
-        with st.container(border=True):
-            st.markdown(f"{SEGMENT_ICON.get(row['Segmen'], '')} **{html.escape(str(row['Segmen']))}** · {html.escape(str(row['Produk']))}")
-            st.markdown(f"**Kenapa produk ini:** {html.escape(str(row['Alasan dipilih']))}  \n"
-                        f"**Format:** {html.escape(str(row['Format']))}  \n"
-                        f"**Tayang:** {row['Hari']} {fmt_date(row['Tanggal'])}, {row['Jam tayang']} (unggah ±1 jam sebelumnya)  \n"
-                        f"**Hook:** _{html.escape(str(row['Hook']))}_  \n"
-                        f"**Poin jual:** {html.escape(str(row['Poin jual']))}  \n"
-                        f"**Ajakan:** {html.escape(str(row['Ajakan']))}  \n"
-                        f"**Hashtag:** {html.escape(str(row['Hashtag']))}")
-            st.caption("Naskah 30 detik (salin lewat ikon di pojok kanan):")
-            st.code(str(row["Naskah 30 dtk"]) + "\n\n" + str(row["Hashtag"]), language=None, wrap_lines=True)
+                column.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:110px;background:{'#fff' if inside else '#f8fafc'};"
+                                f"opacity:{1 if inside else .45}'><b>{day.day}/{day.month}</b>{lines or empty}</div>", unsafe_allow_html=True)
+        st.caption("⭐ produk andalan · 📈 sedang naik · 📦 stok lebih · 🎯 banyak dilihat, jarang dibeli · tanggal pudar = di luar periode")
+        _brief_picker(plan, start, key=key)
         shown = plan.assign(Tanggal=plan["Tanggal"].map(fmt_date)).drop(columns=["Naskah 30 dtk"])
         batched_view(
-            len(shown), key="ex-plan", noun="konten",
+            len(shown), key=f"{key}-plan", noun="konten",
             render=lambda lo, hi: show_table(shown.iloc[lo:hi], kinds={"Omzet 30 hari": "money", "Stok siap (hari)": "count"}, max_height=10_000,
                                              column_config={"Produk": st.column_config.TextColumn(width="large"), "Format": st.column_config.TextColumn(width="large"),
                                                             "Hook": st.column_config.TextColumn(width="large"), "Poin jual": st.column_config.TextColumn(width="large")}),
-            download=lambda: download_excel({"Brief konten": plan, "Ditunda (stok)": delayed}, f"brief_konten_{start.isoformat()}.xlsx", key="xl-ex"),
+            download=lambda: download_excel({"Brief konten": plan, "Ditunda (stok)": delayed}, f"brief_konten_{start.isoformat()}.xlsx", key=f"xl-{key}"),
         )
-        periode = _periode(start)
-        saved = features.read("exposure_schedule", {"periode": periode}) if features is not None else pd.DataFrame()
-        if not saved.empty:
-            st.caption(f"Jadwal tersimpan untuk {_bulan_label(start)}: {fmt_num(len(saved))} konten (oleh {html.escape(str(saved['saved_by'].iloc[0]))}).")
-        if features is not None and st.button("Simpan jadwal konten", key="ex-save", type="primary", disabled=not can_edit):
-            from auth.ui import require
-
-            require("rekomendasi", "edit")
-            rows = pd.DataFrame({"periode": periode, "tanggal": plan["Tanggal"], "sku": plan["SKU"], "label": plan["Produk"].str[:400],
-                                 "kanal": plan["Format"].str.split(":").str[0].str[:40], "kategori": plan["Kategori"], "spesial": plan["Segmen"].str[:60],
-                                 "saved_by": username})
-            features.remove("exposure_schedule", {"periode": periode}, username=username, action="hapus:jadwal_exposure")
-            features.insert("exposure_schedule", rows, username=username, action="simpan:jadwal_exposure")
-            st.success(f"{fmt_num(len(rows))} konten disimpan.")
-    if not delayed.empty:
-        with st.expander(f"Ditunda karena stok · {fmt_num(len(delayed))} produk"):
+    if delayed is not None and not delayed.empty:
+        with st.expander(f"Tidak dijadwalkan (ditunda karena stok) · {fmt_num(len(delayed))} produk"):
             st.caption("Konten untuk produk yang stoknya hampir habis justru membuang penonton: restock dulu, lalu jadwalkan.")
-            show_table(delayed.head(300), column_config={"SKU · produk · varian": st.column_config.TextColumn(width="large")})
+            batched_view(
+                len(delayed), key=f"{key}-delay", noun="produk",
+                render=lambda lo, hi: show_table(delayed.iloc[lo:hi], max_height=10_000, column_config={"SKU · produk · varian": st.column_config.TextColumn(width="large")}),
+                download=lambda: download_excel(delayed, f"konten_tidak_dijadwalkan_{start.isoformat()}.xlsx", key=f"xl-{key}-delay", label="Unduh SKU tidak dijadwalkan"),
+            )
+
+
+def _exposure_describe(c: dict) -> str:
+    rows = c.get("jadwal") or []
+    s = c.get("setelan", {}) or {}
+    return (f"{fmt_num(s.get('per_minggu', 0))} konten/minggu · {fmt_num(len(rows))} konten · "
+            f"{fmt_num(len({r.get('SKU') for r in rows}))} produk")
+
+
+def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: pd.DataFrame | None, frames, today: date, username: str, can_edit: bool) -> None:
+    from datetime import timedelta
+
+    from src.ui import campaign_ui as cmp
+
+    st.markdown("<div class='section-title'>Exposure Shopee Video & media sosial</div>", unsafe_allow_html=True)
+    if table is None or table.empty:
+        st.write("Jalankan analisa terlebih dahulu.")
+        return
+    st.caption("Produk yang paling layak dibuatkan konten, jadwal tayang mengikuti jam ramai pesanan, dan brief siap pakai "
+               "(hook, poin jual, ajakan, hashtag, naskah 30 detik). Hanya produk dengan stok siap ≥ 14 hari (toko + DC).")
+    cmp.flash_message("exposure")
+    mode, cur = cmp.panel("exposure", features=features, today=today, can_edit=can_edit, username=username, describe=_exposure_describe)
+    items = _exposure_items(table, data, orders, frames, today)
+    cands, delayed = expo.pick(items)
+    cat_by_sku = dict(zip(items["sku"], items["nama"].map(expo.category_of)))
+    times = expo.timing(orders.assign(sku=orders["sku"].astype(str)) if orders is not None and not orders.empty and "sku" in orders.columns else None, cat_by_sku)
+    dow, hours = times["*"]
+    peak = f"{expo.WEEKDAYS[dow]} {hours}"
+    if mode == cmp.SAVED and cur is not None:
+        start, end = as_date(cur["mulai"]), as_date(cur["selesai"])
+        plan = cmp.frame_of(cur.get("jadwal"), ("Tanggal",))
+        saved_delayed = cmp.frame_of(cur.get("ditunda"))
+        upcoming = plan.loc[plan["Tanggal"] >= today] if not plan.empty else plan
+        bad = upcoming.loc[~upcoming["SKU"].astype(str).isin(set(cands["sku"].astype(str)))] if not upcoming.empty else upcoming
+        if bad.empty:
+            st.markdown(f"<div class='field-hint'>✅ <b>Campaign masih sesuai.</b> Dicek dengan data {fmt_date(today)}: "
+                        f"{fmt_num(len(upcoming))} konten mendatang produknya masih punya stok siap ≥ {expo.READY_DAYS} hari.</div>", unsafe_allow_html=True)
+        else:
+            st.warning(f"{fmt_num(len(bad))} dari {fmt_num(len(upcoming))} konten mendatang produknya kini stok siap < {expo.READY_DAYS} hari atau tidak terjual: "
+                       "ganti produknya atau buat campaign baru dari saran.")
+            show_table(bad.assign(Tanggal=bad["Tanggal"].map(fmt_date))[["Tanggal", "Jam tayang", "SKU", "Produk", "Segmen"]],
+                       column_config={"Produk": st.column_config.TextColumn(width="large")})
+            st.button("Buat campaign baru dari saran", key="ex-renew", on_click=cmp.switch_to_new, args=("exposure",), type="primary")
+        _exposure_render(plan, saved_delayed, start, end, key="ex-saved", per_week=int((cur.get("setelan") or {}).get("per_minggu", 5)), peak=peak)
+    else:
+        next_monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
+        with st.container(border=True):
+            c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
+            with c1:
+                start, end = cmp.period_picker(key="ex-period", today=today, default=(next_monday, next_monday + timedelta(days=27)))
+            per_week = int(c2.number_input("Konten per minggu", min_value=2, max_value=14, value=5, step=1, key="ex-per-week"))
+        monday = start - timedelta(days=start.weekday())
+        plan = expo.calendar(cands, monday, weeks=(end - monday).days // 7 + 1, per_week=per_week, times=times)
+        if not plan.empty:
+            plan = plan.loc[(plan["Tanggal"] >= start) & (plan["Tanggal"] <= end)].reset_index(drop=True)
+        _exposure_render(plan, delayed, start, end, key="ex-new", per_week=per_week, peak=peak)
+        if not plan.empty and features is not None:
+            def _to_schedule(campaign: dict) -> None:
+                rows = pd.DataFrame({"periode": plan["Tanggal"].map(_periode), "tanggal": plan["Tanggal"], "sku": plan["SKU"], "label": plan["Produk"].str[:400],
+                                     "kanal": plan["Format"].str.split(":").str[0].str[:40], "kategori": plan["Kategori"], "spesial": plan["Segmen"].str[:60],
+                                     "saved_by": username})
+                for periode in rows["periode"].unique():
+                    features.remove("exposure_schedule", {"periode": periode}, username=username, action="hapus:jadwal_exposure")
+                features.insert("exposure_schedule", rows, username=username, action="simpan:jadwal_exposure")
+
+            cmp.save_controls("exposure", features=features, today=today, start=start, end=end, cur=cur, can_edit=can_edit, username=username,
+                              default_name=f"Konten {fmt_date(start)} – {fmt_date(end)}", after_save=_to_schedule,
+                              payload={"setelan": {"per_minggu": per_week}, "jadwal": cmp.records_of(plan), "ditunda": cmp.records_of(delayed)})
     with st.expander("Cara produk & jadwal dipilih"):
         explain([
+            ("Campaign", "jadwal konten yang disimpan terkunci untuk periodenya; tiap hari konten mendatang dicek dengan stok terbaru. "
+                         "Buat campaign baru bila ada kendala (campaign lama otomatis dihentikan)"),
             ("Syarat", f"terjual 90 hari terakhir dan stok toko + DC cukup ≥ {expo.READY_DAYS} hari"),
             ("Segmen", "andalan = prediksi omzet top 30; sedang naik = tren 14 hari ≥ +30%; stok lebih = stok di atas SS ≥ 90 hari; "
                        "banyak dilihat jarang dibeli = klik iklan ≥ 50 dan konversi < 1%"),
@@ -461,7 +586,7 @@ def _rank_catalog(table: pd.DataFrame) -> pd.DataFrame:
     t["_ads"] = cost > 0
     t["_stok"] = pd.to_numeric(t.get("stok"), errors="coerce").where(t.get("ada_data_stok", False).fillna(False).astype(bool))
     return (t.groupby("product_name", as_index=False)
-             .agg(sku=("sku", "first"), qty_bulan=("_q", "sum"), omzet_bulan=("_o", "sum"), stok=("_stok", lambda v: v.sum(min_count=1)),
+             .agg(sku=("sku", lambda v: ", ".join(dict.fromkeys(str(x) for x in v))), n_sku=("sku", "nunique"), qty_bulan=("_q", "sum"), omzet_bulan=("_o", "sum"), stok=("_stok", lambda v: v.sum(min_count=1)),
                   harga=("harga_bersih", "median"), iklan=("_ads", "any"))
              .assign(ada_stok=lambda f: f["stok"].notna())
              .rename(columns={"product_name": "nama"}))
@@ -480,63 +605,101 @@ def show_ranking(table: pd.DataFrame, *, features, frames, username: str, can_ed
         st.info("Data ranking kategori belum diunggah (Upload data › Kompetitor). Isinya: daftar ranking kategori Shopee, peringkat, toko, nama produk, dan baris toko sendiri.")
     elif table is not None and not table.empty:
         stamp = pd.to_datetime(competitors.get("_submitted_at"), errors="coerce").max() if "_submitted_at" in competitors.columns else None
-        summary, opp = rk.analyze(competitors, _rank_catalog(table))
-        st.caption(f"Dari {fmt_num(len(summary))} daftar ranking kategori Shopee" + (f" (unggahan {fmt_date(stamp)})" if stamp is not None and pd.notna(stamp) else "")
-                   + ": posisi produk Mitra10, siapa Top 10, dan apa yang perlu dilakukan untuk masuk Top 10.")
-        counts = opp["Status"].value_counts().to_dict() if not opp.empty else {}
-        k = st.columns(4)
-        card(k[0], "Produk kita di Top 10", fmt_num(counts.get("Sudah Top 10", 0)),
-             hint=f"di {fmt_num(int((summary['Status'] == 'Sudah Top 10').sum()))} kategori · pertahankan")
-        card(k[1], "Dekat (peringkat 11–50)", fmt_num(counts.get("Dekat", 0)), hint="peluang tercepat masuk Top 10")
-        card(k[2], "Menengah (51–500)", fmt_num(counts.get("Menengah", 0)), hint="butuh dorongan iklan + flash sale + judul")
-        card(k[3], "Jauh (> 500)", fmt_num(counts.get("Jauh", 0)), hint=f"{fmt_num(int((summary['Status'] == 'Belum ada produk kita').sum()))} kategori belum ada produk kita")
+        catalog = _rank_catalog(table)
+        summary, opp = rk.analyze(competitors, catalog)
+        products, missing = rk.by_product(competitors, catalog, summary, opp)
+        n_sku = int(table["sku"].astype(str).nunique())
+        in_rank = products.loc[products["Status"] != rk.UNRANKED]
+        st.caption(f"Katalog saat ini {fmt_num(len(products))} produk ({fmt_num(n_sku)} SKU). {fmt_num(len(in_rank))} produk "
+                   f"({fmt_num(int(in_rank['Jumlah SKU'].sum()))} SKU) muncul di {fmt_num(len(summary))} daftar ranking kategori Shopee"
+                   + (f" (unggahan {fmt_date(stamp)})" if stamp is not None and pd.notna(stamp) else "") + ".")
+        counts = products["Status"].value_counts().to_dict()
+        skus = products.groupby("Status")["Jumlah SKU"].sum().to_dict()
+        k = st.columns(5)
+        card(k[0], "Sudah Top 10", fmt_num(counts.get("Sudah Top 10", 0)),
+             hint=f"{fmt_num(skus.get('Sudah Top 10', 0))} SKU · {fmt_num(int((summary['Status'] == 'Sudah Top 10').sum()))} kategori · pertahankan")
+        card(k[1], "Dekat (11–50)", fmt_num(counts.get("Dekat", 0)), hint=f"{fmt_num(skus.get('Dekat', 0))} SKU · peluang tercepat")
+        card(k[2], "Menengah (51–500)", fmt_num(counts.get("Menengah", 0)), hint=f"{fmt_num(skus.get('Menengah', 0))} SKU · iklan + flash sale + judul")
+        card(k[3], "Jauh (> 500)", fmt_num(counts.get("Jauh", 0)), hint=f"{fmt_num(skus.get('Jauh', 0))} SKU")
+        card(k[4], rk.UNRANKED, fmt_num(counts.get(rk.UNRANKED, 0)), hint=f"{fmt_num(skus.get(rk.UNRANKED, 0))} SKU · tidak ada di daftar yang diunggah")
+
         st.markdown("**Peluang masuk Top 10 per produk**")
-        tiers = [name for _l, name in rk.TIERS]
-        picked = st.multiselect("Status", tiers, default=["Sudah Top 10", "Dekat", "Menengah"], key="rk-tier", placeholder="Semua status")
-        view = opp.loc[opp["Status"].isin(picked)] if picked else opp
+        groups = sorted(products["Kelompok"].astype(str).unique())
+        f1, f2, f3, f4 = st.columns([1.1, 1.6, 1.3, 1.2])
+        group_pick = f1.multiselect("Kelompok kategori", groups, key="rk-group", placeholder="Semua kelompok")
+        base = products.loc[products["Kelompok"].isin(group_pick)] if group_pick else products
+        pairs = sorted({(g, c) for g, c in zip(base["Kelompok"].astype(str), base["Kategori"].astype(str))})
+        cat_pick = f2.multiselect("Kategori ranking", [f"{g} › {c}" for g, c in pairs], key="rk-cat", placeholder="Semua kategori")
+        status_pick = f3.multiselect("Status", list(rk.STATUS_ORDER), default=["Sudah Top 10", "Dekat", "Menengah"], key="rk-tier", placeholder="Semua status")
+        query = f4.text_input("Cari produk / SKU", key="rk-q").strip().lower()
+        view = base
+        if cat_pick:
+            view = view.loc[(view["Kelompok"].astype(str) + " › " + view["Kategori"].astype(str)).isin(cat_pick)]
+        if status_pick:
+            view = view.loc[view["Status"].isin(status_pick)]
+        if query:
+            view = view.loc[view["Produk"].astype(str).str.lower().str.contains(query, regex=False) | view["SKU"].astype(str).str.lower().str.contains(query, regex=False)]
+        view = view.sort_values(["Kelompok", "Kategori"], kind="stable").reset_index(drop=True)
+        st.caption(f"{fmt_num(len(view))} produk · {fmt_num(int(view['Jumlah SKU'].sum()))} SKU sesuai saringan · urut kelompok › kategori › status › peringkat")
         batched_view(
             len(view), key="rk-opp", noun="produk",
             render=lambda lo, hi: show_table(view.iloc[lo:hi], kinds={"Penjualan/bulan": "count", "Perlu/bulan (perkiraan)": "count", "Kali lipat": "dec", "Stok": "count",
-                                                                     "Peringkat": "count", "Daftar": "count"}, max_height=10_000,
+                                                                     "Peringkat": "count", "Daftar": "count", "Jumlah SKU": "count"}, max_height=10_000,
                                              column_config={"Produk": st.column_config.TextColumn(width="large"), "Langkah": st.column_config.TextColumn(width="large"),
-                                                            "Penjualan/bulan": st.column_config.Column(help="Prediksi unit per bulan dari analisa"),
+                                                            "SKU": st.column_config.TextColumn(width="small"),
+                                                            "Penjualan/bulan": st.column_config.Column(help="Prediksi unit per bulan dari analisa (semua SKU produk ini)"),
                                                             "Perlu/bulan (perkiraan)": st.column_config.Column(help="Perkiraan unit/bulan di peringkat 10: penjualan ≈ berbanding terbalik dengan peringkat (patokan produk kita yang sudah Top 10 di daftar yang sama bila ada)"),
-                                                            "Kali lipat": st.column_config.Column(help="Berapa kali penjualan sekarang yang dibutuhkan untuk peringkat 10")}),
-            download=lambda: download_excel({"Peluang Top 10": opp, "Ringkasan kategori": summary}, "ranking_kategori_top10.xlsx", key="xl-rk"),
+                                                            "Kali lipat": st.column_config.Column(help="Berapa kali penjualan sekarang yang dibutuhkan untuk peringkat 10"),
+                                                            "Daftar lain": st.column_config.Column(help="Peringkat produk ini di daftar ranking lain")}),
+            download=lambda: download_excel({"Produk": products, "Ringkasan kategori": summary, "Di ranking, tidak di katalog": missing},
+                                            "ranking_kategori_top10.xlsx", key="xl-rk"),
         )
+        if not missing.empty:
+            st.caption(f"{fmt_num(len(missing))} produk Mitra10 di data ranking tidak ditemukan di katalog analisa saat ini (nama berubah / tidak dijual lagi); ada di unduhan Excel.")
+
         st.markdown("**Detail kategori**")
-        lists = summary.loc[summary["Peringkat terbaik"].notna()]
-        if not lists.empty:
-            options = lists["Daftar"].tolist()
-            first = next((d for d, s in zip(lists["Daftar"], lists["Status"]) if s == "Dekat"), options[0])
-            daftar = st.selectbox("Kategori", options, index=options.index(first), key="rk-list",
-                                  format_func=lambda d: (lambda r: f"Daftar {d} · {r['Kategori']} · produk kita terbaik #{int(r['Peringkat terbaik'])} ({r['Status']})")(
-                                      lists.set_index("Daftar").loc[d]))
-            data = rk.prepare(competitors)
-            part = data.loc[data["daftar"] == daftar].sort_values("rank")
-            top = part.loc[part["rank"] <= rk.TOP]
-            pat = rk.patterns(top if not top.empty else part.head(rk.TOP))
-            tags = ", ".join(f"{label} {share * 100:.0f}%" for label, share in pat["tag"].items() if share > 0) or "–"
-            st.markdown(
-                "<div style='border:1px solid #e2e8f0;border-left:5px solid #ee4d2d;border-radius:12px;background:#fff;padding:.7rem 1rem;margin:.4rem 0;font-size:.92rem;line-height:1.6'>"
-                f"<b>Pola Top 10</b> · official store {pat['official'] * 100:.0f}% · kata kunci di ≥ 30% judul: <b>{html.escape(', '.join(pat['kata'][:10]) or '–')}</b>"
-                f" · tag di judul: {html.escape(tags)}</div>", unsafe_allow_html=True)
-            c1, c2 = st.columns([1.1, 1])
-            with c1:
-                st.caption("Top 10 kategori ini")
-                show_table(top.assign(Kita=top["ours"].map({True: "✓ Mitra10", False: ""}))
-                           .rename(columns={"rank": "Peringkat", "change": "Perubahan", "shop": "Toko", "product": "Produk"})[["Peringkat", "Perubahan", "Toko", "Produk", "Kita"]],
-                           kinds={"Peringkat": "count"}, column_config={"Produk": st.column_config.TextColumn(width="large")})
-            with c2:
-                st.caption("Produk kita di kategori ini")
-                mine = opp.loc[opp["Daftar"] == daftar, ["Peringkat", "Status", "Produk", "Penjualan/bulan", "Perlu/bulan (perkiraan)", "Kali lipat", "Langkah"]]
-                show_table(mine, kinds={"Peringkat": "count", "Penjualan/bulan": "count", "Perlu/bulan (perkiraan)": "count", "Kali lipat": "dec"},
-                           column_config={"Produk": st.column_config.TextColumn(width="medium"), "Langkah": st.column_config.TextColumn(width="large")})
+        lists = summary.copy()
+        if group_pick:
+            lists = lists.loc[lists["Kelompok"].isin(group_pick)] if lists["Kelompok"].isin(group_pick).any() else lists
+        lists = lists.sort_values(["Kelompok", "Kategori", "Daftar"]).reset_index(drop=True)
+        options = lists["Daftar"].tolist()
+        info = lists.set_index("Daftar")
+        dekat = [d for d, s_ in zip(lists["Daftar"], lists["Status"]) if s_ == "Dekat"]
+        first = dekat[0] if dekat else options[0]
+
+        def _fmt(d: int) -> str:
+            r = info.loc[d]
+            best = f"produk kita terbaik #{int(r['Peringkat terbaik'])} ({r['Status']})" if pd.notna(r["Peringkat terbaik"]) else "belum ada produk kita"
+            return f"{r['Kelompok']} › {r['Kategori']} · Daftar {d} · {best}"
+
+        daftar = st.selectbox("Kategori", options, index=options.index(first), key="rk-list", format_func=_fmt)
+        data = rk.prepare(competitors)
+        part = data.loc[data["daftar"] == daftar].sort_values("rank")
+        top = part.loc[part["rank"] <= rk.TOP]
+        pat = rk.patterns(top if not top.empty else part.head(rk.TOP))
+        tags = ", ".join(f"{label} {share * 100:.0f}%" for label, share in pat["tag"].items() if share > 0) or "–"
+        st.markdown(
+            "<div style='border:1px solid #e2e8f0;border-left:5px solid #ee4d2d;border-radius:12px;background:#fff;padding:.7rem 1rem;margin:.4rem 0;font-size:.92rem;line-height:1.6'>"
+            f"<b>Pola Top 10</b> · official store {pat['official'] * 100:.0f}% · kata kunci di ≥ 30% judul: <b>{html.escape(', '.join(pat['kata'][:10]) or '–')}</b>"
+            f" · tag di judul: {html.escape(tags)}</div>", unsafe_allow_html=True)
+        c1, c2 = st.columns([1.1, 1])
+        with c1:
+            st.caption("Top 10 kategori ini")
+            show_table(top.assign(Kita=top["ours"].map({True: "✓ Mitra10", False: ""}))
+                       .rename(columns={"rank": "Peringkat", "change": "Perubahan", "shop": "Toko", "product": "Produk"})[["Peringkat", "Perubahan", "Toko", "Produk", "Kita"]],
+                       kinds={"Peringkat": "count"}, column_config={"Produk": st.column_config.TextColumn(width="large")})
+        with c2:
+            st.caption("Produk kita di kategori ini (termasuk perkiraan yang belum masuk ranking)")
+            mine = products.loc[products["Daftar"] == daftar, ["Status", "Peringkat", "Produk", "Jumlah SKU", "Penjualan/bulan", "Perlu/bulan (perkiraan)", "Kali lipat", "Langkah"]]
+            show_table(mine, kinds={"Peringkat": "count", "Jumlah SKU": "count", "Penjualan/bulan": "count", "Perlu/bulan (perkiraan)": "count", "Kali lipat": "dec"},
+                       column_config={"Produk": st.column_config.TextColumn(width="medium"), "Langkah": st.column_config.TextColumn(width="large")})
         with st.expander("Cara membaca"):
             explain([
                 ("Sumber", "unggahan Kompetitor: tiap Daftar = satu ranking kategori Shopee (±20 teratas + produk toko sendiri)"),
-                ("Kategori", "disimpulkan dari kata yang paling sering muncul di nama produk daftar itu (data tidak memuat nama kategori)"),
-                ("Status", "Sudah Top 10 (≤ 10) · Dekat (11–50) · Menengah (51–500) · Jauh (> 500)"),
+                ("Jumlah produk", "satu baris per produk katalog analisa saat ini (varian digabung; kolom Jumlah SKU). Produk di beberapa daftar memakai peringkat terbaiknya"),
+                ("Kelompok & kategori", "kelompok = jenis bahan bangunan dari nama produk; kategori = kata yang paling sering muncul di nama produk daftar itu "
+                                        "(data tidak memuat nama kategori). Produk belum masuk ranking diberi kategori perkiraan dari kata kunci Top 10 yang paling cocok"),
+                ("Status", "Sudah Top 10 (≤ 10) · Dekat (11–50) · Menengah (51–500) · Jauh (> 500) · Belum masuk ranking (tidak ada di daftar yang diunggah)"),
                 ("Perlu/bulan", "perkiraan penjualan di peringkat 10 dengan pola penjualan ≈ 1/peringkat; bila ada produk kita yang sudah Top 10 di daftar itu, "
                                 "penjualannya dipakai sebagai patokan. Angka perkiraan, bukan data Shopee"),
                 ("Langkah", "urut: stok → iklan → flash sale → kata kunci judul yang dipakai ≥ 50% Top 10 → tag promo pesaing → konten"),

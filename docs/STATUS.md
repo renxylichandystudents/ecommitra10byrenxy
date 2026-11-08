@@ -158,6 +158,19 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Jadwal mingguan: hari & jam tayang = waktu pesanan terbanyak per kategori dari riwayat pesanan; maks. 2 konten/hari; produk tidak diulang 14 hari.
 - Brief per konten: format per kategori bahan bangunan (mis. before–after kamar mandi, uji rekat), hook masalah, poin jual dari nama (garansi, packing kayu, material, ukuran) + deskripsi, ajakan harga, hashtag, naskah 30 detik. Unduh Excel brief; simpan ke `exposure_schedule`.
 
+## Campaign tersimpan: Iklan, Flash sale, Exposure (8 Nov 2026)
+
+- Logika `src/core/campaigns.py` (tes `tests/test_campaigns.py`), komponen `src/ui/campaign_ui.py`. Disimpan di `kv_setting` kunci `campaign:iklan|flash|exposure` (maks. 30 per jenis).
+- Tiap tab punya periode campaign dengan kalender gaya Shopee (`date_range_picker` kini menerima `presets` rencana ke depan: sisa bulan ini, minggu depan, 7/14/30 hari, 4 minggu, bulan depan).
+- Campaign yang berjalan/terjadwal terkunci dan tampil sebagai acuan harian (tampilan "Campaign tersimpan"), lalu dicek dengan data terbaru:
+  - Iklan: hitung ulang dengan setelan campaign; perlu ditinjau bila target bulan berubah, > 20% iklan beda budget > 20%, atau proyeksi turun > 5 poin.
+  - Flash sale & Exposure: slot/konten mendatang yang SKU-nya tidak lolos seleksi hari ini (stok, batal, harga) ditandai.
+- "Buat campaign baru": susun ulang; bila periodenya bertabrakan, wajib centang "hentikan campaign #N" — campaign lama dihentikan saat yang baru disimpan. Riwayat: hentikan atau hapus (dengan konfirmasi).
+- Iklan: budget = total periode campaign; perhitungan memakai hari campaign di sisa bulan target. Simpan campaign juga menulis `sales_target.budget_json` (target ROAS bulan itu). Exposure juga menulis `exposure_schedule`.
+- Unduh SKU tidak dijadwalkan: Flash sale (tidak dijadwalkan + alasan), Exposure (ditunda stok), Iklan (produk tidak diiklankan di rencana).
+- Exposure: brief dipilih lewat saringan minggu, segmen, kategori, cari produk/SKU.
+- Ranking: satu baris per produk katalog saat ini (8 Nov: 524 produk / 786 SKU; 98 produk di ranking, 426 "Belum masuk ranking" dengan kategori perkiraan). Filter kelompok › kategori terurut; detail kategori terurut kelompok › kategori › daftar. 14 produk ranking yang tidak ada di katalog dipisah ke unduhan.
+
 ## Hasil pemeriksaan
 
 - Lint (`ruff`, aturan F dan E9): bersih, tidak ada nama tak terdefinisi.

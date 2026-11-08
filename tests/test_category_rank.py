@@ -43,6 +43,21 @@ class CategoryRankTest(unittest.TestCase):
         self.assertAlmostEqual(o.loc["C", "Kali lipat"], 200.0)
         self.assertNotIn("Flash sale", o.loc["C", "Langkah"])
 
+    def test_by_product_covers_whole_catalog(self):
+        catalog = pd.concat([self.catalog, pd.DataFrame([
+            {"nama": "Water Heater Listrik Pemanas Air Mini", "sku": "D, D2", "n_sku": 2, "qty_bulan": 5.0, "omzet_bulan": 5e6, "stok": 10.0, "ada_stok": True,
+             "harga": 1e6, "iklan": False}])], ignore_index=True)
+        summary, opp = R.analyze(self.competitors, catalog)
+        products, missing = R.by_product(self.competitors, catalog, summary, opp)
+        self.assertEqual(len(products), len(catalog))
+        self.assertEqual(int(products["Jumlah SKU"].sum()), 5)
+        row = products.set_index("SKU").loc["D, D2"]
+        self.assertEqual(row["Status"], R.UNRANKED)
+        self.assertEqual(row["Daftar"], 1)
+        self.assertEqual(row["Kelompok"], "Water heater")
+        self.assertIn("Kelompok", summary.columns)
+        self.assertTrue(missing.empty)
+
     def test_keyword_gap_only_for_same_product_type(self):
         self.assertEqual(R.missing_keywords("Kloset Tidy", ["kloset", "duduk", "toilet"]), ["duduk", "toilet"])
         self.assertEqual(R.missing_keywords("Wastafel Gantung", ["floor", "drain"]), [])

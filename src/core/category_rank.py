@@ -17,8 +17,12 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
+from src.core.exposure import category_of
+
 TOP = 10
 TIERS = ((10, "Sudah Top 10"), (50, "Dekat"), (500, "Menengah"), (float("inf"), "Jauh"))
+UNRANKED = "Belum masuk ranking"
+STATUS_ORDER = tuple(name for _l, name in TIERS) + (UNRANKED,)
 STOP = set("""
 dan atau untuk dengan yang di ke dari pada ini itu juga bisa sangat lebih tanpa serta per isi set pcs pc buah unit
 official store shop toko original ori asli new baru murah promo ready stock stok termurah terlaris best seller hot sale
@@ -137,7 +141,7 @@ def analyze(competitors: pd.DataFrame | None, catalog: pd.DataFrame | None) -> t
 
     catalog: nama, sku, qty_bulan (prediksi unit/bulan), omzet_bulan, stok, ada_stok, harga, iklan (bool)."""
     data = prepare(competitors)
-    list_cols = ["Daftar", "Kategori", "Produk kita terbaik", "Peringkat terbaik", "Status", "Produk kita", "Official store di Top 10", "Kata kunci Top 10"]
+    list_cols = ["Kelompok", "Daftar", "Kategori", "Produk kita terbaik", "Peringkat terbaik", "Status", "Produk kita", "Official store di Top 10", "Kata kunci Top 10"]
     opp_cols = ["Status", "Kategori", "Daftar", "Peringkat", "Produk", "SKU", "Penjualan/bulan", "Perlu/bulan (perkiraan)", "Kali lipat",
                 "Stok", "Diiklankan", "Kata kunci yang belum ada", "Langkah"]
     if data.empty:
@@ -159,7 +163,8 @@ def analyze(competitors: pd.DataFrame | None, catalog: pd.DataFrame | None) -> t
             if r.rank <= TOP and qty > 0 and (anchor is None or qty > anchor[1]):
                 anchor = (r.rank, qty)
         best = int(mine["rank"].min()) if not mine.empty else None
-        lists.append({"Daftar": int(daftar), "Kategori": label, "Produk kita terbaik": mine["product"].iloc[0] if not mine.empty else "",
+        groups = Counter(category_of(n) for n in (others["product"].tolist() or part["product"].tolist()))
+        lists.append({"Kelompok": groups.most_common(1)[0][0] if groups else "Lainnya", "Daftar": int(daftar), "Kategori": label, "Produk kita terbaik": mine["product"].iloc[0] if not mine.empty else "",
                       "Peringkat terbaik": best, "Status": tier_of(best) if best else "Belum ada produk kita",
                       "Produk kita": len(mine), "Official store di Top 10": pat["official"] * 100, "Kata kunci Top 10": ", ".join(pat["kata"][:8])})
         for r in mine.drop_duplicates("product").itertuples():
@@ -206,3 +211,57 @@ def actions(rank: int, stok: float, qty: float, advertised: bool, gaps: list[str
             out.append("pesaing Top 10 menonjolkan " + ", ".join(popular).lower() + ": pertimbangkan di judul/voucher")
         out.append("buat konten Shopee Video (Rekomendasi › Exposure)")
     return out
+
+
+def by_product(competitors: pd.DataFrame | None, catalog: pd.DataFrame | None, summary: pd.DataFrame, opp: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(satu baris per produk katalog saat ini, produk di ranking yang tidak ada di katalog).
+
+    Produk di beberapa daftar memakai peringkat terbaiknya; produk yang belum muncul di daftar mana pun berstatus
+    "Belum masuk ranking" dengan kategori perkiraan dari kata kunci Top 10 yang paling cocok dengan namanya."""
+    cols = ["Kelompok", "Kategori", "Status", "Peringkat", "Daftar", "Daftar lain", "Produk", "SKU", "Jumlah SKU", "Penjualan/bulan",
+            "Perlu/bulan (perkiraan)", "Kali lipat", "Stok", "Diiklankan", "Kata kunci yang belum ada", "Langkah"]
+    if catalog is None or catalog.empty:
+        return pd.DataFrame(columns=cols), opp.iloc[0:0] if opp is not None else pd.DataFrame()
+    data = prepare(competitors)
+    words: dict[int, tuple[set[str], list[str]]] = {}
+    for daftar, part in data.groupby("daftar"):
+        top = part.loc[part["rank"] <= TOP]
+        pat = patterns(top if not top.empty else part.sort_values("rank").head(TOP))
+        words[int(daftar)] = (set(pat["kata"]), pat["kuat"])
+    label = dict(zip(summary["Daftar"], summary["Kategori"])) if not summary.empty else {}
+    ranked = opp.loc[opp["SKU"].astype(str) != ""] if opp is not None and not opp.empty else pd.DataFrame(columns=list(opp.columns) if opp is not None else [])
+    by_sku = {sku: g.sort_values("Peringkat") for sku, g in ranked.groupby(ranked["SKU"].astype(str))} if not ranked.empty else {}
+    rows = []
+    for r in catalog.to_dict("records"):
+        sku = str(r.get("sku", ""))
+        base = {"Kelompok": category_of(r["nama"]), "Produk": r["nama"], "SKU": sku, "Jumlah SKU": int(r["n_sku"]) if pd.notna(r.get("n_sku")) else 1}
+        hit = by_sku.get(sku)
+        if hit is not None:
+            best = hit.iloc[0]
+            others = [f"#{int(p)} di daftar {int(d)}" for p, d in zip(hit["Peringkat"].iloc[1:], hit["Daftar"].iloc[1:])]
+            rows.append({**best.to_dict(), **base, "Daftar lain": ", ".join(others)})
+            continue
+        tokens = set(_tokens(r["nama"]))
+        scored = sorted(((len(tokens & kata), -d) for d, (kata, _strong) in words.items()), reverse=True)
+        daftar = -scored[0][1] if scored and scored[0][0] >= 2 else None
+        gaps = missing_keywords(r["nama"], words[daftar][1]) if daftar is not None else []
+        qty = float(r.get("qty_bulan") or 0)
+        stok = float(r["stok"]) if bool(r.get("ada_stok")) and pd.notna(r.get("stok")) else np.nan
+        advertised = bool(r.get("iklan"))
+        steps = []
+        if stok == stok and stok <= 0:
+            steps.append("restock dulu")
+        steps.append("naikkan budget iklan agar mulai muncul di ranking" if advertised else "buat iklan produk tunggal (Rekomendasi › Iklan)")
+        if gaps:
+            steps.append("tambahkan kata kunci di judul bila sesuai produk: " + ", ".join(gaps[:4]))
+        steps.append("masukkan ke Flash sale toko & konten Shopee Video")
+        rows.append({**base, "Kategori": f"{label.get(daftar, '-')} (perkiraan)" if daftar is not None else "-", "Status": UNRANKED,
+                     "Peringkat": np.nan, "Daftar": daftar if daftar is not None else np.nan, "Daftar lain": "", "Penjualan/bulan": qty,
+                     "Perlu/bulan (perkiraan)": np.nan, "Kali lipat": np.nan, "Stok": stok, "Diiklankan": "Ya" if advertised else "Tidak",
+                     "Kata kunci yang belum ada": ", ".join(gaps[:6]), "Langkah": "; ".join(steps)})
+    out = pd.DataFrame(rows).reindex(columns=cols)
+    order = {name: i for i, name in enumerate(STATUS_ORDER)}
+    out = (out.assign(_s=out["Status"].map(order), _p=out["Peringkat"].fillna(10**9), _q=-out["Penjualan/bulan"].fillna(0))
+              .sort_values(["_s", "_p", "_q"]).drop(columns=["_s", "_p", "_q"]).reset_index(drop=True))
+    missing = opp.loc[opp["SKU"].astype(str) == ""] if opp is not None and not opp.empty else pd.DataFrame()
+    return out, missing

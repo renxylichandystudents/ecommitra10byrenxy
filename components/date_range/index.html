@@ -67,6 +67,9 @@
   function clamp(n) { return Math.min(Math.max(n, state.lo), state.hi); }
 
   function presets() {
+    if (Array.isArray(state.args.presets) && state.args.presets.length) {
+      return state.args.presets.map(([name, a, b]) => [name, parse(a), parse(b)]);
+    }
     const a = state.anchor;
     const p = parts(a);
     const isToday = a === state.today;
@@ -130,7 +133,7 @@
       const v = state.view;
       const right = { y: v.m === 11 ? v.y + 1 : v.y, m: (v.m + 1) % 12 };
       html += `<div class="panel"><ul class="presets">${list}</ul><div><div class="cals">${calendar(v.y, v.m, true)}${calendar(right.y, right.m, false)}</div>` +
-        `<div class="hint">${state.pick !== null ? "Klik tanggal akhir." : `Klik tanggal awal lalu tanggal akhir. Data tersedia ${label(state.lo)} – ${label(state.hi)}.`}</div></div></div>`;
+        `<div class="hint">${state.pick !== null ? "Klik tanggal akhir." : `Klik tanggal awal lalu tanggal akhir. ${state.args.presets && state.args.presets.length ? "Bisa dipilih" : "Data tersedia"} ${label(state.lo)} – ${label(state.hi)}.`}</div></div></div>`;
     }
     root.innerHTML = html;
     root.querySelector("[data-toggle]").addEventListener("click", () => { state.open = !state.open; state.pick = null; resetView(); render(); });
@@ -158,9 +161,10 @@
   }
 
   function resetView() {
-    // Bulan kanan = bulan tanggal akhir; bulan kiri = bulan sebelumnya.
-    const p = parts(state.end);
-    const idx = p.y * 12 + p.m - 1;
+    // Bulan kanan = bulan tanggal akhir; bulan kiri = bulan sebelumnya. Mode rencana (ada presets): bulan kiri = bulan mulai.
+    const planning = Array.isArray(state.args && state.args.presets) && state.args.presets.length;
+    const p = parts(planning ? state.start : state.end);
+    const idx = p.y * 12 + p.m - (planning ? 0 : 1);
     state.view = { y: Math.floor(idx / 12), m: ((idx % 12) + 12) % 12 };
   }
 
