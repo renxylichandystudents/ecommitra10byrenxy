@@ -138,21 +138,26 @@ def evaluate_horizon(
     for name in sorted(set.union(*(set(fold_forecasts[cut][days]) for cut in usable)) - common):
         record["notes"].append(f"{name} tidak tersedia di semua lipatan, tidak ikut dibandingkan.")
     pairs: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
+    valid = [~np.isnan(matrix.values[:, cut : cut + days]).any(axis=1) for cut in usable]
+    dropped = sum(int((~v).sum()) for v in valid)
+    if dropped:
+        record["notes"].append(f"{dropped} pasangan SKU-lipatan tidak dinilai karena ada hari stok kosong di periode uji "
+                               "(permintaan aslinya tidak terlihat, bukan 0).")
     for cut in usable:
         actual = matrix.filled[:, cut : cut + days].sum(axis=1)
         for name in sorted(common):
             pairs.setdefault(name, []).append((actual, np.asarray(fold_forecasts[cut][days][name], dtype=float)))
 
     def stacked(name: str) -> tuple[np.ndarray, np.ndarray, list[tuple[float, float]]]:
-        items = pairs[name]
+        items = [(a[v], p[v]) for (a, p), v in zip(pairs[name], valid)]
         return (
             np.concatenate([a for a, _ in items]),
             np.concatenate([p for _, p in items]),
             [(float(a.sum()), float(p.sum())) for a, p in items],
         )
 
-    fold_classes = np.concatenate([classes] * len(usable))
-    fold_segments = np.concatenate([segments] * len(usable))
+    fold_classes = np.concatenate([classes[v] for v in valid])
+    fold_segments = np.concatenate([segments[v] for v in valid])
     for name in list(pairs):
         actual, pred, aggregate = stacked(name)
         record["models"][MODEL_KEYS.get(name, name)] = {"label": name, **_scores(actual, pred, fold_classes, aggregate)}
@@ -160,7 +165,7 @@ def evaluate_horizon(
     singles = {name: record["models"][MODEL_KEYS.get(name, name)]["wape"] for name in pairs}
     weights = ensemble_weights({k: (v if v is not None else np.nan) for k, v in singles.items()})
     raw = [(a, blend({n: pairs[n][i][1] for n in pairs}, weights)) for i, (a, _p) in enumerate(pairs[MODEL_LEVEL])]
-    raw_bias = bias_pct(np.concatenate([a for a, _ in raw]), np.concatenate([p for _, p in raw]))
+    raw_bias = bias_pct(np.concatenate([a[v] for (a, _), v in zip(raw, valid)]), np.concatenate([p[v] for (_, p), v in zip(raw, valid)]))
     factor = 1.0 / (1.0 + raw_bias / 100.0) if np.isfinite(raw_bias) and raw_bias > -100 else 1.0
     factor = float(np.clip(factor, *BIAS_FACTOR_LIMITS))
     pairs[MODEL_ENSEMBLE] = [(a, p * factor) for a, p in raw]
@@ -168,7 +173,7 @@ def evaluate_horizon(
     record["models"]["ensemble"] = {"label": MODEL_ENSEMBLE, **_scores(actual, pred, fold_classes, aggregate)}
     for key, info in record["models"].items():
         info["bobot_ensemble"] = round(float(weights.get(info["label"], 0.0)), 4) if key != "ensemble" else None
-        hits = [top_n_hits(a, p, top_n) for a, p in pairs[info["label"]]]
+        hits = [top_n_hits(a[v], p[v], top_n) for (a, p), v in zip(pairs[info["label"]], valid)]
         info["top50_tepat"] = round(float(np.mean(hits)), 1) if hits else None
     record["bias_sebelum_koreksi"] = _num(raw_bias)
     record["faktor_koreksi_bias"] = round(factor, 4)
@@ -204,10 +209,12 @@ def evaluate_horizon(
             "label": MODEL_SEGMENT,
             **_scores(actual_s, pred_s, fold_classes, aggregate_s),
             "bobot_ensemble": None,
-            "top50_tepat": round(float(np.mean([top_n_hits(a, p, top_n) for a, p in picked])), 1),
+            "top50_tepat": round(float(np.mean([top_n_hits(a[v], p[v], top_n) for (a, p), v in zip(picked, valid)])), 1),
         }
         record["notes"].append(
-            f"{MODEL_SEGMENT} = model yang dipakai prediksi produksi; pemilihan segmen memakai lipatan yang sama (in-sample)."
+            f"{MODEL_SEGMENT} = model yang dipakai prediksi produksi. Bobot ensemble, faktor koreksi bias, dan pilihan model per segmen "
+            "ditentukan dari lipatan yang sama dengan penilaiannya (in-sample), jadi angka Ensemble & Ensemble per segmen cenderung sedikit optimis "
+            "dibanding model tunggal."
         )
 
     ranked = sorted(
@@ -277,7 +284,7 @@ def conclusion_text(record: dict) -> str:
             f"(bias setelah koreksi {fmt_num_id(ens['bias'])}%, sebelum koreksi {fmt_num_id(record.get('bias_sebelum_koreksi'))}%)."
         )
     classes = best.get("mape_per_kelas_ABC") or {}
-    parts.append(f"Akurasi kelas A: MAPE {fmt_num_id(classes.get('A'))}%; kelas C: MAPE {fmt_num_id(classes.get('C'))}%.")
+    parts.append(f"Galat (MAPE) kelas A {fmt_num_id(classes.get('A'))}%, kelas C {fmt_num_id(classes.get('C'))}% (makin kecil makin akurat).")
     return " ".join(parts)
 
 

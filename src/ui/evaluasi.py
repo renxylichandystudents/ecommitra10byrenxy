@@ -233,7 +233,9 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
         "- **Data**: " + ", ".join(UPLOAD_MENUS).lower() + "; duplikat dibuang, snapshot stok per tanggal unggah.\n"
         "- **Hari stok kosong**: dikeluarkan dari latih & uji (permintaan tersensor), bukan dianggap permintaan nol.\n"
         "- **Safety stock**: SS = Z × σ permintaan × √lead time; ROP = permintaan harian × lead time + SS.\n"
-        "- **Tidak ada kebocoran data**: fitur hanya dari data sebelum titik potong; skor segmen in-sample dicatat sebagai keterbatasan."
+        "- **Tidak ada kebocoran data pada fitur**: fitur hanya dari data sebelum titik potong.\n"
+        "- **Keterbatasan**: bobot ensemble, faktor koreksi bias, dan pilihan model per segmen ditentukan dari lipatan yang sama dengan penilaiannya "
+        "(in-sample), sehingga skor Ensemble dan Ensemble per segmen sedikit optimis dibanding model tunggal."
     )
     if outcome is not None:
         rows = [{"Algoritma": name, "Status": "Aktif", "Keterangan": note} for name, note in outcome.availability.active.items()]

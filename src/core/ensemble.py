@@ -402,7 +402,7 @@ def model_forecasts_multi(matrix: DemandMatrix, horizons) -> tuple[dict[int, dic
     if name in {MODEL_GBM, MODEL_GBM_FALLBACK}:
         for h in horizons:
             out[h][name] = rate * h
-        note = "fitur lag 1/7/14/28, rolling, kalender promo, flag stok"
+        note = "fitur penjualan kemarin (lag 1), rata-rata 7/14/28/90 hari, variasi, kalender promo, flag stok"
         if name == MODEL_GBM_FALLBACK:
             note += "; XGBoost tidak bisa dimuat, memakai HistGradientBoosting scikit-learn"
             availability.skipped[MODEL_GBM] = "library xgboost tidak bisa dimuat, diganti Gradient Boosting scikit-learn"

@@ -24,6 +24,10 @@ class EvalTests(unittest.TestCase):
         cls.matrix = _matrix()
         cls.records = evaluate_all(cls.matrix)
 
+    def test_censored_test_windows_are_excluded(self):
+        notes = " ".join(self.records["bulan"]["notes"])
+        self.assertIn("5 pasangan SKU-lipatan tidak dinilai", notes)
+
     def test_six_month_cutoffs_may_to_oct(self):
         cuts = month_cutoffs(self.matrix.dates)
         self.assertEqual([str(self.matrix.dates[c].date()) for c in cuts], [f"2026-{m:02d}-01" for m in range(5, 11)])
