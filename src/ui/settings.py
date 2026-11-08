@@ -15,8 +15,9 @@ FIELDS = (
     # (path, label, min, max, step, keterangan)
     ("lead_time.lokal_hari", "Lead time lokal (hari)", 0, 120, 1, "Site 10037 ke pembeli, dipakai pada safety stock dan ROP."),
     ("gudang.kapasitas_unit", "Kapasitas gudang (unit)", 0, 10_000_000, 100, "Batas optimasi pembelian."),
-    ("margin.margin_min_pct", "Margin minimum (%)", 0, 100, 1, "Batas bawah harga flash sale dan markdown."),
-    ("target.sales_bulanan_rp", "Target sales bulanan (Rp)", 0, 100_000_000_000, 1_000_000, "0 = memakai prediksi sebagai target."),
+    ("margin.margin_min_pct", "Margin minimum (%)", 0, 100, 1, "Margin bersih minimum yang diharapkan. Dipakai di Kalkulator biaya, flash sale, markdown, dan strategi iklan."),
+    ("margin.hpp_pct_harga", "Perkiraan HPP rata-rata (% harga jual)", 1, 99, 1, "Perkiraan saja (HPP per SKU tidak dipakai). Margin kotor = 100 − nilai ini; batas potongan Shopee + iklan = margin kotor − margin minimum."),
+    ("target.sales_bulanan_rp", "Target sales bulanan (Rp)", 0, 100_000_000_000, 1_000_000, "Target bawaan setiap bulan; bisa diganti per bulan di Rekomendasi. 0 = memakai prediksi."),
     ("iklan.target_roas", "Target ROAS", 1, 100, 1, "Dipakai rekomendasi iklan."),
     ("iklan.budget_maks_rp", "Budget iklan maksimum (Rp)", 0, 10_000_000_000, 100_000, "Batas alokasi budget per periode."),
 )
@@ -30,7 +31,6 @@ HIDDEN = (
     "gudang.moq_unit",
     "gudang.biaya_simpan_pct_tahun",
     "gudang.biaya_kehabisan_pct",
-    "margin.hpp_pct_harga",
 )
 
 

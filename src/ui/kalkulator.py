@@ -78,12 +78,8 @@ def _parameter_panel(features, *, may_edit: bool, username: str, require) -> Non
                                "Keterangan": st.column_config.TextColumn(width="large")},
                 key="fee-programs-editor",
             )
-            p1, p2 = st.columns(2)
-            order = p1.number_input("Biaya Proses Pesanan (Rp per pesanan selesai)", 0.0, 50_000.0, float(order_fee), 50.0, key="fee-order", disabled=not may_edit)
-            new_limit = p2.number_input(
-                "Batas total potongan (%)", 5.0, 80.0, float(limit), 1.0, key="fee-limit", disabled=not may_edit,
-                help="Total potongan Shopee + iklan (+ affiliate) di atas batas ini dianggap menggerus margin. Sesuaikan dengan margin kotor rata-rata produk.",
-            )
+            order = st.number_input("Biaya Proses Pesanan (Rp per pesanan selesai)", 0.0, 50_000.0, float(order_fee), 50.0, key="fee-order", disabled=not may_edit)
+            st.caption("Batas total potongan tidak diisi di sini: dihitung dari Pengaturan bisnis (margin kotor − margin minimum).")
             if may_edit and st.button("Simpan parameter", type="primary", key="fee-programs-save"):
                 require("setting_kalkulator_biaya", "edit")
                 payload_programs = {}
@@ -92,7 +88,7 @@ def _parameter_panel(features, *, may_edit: bool, username: str, require) -> Non
                         payload_programs.setdefault("gratis_ongkir", {}).update({"pct_khusus": float(r["Tarif (%)"]), "cap_khusus": float(r["Maks per kuantitas (Rp)"])})
                     else:
                         payload_programs.setdefault(r["Kode"], {}).update({"pct": float(r["Tarif (%)"]), "cap": float(r["Maks per kuantitas (Rp)"]), "on": bool(r["Ikut"])})
-                features.set_json(KEY_PROGRAMS, {"programs": payload_programs, "order_fee": float(order), "limit": float(new_limit)}, username=username)
+                features.set_json(KEY_PROGRAMS, {"programs": payload_programs, "order_fee": float(order)}, username=username)
                 st.session_state.pop("_calc-portfolio", None)
                 st.toast("Parameter biaya tersimpan.")
                 st.rerun()
@@ -223,6 +219,106 @@ def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | 
     return pd.DataFrame(rows)
 
 
+def _month_of(orders: pd.DataFrame | None) -> date:
+    if orders is not None and not orders.empty:
+        stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
+        if pd.notna(stamp):
+            return stamp.date()
+    return date.today()
+
+
+def _goals(features, user_root, orders):
+    from src.core.business import business_targets
+    from src.core.config import load_params
+    from src.ui.feature_data import target_for
+
+    last = _month_of(orders)
+    params = load_params(user_root) if user_root else {}
+    saved = target_for(features, f"{last.year:04d}-{last.month:02d}")
+    return business_targets(params, saved)
+
+
+def _target_panel(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features) -> None:
+    """Target bisnis (Pengaturan bisnis) → posisi saat ini → solusi agar target tercapai dengan margin ≥ minimum."""
+    import calendar
+
+    st.markdown("<div class='section-title'>Target bisnis & solusi</div>", unsafe_allow_html=True)
+    last = _month_of(orders)
+    month_label = f"{['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][last.month - 1]} {last.year}"
+    mtd = 0.0
+    if orders is not None and not orders.empty:
+        work = orders
+        if "status" in work.columns:
+            from src.ingest import cancelled_status_mask
+
+            work = work.loc[~cancelled_status_mask(work["status"])]
+        stamp = pd.to_datetime(work["order_time"], errors="coerce")
+        mtd = float(pd.to_numeric(work.loc[(stamp.dt.year == last.year) & (stamp.dt.month == last.month), "sales"], errors="coerce").sum())
+    days_in = calendar.monthrange(last.year, last.month)[1]
+    rest = days_in - last.day
+    pred_daily = 0.0
+    try:
+        from src.ui.gudang_view import latest_prediction
+
+        _q, sales_daily, _at = latest_prediction(features)
+        pred_daily = float(sum(sales_daily.values())) if sales_daily else 0.0
+    except Exception:
+        pred_daily = 0.0
+    if pred_daily <= 0 and last.day:
+        pred_daily = mtd / last.day
+    projection = mtd + pred_daily * rest
+    gap = goals.target_sales - projection if goals.target_sales > 0 else 0.0
+    omzet = float(port["omzet_30"].sum()) if not port.empty else 0.0
+    net_pct = (float(port["bersih_30"].sum()) / omzet * 100 - goals.hpp_pct) if omzet > 0 else float("nan")
+    k = st.columns(4)
+    card(k[0], f"Target penjualan {month_label}", fmt_idr(goals.target_sales) if goals.target_sales > 0 else "Belum diisi", hint=f"sumber: {goals.target_source}")
+    card(k[1], "Proyeksi akhir bulan", fmt_idr(projection), hint=f"realisasi {fmt_idr(mtd)} s.d. tgl {last.day} + prediksi {rest} hari")
+    card(k[2], "Gap ke target", (fmt_idr(gap) if gap > 0 else "Tercapai") if goals.target_sales > 0 else "–",
+         hint="target − proyeksi" if gap > 0 else ("proyeksi ≥ target" if goals.target_sales > 0 else "isi target di Pengaturan bisnis"))
+    card(k[3], "Margin bersih (perkiraan)", fmt_pct(net_pct, 1) if np.isfinite(net_pct) else "–",
+         hint=f"minimum {fmt_num(goals.margin_min_pct, 1)}% · margin kotor {fmt_num(goals.margin_kotor_pct, 0)}% − potongan")
+    st.markdown(
+        f"<div class='field-hint'>Dari Pengaturan bisnis: margin minimum <b>{fmt_num(goals.margin_min_pct, 1)}%</b> ({goals.margin_source}) · "
+        f"perkiraan HPP {fmt_num(goals.hpp_pct, 0)}% harga → margin kotor {fmt_num(goals.margin_kotor_pct, 0)}% · "
+        f"<b>batas total potongan Shopee + iklan = {fmt_num(goals.cost_limit_pct, 1)}%</b>. SKU di atas batas ini margin bersihnya di bawah minimum.</div>",
+        unsafe_allow_html=True,
+    )
+    if goals.margin_kotor_pct <= goals.margin_min_pct:
+        st.error(
+            f"Pengaturan bisnis belum selaras: perkiraan HPP {fmt_num(goals.hpp_pct, 0)}% berarti margin kotor hanya {fmt_num(goals.margin_kotor_pct, 0)}%, "
+            f"lebih kecil dari margin minimum {fmt_num(goals.margin_min_pct, 0)}%. Akibatnya semua SKU dianggap di bawah minimum. "
+            "Perbarui **Perkiraan HPP rata-rata** di Pengaturan bisnis (mis. HPP 55% → margin kotor 45% → batas potongan 15% bila minimum 30%).",
+            icon=":material/error:",
+        )
+    steps: list[tuple[str, str]] = []
+    if not port.empty:
+        bad = port.loc[port["status"] == "Melebihi batas"]
+        if not bad.empty:
+            top = bad.head(5)
+            steps.append(("bad", f"1. Perbaiki {fmt_num(len(top))} SKU prioritas teratas di tabel bawah: menyelamatkan ±{fmt_idr(float(top['bocor_30'].sum()))} margin per 30 hari "
+                                 f"(seluruh {fmt_num(len(bad))} SKU di atas batas: ±{fmt_idr(float(bad['bocor_30'].sum()))})."))
+        if gap > 0:
+            safe = port.loc[port["status"] == "Aman"].sort_values("omzet_30", ascending=False).head(3)
+            if not safe.empty:
+                names = ", ".join(f"{str(n)[:40]} (margin ±{fmt_pct(100 - t - goals.hpp_pct, 0)})" for n, t in zip(safe["nama"], safe["total_pct"]))
+                steps.append(("warn", f"2. Tutup gap {fmt_idr(gap)} dengan mendorong SKU yang marginnya aman (iklan/promo): {names}. "
+                                      "Hindari menambah iklan pada SKU yang di atas batas karena omzet naik tetapi margin turun."))
+        elif goals.target_sales > 0:
+            steps.append(("ok", "2. Proyeksi sudah mencapai target: fokus menjaga margin dengan memperbaiki SKU di atas batas."))
+        if np.isfinite(net_pct) and net_pct < goals.margin_min_pct:
+            steps.append(("warn", f"3. Margin bersih rata-rata ±{fmt_pct(net_pct, 1)} masih di bawah minimum {fmt_num(goals.margin_min_pct, 1)}%: "
+                                  "kurangi potongan (iklan, program opsional, voucher) sebelum mengejar volume."))
+        elif np.isfinite(net_pct):
+            steps.append(("ok", f"3. Margin bersih rata-rata ±{fmt_pct(net_pct, 1)} sudah ≥ minimum {fmt_num(goals.margin_min_pct, 1)}%."))
+    if goals.target_sales <= 0:
+        steps.append(("info", "Target penjualan belum diisi di Pengaturan bisnis; gap ke target belum bisa dihitung."))
+    if steps:
+        st.markdown("".join(
+            f"<div style='background:{TONE[t][0]};color:{TONE[t][1]};border-radius:10px;padding:.45rem .7rem;margin:.3rem 0;font-size:.9rem'>{html.escape(text)}</div>"
+            for t, text in steps
+        ), unsafe_allow_html=True)
+
+
 def _priority_table(port: pd.DataFrame, limit: float) -> None:
     from src.ui.common import batched_view, explain
 
@@ -233,7 +329,7 @@ def _priority_table(port: pd.DataFrame, limit: float) -> None:
     counts = port["status"].value_counts()
     leak = float(port["bocor_30"].sum())
     k = st.columns(4)
-    card(k[0], "SKU melebihi batas", fmt_num(int(counts.get("Melebihi batas", 0))), hint=f"total potongan > {fmt_num(limit, 0)}% harga akhir")
+    card(k[0], "SKU melebihi batas", fmt_num(int(counts.get("Melebihi batas", 0))), hint=f"potongan > {fmt_num(limit, 1)}% → margin bersih < minimum")
     card(k[1], "Omzet terdampak", fmt_idr(float(port.loc[port["status"] == "Melebihi batas", "omzet_30"].sum())), hint="omzet 30 hari SKU yang melebihi batas")
     card(k[2], "Kebocoran di atas batas", fmt_idr(leak), hint="omzet × kelebihan potongan; yang bisa diselamatkan bila diperbaiki")
     card(k[3], "Penerimaan bersih 30 hari", fmt_idr(float(port["bersih_30"].sum())), hint="harga akhir − potongan Shopee − iklan, sebelum HPP")
@@ -241,7 +337,7 @@ def _priority_table(port: pd.DataFrame, limit: float) -> None:
         ("Urutan prioritas", "🔴 Melebihi batas dulu, diurutkan dari kebocoran Rp terbesar (omzet × kelebihan potongan), lalu 🟠 Mendekati batas dan 🟢 Aman menurut omzet"),
         ("Total potongan", "biaya administrasi kategori + program Shopee Mall + biaya proses pesanan + iklan per unit, dalam % harga akhir (harga transaksi rata-rata setelah diskon & voucher penjual)"),
         ("Yang perlu dibenerin", "langkah dari tuas terbesar yang bisa dikendalikan: iklan (ROAS minimal), komisi affiliate, program opsional, diskon/voucher"),
-        ("Tanpa HPP", "angka adalah penerimaan bersih sebelum HPP; batas potongan menggantikan target margin"),
+        ("Batas", f"{fmt_num(limit, 1)}% = margin kotor − margin minimum (Pengaturan bisnis); di atasnya margin bersih di bawah minimum"),
     ])
     f1, f2 = st.columns([1.2, 1.8])
     status_pick = f1.multiselect("Status", ["Melebihi batas", "Mendekati batas", "Aman"], key="calc-port-status", placeholder="Semua status")
@@ -289,9 +385,12 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     )
     _parameter_panel(features, may_edit=may_edit, username=username, require=require)
     fees = _category_fees(features)
-    programs, order_fee, limit = _programs(features)
+    programs, order_fee, _old_limit = _programs(features)
+    goals = _goals(features, user_root, orders)
+    limit = goals.cost_limit_pct
     rows = _portfolio_rows(features, table, data, orders, fees)
     port = fee.portfolio(rows, programs=programs, order_fee=order_fee, limit_pct=limit) if not rows.empty else pd.DataFrame()
+    _target_panel(goals, port, orders, features)
     _priority_table(port, limit)
 
     # ------------------------------------------------------------------ simulasi satu SKU

@@ -241,7 +241,9 @@ def show_report(
         report_all = orders_all.loc[stamps.between(lo, hi)]
 
     saved_target = getattr(data, "target", None) or {}
-    target = float(saved_target.get("target_sales_bersih", 0) or 0)
+    from src.core.business import business_targets
+
+    target = business_targets(params, saved_target).target_sales
     month_col = "m_sales_exp" if table is not None and "m_sales_exp" in table.columns else "m_sales"
     month_pred = float(table[month_col].sum()) if table is not None and not table.empty and month_col in table.columns else 0.0
     pred_label = format_period_label("prediksi", window_start)

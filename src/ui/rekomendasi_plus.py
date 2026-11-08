@@ -77,10 +77,20 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
         return
     periode = _periode(window_start)
     saved = data.target or {}
+    from src.core.business import business_targets
+
+    goals = business_targets(params, saved)
     c1, c2, c3 = st.columns([1.6, 1, 1])
     with c1:
-        target = float(input_rupiah(f"Target sales bersih {_bulan_label(window_start)}", int(saved.get("target_sales_bersih", 0) or 0), key=f"tgt-rp-{periode}"))
-    margin_min = float(c2.number_input("Margin minimum (%)", min_value=0.0, max_value=60.0, value=float(saved.get("margin_min_pct", 8.0) or 8.0), step=0.5, key=f"tgt-margin-{periode}"))
+        target = float(input_rupiah(
+            f"Target sales bersih {_bulan_label(window_start)}", int(goals.target_sales), key=f"tgt-rp-{periode}",
+            help="Bawaan dari Pengaturan bisnis; simpan di sini untuk mengganti khusus bulan ini.",
+        ))
+    margin_min = float(c2.number_input(
+        "Margin minimum (%)", min_value=0.0, max_value=60.0, value=float(goals.margin_min_pct), step=0.5, key=f"tgt-margin-{periode}",
+        help="Bawaan dari Pengaturan bisnis.",
+    ))
+    st.caption(f"Sumber target: {goals.target_source} · margin minimum: {goals.margin_source}. Nilai yang sama dipakai di Laporan dan Kalkulator biaya.")
     c3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
     if c3.button("Simpan target", key="tgt-save", type="primary", disabled=not can_edit, use_container_width=True):
         from auth.ui import require
@@ -137,7 +147,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
             ]
         )
     if not known.empty and not known["known_margin"].any():
-        st.caption(f"Komponen biaya belum diunggah (Setting › Kalkulator biaya): margin semua SKU memakai margin minimum {fmt_num(margin_min, 1)}%.")
+        st.caption(f"HPP per SKU tidak dipakai: margin semua SKU memakai margin minimum {fmt_num(margin_min, 1)}% dari Pengaturan bisnis. Lihat Setting › Kalkulator biaya untuk SKU yang potongannya melebihi batas.")
     choice = st.radio("Strategi", list(plans), index=list(plans).index("Efisien"), horizontal=True, key="tgt-strategy")
     plan = plans.get(choice, {})
     rows = []
