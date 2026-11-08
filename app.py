@@ -2713,6 +2713,24 @@ def _checked_library_keys() -> list[str]:
     return [k for k in keys if not k[:4].isdigit() or k in touched]
 
 
+def _setting_fallback_table() -> pd.DataFrame:
+    """SKU, nama produk, dan stok Site 10037 dari upload Data stok terakhir (untuk halaman Setting tanpa analisa)."""
+    from src.core.decision_table import latest_stock_by_sku
+
+    try:
+        frame = store_frames().stock
+    except Exception:
+        return pd.DataFrame()
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    stock = latest_stock_by_sku(frame)
+    if stock.empty:
+        return pd.DataFrame()
+    names = frame.assign(sku=frame["sku"].fillna("").astype(str).str.strip().str.replace(r"^(\d+)\.0+$", r"\1", regex=True))
+    names = names.drop_duplicates("sku", keep="last").set_index("sku")["product_name"] if "product_name" in names.columns else pd.Series(dtype=str)
+    return stock.assign(product_name=stock["sku"].map(names).fillna(""), ada_data_stok=True)
+
+
 def _orders_from_library(keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     if not keys:
         return pd.DataFrame(), pd.DataFrame(), "empty"
@@ -7616,6 +7634,15 @@ with PAGE_ROOT.container(key="page-root"):
     if st.session_state.get("setting-open"):
         setting_table = (st.session_state.get("_enriched") or (None, pd.DataFrame()))[1]
         setting_orders = (st.session_state.get("analysis") or {}).get("orders")
+        # Setting dibuka langsung (analisa belum dimuat di sesi ini): pakai data stok Site 10037 dan transaksi tersimpan
+        # agar pencarian SKU dan kapasitas gudang tetap punya daftar SKU, nama produk, dan stok.
+        if not isinstance(setting_table, pd.DataFrame) or setting_table.empty:
+            setting_table = _setting_fallback_table()
+        if not isinstance(setting_orders, pd.DataFrame) or setting_orders.empty:
+            try:
+                setting_orders = _orders_from_library(_checked_library_keys())[0]
+            except Exception:
+                setting_orders = None
         setting_data = cached_feature_data(st.session_state, get_features(), setting_table, date.today(), periode="", stamp="setting")
         shown_tab = show_setting(
             str(st.session_state.get("setting-slug", "") or ""),

@@ -314,7 +314,10 @@ def build_view(
             "over_unit": float((part_items["stok"] - part_items["max_stock"]).clip(lower=0).where(part_items["max_stock"] > 0, 0).sum()),
             "perlu_replenish": int(part_items["status"].isin(["Kosong", "Di bawah ROP"]).sum()),
         })
-    categories = pd.DataFrame(rows)
+    categories = pd.DataFrame(rows, columns=[
+        "kategori", "lokasi_rak", "sku_besar", "sku_besar_berstok", "rak_pct", "lokasi_gondola", "gondola_terisi",
+        "gondola_pct", "sku_kecil", "kecil_tanpa_lokasi", "stok", "over_unit", "perlu_replenish",
+    ])
 
     # Bay (untuk denah): ringkasan per bay_kode.
     bay = loc.groupby("bay_kode").agg(
