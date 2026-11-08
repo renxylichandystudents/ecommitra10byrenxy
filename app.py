@@ -4661,6 +4661,24 @@ def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str,
 
 
 @st.fragment
+def _reason_items(text) -> list[str]:
+    """'Sistem Shopee · Belum dibayar (34) · Pembeli · Lainnya (15)' → ['Sistem Shopee · Belum dibayar (34)', ...]."""
+    import re
+
+    value = "" if text is None or (isinstance(text, float) and np.isnan(text)) else str(text).strip()
+    if not value:
+        return []
+    items = [m.strip(" ·") for m in re.findall(r".+?\(\d+\)(?:\s·\s|$)", value)]
+    return items or [value]
+
+
+def _short_reasons(text, keep: int = 2) -> str:
+    items = _reason_items(text)
+    if len(items) <= keep:
+        return "" if text is None or (isinstance(text, float) and np.isnan(text)) else str(text)
+    return " · ".join(items[:keep]) + f" · +{len(items) - keep} lainnya"
+
+
 def reason_picker(options: list[str], *, key: str) -> list[str]:
     """Filter alasan ringkas: satu tombol (popover) berisi Semua/Kosongkan dan checkbox per alasan,
     dikelompokkan menurut sumber (Pembeli, Sistem Shopee, Penjual, ...) dengan teks lengkap."""
@@ -4735,15 +4753,45 @@ def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None
     total_part, body = shown_sheet.loc[is_total], shown_sheet.loc[~is_total].reset_index(drop=True)
     export = pd.concat([total_part, body], ignore_index=True)
     config = help_columns(tips, shown_sheet, {"Qty retur": "Unit retur", "Qty batal": "Unit batal"})
-    batched_view(
-        len(body),
-        key=f"sku-issue-{issue_kind}",
-        render=lambda lo, hi: show_table(
-            pd.concat([total_part, body.iloc[lo:hi]], ignore_index=True),
+    reason_cols = [c for c in ("Alasan retur", "Alasan batal") if c in body.columns]
+
+    def _render_issue(lo: int, hi: int) -> None:
+        part = body.iloc[lo:hi].reset_index(drop=True)
+        view = pd.concat([total_part, part], ignore_index=True)
+        # Alasan panjang diringkas (2 alasan teratas + "+N lainnya"); rincian lengkap muncul saat baris diklik.
+        long_any = False
+        for column in reason_cols:
+            short = view[column].map(_short_reasons)
+            long_any |= bool((short != view[column].fillna("").astype(str)).any())
+            view[column] = short
+        if long_any:
+            view.insert(len(view.columns), "Detail", ["" if i == 0 else "Lihat ▸" for i in range(len(view))])
+        event = show_table(
+            view,
             kinds={"Nominal retur": "money", "Nominal batal": "money"},
             bold_label="Total",
             column_config=config,
-        ),
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"sku-issue-table-{issue_kind}-{hi}",
+        )
+        rows = getattr(getattr(event, "selection", None), "rows", []) or []
+        if rows and rows[0] > 0:
+            row = part.iloc[rows[0] - 1]
+            with st.container(border=True):
+                st.markdown(f"**Detail alasan · {html.escape(str(row.get('SKU', '')))} · {html.escape(str(row.get('Produk', '')))}**")
+                for column in reason_cols:
+                    items = _reason_items(row.get(column))
+                    if items:
+                        st.markdown(f"<div class='field-hint'><b>{column}</b></div>", unsafe_allow_html=True)
+                        st.markdown("\n".join(f"- {html.escape(item)}" for item in items))
+        elif long_any:
+            st.caption("Klik baris (kotak di kiri) untuk melihat seluruh alasan SKU itu.")
+
+    batched_view(
+        len(body),
+        key=f"sku-issue-{issue_kind}",
+        render=_render_issue,
         noun="SKU",
         fragment=False,
         rerun_scope="fragment",
