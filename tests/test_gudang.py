@@ -32,9 +32,9 @@ def test_parse_and_view():
     view = gudang.build_view(_locations(), repl, stock={"300002038": 0.0})
     items = view["items"].set_index("sku")
     assert items.loc["300002038", "status"] == "Kosong"
-    assert "Replenish ±10" in items.loc["300002038", "saran"]
-    assert items.loc["100024295", "status"] == "Lebih dari Max"
-    assert "pick location" in items.loc["900007910", "saran"]
+    assert "Isi ulang ±10" in items.loc["300002038", "saran"]
+    assert items.loc["100024295", "status"] == "Stok berlebih"
+    assert "lokasi ambil" in items.loc["900007910", "saran"]
     loc = view["locations"].set_index("lokasi")
     assert bool(loc.loc["G010010401", "terisi"]) and not bool(loc.loc["G010010201", "terisi"])
     cats = view["categories"].set_index("kategori")

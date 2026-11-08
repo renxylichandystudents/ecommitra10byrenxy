@@ -344,6 +344,14 @@ class FeatureStore:
             self.audit(username, action or f"hapus:{name}", {"filter": dict(filters), "baris": count}, conn=conn)
         return int(count)
 
+    def clear(self, name: str, *, username: str = "", action: str | None = None) -> int:
+        """Kosongkan seluruh tabel (dipakai saat denah gudang diganti total)."""
+        table = self._table(name)
+        with self.engine.begin() as conn:
+            count = conn.execute(delete(table)).rowcount or 0
+            self.audit(username, action or f"kosongkan:{name}", {"baris": count}, conn=conn)
+        return int(count)
+
     def read(self, name: str, filters: Mapping | None = None) -> pd.DataFrame:
         table = self._table(name)
         query = select(table)

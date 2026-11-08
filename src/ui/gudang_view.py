@@ -13,7 +13,7 @@ from src.core import gudang
 from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct
 from src.utils.format import show_table
 
-STATUS_ICON = {"Kosong": "🔴 Kosong", "Di bawah ROP": "🟠 Di bawah ROP", "Lebih dari Max": "🟣 Lebih dari Max", "Aman": "🟢 Aman"}
+STATUS_ICON = {"Kosong": "🔴 Kosong", "Hampir habis": "🟠 Hampir habis", "Stok berlebih": "🟣 Stok berlebih", "Aman": "🟢 Aman"}
 CATEGORY_COLORS = [
     "#60a5fa", "#f59e0b", "#34d399", "#f472b6", "#a78bfa", "#fb7185",
     "#2dd4bf", "#facc15", "#818cf8", "#4ade80", "#fb923c", "#94a3b8",
@@ -171,7 +171,7 @@ def denah_svg(view: dict, *, mode: str, landscape: bool, width: int = 1100) -> s
                     pct = bay["rak_pct"]
                     lines.append(f"{int(bay['lokasi'])} lokasi rak · zona kategori terisi ±{fmt_pct(pct, 0) if np.isfinite(pct) else '-'}")
                 if int(bay["masalah"]):
-                    lines.append(f"⚠ {int(bay['masalah'])} SKU kosong / di bawah ROP")
+                    lines.append(f"⚠ {int(bay['masalah'])} SKU kosong / hampir habis")
                 tip = "<title>" + html.escape("\n".join(lines)) + "</title>"
         if fill:
             parts.append(f"<rect x='{x}' y='{y}' width='{w}' height='{h}' fill='{fill}'>{tip}</rect>")
@@ -208,7 +208,7 @@ def _legend(mode: str, palette: dict[str, str]) -> str:
     if mode == "Kategori":
         items = [(c, color) for c, color in palette.items()]
     elif mode == "Perlu tindakan":
-        items = [("Tidak ada", "#f1f5f9"), ("1 SKU kosong / di bawah ROP", "#fecaca"), ("≥ 2 SKU", "#f87171")]
+        items = [("Tidak ada", "#f1f5f9"), ("1 SKU kosong / hampir habis", "#fecaca"), ("≥ 2 SKU", "#f87171")]
     else:
         items = [
             ("Gondola kosong", "#f1f5f9"), ("Gondola < 50% terisi", "#bbf7d0"), ("Gondola 50–99%", "#4ade80"), ("Gondola penuh", "#16a34a"),
@@ -219,7 +219,7 @@ def _legend(mode: str, palette: dict[str, str]) -> str:
         f"<span style='width:14px;height:14px;border-radius:3px;background:{color};border:1px solid #cbd5e1'></span>{html.escape(str(label).title() if mode == 'Kategori' else label)}</span>"
         for label, color in items
     )
-    extra = "" if mode != "Keterisian" else "<span style='font-size:.8rem;color:#b91c1c;margin-left:4px'>▢ garis merah = ada SKU kosong / di bawah ROP</span>"
+    extra = "" if mode != "Keterisian" else "<span style='font-size:.8rem;color:#b91c1c;margin-left:4px'>▢ garis merah = ada SKU kosong / hampir habis</span>"
     return f"<div style='margin:4px 0 8px'>{chips}{extra}</div>"
 
 
@@ -230,24 +230,17 @@ def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: 
     st.markdown(f"**Kapasitas gudang · Site {gudang.SITE} {gudang.SITE_NAME}**")
     view = cached_view(features, table)
     loc = view["locations"]
-    _upload_box(features, may_upload=may_upload, username=username, require=require, expanded=loc.empty or not view.get("has_repl"))
+    _upload_cards(features, view, may_upload=may_upload, username=username, require=require)
     if loc.empty:
-        st.info(
-            "Denah gudang belum ada. Unggah file **LAYOUT_ECOM** (berisi sheet LAY OUT dan Location) sekali di kotak "
-            "**Perbarui data replenishment (harian) atau denah** di atas. Setelah itu cukup unggah replenishment harian."
-        )
+        st.info("Mulai dengan mengunggah **denah gudang** di kotak kiri. Cukup sekali; unggah lagi hanya bila tata letak gudang berubah.")
         return
-    racks = loc.loc[loc["area"] == "Racking"]
-    gondolas = loc.loc[loc["area"] == "Gondola"]
-    snap = view.get("snapshot")
-    st.caption(
-        f"Denah: {fmt_num(len(loc))} lokasi · Racking R01–R04 {fmt_num(len(racks))} lokasi (barang Besar) · "
-        f"Gondola G01–G03 {fmt_num(len(gondolas))} lokasi (barang Kecil, pick location). "
-        + (f"Replenishment: {snap:%d/%m/%Y}." if snap else "Replenishment belum diunggah.")
-        + (" Stok: data stok Site 10037 yang diunggah." if view.get("has_stock") else " Stok: Stock On Hand dari replenishment (data stok 10037 belum ada di analisa).")
-    )
     if not view.get("has_repl"):
-        st.info("Unggah laporan **Replenishment Calculation by Date** (Site 10037) agar isi lokasi dan status stok tampil di denah. Denah kosong di bawah memakai lokasi bawaan.")
+        st.info("Denah sudah ada. Unggah **data stok harian (replenishment)** di kotak kanan agar isi rak dan status stok terlihat.")
+    gondolas = loc.loc[loc["area"] == "Gondola"]
+    st.caption(
+        "Stok diambil dari data stok Site 10037 yang diunggah di aplikasi."
+        if view.get("has_stock") else "Stok diambil dari data stok harian (data stok Site 10037 belum diunggah di aplikasi)."
+    )
 
     items = view["items"]
     cats = view["categories"]
@@ -257,11 +250,11 @@ def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: 
         card(cols[0], "Lokasi terpakai", value, hint=note)
         card(cols[1], "Gondola terisi", f"{fmt_num(int(gondolas['terisi'].sum()))} / {fmt_num(len(gondolas))}",
              hint=f"{fmt_num(int((items['pick_location'] != '').sum()))} SKU kecil punya pick location · {fmt_num(int((loc['n_sku'] > 1).sum()))} lokasi dipakai >1 SKU")
-        need = items.loc[items["status"].isin(["Kosong", "Di bawah ROP"])]
-        card(cols[2], "Perlu replenish", fmt_num(len(need)), hint=f"{fmt_num(int((items['status'] == 'Kosong').sum()))} kosong · {fmt_num(int((items['status'] == 'Di bawah ROP').sum()))} di bawah ROP/Min")
-        over = items.loc[items["status"] == "Lebih dari Max"]
+        need = items.loc[items["status"].isin(["Kosong", "Hampir habis"])]
+        card(cols[2], "Perlu diisi ulang", fmt_num(len(need)), hint=f"{fmt_num(int((items['status'] == 'Kosong').sum()))} kosong · {fmt_num(int((items['status'] == 'Hampir habis').sum()))} hampir habis (di bawah titik pesan ulang)")
+        over = items.loc[items["status"] == "Stok berlebih"]
         over_units = float((over["stok"] - over["max_stock"]).sum())
-        card(cols[3], "Lebih dari Max", fmt_num(len(over)), hint=f"kelebihan {fmt_num(over_units)} unit memakan ruang")
+        card(cols[3], "Stok berlebih", fmt_num(len(over)), hint=f"kelebihan {fmt_num(over_units)} unit memakan ruang")
         notes = []
         for r in cats.itertuples():
             bits = []
@@ -274,7 +267,7 @@ def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: 
         if notes:
             st.warning(
                 "Zona penuh / melebihi lokasi: " + "; ".join(notes)
-                + ". Pertimbangkan menambah lokasi, memindah SKU lambat, atau menahan replenish SKU yang lebih dari Max.",
+                + ". Pertimbangkan menambah lokasi, memindah SKU lambat, atau menahan pengisian SKU yang stoknya berlebih.",
                 icon=":material/warning:",
             )
 
@@ -295,59 +288,111 @@ def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: 
     _sku_table(view)
 
 
-def _upload_box(features, *, may_upload: bool, username: str, require, expanded: bool = False) -> None:
-    with st.expander("Perbarui data replenishment (harian) atau denah", expanded=expanded):
-        if not may_upload:
-            st.caption("Role Anda hanya melihat. Unggahan oleh Team DC atau Super user.")
-        st.markdown(
-            "<div class='field-hint'>Unggah laporan <b>Replenishment Calculation by Date</b> Site 10037 dari sistem (xlsx/csv) setiap hari. "
-            "Yang dipakai: Item No, Item Category, Spesifikasi Barang (Besar/Kecil), Pick Location, Min/Max/ROP, Stock On Hand, Outstanding PO/TR. "
-            "File LAYOUT_ECOM lengkap juga bisa diunggah: sheet Location memperbarui daftar lokasi, sheet replenishment ikut tersimpan.</div>",
-            unsafe_allow_html=True,
-        )
-        upload = st.file_uploader("File replenishment / layout", type=["xlsx", "xls", "csv"], key="gudang-upload", disabled=not may_upload)
-        if upload is None or not may_upload:
-            return
-        try:
-            if upload.name.lower().endswith(".csv"):
-                raw = pd.read_csv(upload, header=None, dtype=object)
-                repl, snap = gudang.parse_replenishment(raw)
-                found = {"denah": None, "locations": None, "repl": repl, "snapshot": snap}
-            else:
-                found = gudang.read_layout_workbook(upload.getvalue())
-        except Exception as exc:  # noqa: BLE001 - tampilkan pesan yang bisa dibaca
-            st.error(f"File tidak bisa dibaca: {exc}")
-            return
-        repl, locations, denah = found["repl"], found["locations"], found["denah"]
-        if repl is None and locations is None and denah is None:
-            st.error("Tidak ditemukan tabel replenishment (kolom Item No), sheet Location, maupun sheet LAY OUT.")
-            return
-        snap = found["snapshot"] or datetime.now().date()
-        parts = []
-        if denah is not None:
-            parts.append(f"denah ({fmt_num(sum(1 for c in denah['cells'] if c.get('k')))} bay)")
-        if locations is not None:
-            parts.append(f"{fmt_num(len(locations))} lokasi")
-        if repl is not None:
-            parts.append(f"replenishment {fmt_num(len(repl))} SKU tanggal {snap:%d/%m/%Y} ({fmt_num(int((repl['pick_location'] != '').sum()))} punya pick location)")
-        st.markdown("Terbaca: " + " · ".join(parts))
-        if st.button("Simpan", type="primary", key="gudang-save"):
-            import json
+def _denah_info(features) -> tuple[str, str]:
+    """(kapan, oleh siapa) denah terakhir diunggah."""
+    try:
+        frame = features.read("warehouse_denah")
+    except Exception:
+        return "", ""
+    if frame.empty:
+        return "", ""
+    latest = frame.sort_values("created_at").iloc[-1]
+    return pd.Timestamp(latest["created_at"]).strftime("%d/%m/%Y %H:%M"), str(latest["uploaded_by"] or "")
 
-            require("setting_kapasitas_gudang", "upload")
-            if denah is not None:
-                features.insert("warehouse_denah", [{"created_at": datetime.now(), "uploaded_by": username, "content": json.dumps(denah)}], username=username, action="unggah:denah_gudang")
-            if locations is not None:
-                keep = locations[["lokasi", "rak", "lorong", "bay", "level", "slot", "kategori"]]
-                features.replace("warehouse_location", keep, keys=["lokasi"], username=username, action="unggah:lokasi_gudang")
-            if repl is not None:
-                rows = repl.assign(snapshot_date=snap, uploaded_by=username, uploaded_at=datetime.now())
-                features.remove("warehouse_replenishment", {"snapshot_date": snap}, username=username, action="ganti:replenishment")
-                features.insert("warehouse_replenishment", rows, username=username, action="unggah:replenishment")
-                features.prune_snapshots("warehouse_replenishment", keep=60)
-            st.session_state.pop("_gudang_view", None)
-            st.success("Tersimpan.")
-            st.rerun()
+
+def _read_upload(upload) -> dict | None:
+    try:
+        if upload.name.lower().endswith(".csv"):
+            repl, snap = gudang.parse_replenishment(pd.read_csv(upload, header=None, dtype=object))
+            return {"denah": None, "locations": None, "repl": repl, "snapshot": snap}
+        return gudang.read_layout_workbook(upload.getvalue())
+    except Exception as exc:  # noqa: BLE001 - pesan yang bisa dibaca
+        st.error(f"File tidak bisa dibaca: {exc}")
+        return None
+
+
+def _upload_cards(features, view: dict, *, may_upload: bool, username: str, require) -> None:
+    """Dua kotak terpisah: denah gudang (jarang berubah) dan data stok harian (replenishment)."""
+    loc = view["locations"]
+    left, right = st.columns(2)
+    with left.container(border=True):
+        when, who = _denah_info(features)
+        st.markdown("**🗺️ Denah gudang**")
+        if loc.empty:
+            st.markdown("<div class='field-hint'>Belum ada denah. Unggah file tata letak gudang (LAYOUT_ECOM).</div>", unsafe_allow_html=True)
+        else:
+            racks = int((loc["area"] == "Racking").sum())
+            st.markdown(
+                f"<div class='field-hint'>✓ Terpasang: <b>{fmt_num(len(loc))} lokasi</b> · rak besar {fmt_num(racks)} · gondola {fmt_num(len(loc) - racks)}"
+                + (f"<br>Diperbarui {when}" + (f" oleh {html.escape(who)}" if who else "") if when else "") + "</div>",
+                unsafe_allow_html=True,
+            )
+        with st.expander("Ganti denah" if not loc.empty else "Unggah denah", expanded=loc.empty and may_upload):
+            if not may_upload:
+                st.caption("Hanya Team DC atau Super user yang bisa mengunggah.")
+            st.markdown(
+                "<div class='field-hint'>Pakai file tata letak gudang (Excel) yang berisi gambar denah dan daftar lokasi rak. "
+                "Denah lama akan diganti seluruhnya.</div>",
+                unsafe_allow_html=True,
+            )
+            denah_upload = st.file_uploader("File denah gudang", type=["xlsx"], key="gudang-denah-upload") if may_upload else None
+            found = _read_upload(denah_upload) if denah_upload is not None else None
+            if found is not None:
+                denah, locations = found["denah"], found["locations"]
+                if locations is None:
+                    st.error("Daftar lokasi rak tidak ditemukan di file ini. Pastikan file berisi sheet Location.")
+                else:
+                    bays = sum(1 for c in (denah or {}).get("cells", []) if c.get("k"))
+                    st.markdown(f"Terbaca **{fmt_num(len(locations))} lokasi**" + (f" dan gambar denah ({fmt_num(bays)} bay)." if denah else ", tanpa gambar denah."))
+                    if st.button("Simpan denah", type="primary", key="gudang-denah-save", use_container_width=True):
+                        import json
+
+                        require("setting_kapasitas_gudang", "upload")
+                        features.clear("warehouse_location", username=username, action="ganti:lokasi_gudang")
+                        keep = locations[["lokasi", "rak", "lorong", "bay", "level", "slot", "kategori"]]
+                        features.insert("warehouse_location", keep, username=username, action="unggah:lokasi_gudang")
+                        if denah is not None:
+                            features.insert("warehouse_denah", [{"created_at": datetime.now(), "uploaded_by": username, "content": json.dumps(denah)}], username=username, action="unggah:denah_gudang")
+                        st.session_state.pop("_gudang_view", None)
+                        st.toast("Denah gudang tersimpan.")
+                        st.rerun()
+    with right.container(border=True):
+        snap = view.get("snapshot")
+        st.markdown("**📦 Data stok harian (replenishment)**")
+        if snap:
+            st.markdown(
+                f"<div class='field-hint'>✓ Data terakhir: <b>{snap:%d/%m/%Y}</b> · {fmt_num(len(view['items']))} SKU"
+                f"<br>Unggah file baru setiap hari dari sistem replenishment.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown("<div class='field-hint'>Belum ada data. Unggah laporan replenishment Site 10037 dari sistem.</div>", unsafe_allow_html=True)
+        with st.expander("Unggah data hari ini", expanded=not loc.empty and not snap and may_upload):
+            if not may_upload or loc.empty:
+                st.caption("Unggah denah gudang dulu." if loc.empty else "Hanya Team DC atau Super user yang bisa mengunggah.")
+            st.markdown(
+                "<div class='field-hint'>File dari sistem: <i>Replenishment Calculation by Date</i> Site 10037 (Excel atau CSV). "
+                "Isinya dipakai untuk lokasi barang kecil di gondola, batas Min/Max, dan stok.</div>",
+                unsafe_allow_html=True,
+            )
+            upload = st.file_uploader("File replenishment", type=["xlsx", "xls", "csv"], key="gudang-repl-upload") if may_upload and not loc.empty else None
+            found = _read_upload(upload) if upload is not None else None
+            if found is not None:
+                repl = found["repl"]
+                if repl is None:
+                    st.error("Tabel replenishment tidak ditemukan. Pastikan file berasal dari laporan Replenishment Calculation by Date.")
+                else:
+                    snap_new = found["snapshot"] or datetime.now().date()
+                    st.markdown(f"Terbaca **{fmt_num(len(repl))} SKU** untuk tanggal **{snap_new:%d/%m/%Y}**.")
+                    if st.button("Simpan data", type="primary", key="gudang-repl-save", use_container_width=True):
+                        require("setting_kapasitas_gudang", "upload")
+                        rows = repl.assign(snapshot_date=snap_new, uploaded_by=username, uploaded_at=datetime.now())
+                        features.remove("warehouse_replenishment", {"snapshot_date": snap_new}, username=username, action="ganti:replenishment")
+                        features.insert("warehouse_replenishment", rows, username=username, action="unggah:replenishment")
+                        features.prune_snapshots("warehouse_replenishment", keep=60)
+                        st.session_state.pop("_gudang_view", None)
+                        st.toast("Data stok harian tersimpan.")
+                        st.rerun()
 
 
 def _lane_detail(view: dict) -> None:
@@ -363,7 +408,7 @@ def _lane_detail(view: dict) -> None:
         frame = pd.DataFrame({
             "Lokasi": joined["lokasi"], "Bay": joined["bay"], "Level": joined["level"], "Kategori lokasi": joined["kategori"].str.title(),
             "SKU": joined["sku"].fillna(""), "Nama": joined["nama"].fillna("— kosong —"), "Stok 10037": joined["stok_sku"] if "stok_sku" in joined else joined["stok"],
-            "Min": joined["min_stock"], "ROP": joined["rop"], "Max": joined["max_stock"],
+            "Min": joined["min_stock"], "Titik pesan ulang": joined["rop"], "Max": joined["max_stock"],
             "Status": joined["status"].map(lambda v: STATUS_ICON.get(v, "⚪ Lokasi kosong") if isinstance(v, str) else "⚪ Lokasi kosong"),
             "Saran": joined["saran"].fillna("Lokasi kosong — bisa dipakai SKU kecil tanpa pick location"),
         })
@@ -377,7 +422,7 @@ def _lane_detail(view: dict) -> None:
         big = items.loc[items["kategori"].isin(cats) & items["spesifikasi"].str.lower().eq("besar")].sort_values("stok", ascending=False)
         frame = pd.DataFrame({
             "SKU": big["sku"], "Nama": big["nama"], "Kategori": big["kategori"].str.title(), "Stok 10037": big["stok"],
-            "Min": big["min_stock"], "ROP": big["rop"], "Max": big["max_stock"],
+            "Min": big["min_stock"], "Titik pesan ulang": big["rop"], "Max": big["max_stock"],
             "Status": big["status"].map(lambda v: STATUS_ICON.get(v, v)), "Saran": big["saran"],
         })
         c2.markdown(
@@ -388,7 +433,7 @@ def _lane_detail(view: dict) -> None:
     frame = frame.reset_index(drop=True)
     batched_view(
         len(frame), key=f"gudang-lane-{lane}", noun="baris",
-        render=lambda lo, hi: show_table(frame.iloc[lo:hi], kinds={"Stok 10037": "count", "Min": "count", "ROP": "count", "Max": "count"}),
+        render=lambda lo, hi: show_table(frame.iloc[lo:hi], kinds={"Stok 10037": "count", "Min": "count", "Titik pesan ulang": "count", "Max": "count"}),
         download=lambda: download_excel(frame, f"isi_lorong_{lane}.xlsx", key=f"xl-lane-{lane}"),
     )
 
@@ -399,25 +444,25 @@ def _category_table(view: dict) -> None:
     explain([
         ("Rak", "SKU Besar yang masih berstok ÷ lokasi racking kategori itu (perkiraan 1 SKU ≈ 1 lokasi). Di atas 100% = barang melebihi lokasi rak yang disediakan"),
         ("Gondola", "lokasi gondola yang punya pick location ÷ lokasi gondola kategori itu"),
-        ("Lebih dari Max", "Σ (stok − Max) untuk SKU yang stoknya di atas Maximum Stock: ruang yang bisa dibebaskan"),
+        ("Stok berlebih", "Σ (stok − Max) untuk SKU yang stoknya di atas Maximum Stock: ruang yang bisa dibebaskan"),
     ])
     frame = pd.DataFrame({
         "Kategori": cats["kategori"].str.title(),
         "Lokasi rak": cats["lokasi_rak"], "SKU besar berstok": cats["sku_besar_berstok"], "Rak terpakai": cats["rak_pct"].where(cats["rak_pct"] < 999),
         "Lokasi gondola": cats["lokasi_gondola"], "Gondola terisi": cats["gondola_terisi"], "Gondola terpakai": cats["gondola_pct"],
-        "SKU kecil tanpa lokasi": cats["kecil_tanpa_lokasi"], "Stok 10037": cats["stok"], "Unit lebih dari Max": cats["over_unit"],
-        "SKU perlu replenish": cats["perlu_replenish"],
+        "SKU kecil tanpa lokasi": cats["kecil_tanpa_lokasi"], "Stok 10037": cats["stok"], "Unit berlebih": cats["over_unit"],
+        "SKU perlu diisi ulang": cats["perlu_replenish"],
     }).sort_values("Rak terpakai", ascending=False, na_position="last").reset_index(drop=True)
     total = {
         "Kategori": "Total", "Lokasi rak": frame["Lokasi rak"].sum(), "SKU besar berstok": frame["SKU besar berstok"].sum(),
         "Lokasi gondola": frame["Lokasi gondola"].sum(), "Gondola terisi": frame["Gondola terisi"].sum(),
         "SKU kecil tanpa lokasi": frame["SKU kecil tanpa lokasi"].sum(), "Stok 10037": frame["Stok 10037"].sum(),
-        "Unit lebih dari Max": frame["Unit lebih dari Max"].sum(), "SKU perlu replenish": frame["SKU perlu replenish"].sum(),
+        "Unit berlebih": frame["Unit berlebih"].sum(), "SKU perlu diisi ulang": frame["SKU perlu diisi ulang"].sum(),
     }
     total["Rak terpakai"] = total["SKU besar berstok"] / total["Lokasi rak"] * 100 if total["Lokasi rak"] else np.nan
     total["Gondola terpakai"] = total["Gondola terisi"] / total["Lokasi gondola"] * 100 if total["Lokasi gondola"] else np.nan
     full = pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
-    show_table(full, bold_label="Total", kinds={"Rak terpakai": "pct", "Gondola terpakai": "pct", "Stok 10037": "count", "Unit lebih dari Max": "count"}, max_height=10_000)
+    show_table(full, bold_label="Total", kinds={"Rak terpakai": "pct", "Gondola terpakai": "pct", "Stok 10037": "count", "Unit berlebih": "count"}, max_height=10_000)
     no_rack = cats.loc[(cats["lokasi_rak"] == 0) & (cats["sku_besar_berstok"] > 0), "kategori"].tolist()
     if no_rack:
         st.caption("Kategori dengan SKU Besar berstok tetapi tanpa lokasi racking di denah: " + ", ".join(c.title() for c in no_rack) + ".")
@@ -427,7 +472,7 @@ def _sku_table(view: dict) -> None:
     st.markdown("<div class='section-title'>SKU di gudang 10037 & tindakan</div>", unsafe_allow_html=True)
     items = view["items"]
     if items.empty:
-        st.caption("Belum ada data replenishment.")
+        st.caption("Belum ada data stok harian.")
         return
     f1, f2, f3, f4 = st.columns([1.6, 1.2, 1.2, 1])
     options = [f"{s} · {n}" for s, n in zip(items["sku"], items["nama"])]
@@ -444,21 +489,21 @@ def _sku_table(view: dict) -> None:
         work = work.loc[work["kategori"].isin(cat_pick)]
     if spec_pick:
         work = work.loc[work["spesifikasi"].str.title().isin(spec_pick)]
-    order = {"Kosong": 0, "Di bawah ROP": 1, "Lebih dari Max": 2, "Aman": 3}
-    gap = np.where(work["status"].eq("Lebih dari Max"), work["stok"] - work["max_stock"], work["max_stock"] - work["stok"])
+    order = {"Kosong": 0, "Hampir habis": 1, "Stok berlebih": 2, "Aman": 3}
+    gap = np.where(work["status"].eq("Stok berlebih"), work["stok"] - work["max_stock"], work["max_stock"] - work["stok"])
     work = work.assign(_o=work["status"].map(order), _g=gap).sort_values(["_o", "_g"], ascending=[True, False])
     frame = pd.DataFrame({
         "SKU": work["sku"], "Nama": work["nama"], "Kategori": work["kategori"].str.title(), "Barang": work["spesifikasi"].str.title(),
-        "Pick location": work["pick_location"].replace("", "—"), "Stok 10037": work["stok"], "Sumber stok": work["sumber_stok"],
-        "Min": work["min_stock"], "ROP": work["rop"], "Max": work["max_stock"], "PO/TR jalan": work["out_po"] + work["out_tr"],
+        "Lokasi ambil (gondola)": work["pick_location"].replace("", "—"), "Stok 10037": work["stok"], "Sumber stok": work["sumber_stok"],
+        "Min": work["min_stock"], "Titik pesan ulang": work["rop"], "Max": work["max_stock"], "Barang dalam perjalanan": work["out_po"] + work["out_tr"],
         "Prediksi 30 hari": work["pred_30"].round(0), "Status": work["status"].map(lambda v: STATUS_ICON.get(v, v)), "Saran": work["saran"],
     }).reset_index(drop=True)
     explain([
-        ("Urutan", "Kosong → Di bawah ROP → Lebih dari Max → Aman; dalam tiap status, selisih terbesar di atas"),
+        ("Urutan", "Kosong → Hampir habis → Stok berlebih → Aman; dalam tiap status, selisih terbesar di atas"),
         ("Prediksi 30 hari", "dari analisa aplikasi (laju harian × 30), dibandingkan dengan Max untuk menyarankan Max dinaikkan/diturunkan"),
     ])
     batched_view(
         len(frame), key="gudang-sku", noun="SKU",
-        render=lambda lo, hi: show_table(frame.iloc[lo:hi], kinds={"Stok 10037": "count", "Min": "count", "ROP": "count", "Max": "count", "PO/TR jalan": "count", "Prediksi 30 hari": "count"}),
+        render=lambda lo, hi: show_table(frame.iloc[lo:hi], kinds={"Stok 10037": "count", "Min": "count", "Titik pesan ulang": "count", "Max": "count", "Barang dalam perjalanan": "count", "Prediksi 30 hari": "count"}),
         download=lambda: download_excel(frame, "gudang_10037_sku.xlsx", key="xl-gudang-sku"),
     )

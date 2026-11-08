@@ -312,7 +312,7 @@ def build_view(
             "kecil_tanpa_lokasi": int((small_items["pick_location"].eq("")).sum()),
             "stok": float(part_items["stok"].sum()),
             "over_unit": float((part_items["stok"] - part_items["max_stock"]).clip(lower=0).where(part_items["max_stock"] > 0, 0).sum()),
-            "perlu_replenish": int(part_items["status"].isin(["Kosong", "Di bawah ROP"]).sum()),
+            "perlu_replenish": int(part_items["status"].isin(["Kosong", "Hampir habis"]).sum()),
         })
     categories = pd.DataFrame(rows, columns=[
         "kategori", "lokasi_rak", "sku_besar", "sku_besar_berstok", "rak_pct", "lokasi_gondola", "gondola_terisi",
@@ -326,7 +326,7 @@ def build_view(
     )
     status_by_loc = small.groupby("pick_location")["status"].agg(list).to_dict()
     bay["masalah"] = [
-        sum(1 for l in loc.loc[loc["bay_kode"] == b, "lokasi"] for s in status_by_loc.get(l, []) if s in ("Kosong", "Di bawah ROP"))
+        sum(1 for l in loc.loc[loc["bay_kode"] == b, "lokasi"] for s in status_by_loc.get(l, []) if s in ("Kosong", "Hampir habis"))
         for b in bay.index
     ]
     cat_rack_pct = categories.set_index("kategori")["rak_pct"].to_dict()
@@ -339,9 +339,9 @@ def _item_status(row) -> str:
     if stock <= 0:
         return "Kosong"
     if (rop > 0 and stock <= rop) or (min_stock > 0 and stock < min_stock):
-        return "Di bawah ROP"
+        return "Hampir habis"
     if max_stock > 0 and stock > max_stock:
-        return "Lebih dari Max"
+        return "Stok berlebih"
     return "Aman"
 
 
@@ -349,16 +349,16 @@ def _item_action(row) -> str:
     stock, max_stock = float(row.stok), float(row.max_stock)
     incoming = float(row.out_po) + float(row.out_tr)
     notes = []
-    if row.status in ("Kosong", "Di bawah ROP"):
+    if row.status in ("Kosong", "Hampir habis"):
         need = max(max_stock - stock - incoming, 0)
-        notes.append(f"Replenish ±{need:,.0f} unit (sampai Max {max_stock:,.0f}, sudah dalam perjalanan {incoming:,.0f})".replace(",", ".")
-                     if need > 0 else "Menunggu PO/TR yang sedang berjalan")
-    elif row.status == "Lebih dari Max":
-        notes.append(f"Kelebihan {stock - max_stock:,.0f} unit memakan ruang — tahan replenish / dorong promo".replace(",", "."))
+        notes.append(f"Isi ulang ±{need:,.0f} unit (sampai batas Max {max_stock:,.0f}; {incoming:,.0f} unit sudah dalam perjalanan)".replace(",", ".")
+                     if need > 0 else "Tunggu barang yang sedang dalam perjalanan")
+    elif row.status == "Stok berlebih":
+        notes.append(f"Kelebihan {stock - max_stock:,.0f} unit memakan ruang — tahan pengisian / dorong promo".replace(",", "."))
     if str(row.spesifikasi).lower() != "besar" and not row.pick_location:
-        notes.append("Barang kecil belum punya pick location — tetapkan lokasi gondola")
+        notes.append("Barang kecil belum punya lokasi ambil — tetapkan lokasi di gondola")
     elif row.pick_location and not row.lokasi_valid:
-        notes.append(f"Pick location {row.pick_location} tidak ada di denah")
+        notes.append(f"Lokasi {row.pick_location} tidak ada di denah")
     elif row.pick_location and row.kategori_lokasi and row.kategori and row.kategori_lokasi != row.kategori:
         notes.append(f"Lokasi zona {row.kategori_lokasi.title()}, kategori barang {row.kategori.title()}")
     pred = float(row.pred_30) if row.pred_30 == row.pred_30 else np.nan
