@@ -395,44 +395,79 @@ def _upload_cards(features, view: dict, *, may_upload: bool, username: str, requ
                         st.rerun()
 
 
+LANE_PRIORITY = {"Kosong": 0, "Hampir habis": 1, "Stok berlebih": 2, "Lokasi kosong": 3, "Aman": 4}
+
+
 def _lane_detail(view: dict) -> None:
     st.markdown("<div class='section-title'>Isi lokasi per lorong</div>", unsafe_allow_html=True)
     loc = view["locations"]
     items = view["items"]
     lanes = sorted(loc["lorong_kode"].unique(), key=lambda s: (s[0] != "G", s))
-    c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
+    c1, c2, c3 = st.columns([1, 1.3, 1.7], vertical_alignment="bottom")
     lane = c1.selectbox("Lorong", lanes, key="gudang-lane", format_func=lambda s: f"{'Gondola' if s.startswith('G') else 'Racking'} {s}")
     part = loc.loc[loc["lorong_kode"] == lane].sort_values(["bay", "level"])
     if lane.startswith("G"):
         joined = part.merge(items, left_on="lokasi", right_on="pick_location", how="left", suffixes=("", "_sku"))
+        status = joined["status"].where(joined["status"].notna(), "Lokasi kosong")
+        stock = joined["stok_sku"] if "stok_sku" in joined else joined["stok"]
         frame = pd.DataFrame({
+            "_status": status,
+            "Status": status.map(lambda v: STATUS_ICON.get(v, "⚪ Lokasi kosong")),
             "Lokasi": joined["lokasi"], "Bay": joined["bay"], "Level": joined["level"], "Kategori lokasi": joined["kategori"].str.title(),
-            "SKU": joined["sku"].fillna(""), "Nama": joined["nama"].fillna("— kosong —"), "Stok 10037": joined["stok_sku"] if "stok_sku" in joined else joined["stok"],
+            "SKU": joined["sku"].fillna(""), "Nama": joined["nama"].fillna("— kosong —"), "Stok 10037": stock,
             "Min": joined["min_stock"], "Titik pesan ulang": joined["rop"], "Max": joined["max_stock"],
-            "Status": joined["status"].map(lambda v: STATUS_ICON.get(v, "⚪ Lokasi kosong") if isinstance(v, str) else "⚪ Lokasi kosong"),
-            "Saran": joined["saran"].fillna("Lokasi kosong — bisa dipakai SKU kecil tanpa pick location"),
+            "Saran": joined["saran"].fillna("Lokasi kosong — bisa dipakai barang kecil yang belum punya lokasi ambil"),
         })
-        c2.markdown(
-            f"<div class='field-hint'>{fmt_num(int(part['terisi'].sum()))} dari {fmt_num(len(part))} lokasi terisi · "
-            f"{fmt_num(int((~part['terisi']).sum()))} lokasi kosong</div>",
-            unsafe_allow_html=True,
+        note = (
+            f"{fmt_num(int(part['terisi'].sum()))} dari {fmt_num(len(part))} lokasi terisi · "
+            f"{fmt_num(int((~part['terisi']).sum()))} lokasi kosong"
         )
     else:
         cats = sorted(set(part["kategori"]))
-        big = items.loc[items["kategori"].isin(cats) & items["spesifikasi"].str.lower().eq("besar")].sort_values("stok", ascending=False)
+        big = items.loc[items["kategori"].isin(cats) & items["spesifikasi"].str.lower().eq("besar")]
         frame = pd.DataFrame({
+            "_status": big["status"],
+            "Status": big["status"].map(lambda v: STATUS_ICON.get(v, v)),
             "SKU": big["sku"], "Nama": big["nama"], "Kategori": big["kategori"].str.title(), "Stok 10037": big["stok"],
-            "Min": big["min_stock"], "Titik pesan ulang": big["rop"], "Max": big["max_stock"],
-            "Status": big["status"].map(lambda v: STATUS_ICON.get(v, v)), "Saran": big["saran"],
+            "Min": big["min_stock"], "Titik pesan ulang": big["rop"], "Max": big["max_stock"], "Saran": big["saran"],
         })
-        c2.markdown(
-            f"<div class='field-hint'>Racking {lane}: {fmt_num(len(part))} lokasi, zona {', '.join(c.title() for c in cats)}. "
-            "Barang Besar tidak punya pick location di sistem, jadi daftar di bawah = SKU Besar pada kategori zona ini.</div>",
-            unsafe_allow_html=True,
+        note = (
+            f"Racking {lane}: {fmt_num(len(part))} lokasi, zona {', '.join(c.title() for c in cats)}. "
+            "Barang besar tidak punya lokasi ambil di sistem, jadi daftar ini = barang besar pada kategori zona ini."
         )
-    frame = frame.reset_index(drop=True)
+    options = [s for s in LANE_PRIORITY if s in set(frame["_status"])]
+    picked = c2.multiselect(
+        "Status", options, key=f"gudang-lane-status-{lane}", placeholder="Semua status",
+        format_func=lambda v: STATUS_ICON.get(v, "⚪ Lokasi kosong"),
+    )
+    counts = frame["_status"].value_counts()
+    c3.markdown(
+        f"<div class='field-hint'>{note}<br>"
+        + " · ".join(f"{STATUS_ICON.get(k, '⚪ Lokasi kosong')} {fmt_num(int(counts[k]))}" for k in LANE_PRIORITY if k in counts)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    if picked:
+        frame = frame.loc[frame["_status"].isin(picked)]
+    # Prioritas tindak lanjut: Kosong → Hampir habis → Stok berlebih → Lokasi kosong → Aman.
+    # Dalam status yang sama: kekurangan terhadap Max terbesar dulu (Kosong/Hampir habis), kelebihan terbesar dulu (Stok berlebih).
+    stock = pd.to_numeric(frame["Stok 10037"], errors="coerce").fillna(0)
+    cap = pd.to_numeric(frame["Max"], errors="coerce").fillna(0)
+    gap = np.where(frame["_status"].eq("Stok berlebih"), stock - cap, cap - stock)
+    frame = (
+        frame.assign(_p=frame["_status"].map(LANE_PRIORITY).fillna(9), _g=gap)
+        .sort_values(["_p", "_g"], ascending=[True, False], kind="mergesort")
+        .drop(columns=["_p", "_g", "_status"])
+        .reset_index(drop=True)
+    )
+    st.markdown(
+        "<div class='field-hint'>Urutan: prioritas tindak lanjut — 🔴 Kosong → 🟠 Hampir habis → 🟣 Stok berlebih → ⚪ Lokasi kosong → 🟢 Aman; "
+        "dalam status yang sama, selisih terhadap batas Max terbesar di atas.</div>",
+        unsafe_allow_html=True,
+    )
+    key = f"gudang-lane-{lane}-{'-'.join(sorted(picked))}"
     batched_view(
-        len(frame), key=f"gudang-lane-{lane}", noun="baris",
+        len(frame), key=key, noun="baris",
         render=lambda lo, hi: show_table(frame.iloc[lo:hi], kinds={"Stok 10037": "count", "Min": "count", "Titik pesan ulang": "count", "Max": "count"}),
         download=lambda: download_excel(frame, f"isi_lorong_{lane}.xlsx", key=f"xl-lane-{lane}"),
     )
