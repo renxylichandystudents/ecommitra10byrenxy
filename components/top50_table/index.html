@@ -7,7 +7,8 @@
 <style>
   /* Skala sama dengan :root di app.py */
   :root { --fs-xs: 0.75rem; --fs-sm: 0.85rem; --fs-base: 0.95rem; }
-  html, body { margin: 0; padding: 0; background: transparent; font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif; }
+  :root { color-scheme: light; }
+  html, body { margin: 0; padding: 0; width: 100%; background: transparent; font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif; }
   /* Warna, border, dan ukuran huruf disamakan dengan st.dataframe (lihat [theme] di .streamlit/config.toml). */
   .box {
     overflow: auto;
@@ -385,25 +386,9 @@
      dan scrollbar terpotong di bawah iframe. */
   // Tinggi selalu dikirim (tanpa dedup): pesan pertama bisa hilang bila Streamlit belum siap menerima,
   // dan pada layar sempit baris terlipat lebih banyak sehingga tinggi akhir baru diketahui setelah layout stabil.
-  // Beberapa browser (zoom halaman per situs) merender isi iframe dengan skala berbeda dari bingkainya:
-  // isi tampak mengecil dan ada area putih di kanan/bawah. Skala isi disamakan dengan lebar bingkai.
-  function frameScale() {
-    try {
-      const frame = window.frameElement;
-      if (!frame) return 1;
-      const ratio = frame.getBoundingClientRect().width / document.documentElement.clientWidth;
-      return ratio > 1.03 || ratio < 0.97 ? ratio : 1;
-    } catch (err) {
-      return 1;
-    }
-  }
-
   function postHeight() {
     const root = document.getElementById("root");
-    const scale = frameScale();
-    const zoom = scale === 1 ? "" : String(scale);
-    if (document.body.style.zoom !== zoom) document.body.style.zoom = zoom;
-    const height = Math.ceil((root.scrollHeight || root.getBoundingClientRect().height) * scale) + 8;
+    const height = Math.ceil(root.scrollHeight || root.getBoundingClientRect().height) + 8;
     post("streamlit:setFrameHeight", { height: height });
   }
   if (window.ResizeObserver) new ResizeObserver(() => postHeight()).observe(document.getElementById("root"));
