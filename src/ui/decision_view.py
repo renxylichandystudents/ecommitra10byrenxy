@@ -410,6 +410,39 @@ def top50_matrix(
     )
 
 
+def past_predictions(features, sku: str, varian: str, start: date, end: date) -> pd.DataFrame:
+    """Prediksi yang dulu dibuat untuk tanggal [start, end] (snapshot analisa): per tanggal D dipakai analisa
+    terakhir yang dibuat paling lambat pada hari D (datanya s.d. D−1), sehingga bisa dibandingkan dengan aktual."""
+    empty = pd.DataFrame(columns=["date", "pred_qty", "pred_sales"])
+    if features is None or start > end:
+        return empty
+    try:
+        from sqlalchemy import and_, select
+
+        from src.core.feature_store import prediction_snapshot as snap
+
+        query = select(snap.c.run_id, snap.c.created_at, snap.c.target_date, snap.c.varian, snap.c.pred_qty, snap.c.pred_sales).where(
+            and_(snap.c.sku == str(sku), snap.c.target_date >= start, snap.c.target_date <= end)
+        )
+        with features.engine.connect() as conn:
+            frame = pd.DataFrame(conn.execute(query).all(), columns=["run_id", "created_at", "date", "varian", "pred_qty", "pred_sales"])
+    except Exception:
+        return empty
+    if frame.empty:
+        return empty
+    wanted = str(varian or "")
+    if wanted and frame["varian"].astype(str).eq(wanted).any():
+        frame = frame.loc[frame["varian"].astype(str).eq(wanted)]
+    frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+    frame["created_at"] = pd.to_datetime(frame["created_at"])
+    frame = frame.loc[frame["created_at"].dt.normalize() <= frame["date"]]
+    if frame.empty:
+        return empty
+    latest = frame.groupby("date")["created_at"].transform("max")
+    frame = frame.loc[frame["created_at"] == latest]
+    return frame.groupby("date", as_index=False)[["pred_qty", "pred_sales"]].sum()
+
+
 def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, start: date, end: date, total: float) -> pd.DataFrame:
     dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D")
     if len(dates) == 0:
@@ -425,7 +458,7 @@ def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, 
     return pd.DataFrame({"date": dates, "qty": qty, "sales": qty * price})
 
 
-def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str) -> go.Figure:
+def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str, past=None) -> go.Figure:
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.62, 0.38], subplot_titles=(title, "Proyeksi sisa stok"))
     fmt = fmt_idr_short if money else fmt_qty
     fig.add_bar(
@@ -433,6 +466,18 @@ def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str
         text=[fmt(v) if v else "" for v in sold], textposition="outside",
         hovertemplate="%{x}<br>Terjual: %{customdata}<extra></extra>", customdata=[fmt(v) for v in sold], row=1, col=1,
     )
+    if past is not None and np.nansum(np.asarray(past, dtype=float)) > 0:
+        # Prediksi yang dulu dibuat untuk hari yang sudah lewat: dibandingkan langsung dengan batang Terjual.
+        hit = [
+            ("" if not p else f"{fmt(p)} · aktual {fmt(a)} ({fmt_num(a / p * 100, 0)}%)")
+            for a, p in zip(sold, past)
+        ]
+        fig.add_bar(
+            x=x_labels, y=past, name="Prediksi sebelumnya (hari lewat)", marker_color="rgba(238,77,45,0.30)",
+            marker_line=dict(color="#ee4d2d", width=1.2), marker_pattern_shape="/",
+            text=[fmt(v) if v else "" for v in past], textposition="outside",
+            hovertemplate="%{x}<br>Prediksi sebelumnya: %{customdata}<extra></extra>", customdata=hit, row=1, col=1,
+        )
     fig.add_bar(
         x=x_labels, y=pred, name="Prediksi", marker_color="#ee4d2d",
         text=[fmt(v) if v else "" for v in pred], textposition="outside",
@@ -483,6 +528,7 @@ def sku_charts(
     window_end: date,
     weekday: np.ndarray,
     key: str,
+    past: pd.DataFrame | None = None,
 ) -> None:
     """R9: Grafik QTY dan Grafik Sales, dua panel sumbu X bersama."""
     month_start = date(today.year, today.month, 1)
@@ -504,6 +550,12 @@ def sku_charts(
     if not path.empty:
         pred.loc[pd.DatetimeIndex(path["date"])] = path["qty"].to_numpy()
         pred_sales.loc[pd.DatetimeIndex(path["date"])] = path["sales"].to_numpy()
+    past_qty = pd.Series(0.0, index=days)
+    past_sales = pd.Series(0.0, index=days)
+    if isinstance(past, pd.DataFrame) and not past.empty:
+        part = past.loc[(past["date"] >= pd.Timestamp(month_start)) & (past["date"] < pd.Timestamp(today))].set_index("date")
+        past_qty = past_qty.add(part["pred_qty"].reindex(days, fill_value=0.0), fill_value=0.0)
+        past_sales = past_sales.add(part["pred_sales"].reindex(days, fill_value=0.0), fill_value=0.0)
     has_stock = bool(row.get("ada_data_stok", False))
     stok = float(row["stok"]) if has_stock else 0.0
     ss = float(row["ss"])
@@ -523,15 +575,18 @@ def sku_charts(
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(
-            _two_panel(labels, sold.to_numpy(), pred.to_numpy(), qty_line, ss, labels[qty_out] if qty_out is not None else None, money=False, title="Grafik QTY · Bulan ini", unit="Unit"),
+            _two_panel(labels, sold.to_numpy(), pred.to_numpy(), qty_line, ss, labels[qty_out] if qty_out is not None else None, money=False, title="Grafik QTY · Bulan ini", unit="Unit", past=past_qty.to_numpy()),
             use_container_width=True, key=f"{key}-qty",
         )
     with c2:
         st.plotly_chart(
-            _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah"),
+            _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah", past=past_sales.to_numpy()),
             use_container_width=True, key=f"{key}-sales",
         )
-    _sku_summary(row, today=today, month_end=month_end, sold=sold, sold_sales=sold_sales, pred=pred, pred_sales=pred_sales, qty_line=qty_line, days=days)
+    _sku_summary(
+        row, today=today, month_end=month_end, sold=sold, sold_sales=sold_sales, pred=pred, pred_sales=pred_sales,
+        qty_line=qty_line, days=days, past_qty=past_qty, past_sales=past_sales,
+    )
 
     if period == "bulan":
         return
@@ -583,6 +638,8 @@ def _sku_summary(
     pred_sales: pd.Series,
     qty_line: np.ndarray | None,
     days: pd.DatetimeIndex,
+    past_qty: pd.Series | None = None,
+    past_sales: pd.Series | None = None,
 ) -> None:
     """Kartu di bawah grafik SKU: penjualan, prediksi, stok Site 10037/10062/10036, rencana, dan catatan analisa."""
     month_start = date(today.year, today.month, 1)
@@ -701,7 +758,23 @@ def _sku_summary(
                 + (f" ({'+' if diff >= 0 else '−'}{fmt_num(abs(diff), 0)}%)" if diff is not None else ""),
             )
         )
-    notes.append(("Grafik", "batang biru = terjual s.d. kemarin, merah = prediksi harian mulai hari ini; garis oranye = stok Site 10037 dikurangi prediksi kumulatif, garis putus = SS"))
+    if past_qty is not None and float(past_qty.sum()) > 0:
+        covered = past_qty > 0
+        p_qty, a_qty = float(past_qty[covered].sum()), float(sold[covered].sum())
+        p_val, a_val = float(past_sales[covered].sum()), float(sold_sales[covered].sum())
+        first_day = past_qty.index[covered][0]
+        rate = a_qty / p_qty * 100 if p_qty > 0 else 0.0
+        verdict = "sesuai" if 85 <= rate <= 115 else ("di atas prediksi" if rate > 115 else "di bawah prediksi (meleset)")
+        notes.append(
+            (
+                f"Aktual vs prediksi sebelumnya ({fmt_date(first_day.date(), short=True)}–{fmt_date(yesterday, short=True)})",
+                f"terjual {fmt_qty(a_qty)} vs prediksi {fmt_num(p_qty, 1)} unit ({fmt_num(rate, 0)}%, {verdict}); "
+                f"sales {fmt_idr(a_val)} vs {fmt_idr(p_val)}",
+            )
+        )
+    else:
+        notes.append(("Prediksi sebelumnya", "belum ada analisa tersimpan yang memprediksi hari-hari yang sudah lewat bulan ini"))
+    notes.append(("Grafik", "batang biru = terjual s.d. kemarin; batang arsir = prediksi yang dulu dibuat untuk hari itu (bandingkan dengan biru); merah = prediksi mulai hari ini; garis oranye = stok Site 10037 dikurangi prediksi kumulatif, garis putus = SS"))
     explain(notes, title="Catatan analisa")
 
 

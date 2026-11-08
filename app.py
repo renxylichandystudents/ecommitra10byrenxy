@@ -68,6 +68,7 @@ from src.ui.rekomendasi import show_recommendations
 from src.ui.decision_view import (
     SS_DEFINITION_TOP,
     label_legend,
+    past_predictions,
     safety_stock_box,
     show_decision_table,
     sku_charts,
@@ -7747,7 +7748,8 @@ with PAGE_ROOT.container(key="page-root"):
         base_hist = stored.get("base_history")
         weekday = _weekday_profile(base_hist) if isinstance(base_hist, pd.DataFrame) and not base_hist.empty else np.ones(7)
         try:
-            sku_charts(chosen, item_orders, period=period, today=today, window_end=window_end, weekday=weekday, key=key)
+            past = past_predictions(FEATURES, str(chosen["sku"]), str(chosen.get("variasi_tampil") or ""), date(today.year, today.month, 1), today - timedelta(days=1))
+            sku_charts(chosen, item_orders, period=period, today=today, window_end=window_end, weekday=weekday, key=key, past=past)
         except Exception as exc:  # grafik tidak boleh menghentikan halaman
             st.info(f"Grafik SKU belum bisa digambar: {exc}")
 
