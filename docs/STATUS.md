@@ -203,6 +203,12 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Tab Evaluasi: 9 bagian (Ringkasan & kesesuaian metode, Metodologi, Profil data, Hasil uji walk-forward, Kurva aktual vs prediksi, Uji maju, Riwayat analisa, Fitur & segmen, Lampiran), gambar bernomor, unduhan Excel per bagian & lampiran lengkap.
 - Analisa #5 (bulan): Ensemble per segmen, MAPE agregat 18,6% (target 15%), WAPE 68,1% vs MA28 70,4% (skill +3,3%), bias −16,5% → 5 dari 10 uji sesuai. Uji maju terisi setelah transaksi hari sesudah analisa diunggah.
 
+## Data: performa penjualan instan & urutan bagian (8 Nov 2026)
+
+- Urutan tab Data: Status pesanan → Kontribusi invoice batal → **SKU dengan retur dan batal** (dipindah ke sini agar satu kelompok batal/retur) → Asal pesanan per wilayah → **Performa penjualan instan** (baru) → Pembeli batal karena belum bayar.
+- `src/core/instant.py` + `src/ui/instant.py`: instan = Opsi Pengiriman Instant, Instant Prioritas, Same Day (SPX/GoSend/GrabExpress), ikut periode data. Kartu invoice/sales bersih/tingkat batal/AOV instan vs lainnya, median waktu proses (bayar → pengiriman diatur), pesanan diproses > 2 jam, median sampai selesai; grafik harian per layanan + porsi instan, jam pesanan + % batal, box plot waktu proses; tabel per layanan × kurir (semua opsi sebagai pembanding), alasan batal instan, kota tujuan, produk instan teratas; Excel.
+- Sales bersih per layanan dijumlah = sales bersih tab Data (Okt 2026: Rp 2.849.936.785). Okt 2026: 334 invoice instan (4,9%), batal 12,3% vs 23,1% lainnya, median proses 2,7 jam, 9 batal karena penjual tidak mengatur pengiriman.
+
 ## Langkah berikutnya
 
 Audit ulang per menu bersama pengguna, satu per satu:

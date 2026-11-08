@@ -75,6 +75,7 @@ from src.ui.decision_view import (
     top50_matrix,
 )
 from src.ui.region import show_region_analysis
+from src.ui.instant import show_instant_analysis
 from src.ui.targets_view import achievement_line, monthly_targets, show_target_uploader, target_upload_label
 from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
@@ -4892,7 +4893,9 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
                 "Kontribusi nominal": st.column_config.ProgressColumn(format="%.1f%%", min_value=0.0, max_value=max(peak, 100.0 if peak > 100 else peak), help="Nominal batal ÷ seluruh nominal pada rentang"),
             },
         )
+    show_sku_issue_section(sku_sheet, selected_label)
     show_region_analysis(source_raw)
+    show_instant_analysis(source_raw, *_data_range)
     st.subheader("Pembeli batal karena belum bayar")
     unpaid_months = list(st.session_state.get("data_months") or [])
     if not unpaid_months:
@@ -4953,7 +4956,6 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             noun="akun",
             download=lambda: download_excel(export, "pembeli_belum_bayar.xlsx", key="xl-unpaid"),
         )
-    show_sku_issue_section(sku_sheet, selected_label)
 
 
 ISSUE_COLUMNS = {
