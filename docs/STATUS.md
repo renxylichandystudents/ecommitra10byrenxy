@@ -190,6 +190,19 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Nama campaign ikut setelan terbaru selama belum diketik manual.
 - Mengganti **Daya dorong iklan maks.** langsung mengisi target ROAS & budget dengan rekomendasi untuk asumsi itu (lewat flag + rerun, karena nilai widget tidak boleh diubah sesudah dibuat).
 
+## Laporan per rentang & laporan tersimpan (8 Nov 2026)
+
+- Laporan pakai kalender rentang (`date_range_picker`, bawaan bulan penuh terakhir). Semua angka, grafik & tabel dihitung untuk rentang itu dan dibanding periode sebelumnya yang sama panjang; prediksi, stok, Monte Carlo & rekomendasi tetap dari analisa aktif (diberi keterangan).
+- 12 bagian: ringkasan, target & tren (harian + rata-rata 7 hari, kumulatif vs laju target, 6 bulan + target), produk terlaris (bar, treemap, perubahan), prediksi & stok, iklan (biaya vs omzet per produk), campaign tersimpan yang beririsan (timeline), performa toko harian, transaksi/batal/retur, SWOT, fishbone, rekomendasi, panduan kerja. Unduh semua tabel (Excel) + cetak PDF.
+- **Simpan laporan**: snapshot JSON di kv_setting (`laporan:index`, `laporan:<id>`, maks. 60) lewat `src/core/report_data.py` (`build_snapshot` di UI, `ReportStore`, `to_json`/`from_json`). Mode **Laporan tersimpan** membuka laporan persis seperti saat disimpan tanpa menghitung ulang; bisa dihapus.
+- `daily_orders` cocok dengan `order_metrics` (sales bersih, pesanan, batal) — diuji.
+
+## Evaluasi model untuk tesis (8 Nov 2026)
+
+- `src/core/model_history.py`: riwayat semua analisa tersimpan (data/runs/*/state.pkl), uji kesesuaian metode (skill vs MA28 & Level terkini, MAPE agregat ≤ 15%, bias, Top 50, tingkat layanan, jumlah lipatan, stabilitas & konsistensi antar analisa, keterbatasan in-sample segmen), profil permintaan Syntetos–Boylan (ADI/CV²), Pareto, replikasi walk-forward per SKU (disimpan `eval_detail.pkl` di folder run), uji maju (prediction_snapshot vs aktual sesudah tanggal analisa).
+- Tab Evaluasi: 9 bagian (Ringkasan & kesesuaian metode, Metodologi, Profil data, Hasil uji walk-forward, Kurva aktual vs prediksi, Uji maju, Riwayat analisa, Fitur & segmen, Lampiran), gambar bernomor, unduhan Excel per bagian & lampiran lengkap.
+- Analisa #5 (bulan): Ensemble per segmen, MAPE agregat 18,6% (target 15%), WAPE 68,1% vs MA28 70,4% (skill +3,3%), bias −16,5% → 5 dari 10 uji sesuai. Uji maju terisi setelah transaksi hari sesudah analisa diunggah.
+
 ## Langkah berikutnya
 
 Audit ulang per menu bersama pengguna, satu per satu:

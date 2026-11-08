@@ -8648,6 +8648,9 @@ with PAGE_ROOT.container(key="page-root"):
             params=params,
             base_history=stored.get("base_history"),
             is_super=AUTH_USER.role == "super_user",
+            repo=run_repository(),
+            run_id=int((st.session_state.get("active-run") or (0,))[0] or 0),
+            features=FEATURES,
         )
 
     _tick(f"menu {sheet}")
