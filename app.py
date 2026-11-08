@@ -94,7 +94,7 @@ from src.core.periods import last_full_month
 from src.core.warehouse import lead_time_stats
 from src.ui.dashboard import show_priority_dashboard
 from src.ui.feature_data import cached_feature_data, excluded_skus
-from src.ui.prediksi_top import save_run_snapshot, show_pred_vs_actual, show_prediction_checklist
+from src.ui.prediksi_top import save_run_snapshot, show_pred_vs_actual
 from src.ui.setting_page import show_setting
 from src.core.access import allowed as allowed_access, setting_tabs
 from src.core.fmt import fmt_date_short
@@ -8042,14 +8042,7 @@ with PAGE_ROOT.container(key="page-root"):
             safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, **_ss_params(params, applied_service))
 
     elif sheet == "Prediksi":
-        show_prediction_checklist(
-            enriched,
-            orders=orders,
-            today=today,
-            window_start=window_start,
-            data=FEATURE_DATA,
-            label_options=list(LABEL_ICONS),
-        )
+        # Tabel "Pilih SKU" dihapus: isinya sudah ada di tabel Prediksi semua produk di bawah (centang Grafik untuk rincian SKU).
         show_pred_vs_actual(FEATURES, orders=orders, table=enriched)
         # Kartu penjualan & saklar batal/retur sama dengan Ringkasan: di sini dilipat agar tidak dobel.
         with st.expander("Ringkasan penjualan periode & saklar Kecualikan batal & retur (sama dengan menu Ringkasan)"):
