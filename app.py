@@ -7957,11 +7957,12 @@ with PAGE_ROOT.container(key="page-root"):
                 filename="top50_item_terlaris.xlsx",
                 step=5,
             )
-            safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, **_ss_params(params, applied_service))
+            # Grafik SKU langsung di bawah tabel (dekat centang Grafik); analisa safety stock sesudahnya.
             if picked:
                 show_sku_detail(shown, picked, key=f"top50-chart-{picked}")
             else:
                 st.info("Centang kolom Grafik pada satu SKU untuk menampilkan Grafik QTY dan Grafik Sales.")
+            safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, **_ss_params(params, applied_service))
 
     elif sheet == "Prediksi":
         show_prediction_checklist(
@@ -8015,9 +8016,9 @@ with PAGE_ROOT.container(key="page-root"):
                     filename="prediksi_semua_produk.xlsx",
                     height=720,
                 )
-                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, scope="Semua produk sesuai saringan", **_ss_params(params, applied_service))
                 if picked:
                     show_sku_detail(page_view, picked, key=f"allpred-chart-{picked}")
+                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, scope="Semua produk sesuai saringan", **_ss_params(params, applied_service))
 
     elif sheet == "Data":
         if source_raw.empty:
