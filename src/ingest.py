@@ -60,6 +60,16 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "jumlah produk di pesan",
         "jumlah produk dipesan",
     ),
+    "province": (
+        "provinsi",
+        "province",
+    ),
+    "city": (
+        "kota/kabupaten",
+        "kota",
+        "kabupaten/kota",
+        "city",
+    ),
     "returned_qty": (
         "returned quantity",
         "jumlah dikembalikan",

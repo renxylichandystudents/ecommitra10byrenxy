@@ -557,3 +557,68 @@ def unpaid_buyer_table(
     result.insert(0, "No", numbers)
     result.insert(1, "Nama akun pembeli", names)
     return result.drop(columns=["_buyer", "_name", "_time", "_latest"]).reset_index(drop=True)
+
+
+def region_lines(source: pd.DataFrame) -> pd.DataFrame:
+    """Baris pesanan dengan provinsi dan kota/kabupaten pembeli (dari kolom Provinsi & Kota/Kabupaten Shopee)."""
+    columns = ["order_id", "order_time", "month", "province", "city", "cancelled", "qty", "line_sales"]
+    if source is None or source.empty:
+        return pd.DataFrame(columns=columns)
+    table = source.drop(columns=["Nama file"], errors="ignore")
+    table.columns = [str(column).strip() for column in table.columns]
+    try:
+        mapping = map_columns(table)
+    except ValueError:
+        return pd.DataFrame(columns=columns)
+    if not {"order_id", "order_time", "qty"} <= set(mapping) or not ({"province", "city"} & set(mapping)):
+        return pd.DataFrame(columns=columns)
+    frame = pd.DataFrame()
+    frame["order_time"] = _parse_datetime(table[mapping["order_time"]])
+    frame["order_id"] = clean_text_series(table[mapping["order_id"]])
+    frame["province"] = clean_text_series(table[mapping["province"]]).str.upper() if "province" in mapping else ""
+    frame["city"] = clean_text_series(table[mapping["city"]]).str.upper() if "city" in mapping else ""
+    status = normalize_status_series(table[mapping["status"]]) if "status" in mapping else pd.Series("", index=table.index)
+    frame["cancelled"] = cancelled_status_mask(status)
+    frame["qty"] = _parse_number(table[mapping["qty"]]).fillna(0).clip(lower=0)
+    price = _parse_number(table[mapping["unit_price"]]).fillna(0).clip(lower=0) if "unit_price" in mapping else 0.0
+    frame["line_sales"] = price * frame["qty"]
+    frame = frame.dropna(subset=["order_time"])
+    frame = frame.loc[frame["order_id"].ne("")].copy()
+    frame["province"] = frame["province"].replace("", "TIDAK DIKETAHUI")
+    frame["city"] = frame["city"].replace("", "TIDAK DIKETAHUI")
+    frame["month"] = frame["order_time"].dt.to_period("M").astype(str)
+    return frame[columns]
+
+
+def _region_title(name: str) -> str:
+    """JAWA BARAT → Jawa Barat; singkatan DKI/DI/KAB./KOTA tetap rapi."""
+    words = str(name).title().split()
+    fixed = {"Dki": "DKI", "Di": "DI", "Kab.": "Kab.", "Ntb": "NTB", "Ntt": "NTT"}
+    return " ".join(fixed.get(word, word) for word in words)
+
+
+def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
+    """Ringkasan invoice per provinsi (level="province") atau per kota/kabupaten (level="city").
+
+    Invoice = No. Pesanan unik. QTY & sales value hanya dari pesanan yang tidak batal."""
+    keys = ["province"] if level == "province" else ["province", "city"]
+    names = {"province": "Provinsi", "city": "Kota/Kabupaten"}
+    out_cols = ["Rank"] + [names[k] for k in keys] + ["Invoice", "Invoice batal", "% batal", "QTY terjual", "Sales value", "Kontribusi invoice"]
+    if lines is None or lines.empty:
+        return pd.DataFrame(columns=out_cols)
+    orders = lines.groupby(["order_id"] + keys, as_index=False).agg(cancelled=("cancelled", "all"))
+    grouped = orders.groupby(keys).agg(invoice=("order_id", "nunique"), batal=("cancelled", "sum"))
+    paid = lines.loc[~lines["cancelled"]].groupby(keys).agg(qty=("qty", "sum"), sales=("line_sales", "sum"))
+    result = grouped.join(paid, how="left").fillna({"qty": 0.0, "sales": 0.0}).reset_index()
+    total_invoice = float(result["invoice"].sum()) or 1.0
+    result = result.sort_values(["invoice", "sales"], ascending=False).reset_index(drop=True)
+    out = pd.DataFrame({"Rank": range(1, len(result) + 1)})
+    for key in keys:
+        out[names[key]] = result[key].map(_region_title).to_numpy()
+    out["Invoice"] = result["invoice"].astype(int).to_numpy()
+    out["Invoice batal"] = result["batal"].astype(int).to_numpy()
+    out["% batal"] = (result["batal"] / result["invoice"].replace(0, np.nan) * 100).fillna(0).to_numpy()
+    out["QTY terjual"] = result["qty"].to_numpy()
+    out["Sales value"] = result["sales"].to_numpy()
+    out["Kontribusi invoice"] = (result["invoice"] / total_invoice * 100).to_numpy()
+    return out[out_cols]

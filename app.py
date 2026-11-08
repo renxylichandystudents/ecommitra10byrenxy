@@ -74,6 +74,7 @@ from src.ui.decision_view import (
     sku_charts,
     top50_matrix,
 )
+from src.ui.region import show_region_analysis
 from src.ui.settings import show_business_settings
 from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
@@ -4512,6 +4513,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             },
         )
         offer_excel(contribution_view, "kontribusi_invoice_batal.xlsx")
+    show_region_analysis(source_raw)
     st.subheader("Pembeli batal karena belum bayar")
     unpaid_months = list(st.session_state.get("data_months") or [])
     if not unpaid_months:
