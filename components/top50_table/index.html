@@ -81,13 +81,44 @@
   td.st-short .main, td.st-empty .main { color: #b91c1c; }
   .labels { font-size: var(--fs-xs); color: #475569; margin-top: 3px; white-space: normal; }
   .labels .chip.more { cursor: help; background: #f1f5f9; }
+  /* Muat bertahap per kelompok (Terbuka / Tertutup), sama dengan batched_view di Streamlit. */
+  tr.grp td { background: #f8fafc; padding: 0; border-left: 0; border-right: 0; border-bottom: 1px solid #e2e8f0; cursor: pointer; }
+  tr.grp:hover td { background: #f1f5f9; }
+  .grp-in { position: sticky; left: 0; display: flex; align-items: center; gap: 10px; padding: 9px 12px; width: var(--vw, 600px); box-sizing: border-box; }
+  .grp-no { background: #4f46e5; color: #fff; font-weight: 800; font-size: 0.78rem; border-radius: 7px; padding: 4px 7px; min-width: 28px; text-align: center; }
+  .grp-title { font-weight: 800; color: #0f172a; }
+  .grp-sub { color: #64748b; font-size: var(--fs-xs); font-weight: 500; }
+  .grp-sp { flex: 1; }
+  .pill { border-radius: 999px; padding: 3px 10px; font-size: var(--fs-xs); font-weight: 800; white-space: nowrap; }
+  .pill.open { background: #dcfce7; color: #047857; border: 1px solid #86efac; }
+  .pill.closed { background: #fef9c3; color: #92400e; border: 1px solid #fde68a; }
+  .chev { width: 28px; height: 28px; border-radius: 50%; border: 1px solid #cbd5e1; background: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #334155; }
+  .foot { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 4px 4px; }
+  .btn { font-family: inherit; font-weight: 700; font-size: var(--fs-sm); border-radius: 10px; padding: 9px 18px; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; }
+  .btn.primary { background: #ee4d2d; border-color: #ee4d2d; color: #fff; }
+  .btn.primary:hover { background: #d9411f; }
+  .done { border: 1px solid #a7f3d0; background: #ecfdf5; color: #047857; border-radius: 12px; padding: 10px 16px; text-align: center; font-size: var(--fs-sm); }
+  .done b { display: block; }
   .chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 0 0; border-radius: 999px; background: #f1f5f9; border: 1px solid #e2e8f0; font-weight: 600; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script>
-  const state = { sortId: null, sortDir: 1, selected: "", args: null, order: null, widths: {}, justDragged: false };
+  const state = { sortId: null, sortDir: 1, selected: "", args: null, order: null, widths: {}, justDragged: false, groups: 1, open: new Set([0]), sig: "" };
+
+  /* Rentang kelompok: kelompok 1 = first baris, berikutnya step baris. */
+  function batchRanges(total, groups, first, step) {
+    const out = [];
+    let start = 0;
+    for (let i = 0; i < Math.max(1, groups); i++) {
+      const end = Math.min(total, start + (i === 0 ? first : step));
+      if (start >= end) break;
+      out.push([start, end]);
+      start = end;
+    }
+    return out;
+  }
   const DRAG_PX = 5;
   const MIN_WIDTH = 56;
 
@@ -244,7 +275,9 @@
 
     // limit: tampil N baris teratas SETELAH diurutkan (urut tetap atas semua baris); Muat lagi menambah limit dari Streamlit.
     const limit = Number(args.limit) > 0 ? Number(args.limit) : Infinity;
-    const body = sortedRows(args).slice(0, limit).map((r) => {
+    const batch = args.batch && args.rows.length > (args.batch.first || 5) ? args.batch : null;
+    const allRows = sortedRows(args);
+    function rowHtml(r) {
       const picked = r.key === state.selected;
       const tds = cols.map((c) => {
         if (c.id === "pick") {
@@ -254,7 +287,30 @@
         return `<td data-c="${esc(c.id)}" class="${cls(c, cell && cell.c ? cell.c : "")}" style="${style(c)}">${cellHtml(cell)}</td>`;
       }).join("");
       return `<tr class="${picked ? "picked" : ""}">${tds}</tr>`;
-    }).join("");
+    }
+    let body = "";
+    let foot = "";
+    if (batch) {
+      const first = batch.first || 5;
+      const step = batch.step || 10;
+      const noun = esc(batch.noun || "baris");
+      const ranges = batchRanges(allRows.length, state.groups, first, step);
+      ranges.forEach(([a, b], i) => {
+        const on = state.open.has(i);
+        body += `<tr class="grp" data-grp="${i}"><td colspan="${cols.length}"><div class="grp-in"><span class="grp-no">#${i + 1}</span>` +
+          `<div><div class="grp-title">Kelompok ${noun} (${a + 1} – ${b})</div><div class="grp-sub">Dimuat pada pemanggilan data ke-${i + 1}</div></div>` +
+          `<span class="grp-sp"></span><span class="pill ${on ? "open" : "closed"}">${on ? "👁 Terbuka" : "🙈 Tertutup"}</span>` +
+          `<span class="chev">${on ? "▲" : "▼"}</span></div></td></tr>`;
+        if (on) body += allRows.slice(a, b).map(rowHtml).join("");
+      });
+      const loaded = ranges[ranges.length - 1][1];
+      const rest = allRows.length - loaded;
+      foot = rest > 0
+        ? `<div class="foot"><button class="btn primary" data-act="more">Muat lebih banyak ▾ · ${Math.min(step, rest)} ${noun} berikutnya (sisa ${rest})</button></div>`
+        : `<div class="foot"><div class="done"><b>✓ Semua data telah ditampilkan</b>${allRows.length} dari ${allRows.length} ${noun}</div><button class="btn" data-act="reset">↺ Tutup semua, kembali ke awal</button></div>`;
+    } else {
+      body = allRows.slice(0, limit).map(rowHtml).join("");
+    }
 
     const root = document.getElementById("root");
     const box = root.querySelector(".box");
@@ -266,7 +322,7 @@
     root.innerHTML =
       `<div class="box" style="max-height:${maxHeight}px"><table><thead>` +
       `<tr class="h1">${row1}</tr><tr class="h2">${row2}</tr><tr class="total">${row3}</tr>` +
-      `</thead><tbody>${body}</tbody></table></div>`;
+      `</thead><tbody>${body}</tbody></table></div>${foot}`;
 
     const table = root.querySelector("table");
     const h1 = table.querySelector("tr.h1").getBoundingClientRect().height;
@@ -302,10 +358,32 @@
       });
     });
 
+    root.querySelectorAll("tr.grp").forEach((tr) => {
+      tr.addEventListener("click", () => {
+        const i = Number(tr.getAttribute("data-grp"));
+        if (state.open.has(i)) state.open.delete(i); else state.open.add(i);
+        render();
+      });
+    });
+    root.querySelectorAll("[data-act]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.getAttribute("data-act") === "more") {
+          // Kelompok baru terbuka, kelompok sebelumnya otomatis tertutup agar tabel tetap ringkas.
+          state.open = new Set([state.groups]);
+          state.groups += 1;
+        } else {
+          state.groups = 1;
+          state.open = new Set([0]);
+        }
+        render();
+      });
+    });
+
     const newBox = root.querySelector(".box");
+    newBox.style.setProperty("--vw", newBox.clientWidth + "px");
     newBox.scrollTop = keepTop;
     newBox.scrollLeft = keepLeft;
-    post("streamlit:setFrameHeight", { height: Math.ceil(newBox.getBoundingClientRect().height) + 4 });
+    post("streamlit:setFrameHeight", { height: Math.ceil(root.getBoundingClientRect().height) + 4 });
   }
 
   function markDragged() {
@@ -414,6 +492,9 @@
     const args = data.args || {};
     const first = state.args === null;
     state.args = args;
+    // Data berganti (mis. rentang tanggal lain): kelompok kembali ke awal.
+    const sig = (args.rows || []).length + "|" + ((args.rows || [])[0] || {}).key;
+    if (sig !== state.sig) { state.sig = sig; state.groups = 1; state.open = new Set([0]); }
     if (first) state.selected = args.selected || "";
     if (first && args.sort) state.sortId = args.sort;
     render();

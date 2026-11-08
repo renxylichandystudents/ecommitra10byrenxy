@@ -16,7 +16,7 @@ from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date
 from src.core.product_features import features_from_description, hook_for
 from src.core.promo import momentum_14d, product_label, promo_eligible
-from src.ui.common import card, download_excel, explain, fmt_idr, fmt_num
+from src.ui.common import batched_view, card, download_excel, explain, fmt_idr, fmt_num
 from src.ui.feature_data import FeatureData, bump, product_frame
 from src.core.ads import roas_estimate
 from src.utils.format import input_rupiah, show_table, wrap_layout
@@ -158,30 +158,35 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
         )
     alloc = pd.DataFrame(rows)
     alloc = alloc.sort_values(["Budget tambahan", "Budget saat ini / bulan"], ascending=False)
-    limit = int(st.session_state.get("tgt-limit", STEP))
-    page = alloc.head(limit)
+    alloc = alloc.reset_index(drop=True)
+    # Nilai Budget tambahan yang sudah diubah user disimpan per SKU agar tidak hilang saat kelompok ditutup.
+    edits_key = f"tgt-edits-{choice}"
+    edits: dict = st.session_state.setdefault(edits_key, {})
+    alloc["Budget tambahan"] = [float(edits.get(sku, value)) for sku, value in zip(alloc["_sku"], alloc["Budget tambahan"])]
     alloc_cfg = {
         "SKU · produk · varian": st.column_config.TextColumn(width="large"),
         "Budget saat ini / bulan": st.column_config.NumberColumn(format="localized"),
         "Budget tambahan": st.column_config.NumberColumn(format="localized", step=500_000, min_value=0),
         "ROAS marginal": st.column_config.NumberColumn(format="%.1f"),
     }
-    alloc_row, alloc_cfg = wrap_layout(page.drop(columns="_sku"), alloc_cfg)
-    edited = st.data_editor(
-        page.drop(columns="_sku"),
-        row_height=alloc_row,
-        hide_index=True,
-        use_container_width=True,
-        disabled=["SKU · produk · varian", "Keputusan", "Budget saat ini / bulan", "ROAS marginal"],
-        column_config=alloc_cfg,
-        key=f"tgt-alloc-{choice}-{limit}",
-    )
-    if limit < len(alloc) and st.button("Muat 20 SKU lagi", key="tgt-more"):
-        st.session_state["tgt-limit"] = limit + STEP
-        st.rerun()
+    def _render_alloc(lo: int, hi: int) -> None:
+        part = alloc.iloc[lo:hi]
+        row_px, cfg = wrap_layout(part.drop(columns="_sku"), dict(alloc_cfg))
+        edited = st.data_editor(
+            part.drop(columns="_sku"),
+            row_height=row_px,
+            hide_index=True,
+            use_container_width=True,
+            disabled=["SKU · produk · varian", "Keputusan", "Budget saat ini / bulan", "ROAS marginal"],
+            column_config=cfg,
+            key=f"tgt-alloc-{choice}-{lo}",
+        )
+        for sku, value in zip(part["_sku"], edited["Budget tambahan"]):
+            edits[sku] = float(value or 0)
+
+    batched_view(len(alloc), key=f"tgt-{choice}", render=_render_alloc, noun="SKU")
     final = dict(plan)
-    for sku, value in zip(page["_sku"], edited["Budget tambahan"]):
-        final[sku] = float(value or 0)
+    final.update({sku: float(value or 0) for sku, value in edits.items()})
     strategy_budget = float(frame.set_index("Strategi").loc[choice, "Budget tambahan"])
     product_total = float(sum(final.values()))
     g1, g2 = st.columns([1, 2])
@@ -479,10 +484,11 @@ def show_ranking(table: pd.DataFrame, *, features, frames, username: str, can_ed
     shown = frame.drop(columns=empty_cols)
     if empty_cols:
         st.caption("Belum ada datanya, jadi tidak ditampilkan: " + ", ".join(empty_cols) + ".")
-    limit = int(st.session_state.get("rank-limit", STEP))
-    show_table(shown.head(limit), column_config={"Langkah prioritas": st.column_config.TextColumn(width="large")})
-    if limit < len(frame) and st.button("Muat 20 SKU lagi", key="rank-more"):
-        st.session_state["rank-limit"] = limit + STEP
-        st.rerun()
+    batched_view(
+        len(shown),
+        key="rank",
+        render=lambda lo, hi: show_table(shown.iloc[lo:hi], column_config={"Langkah prioritas": st.column_config.TextColumn(width="large")}),
+        noun="SKU",
+    )
     download_excel(frame, "skor_kesiapan_ranking.xlsx", key="xl-rank")
 

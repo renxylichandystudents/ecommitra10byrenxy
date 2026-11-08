@@ -15,7 +15,7 @@ from src.core.fmt import fmt_date, fmt_date_short
 from src.core.pred_actual import STATUS_ORDER, daily_comparison, lost_sales_from_stock
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
-from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct, sku_cards, status_key
+from src.ui.common import batched_view, card, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
 from src.ui.dashboard import status_badges
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table, table_height, wrap_layout
@@ -70,8 +70,7 @@ def show_prediction_checklist(
         work = work.loc[work["label"].map(lambda names: any(name in (names or []) for name in labels))]
     if statuses:
         work = work.loc[work["m_status"].map(status_key).isin(statuses)]
-    limit = int(st.session_state.get("chk-limit", STEP))
-    page = work.head(limit)
+    page = work
     picked_before = set(st.session_state.get("chk-picked", []))
     frame = pd.DataFrame(
         {
@@ -96,8 +95,7 @@ def show_prediction_checklist(
             frame = frame.drop(columns=column)
     if not frame["Ambil dari DC"].astype(str).str.strip().any():
         frame = frame.drop(columns="Ambil dari DC")
-    shown = status_badges(frame, "Status stok")
-    editor_box = st.container(key="desktop-chk-editor")
+    shown_all = status_badges(frame, "Status stok")
     editor_cfg = {
         "Pilih": st.column_config.CheckboxColumn("Pilih", width="small"),
         pred_label: st.column_config.NumberColumn(format="localized"),
@@ -109,32 +107,45 @@ def show_prediction_checklist(
         "SS": st.column_config.NumberColumn(format="localized"),
         "Status stok": st.column_config.TextColumn(width="small"),
     }
-    row_px, editor_cfg = wrap_layout(shown.drop(columns="_key"), editor_cfg)
-    edited = editor_box.data_editor(
-        shown.drop(columns="_key"),
-        row_height=row_px,
-        hide_index=True,
-        use_container_width=True,
-        disabled=[c for c in shown.columns if c not in ("Pilih", "_key")],
-        column_config=editor_cfg,
-        key=f"chk-editor-{limit}-{needle}-{'|'.join(labels)}-{'|'.join(statuses)}",
-        height=table_height(len(shown), 720, row_px),
-    )
+    picked = set(picked_before)
+    filter_sig = f"{needle}-{'|'.join(labels)}-{'|'.join(statuses)}"
+    if st.session_state.get("chk-filter-sig") != filter_sig:
+        st.session_state["chk-filter-sig"] = filter_sig
+        reset_batches("chk")
+
+    def _render(lo: int, hi: int) -> None:
+        nonlocal picked
+        part = shown_all.iloc[lo:hi]
+        keys_part = frame["_key"].iloc[lo:hi]
+        row_px, cfg = wrap_layout(part.drop(columns="_key"), dict(editor_cfg))
+        edited = st.container(key=f"desktop-chk-editor-{lo}").data_editor(
+            part.drop(columns="_key"),
+            row_height=row_px,
+            hide_index=True,
+            use_container_width=True,
+            disabled=[c for c in part.columns if c not in ("Pilih", "_key")],
+            column_config=cfg,
+            key=f"chk-editor-{lo}-{filter_sig}",
+            height=table_height(len(part), 720, row_px),
+        )
+        # Centang per kelompok digabung; kelompok yang ditutup tetap menyimpan pilihannya.
+        picked = (picked - set(keys_part)) | set(keys_part[edited["Pilih"].to_numpy()])
+        sku_cards(
+            [
+                {
+                    "sku": r["SKU"],
+                    "produk": r["Produk"],
+                    "varian": r["Varian"],
+                    "status": r["Status stok"],
+                    "nums": [(pred_label, fmt_num(r[pred_label])), (actual_label, fmt_num(r[actual_label])), ("Stok Site 10037", fmt_num(r["Stok Site 10037"])), ("SS", fmt_num(r["SS"]))] + ([("Ambil dari DC", r["Ambil dari DC"])] if r.get("Ambil dari DC") else []),
+                }
+                for r in frame.iloc[lo:hi].to_dict("records")
+            ],
+            key=f"chk-{lo}",
+        )
+
+    batched_view(len(frame), key="chk", render=_render, noun="SKU")
     keys_on_page = set(frame["_key"])
-    picked = (picked_before - keys_on_page) | set(frame.loc[edited["Pilih"].to_numpy(), "_key"])
-    sku_cards(
-        [
-            {
-                "sku": r["SKU"],
-                "produk": r["Produk"],
-                "varian": r["Varian"],
-                "status": r["Status stok"],
-                "nums": [(pred_label, fmt_num(r[pred_label])), (actual_label, fmt_num(r[actual_label])), ("Stok Site 10037", fmt_num(r["Stok Site 10037"])), ("SS", fmt_num(r["SS"]))] + ([("Ambil dari DC", r["Ambil dari DC"])] if r.get("Ambil dari DC") else []),
-            }
-            for r in frame.to_dict("records")
-        ],
-        key="chk",
-    )
     names = dict(zip(frame["_key"], frame["SKU"] + " · " + frame["Produk"]))
     default = sorted(picked_before & keys_on_page)
     with st.container(key="mobile-chk-pick"):
@@ -142,13 +153,10 @@ def show_prediction_checklist(
     if sorted(mobile_pick) != default:
         picked = (picked_before - keys_on_page) | set(mobile_pick)
     st.session_state["chk-picked"] = sorted(picked)
-    c1, c2, c3 = st.columns([1.2, 1, 3])
-    if limit < len(work) and c1.button("Muat 20 SKU lagi", key="chk-more"):
-        st.session_state["chk-limit"] = limit + STEP
-        st.rerun()
+    c2, c3 = st.columns([1, 3])
     with c2:
         download_excel(frame.drop(columns=["Pilih", "_key"]), "prediksi_pilih_sku.xlsx", key="xl-chk")
-    c3.markdown(f"<div class='field-hint' style='text-align:right'>{fmt_num(len(page))} dari {fmt_num(len(work))} SKU</div>", unsafe_allow_html=True)
+    c3.markdown(f"<div class='field-hint' style='text-align:right'>{fmt_num(len(work))} SKU sesuai saringan</div>", unsafe_allow_html=True)
     chosen = table.loc[table["item_key"].astype(str).isin(picked)]
     if chosen.empty:
         st.caption("Centang kolom Pilih untuk menampilkan penjelasan prediksi per SKU.")

@@ -16,7 +16,7 @@ import streamlit as st
 from src.core.nlp_competitor import build_name_recommendations, clean_text, description_summary
 from src.core.recommendations import ads_plan, flash_sale_plan, flash_sale_template
 from src.core.segmentation import association_rules
-from src.ui.common import button_tabs, card, download_excel, explain, fmt_date, fmt_idr, fmt_num
+from src.ui.common import batched_view, button_tabs, card, download_excel, explain, fmt_date, fmt_idr, fmt_num, reset_batches
 from src.utils.format import input_rupiah, show_table
 
 STATUS_TONES = {"Poor": "#fee2e2", "Standard": "#fef9c3", "Excellence": "#dcfce7"}
@@ -73,34 +73,37 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
             st.session_state["name-filter"] = status
             st.rerun()
     view = recs if current == "Semua" else recs.loc[recs["Status skor"].eq(current)]
-    size = int(st.selectbox("Tampilkan", [10, 50, 100, 200], index=0, key="name-size"))
-    shown_n = int(st.session_state.get("name-more", size))
-    shown_n = max(shown_n, size)
-    page = view.head(shown_n).reset_index(drop=True)
+    page = view.reset_index(drop=True)
     columns = ["SKU", "Nama produk saat ini", "Status skor", "Rekomendasi nama baru", "Kata kunci utama"]
     display = page[columns].copy()
     display["Ringkasan deskripsi"] = page["Rekomendasi deskripsi"].map(description_summary)
     display["Status skor"] = display["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v))
-    # Tabel selebar penuh; detail baris terpilih tampil di bawahnya.
-    table_col, detail_col = st.container(), st.container(border=True)
-    with table_col:
+    if st.session_state.get("name-filter-was") != current:
+        st.session_state["name-filter-was"] = current
+        reset_batches("names")
+        st.session_state.pop("name-picked", None)
+
+    def _render_names(lo: int, hi: int) -> None:
         event = show_table(
-            display,
+            display.iloc[lo:hi],
             on_select="rerun",
             selection_mode="single-row",
-            key="name-table",
+            key=f"name-table-{current}-{lo}",
             column_config={"Ringkasan deskripsi": st.column_config.TextColumn(width="medium")},
         )
-    rows = getattr(getattr(event, "selection", None), "rows", []) or []
-    with detail_col:
+        rows = getattr(getattr(event, "selection", None), "rows", []) or []
         if rows:
-            _name_detail(page.iloc[rows[0]])
+            st.session_state["name-picked"] = lo + int(rows[0])
+
+    # Tabel selebar penuh per kelompok; detail baris terpilih tampil di bawahnya.
+    batched_view(len(display), key="names", render=_render_names, noun="SKU")
+    picked_row = st.session_state.get("name-picked")
+    with st.container(border=True):
+        if picked_row is not None and 0 <= int(picked_row) < len(page):
+            _name_detail(page.iloc[int(picked_row)])
         else:
             st.caption("Pilih satu baris untuk melihat nama rekomendasi, kata kunci, dan deskripsi lengkap.")
-    left, right = st.columns(2)
-    if len(view) > shown_n and left.button(f"Muat {size} SKU lagi", key="name-load-more"):
-        st.session_state["name-more"] = shown_n + size
-        st.rerun()
+    _left, right = st.columns(2)
     with right:
         download_excel(
             view[["SKU", "Nama produk saat ini", "Rekomendasi nama baru", "Kata kunci utama", "Kata kunci pendukung", "Rekomendasi deskripsi"]],

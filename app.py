@@ -68,7 +68,6 @@ from src.ui.rekomendasi import show_recommendations
 from src.ui.decision_view import (
     SS_DEFINITION_TOP,
     label_legend,
-    load_more_buttons,
     safety_stock_box,
     show_decision_table,
     sku_charts,
@@ -6996,9 +6995,10 @@ def _render_movement_board(
         "sold_sales": money_cell(total("sold_sales")),
         "sold_qty": qty_cell(total("sold_qty"), None),
     }
-    limit = max(MOVEMENT_STEP, int(st.session_state.get("movement-limit", MOVEMENT_STEP)))
-    _TOP50_TABLE(columns=columns, rows=rows, total=total_row, selected="", height=620, sort="", key="movement-top50", default="", limit=limit)
-    load_more_buttons(len(rows), limit, key="movement", first=MOVEMENT_STEP)
+    _TOP50_TABLE(
+        columns=columns, rows=rows, total=total_row, selected="", height=620, sort="", key="movement-top50", default="",
+        limit=0, batch={"first": MOVEMENT_STEP, "step": 10, "noun": "SKU"},
+    )
     return pd.DataFrame(export_rows)
 
 
@@ -7145,7 +7145,7 @@ def show_analysis_movement(
         [
             "SKU Top 50 yang prediksinya berubah pada rentang tanggal yang dipilih.",
             ("Urutan", "dampak ke omzet terbesar lebih dulu: gabungan besar perubahan prediksi bulan dalam sales value (Rp) dan QTY, naik maupun turun"),
-            ("Tampilan", "5 SKU teratas; Muat lebih banyak menambah 10 baris, Tutup kembali ke 5 baris. Unduh Excel berisi semua SKU"),
+            ("Tampilan", "kelompok #1 berisi 5 SKU; Muat lebih banyak menambah kelompok 10 SKU; klik judul kelompok untuk membuka/menutup. Unduh Excel berisi semua SKU"),
             ("Angka kecil di sel", "besar perubahan: ▲ naik, ▼ turun"),
             ("Stok Site 10062 / 10036 · Ambil dari DC", "bila stok Site 10037 kurang, cek apakah DC bisa memenuhi sebelum PO"),
             ("Kolom", "klik judul untuk mengurutkan, geser judul untuk memindah, tarik tepi judul untuk mengubah lebar"),

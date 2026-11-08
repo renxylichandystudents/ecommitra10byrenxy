@@ -195,24 +195,22 @@ def show_decision_table(
     columns, rows, total, export = table_parts(view, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label)
     keys = {row["key"] for row in rows}
     previous = str(st.session_state.get(f"{key}-value") or "")
-    limit_key = f"{key}-limit"
-    limit = max(int(step), int(st.session_state.get(limit_key, step))) if step else 0
-    # Tabel tetap satu (urut atas semua baris); limit naik per 10 baris, Tutup kembali ke awal.
+    # Satu tabel, urut atas semua baris; tampil per kelompok (5 lalu +10) yang bisa dibuka/ditutup di dalam tabel.
+    batch = {"first": int(step), "step": 10, "noun": "SKU"} if step else None
     picked = _TABLE(
         columns=columns,
         rows=rows,
         total=total,
         selected=previous if previous in keys else "",
         height=height,
-        limit=limit,
+        limit=0,
+        batch=batch,
         sort="rank",
         key=key,
         default=previous if previous in keys else "",
     )
     picked = str(picked or "")
     st.session_state[f"{key}-value"] = picked
-    if step:
-        load_more_buttons(len(rows), limit, key=key, first=int(step))
     download_excel(export, filename, key=f"xl-{key}")
     return picked if picked in keys else ""
 
@@ -228,23 +226,6 @@ def label_legend() -> None:
         ],
         title="Label",
     )
-
-
-def load_more_buttons(total: int, limit: int, *, key: str, first: int = 5, step: int = 10) -> None:
-    """Tombol Muat lebih banyak (+10 baris) dan Tutup (kembali ke `first` baris) untuk tabel komponen."""
-    limit_key = f"{key}-limit"
-    shown = min(limit, total)
-    rest = total - shown
-    st.caption(f"Menampilkan {fmt_num(shown)} dari {fmt_num(total)} SKU")
-    more_col, close_col, _gap = st.columns([1.6, 1.2, 2])
-    if rest > 0 and more_col.button(f"Muat lebih banyak ▾ · {min(step, rest)} SKU berikutnya (sisa {rest})", key=f"{key}-more", use_container_width=True, type="primary"):
-        st.session_state[limit_key] = shown + step
-        st.rerun()
-    if rest <= 0 and total > first:
-        more_col.success(f"✓ Semua data ditampilkan ({fmt_num(total)} dari {fmt_num(total)} SKU)")
-    if shown > first and close_col.button("▴ Tutup, kembali ke 5 baris", key=f"{key}-close", use_container_width=True):
-        st.session_state[limit_key] = first
-        st.rerun()
 
 
 def safety_stock_box(
