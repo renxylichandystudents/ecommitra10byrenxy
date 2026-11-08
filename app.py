@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -68,6 +68,7 @@ from src.ui.rekomendasi import show_recommendations
 from src.ui.decision_view import (
     SS_DEFINITION_TOP,
     label_legend,
+    load_more_buttons,
     safety_stock_box,
     show_decision_table,
     sku_charts,
@@ -1940,32 +1941,17 @@ PAGE_STEP = 5
 
 def toggle_table(frame: pd.DataFrame, *, key: str, step: int = PAGE_STEP) -> None:
     """Tabel 5 baris teratas; satu tombol untuk membuka semua baris dan menutupnya kembali."""
-    if not isinstance(frame, pd.DataFrame) or len(frame) <= step:
-        show_table(frame)
+    if not isinstance(frame, pd.DataFrame):
         return
-    open_key = f"{key}-open"
-    opened = bool(st.session_state.get(open_key, False))
-    show_table(frame if opened else frame.head(step))
-    rest = len(frame) - step
-    label = "▲ Tutup, tampilkan 5 baris saja" if opened else f"▼ Muat lebih banyak ({rest} baris lagi)"
-    col, _gap = st.columns([1, 3])
-    if col.button(label, key=f"{key}-toggle", use_container_width=True):
-        st.session_state[open_key] = not opened
-        st.rerun()
+    batched_view(len(frame), key=key, render=lambda a, b: show_table(frame.iloc[a:b]))
 
 
 def paged_table(frame: pd.DataFrame, *, key: str, filename: str, kinds: dict | None = None, step: int = PAGE_STEP) -> None:
     """Tabel bernomor urut, tampil bertahap (Muat lagi) + unduh Excel lengkap."""
     full = frame.reset_index(drop=True)
     full.insert(0, "No", range(1, len(full) + 1))
-    shown_key = f"{key}-shown"
-    shown = int(st.session_state.get(shown_key, step))
-    show_table(full.head(shown), kinds=kinds, max_height=10_000)
-    left, mid, _gap = st.columns([1.3, 1.2, 3])
-    rest = len(full) - shown
-    if rest > 0 and left.button(f"Muat {min(step, rest)} lagi (sisa {rest})", key=f"{key}-more", use_container_width=True):
-        st.session_state[shown_key] = shown + step
-        st.rerun()
+    batched_view(len(full), key=key, render=lambda a, b: show_table(full.iloc[a:b], kinds=kinds, max_height=10_000))
+    _left, mid, _gap = st.columns([1.3, 1.2, 3])
     with mid:
         download_excel(full, filename.replace("/", "-").replace(" ", "_"), key=f"{key}-xl", label=f"Unduh Excel ({len(full)} baris)")
 
@@ -4217,7 +4203,7 @@ def show_qty_forecast_board(
     for column, name, label in filters:
         if column.button(label, key=f"qty-board-filter-{name}", type="primary" if current == name else "secondary", use_container_width=True):
             st.session_state["qty-board-direction"] = name
-            st.session_state["qty-board-limit"] = QTY_BOARD_STEP
+            reset_batches("qty-board")
             st.rerun(scope="fragment")
     unit_word = "unit" if metric == "qty" else "Rp"
     explain(
@@ -4258,9 +4244,13 @@ def show_qty_forecast_board(
     if not shown_rows:
         st.info("Tidak ada SKU pada saringan ini.")
     # Kartu ditampilkan bertahap (5 Rank teratas dulu) agar halaman Ringkasan tidak setinggi 23 layar.
-    limit = int(st.session_state.get("qty-board-limit", QTY_BOARD_STEP))
     total_rows = len(shown_rows)
-    for row in shown_rows[:limit]:
+
+    def _render_cards(lo: int, hi: int) -> None:
+        for row in shown_rows[lo:hi]:
+            _qty_board_card(row)
+
+    def _qty_board_card(row) -> None:
         key = str(row["item_key"])
         brief = briefs[key]
         st.markdown("<div class='qty-row-anchor'></div>", unsafe_allow_html=True)
@@ -4274,12 +4264,10 @@ def show_qty_forecast_board(
         card_col.markdown(_qty_card_html(row, brief, bars, _stock_chip_row(enriched, period, as_of)), unsafe_allow_html=True)
         if action_col.button("Analisa", key=f"qty-insight-open-{key}", use_container_width=True):
             st.session_state["qty-insight-key"] = key
-    if total_rows > limit:
-        more_col, info_col = st.columns([1, 3], vertical_alignment="center")
-        if more_col.button(f"Muat {min(QTY_BOARD_STEP, total_rows - limit)} SKU lagi (sisa {total_rows - limit})", key="qty-board-more", use_container_width=True):
-            st.session_state["qty-board-limit"] = limit + QTY_BOARD_STEP
-            st.rerun(scope="fragment")
-        info_col.caption(f"Menampilkan {format_number(limit)} dari {format_number(total_rows)} SKU. Gunakan pencarian untuk langsung ke satu SKU.")
+
+    batched_view(total_rows, key="qty-board", render=_render_cards, noun="SKU", rerun_scope="fragment")
+    if total_rows > 5:
+        st.caption("Gunakan pencarian untuk langsung ke satu SKU.")
     selected = str(st.session_state.get("qty-insight-key") or "")
     if selected and selected in briefs:
         enriched = decision_rows.get(selected)
@@ -7010,12 +6998,7 @@ def _render_movement_board(
     }
     limit = max(MOVEMENT_STEP, int(st.session_state.get("movement-limit", MOVEMENT_STEP)))
     _TOP50_TABLE(columns=columns, rows=rows, total=total_row, selected="", height=620, sort="", key="movement-top50", default="", limit=limit)
-    rest = len(rows) - min(limit, len(rows))
-    if rest > 0:
-        more_col, _gap = st.columns([1, 3])
-        if more_col.button(f"Muat {min(MOVEMENT_STEP, rest)} SKU lagi (sisa {rest})", key="movement-more", use_container_width=True):
-            st.session_state["movement-limit"] = limit + MOVEMENT_STEP
-            st.rerun()
+    load_more_buttons(len(rows), limit, key="movement", first=MOVEMENT_STEP)
     return pd.DataFrame(export_rows)
 
 
@@ -7162,7 +7145,7 @@ def show_analysis_movement(
         [
             "SKU Top 50 yang prediksinya berubah pada rentang tanggal yang dipilih.",
             ("Urutan", "dampak ke omzet terbesar lebih dulu: gabungan besar perubahan prediksi bulan dalam sales value (Rp) dan QTY, naik maupun turun"),
-            ("Tampilan", "5 SKU teratas; klik Muat SKU lagi untuk menambah 5 baris. Unduh Excel berisi semua SKU"),
+            ("Tampilan", "5 SKU teratas; Muat lebih banyak menambah 10 baris, Tutup kembali ke 5 baris. Unduh Excel berisi semua SKU"),
             ("Angka kecil di sel", "besar perubahan: ▲ naik, ▼ turun"),
             ("Stok Site 10062 / 10036 · Ambil dari DC", "bila stok Site 10037 kurang, cek apakah DC bisa memenuhi sebelum PO"),
             ("Kolom", "klik judul untuk mengurutkan, geser judul untuk memindah, tarik tepi judul untuk mengubah lebar"),

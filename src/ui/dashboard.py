@@ -15,7 +15,7 @@ from src.core.fmt import fmt_date, fmt_rp
 from src.core.periods import prediction_window, short_date
 from src.core.promo import promo_eligible
 from src.core.restock import restock_priority
-from src.ui.common import badge, card, download_excel, explain, fmt_num, sku_cards, status_key
+from src.ui.common import badge, batched_view, card, download_excel, explain, fmt_num, sku_cards, status_key
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table
 
@@ -142,35 +142,35 @@ def show_priority_dashboard(
         if priority.empty:
             st.info("Data stok Top 50 belum diunggah, jadi kebutuhan restock belum bisa dihitung.")
         else:
-            limit = int(st.session_state.get("dash-limit", RESTOCK_STEP))
             view = restock_view(priority)
-            display = status_badges(view.head(limit))
-            if not display["Inbound"].astype(str).str.strip().any():
-                display = display.drop(columns="Inbound")
-            for column in ("Stok Site 10062", "Stok Site 10036"):
-                if display[column].isna().all():
-                    display = display.drop(columns=column)
-            if not display["Ambil dari DC"].astype(str).str.strip().any():
-                display = display.drop(columns="Ambil dari DC")
-            with st.container(key="desktop-dash-restock"):
-                show_table(display, kinds={"Rank": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Prediksi": "count", "SS": "count", "Restock": "count", "Potensi loss QTY": "count", "Potensi loss sales": "money"}, column_config={"Status": st.column_config.TextColumn(width="small"), "Ambil dari DC": st.column_config.TextColumn(width="large")})
-            sku_cards(
-                [
-                    {
-                        "sku": r.get("SKU"),
-                        "produk": r.get("Produk"),
-                        "varian": r.get("Varian"),
-                        "status": r.get("Status"),
-                        "nums": [("Rank", fmt_num(r.get("Rank"))), ("Stok Site 10037", fmt_num(r.get("Stok Site 10037"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Potensi loss sales", fmt_rp(r.get("Potensi loss sales"))), ("Stok habis", r.get("Stok habis", "–"))] + ([("Ambil dari DC", r.get("Ambil dari DC"))] if r.get("Ambil dari DC") else []),
-                    }
-                    for r in view.head(limit).to_dict("records")
-                ],
-                key="dash-restock",
-            )
-            b1, b2 = st.columns([1, 1])
-            if limit < len(priority) and b1.button(f"Muat {min(RESTOCK_STEP, len(priority) - limit)} SKU lagi (sisa {len(priority) - limit})", key="dash-more"):
-                st.session_state["dash-limit"] = limit + RESTOCK_STEP
-                st.rerun()
+            # Kolom yang kosong untuk semua SKU disembunyikan (dinilai dari seluruh daftar, bukan per kelompok).
+            hide = [c for c in ("Stok Site 10062", "Stok Site 10036") if view[c].isna().all()]
+            if not view["Inbound"].astype(str).str.strip().any():
+                hide.append("Inbound")
+            if not view["Ambil dari DC"].astype(str).str.strip().any():
+                hide.append("Ambil dari DC")
+
+            def _render(lo: int, hi: int) -> None:
+                part = view.iloc[lo:hi]
+                display = status_badges(part).drop(columns=hide)
+                with st.container(key=f"desktop-dash-restock-{lo}"):
+                    show_table(display, kinds={"Rank": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Prediksi": "count", "SS": "count", "Restock": "count", "Potensi loss QTY": "count", "Potensi loss sales": "money"}, column_config={"Status": st.column_config.TextColumn(width="small"), "Ambil dari DC": st.column_config.TextColumn(width="large")})
+                sku_cards(
+                    [
+                        {
+                            "sku": r.get("SKU"),
+                            "produk": r.get("Produk"),
+                            "varian": r.get("Varian"),
+                            "status": r.get("Status"),
+                            "nums": [("Rank", fmt_num(r.get("Rank"))), ("Stok Site 10037", fmt_num(r.get("Stok Site 10037"))), ("Prediksi", fmt_num(r.get("Prediksi"))), ("SS", fmt_num(r.get("SS"))), ("Restock", fmt_num(r.get("Restock"))), ("Potensi loss sales", fmt_rp(r.get("Potensi loss sales"))), ("Stok habis", r.get("Stok habis", "–"))] + ([("Ambil dari DC", r.get("Ambil dari DC"))] if r.get("Ambil dari DC") else []),
+                        }
+                        for r in part.to_dict("records")
+                    ],
+                    key=f"dash-restock-{lo}",
+                )
+
+            batched_view(len(view), key="dash-restock", render=_render, noun="SKU")
+            _b1, b2 = st.columns([1, 1])
             with b2:
                 download_excel(view, "restock_prioritas.xlsx", key="xl-dash-restock")
 

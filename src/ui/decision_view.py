@@ -197,6 +197,7 @@ def show_decision_table(
     previous = str(st.session_state.get(f"{key}-value") or "")
     limit_key = f"{key}-limit"
     limit = max(int(step), int(st.session_state.get(limit_key, step))) if step else 0
+    # Tabel tetap satu (urut atas semua baris); limit naik per 10 baris, Tutup kembali ke awal.
     picked = _TABLE(
         columns=columns,
         rows=rows,
@@ -210,12 +211,8 @@ def show_decision_table(
     )
     picked = str(picked or "")
     st.session_state[f"{key}-value"] = picked
-    rest = len(rows) - limit if step else 0
-    if rest > 0:
-        more_col, _gap = st.columns([1, 3])
-        if more_col.button(f"Muat {min(int(step), rest)} SKU lagi (sisa {rest})", key=f"{key}-more", use_container_width=True):
-            st.session_state[limit_key] = limit + int(step)
-            st.rerun()
+    if step:
+        load_more_buttons(len(rows), limit, key=key, first=int(step))
     download_excel(export, filename, key=f"xl-{key}")
     return picked if picked in keys else ""
 
@@ -231,6 +228,23 @@ def label_legend() -> None:
         ],
         title="Label",
     )
+
+
+def load_more_buttons(total: int, limit: int, *, key: str, first: int = 5, step: int = 10) -> None:
+    """Tombol Muat lebih banyak (+10 baris) dan Tutup (kembali ke `first` baris) untuk tabel komponen."""
+    limit_key = f"{key}-limit"
+    shown = min(limit, total)
+    rest = total - shown
+    st.caption(f"Menampilkan {fmt_num(shown)} dari {fmt_num(total)} SKU")
+    more_col, close_col, _gap = st.columns([1.6, 1.2, 2])
+    if rest > 0 and more_col.button(f"Muat lebih banyak ▾ · {min(step, rest)} SKU berikutnya (sisa {rest})", key=f"{key}-more", use_container_width=True, type="primary"):
+        st.session_state[limit_key] = shown + step
+        st.rerun()
+    if rest <= 0 and total > first:
+        more_col.success(f"✓ Semua data ditampilkan ({fmt_num(total)} dari {fmt_num(total)} SKU)")
+    if shown > first and close_col.button("▴ Tutup, kembali ke 5 baris", key=f"{key}-close", use_container_width=True):
+        st.session_state[limit_key] = first
+        st.rerun()
 
 
 def safety_stock_box(
