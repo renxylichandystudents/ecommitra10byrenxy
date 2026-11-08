@@ -187,6 +187,23 @@ margin_item = Table(
     Column("uploaded_by", String(80), nullable=False, default=""),
 )
 
+seo_snapshot = Table(
+    "seo_snapshot",
+    metadata,
+    _id(),
+    Column("snapshot_at", DateTime, nullable=False, index=True),
+    Column("data_stamp", String(80), nullable=False, index=True),
+    Column("product_code", String(64), nullable=False, index=True),
+    Column("nama", Text, nullable=False, default=""),
+    Column("desc_hash", String(40), nullable=False, default=""),
+    Column("status_nama", String(20), nullable=False, default=""),
+    Column("poin_nama", Integer, nullable=False, default=0),
+    Column("skor_seo", Integer, nullable=False, default=0),
+    Column("rek_nama", Text, nullable=False, default=""),
+    Column("rek_deskripsi", Text, nullable=False, default=""),
+    Column("skor_seo_rek", Integer, nullable=False, default=0),
+)
+
 import_po = Table(
     "import_po",
     metadata,

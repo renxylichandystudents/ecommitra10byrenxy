@@ -19,6 +19,8 @@ import pandas as pd
 
 from src.core.naming import (
     MANUAL_CHECK,
+    SHOPEE_TITLE_HARD,
+    fit_title,
     allowed_keyword,
     brand_set,
     extract_packing_tag,
@@ -357,7 +359,7 @@ def score_name(name: str, primary_keywords: list[str], brands: list[str], *, min
         "Kegunaan": any(hint in low for hint in USAGE_HINTS),
         "Kata kunci utama": bool(primary_keywords) and sum(1 for k in primary_keywords if k in low) >= max(1, len(primary_keywords) // 2),
         "Tanpa pengulangan / tanda baca berlebihan": not repeated and not re.search(r"[!?*#~]{2,}|[A-Z]{12,}", text),
-        "Panjang sesuai batas Shopee": min_len <= len(text) <= max_len,
+        "Panjang ideal (25–120 karakter)": min_len <= len(text) <= max_len,
     }
     points = sum(checks.values())
     label = "Excellence" if points >= 7 else ("Standard" if points >= 4 else "Poor")
@@ -420,8 +422,8 @@ def synthesize_title(name: str, variation: str, primary: list[str], brands: list
         deduped.append(word)
     title = " ".join(deduped)
     if len(title) > max_len:
-        title = title[:max_len].rsplit(" ", 1)[0]
-    return title or _title_case(str(name))[:max_len]
+        title = fit_title(title, max_len)
+    return title or fit_title(_title_case(str(name)), max_len)
 
 
 def description_strengths(description: str) -> dict[str, bool]:
@@ -690,7 +692,9 @@ def description_similarity(texts: list[str]) -> tuple[list[float], list[int]]:
         return [0.0] * len(texts), [-1] * len(texts)
     from sklearn.feature_extraction.text import TfidfVectorizer
 
-    clean = [re.sub(r"#\w+", " ", t or "") for t in texts]
+    clean = [re.sub(r"#\w+", " ", str(t or "")) for t in texts]
+    if not any(re.search(r"[a-z0-9]{2,}", c.lower()) for c in clean):
+        return [0.0] * len(texts), [-1] * len(texts)
     matrix = TfidfVectorizer(analyzer="word", ngram_range=(1, 2), min_df=1, sublinear_tf=True).fit_transform(clean)
     sims = (matrix @ matrix.T).toarray()
     np.fill_diagonal(sims, 0.0)
@@ -759,6 +763,21 @@ def description_summary(text: str, limit: int = 60) -> str:
     return first[: limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
+def desc_hash(text: object) -> str:
+    """Sidik deskripsi (abaikan spasi & huruf besar) untuk mendeteksi perubahan antar unggahan."""
+    import hashlib
+
+    norm = " ".join(str(text or "").lower().split())
+    return hashlib.md5(norm.encode("utf-8")).hexdigest() if norm else ""
+
+
+def title_similarity(a: str, b: str) -> float:
+    """Kemiripan dua judul (Jaccard kata, tanpa tag packing) 0–1."""
+    wa = set(clean_text(strip_packing_words(a)).split())
+    wb = set(clean_text(strip_packing_words(b)).split())
+    return len(wa & wb) / max(len(wa | wb), 1)
+
+
 def _distinct_words(name: str, other: str) -> list[str]:
     """Kata/kode/ukuran di nama ini yang tidak ada di nama produk pembanding (urutan asli)."""
     theirs = set(clean_text(strip_packing_words(other)).split())
@@ -777,9 +796,7 @@ def _distinct_words(name: str, other: str) -> list[str]:
 def _fit_long_title(clean_name: str, max_len: int) -> str:
     """Nama lama yang terlalu panjang: buang bagian 'Variasi …' / setelah ' - ', lalu potong per kata."""
     base = re.split(r"\s+-\s+Variasi\b|\bVariasi\b", clean_name, maxsplit=1, flags=re.IGNORECASE)[0].strip(" -")
-    if len(base) > max_len:
-        base = base[:max_len].rsplit(" ", 1)[0]
-    return base
+    return fit_title(base, max_len)
 
 
 def build_name_recommendations(
@@ -843,6 +860,14 @@ def build_name_recommendations(
         # Judul baru tidak boleh membuang kata yang dicari pembeli: bila < 75% kata penting nama lama masih ada, pakai nama lama.
         old_words = {w for w in clean_text(clean_name).split() if len(w) > 2 and w not in STOPWORDS and not w.isdigit()}
         kept = len(old_words & set(clean_text(new_title).split())) / max(len(old_words), 1)
+        # Kode tipe & ukuran (kata berangka, mis. ZT-22, 300ml) wajib tetap ada: sering diketik pembeli saat mencari.
+        def _coded(text: str) -> set[str]:
+            raw = re.split(r"\bvariasi\b", str(text).lower())[0]
+            return {re.sub(r"[^a-z0-9]", "", w) for w in re.findall(r"[a-z0-9][a-z0-9.\-/]*[a-z0-9]", raw) if any(c.isdigit() for c in w) and any(c.isalpha() for c in w)}
+
+        coded = _coded(clean_name)
+        if coded and not coded <= _coded(new_title):
+            kept = 0.0
         if new_score.points < old.points or (kept < 0.75 and len(clean_name) <= max_len):
             new_title, new_score = clean_name, old
         elif kept < 0.75:
@@ -850,7 +875,7 @@ def build_name_recommendations(
             fitted_kept = len(old_words & set(clean_text(fitted).split())) / max(len(old_words), 1)
             if fitted_kept > kept:
                 new_title, new_score = fitted, score_name(fitted, primary, brands, min_len=min_len, max_len=max_len)
-        final_title = with_tag(new_title, tag, max_len)
+        final_title = with_tag(new_title, tag, SHOPEE_TITLE_HARD, ideal=max_len)
         variants = [v for v in (item.get("variants") or []) if str(v).strip() and str(v).lower() not in {"nan", "none"}]
         usp = usp_points(name, current_desc, variation, titles, brands)
         description = generate_description(
@@ -887,6 +912,8 @@ def build_name_recommendations(
                 "Sumber pembanding": info.get("sumber", ""),
                 "Pembanding teratas": [(comp.iloc[i]["product_name"], comp.iloc[i]["_rank"], comp.iloc[i].get("shop_name", "")) for i in picked[:3]] if picked else [],
                 "SEO judul": seo_title_checks(final_title, primary, brands, max_len=max_len),
+                "_desc_now": current_desc,
+                "SEO judul saat ini": seo_title_checks(name, primary, brands, max_len=max_len),
             }
         )
     out = pd.DataFrame(rows)
@@ -919,6 +946,18 @@ def build_name_recommendations(
         seo_description_checks(text, [k.strip() for k in str(kw).split(",") if k.strip()], max_chars=max_desc, similarity=sim)
         for text, kw, sim in zip(out["Rekomendasi deskripsi"], out["Kata kunci utama"], sims)
     ]
+    # Kondisi listing saat ini (nama & deskripsi yang sedang tayang) — dasar pelacakan perubahan antar unggahan.
+    now_sims, _p = description_similarity(out["_desc_now"].fillna("").tolist())
+    now_desc = [
+        seo_description_checks(text, [k.strip() for k in str(kw).split(",") if k.strip()], max_chars=max_desc, similarity=sim) if str(text).strip()
+        else {k: False for k in seo_description_checks("x", ["x"], max_chars=max_desc)}  # belum ada deskripsi = semua kaidah belum terpenuhi
+        for text, kw, sim in zip(out["_desc_now"], out["Kata kunci utama"], now_sims)
+    ]
+    out["Skor SEO saat ini"] = [
+        round((sum(a.values()) + sum(b.values())) / max(len(a) + len(b), 1) * 100) for a, b in zip(out["SEO judul saat ini"], now_desc)
+    ]
+    out["Hash deskripsi saat ini"] = [desc_hash(t) for t in out["_desc_now"]]
+    out = out.rename(columns={"_desc_now": "Deskripsi saat ini"})
     out["Skor SEO"] = [
         round((sum(a.values()) + sum(b.values())) / max(len(a) + len(b), 1) * 100)
         for a, b in zip(out["SEO judul"], out["SEO deskripsi"])

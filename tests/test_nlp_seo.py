@@ -42,3 +42,28 @@ def test_build_per_product_seo_and_uniqueness():
     assert first["SEO deskripsi"]["Tanpa link/kontak"] and 0 <= first["Skor SEO"] <= 100
     sims, partner = nlp.description_similarity(["kloset duduk putih", "kloset duduk putih", "kran air dapur"])
     assert sims[0] > 0.99 and partner[0] == 1
+
+
+def test_title_never_cut_mid_phrase():
+    from src.core.naming import fit_title
+
+    t = "Lem Silicone Sealant Tabung Multi Purpose Hitam/Putih/Bening 300ml - Dextone Glue Silikon Fleksibel, Tahan Suhu, Daya Rekat Kuat"
+    out = fit_title(t, 120)
+    assert len(out) <= 120 and out.endswith("Tahan Suhu")
+    long = "Kloset " * 30
+    assert len(fit_title(long, 120)) <= 255
+
+
+def test_history_compare():
+    from src.core import seo_history as sh
+
+    out, _ = nlp.build_name_recommendations(_own(), None, _comp(), {}, default_params())
+    prev = sh.snapshot_rows(out, "v1")
+    now = out.copy()
+    now.loc[0, "Nama produk saat ini"] = now.loc[0, "Rekomendasi nama baru"]
+    now.loc[1, "Nama produk saat ini"] = "Kran Air Dapur Hitam Murah"
+    res = sh.compare(now, sh.previous_snapshot(prev, "v2")).set_index("item_key")
+    assert res.loc["P1", "perubahan"] == "Mengikuti rekomendasi"
+    assert res.loc["P2", "perubahan"] == "Diubah di luar rekomendasi"
+    same = sh.compare(out, sh.previous_snapshot(prev, "v2")).set_index("item_key")
+    assert (same["perubahan"] == "Belum diubah").all()

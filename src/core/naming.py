@@ -209,9 +209,35 @@ def allowed_keyword(phrase: str, vocab: set[str]) -> bool:
     return bool(words) and not any(w in PACKING_WORDS for w in words) and all(w in vocab for w in words)
 
 
-def with_tag(title: str, tag: str | None, max_len: int) -> str:
+SHOPEE_TITLE_HARD = 255  # batas Shopee untuk nama produk
+
+
+def fit_title(title: str, ideal: int, hard: int = SHOPEE_TITLE_HARD) -> str:
+    """Pendekkan judul tanpa memotong kata/frasa: buang segmen utuh dari belakang (dipisah " - ", ", ", " / ")
+    sampai ≤ ideal. Bila tetap lebih panjang, judul dibiarkan utuh selama ≤ batas Shopee (255), bukan dipotong di tengah frasa."""
+    import re as _re
+
+    text = " ".join(str(title or "").split())
+    if len(text) <= ideal:
+        return text
+    parts = _re.split(r"(\s+-\s+|,\s+|\s+/\s+)", text)
+    segments = [parts[i] + (parts[i + 1] if i + 1 < len(parts) else "") for i in range(0, len(parts), 2)]
+    while len(segments) > 1 and len("".join(segments).rstrip(" ,-/")) > ideal:
+        segments.pop()
+    shorter = "".join(segments).rstrip(" ,-/")
+    if len(shorter) <= ideal or len(shorter) < len(text):
+        text = shorter
+    if len(text) > hard:
+        text = text[:hard].rsplit(" ", 1)[0].rstrip(" ,-/")
+    return text
+
+
+def with_tag(title: str, tag: str | None, max_len: int, ideal: int | None = None) -> str:
+    """Tag "[INCLUDE PACKING KAYU]" selalu di akhir. max_len = batas keras; ideal (opsional) = panjang yang diupayakan
+    dengan membuang segmen utuh. Tidak pernah memotong di tengah kata."""
+    ideal = ideal or max_len
     if not tag:
-        return title[:max_len].rstrip()
+        return fit_title(title, ideal, max_len)
     room = max_len - len(tag) - 1
-    base = title if len(title) <= room else title[: max(room, 0)].rsplit(" ", 1)[0]
+    base = fit_title(title, max(min(ideal, max_len) - len(tag) - 1, 0), max(room, 0))
     return f"{base} {tag}".strip()
