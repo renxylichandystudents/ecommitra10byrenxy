@@ -19,7 +19,7 @@ from src.core.periods import last_full_month
 from src.core.promo import exclusion_suggestions
 from src.ui.common import ID_MONTHS, button_tabs, card, download_excel, fmt_idr, fmt_num
 from src.ui.confirm import confirm_action
-from src.ui.feature_data import FeatureData, bump, product_frame
+from src.ui.feature_data import FeatureData, bump
 from src.utils.format import show_table
 
 
@@ -54,7 +54,7 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
     if picked == "sku-dikecualikan":
         _excluded_tab(features, table, username, orders)
     elif picked == "kalkulator-biaya":
-        _calculator_tab(features, table, data, username, today, user_root=user_root)
+        _calculator_tab(features, table, data, username, today, user_root=user_root, orders=orders)
     elif picked == "laporan-margin":
         _margin_report_tab(table, data, orders, today)
     elif picked == "kapasitas-gudang":
@@ -193,7 +193,8 @@ def _excluded_tab(features, table: pd.DataFrame, username: str, orders: pd.DataF
 # ---------------------------------------------------------------- Kalkulator biaya
 
 
-def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: str, today: date, *, user_root: Path | None = None) -> None:
+def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: str, today: date, *, user_root: Path | None = None, orders: pd.DataFrame | None = None) -> None:
+    """Kalkulator margin Shopee Mall (tanpa HPP: tim e-commerce hanya membaca data yang ada)."""
     from src.ui.kalkulator import show_calculator
 
     may_edit = True
@@ -204,35 +205,7 @@ def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: 
         may_edit = allowed(getattr(user, "role", ""), "setting_kalkulator_biaya", "edit") if user else True
     except Exception:
         pass
-    show_calculator(features, table, data, username=username, today=today, user_root=user_root, may_edit=may_edit, require=_require)
-    products = product_frame(table)
-    st.markdown("<div class='section-title'>HPP, packing, dan komponen biaya per SKU</div>", unsafe_allow_html=True)
-    st.markdown("**Unggah komponen biaya** (HPP, packing, voucher, ongkir penjual · berperiode: baris baru menutup periode baris lama)")
-    template = pd.DataFrame(columns=list(margin_core.TEMPLATE_COLUMNS))
-    u1, u2 = st.columns([3, 1])
-    upload = u1.file_uploader("File komponen biaya", type=["xlsx", "csv"], key="cost-upload")
-    with u2:
-        download_excel(template, "template_komponen_biaya.xlsx", key="xl-cost-tpl", label="Unduh template")
-    if upload is not None and st.button("Simpan komponen biaya", key="cost-save", type="primary"):
-        _require("setting_kalkulator_biaya", "edit")
-        rows = margin_core.normalize_components(_read_upload(upload))
-        bad = rows["berlaku_mulai"].isna()
-        if bad.any():
-            st.error(f"{int(bad.sum())} baris tanpa tanggal berlaku_mulai yang valid tidak disimpan.")
-        rows = rows.loc[~bad]
-        if not rows.empty:
-            existing = features.read("cost_component")
-            closed = margin_core.close_previous_periods(existing, rows)
-            if not closed.empty:
-                features.replace("cost_component", closed, keys=["id"], username=username, action="tutup:komponen_biaya")
-            features.insert("cost_component", rows.assign(uploaded_by=username), username=username, action="unggah:komponen_biaya")
-            bump(st.session_state)
-            st.success(f"{fmt_num(len(rows))} baris komponen biaya disimpan; {fmt_num(len(closed))} periode lama ditutup.")
-    margin = data.margin
-    total = len(products)
-    complete = int(margin["lengkap"].sum()) if not margin.empty else 0
-    with_hpp = int(margin["ada_hpp"].sum()) if not margin.empty else 0
-    st.caption(f"Kelengkapan: {fmt_num(complete)} dari {fmt_num(total)} SKU punya komponen lengkap · {fmt_num(total - with_hpp)} SKU tanpa HPP.")
+    show_calculator(features, table, data, username=username, today=today, user_root=user_root, may_edit=may_edit, require=_require, orders=orders)
 
 
 # ---------------------------------------------------------------- Laporan margin
