@@ -1919,7 +1919,7 @@ def show_training_summary() -> None:
     st.markdown("<div class='home-section'>RINGKASAN DATA</div>", unsafe_allow_html=True)
     stored_summary = store.source_summaries()
     with st.expander("Ringkasan data tersimpan", expanded=False):
-        show_table(stored_summary)
+        toggle_table(stored_summary, key="stored-summary")
     try:
         stamp = store.registry_path.stat().st_mtime if store.registry_path.exists() else 0.0
         with st.spinner("Menyusun ringkasan konsolidasi..."):
@@ -1936,6 +1936,22 @@ def show_training_summary() -> None:
 
 
 PAGE_STEP = 5
+
+
+def toggle_table(frame: pd.DataFrame, *, key: str, step: int = PAGE_STEP) -> None:
+    """Tabel 5 baris teratas; satu tombol untuk membuka semua baris dan menutupnya kembali."""
+    if not isinstance(frame, pd.DataFrame) or len(frame) <= step:
+        show_table(frame)
+        return
+    open_key = f"{key}-open"
+    opened = bool(st.session_state.get(open_key, False))
+    show_table(frame if opened else frame.head(step))
+    rest = len(frame) - step
+    label = "▲ Tutup, tampilkan 5 baris saja" if opened else f"▼ Muat lebih banyak ({rest} baris lagi)"
+    col, _gap = st.columns([1, 3])
+    if col.button(label, key=f"{key}-toggle", use_container_width=True):
+        st.session_state[open_key] = not opened
+        st.rerun()
 
 
 def paged_table(frame: pd.DataFrame, *, key: str, filename: str, kinds: dict | None = None, step: int = PAGE_STEP) -> None:
