@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -79,6 +80,8 @@ class Unit:
     demand: float = float("inf")         # prediksi omzet harian produk anggota (analisa, semua kanal)
     locked: bool = False                 # dijeda oleh pemilihan produk (stok 0 / dipindah ke grup)
     origin: str = ""                     # keterangan asal (mis. grup asal iklan tunggal hasil pisah)
+    lift: float = DEMAND_LIFT            # batas tambahan omzet iklan sebagai pecahan prediksi omzet anggota
+    last_days: int = 0                   # jumlah hari laporan periode terakhir (laporan bulan berjalan = s.d. tanggal laporan)
 
     @property
     def roas(self) -> float:
@@ -128,7 +131,8 @@ def parse_units(ads_group: pd.DataFrame | None, ads_overall: pd.DataFrame | None
     member_rows: list[dict] = []
 
     def add(key: str, nama: str, jenis: str, period: str, days: int, cost: float, sales: float, status: str, mode: str) -> None:
-        item = hist.setdefault(key, {"nama": nama, "jenis": jenis, "points": {}, "status": status, "mode": mode, "period": ""})
+        item = hist.setdefault(key, {"nama": nama, "jenis": jenis, "points": {}, "status": status, "mode": mode, "period": "", "days": {}})
+        item["days"][period] = days
         prev = item["points"].get(period, (0.0, 0.0))
         item["points"][period] = (prev[0] + cost / days, prev[1] + sales / days)
         if period >= item["period"]:
@@ -184,7 +188,7 @@ def parse_units(ads_group: pd.DataFrame | None, ads_overall: pd.DataFrame | None
         a, b, spread = _fit([p for _k, p in points], cost, sales)
         members = sorted({m["product_code"] for m in member_rows if m["unit"] == key})
         units.append(Unit(key, item["nama"], item["jenis"], item["status"], item["mode"], cost, sales, a, b, spread, members,
-                          [(k, c, s) for k, (c, s) in points]))
+                          [(k, c, s) for k, (c, s) in points], last_days=int(item["days"].get(last_period, 0))))
     return units, pd.DataFrame(member_rows, columns=["unit", "periode", "product_code", "nama", "biaya", "omzet", "terjual"])
 
 
@@ -312,7 +316,7 @@ def _now_sales(u: Unit) -> float:
 
 
 def uplift_cap(u: Unit) -> float:
-    return DEMAND_LIFT * u.demand if np.isfinite(u.demand) else float("inf")
+    return u.lift * u.demand if np.isfinite(u.demand) else float("inf")
 
 
 def ad_sales(u: Unit, cost: float) -> float:
@@ -912,7 +916,7 @@ def _unit_of(selection: pd.DataFrame, plan_units: list[Unit]) -> list[str]:
 
 
 def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
-               gap_daily: float, target_roas: float, budget_daily: float | None) -> tuple[list[Unit], Plan, pd.DataFrame]:
+               gap_daily: float, target_roas: float, budget_daily: float | None, lift: float = DEMAND_LIFT) -> tuple[list[Unit], Plan, pd.DataFrame]:
     """Satu alur: pemilihan produk → susunan iklan baru → rencana budget, sehingga langkah 3 & 4 selalu sejalan.
 
     Iklan tunggal baru / hasil pisah yang tidak mendapat budget di rencana dikembalikan (tetap di grup / masuk grup),
@@ -920,7 +924,7 @@ def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame,
     selection = product_selection(members, units, products, contribution_by_code, target_roas=target_roas)
     plan_units, plan = [], Plan("Kejar target", {}, {})
     for _ in range(3):
-        plan_units = restructure(units, selection, products, contribution_by_code)
+        plan_units = [replace(u, lift=lift) for u in restructure(units, selection, products, contribution_by_code)]
         plan = allocate_target(plan_units, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily)
         idle = {u.members[0] for u in plan_units if u.jenis in NEW_KINDS and u.members and plan.cost.get(u.key, 0.0) <= 0}
         if selection.empty or not idle:
@@ -941,3 +945,167 @@ def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame,
             **{"Iklan di rencana": [("Grup: " + by_key[k].nama if by_key[k].jenis == "Grup" else "Iklan tunggal") if k in by_key else "–" for k in keys],
                "Budget usulan iklan/hari": [plan.cost.get(k, np.nan) if k in by_key else np.nan for k in keys]})
     return plan_units, plan, selection
+
+
+# ---------------------------------------------------------------- Rencana bertahap per minggu & rekomendasi
+
+
+def week_blocks(start: date, end: date) -> list[tuple[date, date]]:
+    """Blok 7 hari dari `start` s.d. `end` (blok terakhir bisa lebih pendek): budget dievaluasi & diubah tiap blok."""
+    out, day = [], start
+    while day <= end:
+        last = min(day + timedelta(days=6), end)
+        out.append((day, last))
+        day = last + timedelta(days=1)
+    return out
+
+
+def _carry(u: Unit, cost: float) -> Unit:
+    """Unit untuk minggu berikutnya: budget minggu ini menjadi titik awal (batas 2× Shopee berlaku dari sini), sisa batas
+    permintaan dikurangi tambahan yang sudah dipakai."""
+    if u.locked:
+        return u
+    sales = ad_sales(u, cost)
+    used = sales - _now_sales(u)
+    demand = (max(uplift_cap(u) - used, 0.0) / u.lift) if np.isfinite(u.demand) and u.lift > 0 else u.demand
+    return replace(u, status="Berjalan" if cost > 0 else "Dijeda", daily_cost=cost, daily_sales=sales, demand=demand)
+
+
+def ramp(units: list[Unit], *, weeks: list[int], gap_total: float, target_roas: float, budget_total: float | None,
+         first: Plan | None = None) -> list[tuple[int, Plan]]:
+    """Rencana per minggu: tiap minggu budget per iklan boleh naik maks. 2× (turun ke ≥ ½) dari minggu sebelumnya, sisa
+    kekurangan omzet & sisa budget dibagi rata ke hari yang tersisa. Mengembalikan [(jumlah hari, rencana minggu itu)]."""
+    base_now = sum(_now_sales(u) for u in units)
+    current, spent, gained, days_left = list(units), 0.0, 0.0, sum(weeks)
+    out: list[tuple[int, Plan]] = []
+    for index, days in enumerate(weeks):
+        if days <= 0:
+            continue
+        gap_daily = (gap_total - gained) / days_left
+        budget_daily = None if budget_total is None else max(budget_total - spent, 0.0) / days_left
+        plan = first if index == 0 and first is not None else allocate_target(current, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily)
+        out.append((days, plan))
+        spent += sum(plan.cost.values()) * days
+        gained += (sum(ad_sales(u, plan.cost[u.key]) for u in units) - base_now) * days
+        days_left -= days
+        current = [_carry(u, plan.cost[u.key]) for u in units]
+    return out
+
+
+def ramp_effect(units: list[Unit], steps: list[tuple[int, Plan]]) -> dict:
+    """Jumlah `plan_effect` semua minggu (selalu relatif terhadap kondisi iklan sekarang)."""
+    keys = ("biaya_total", "biaya_tambahan", "omzet_tambahan", "omzet_iklan", "dampak_margin")
+    total = {k: 0.0 for k in keys}
+    lo = hi = 0.0
+    known = True
+    for days, plan in steps:
+        e = plan_effect(units, plan, days=days)
+        for k in keys:
+            total[k] += e[k]
+        lo, hi = lo + e["rentang"][0], hi + e["rentang"][1]
+        known &= e["margin_lengkap"]
+    total["rentang"] = (lo, hi)
+    total["roas_rencana"] = total["omzet_iklan"] / total["biaya_total"] if total["biaya_total"] > 0 else float("nan")
+    total["margin_lengkap"] = known
+    return total
+
+
+def weekly_table(units: list[Unit], steps: list[tuple[int, Plan]], blocks: list[tuple[date, date]]) -> pd.DataFrame:
+    rows = []
+    for i, ((days, plan), (a, b)) in enumerate(zip(steps, blocks), start=1):
+        cost = sum(plan.cost.values())
+        sales = sum(ad_sales(u, plan.cost[u.key]) for u in units)
+        rows.append({"Minggu": i, "Mulai": a, "Selesai": b, "Hari": days, "Budget/hari": cost, "Omzet iklan/hari": sales,
+                     "ROAS": sales / cost if cost > 0 else np.nan, "Tambahan omzet": (sales - sum(_now_sales(u) for u in units)) * days,
+                     "Iklan aktif": sum(1 for v in plan.cost.values() if v > 0)})
+    return pd.DataFrame(rows)
+
+
+def unit_weekly_budget(units: list[Unit], steps: list[tuple[int, Plan]]) -> pd.DataFrame:
+    """Budget harian per iklan per minggu (untuk unduhan & evaluasi)."""
+    rows = []
+    for u in units:
+        values = [plan.cost.get(u.key, 0.0) for _d, plan in steps]
+        if _base(u) <= 0 and not any(v > 0 for v in values):
+            continue
+        rows.append({"_key": u.key, "Iklan": u.nama, "Jenis": u.jenis, "Budget sekarang/hari": _base(u),
+                     **{f"Minggu {i}": v for i, v in enumerate(values, start=1)}})
+    return pd.DataFrame(rows)
+
+
+ROAS_GRID = (30, 25, 20, 18, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
+
+
+def recommend(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
+              weeks: list[int], gap_total: float, grid: tuple[float, ...] = ROAS_GRID, lift: float = DEMAND_LIFT) -> dict:
+    """Target ROAS tertinggi + budget yang menutup kekurangan omzet dengan iklan saja (rencana bertahap per minggu).
+
+    Bila tidak ada ROAS yang menutupnya, dipilih ROAS tertinggi yang memberi ≥ 99% tambahan omzet maksimal (budget di
+    bawah ROAS itu tidak menambah omzet lagi). Mengembalikan roas, budget (total), tambahan, tercapai (bool), dan tabel."""
+    days = max(sum(weeks), 1)
+    rows, best = [], None
+    for r in grid:
+        plan_units, first, _sel = build_plan(units, members, products, contribution_by_code, gap_daily=gap_total / days, target_roas=r, budget_daily=None, lift=lift)
+        steps = ramp(plan_units, weeks=weeks, gap_total=gap_total, target_roas=r, budget_total=None, first=first)
+        eff = ramp_effect(plan_units, steps)
+        rows.append({"roas": float(r), "budget": eff["biaya_total"], "tambahan": eff["omzet_tambahan"], "roas_rencana": eff["roas_rencana"]})
+        if eff["omzet_tambahan"] >= gap_total - 1:
+            best = rows[-1]
+            break
+        if len(rows) >= 4 and max(x["tambahan"] for x in rows[-3:]) <= rows[-4]["tambahan"] * 1.005:
+            break
+    table = pd.DataFrame(rows)
+    if best is None and not table.empty:
+        top = table["tambahan"].max()
+        best = table.loc[table["tambahan"] >= top - abs(top) * 0.01].iloc[0].to_dict()
+    best = dict(best or {"roas": float(grid[0]), "budget": 0.0, "tambahan": 0.0, "roas_rencana": float("nan")})
+    best["tercapai"] = bool(best["tambahan"] >= gap_total - 1)
+    best["budget"] = math.ceil(best["budget"] / 1_000_000) * 1_000_000
+    return {**best, "tabel": table}
+
+
+def month_totals(units: list[Unit]) -> dict[str, dict]:
+    """Total biaya & omzet periode laporan terakhir per iklan (laporan bulan berjalan bersifat kumulatif s.d. tanggal laporan)."""
+    out = {}
+    for u in units:
+        if not u.history or u.last_days <= 0:
+            continue
+        period, cost, sales = u.history[-1]
+        out[u.key] = {"periode": period, "hari": int(u.last_days), "biaya": cost * u.last_days, "omzet": sales * u.last_days}
+    return out
+
+
+def evaluate(baseline: dict[str, dict], current: dict[str, dict], planned: dict[str, float], *, target_roas: float) -> tuple[pd.DataFrame, dict]:
+    """Pelaksanaan campaign dari laporan iklan terbaru: biaya & omzet harian sejak campaign disimpan (selisih laporan kumulatif).
+
+    planned: budget harian usulan per iklan (kunci unit). Dijalankan = biaya aktual 60–140% budget usulan (atau ≈ 0 bila dijeda)."""
+    rows = []
+    base_days = {v.get("periode"): int(v.get("hari", 0)) for v in baseline.values()}
+    for key, plan_cost in planned.items():
+        report_key = "produk:" + key.split(":", 1)[1] if key.startswith(("pisah:", "baru:")) else key
+        cur, base = current.get(key) or current.get(report_key), baseline.get(key) or baseline.get(report_key)
+        if cur is None:
+            continue
+        if base is None and cur["periode"] in base_days:
+            base = {"periode": cur["periode"], "hari": base_days[cur["periode"]], "biaya": 0.0, "omzet": 0.0}
+        if base and base.get("periode") == cur["periode"]:
+            days = cur["hari"] - int(base.get("hari", 0))
+            cost, sales = cur["biaya"] - float(base.get("biaya", 0)), cur["omzet"] - float(base.get("omzet", 0))
+        else:
+            days, cost, sales = cur["hari"], cur["biaya"], cur["omzet"]
+        if days <= 0:
+            continue
+        cost_d, sales_d = cost / days, sales / days
+        if plan_cost <= 0:
+            done = cost_d <= max(5_000.0, 0.1 * float((base or {}).get("biaya", 0)) / max(int((base or {}).get("hari", 1)), 1))
+        else:
+            done = 0.6 <= cost_d / plan_cost <= 1.4
+        rows.append({"_key": key, "Hari dievaluasi": days, "Budget usulan/hari": plan_cost, "Biaya aktual/hari": cost_d, "Omzet iklan aktual/hari": sales_d,
+                     "ROAS aktual": sales_d / cost_d if cost_d > 0 else np.nan, "Rekomendasi dijalankan": "Ya" if done else "Belum"})
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame, {}
+    cost, sales = frame["Biaya aktual/hari"].sum(), frame["Omzet iklan aktual/hari"].sum()
+    return frame, {"hari": int(frame["Hari dievaluasi"].max()), "dijalankan": int((frame["Rekomendasi dijalankan"] == "Ya").sum()), "iklan": len(frame),
+                   "biaya_harian": cost, "omzet_harian": sales, "roas": sales / cost if cost > 0 else float("nan"), "target_roas": target_roas,
+                   "budget_usulan_harian": float(frame["Budget usulan/hari"].sum())}

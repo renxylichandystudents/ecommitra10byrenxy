@@ -119,7 +119,11 @@ def save_controls(kind: str, *, features, today: date, start: date, end: date, p
     store = C.Store(features, kind)
     with st.container(border=True):
         st.markdown(f"**Simpan sebagai campaign** · periode {period_text(start, end)}")
-        name = st.text_input("Nama campaign", value=default_name, key=f"cmp-name-{kind}", max_chars=80)
+        name_key, last_key = f"cmp-name-{kind}", f"cmp-name-default-{kind}"
+        if st.session_state.get(name_key) in (None, st.session_state.get(last_key)):
+            st.session_state[name_key] = default_name
+        st.session_state[last_key] = default_name
+        name = st.text_input("Nama campaign", key=name_key, max_chars=80)
         clash = cur is not None and C.overlaps(cur, {"mulai": start, "selesai": end})
         ok = True
         if clash:

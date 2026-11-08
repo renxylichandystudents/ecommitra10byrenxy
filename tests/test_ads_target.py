@@ -186,3 +186,53 @@ class RestockCapacityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RampTest(unittest.TestCase):
+    def test_weekly_ramp_lets_budget_grow_beyond_double(self):
+        strong = unit("strong", cost=100_000, a=50_000_000, b=2_000_000)
+        steps = A.ramp([strong], weeks=[7, 7, 7], gap_total=1e12, target_roas=2, budget_total=None)
+        costs = [plan.cost["strong"] for _d, plan in steps]
+        self.assertLessEqual(costs[0], 200_000 + 1)
+        self.assertGreater(costs[1], 200_000 * 1.5)
+        self.assertGreater(costs[2], costs[1])
+
+    def test_ramp_respects_campaign_budget(self):
+        strong = unit("strong", cost=100_000, a=50_000_000, b=2_000_000)
+        steps = A.ramp([strong], weeks=[7, 7], gap_total=1e12, target_roas=2, budget_total=3_000_000)
+        self.assertLessEqual(A.ramp_effect([strong], steps)["biaya_total"], 3_000_000 + 1)
+
+    def test_budget_change_changes_result_when_roas_allows(self):
+        strong = unit("strong", cost=100_000, a=50_000_000, b=2_000_000)
+        small = A.ramp_effect([strong], A.ramp([strong], weeks=[7, 7], gap_total=1e12, target_roas=2, budget_total=2_000_000))
+        big = A.ramp_effect([strong], A.ramp([strong], weeks=[7, 7], gap_total=1e12, target_roas=2, budget_total=4_000_000))
+        self.assertGreater(big["omzet_tambahan"], small["omzet_tambahan"])
+
+
+class EvaluateTest(unittest.TestCase):
+    def test_detects_applied_and_not_applied(self):
+        base = {"a": {"periode": "2026-11-01", "hari": 5, "biaya": 500_000, "omzet": 5_000_000},
+                "b": {"periode": "2026-11-01", "hari": 5, "biaya": 500_000, "omzet": 5_000_000}}
+        now = {"a": {"periode": "2026-11-01", "hari": 7, "biaya": 900_000, "omzet": 9_000_000},
+               "b": {"periode": "2026-11-01", "hari": 7, "biaya": 700_000, "omzet": 6_000_000}}
+        frame, summary = A.evaluate(base, now, {"a": 200_000, "b": 400_000}, target_roas=8)
+        done = dict(zip(frame["_key"], frame["Rekomendasi dijalankan"]))
+        self.assertEqual(done, {"a": "Ya", "b": "Belum"})
+        self.assertEqual(summary["hari"], 2)
+        self.assertEqual(summary["dijalankan"], 1)
+        self.assertAlmostEqual(summary["biaya_harian"], 300_000)
+
+    def test_no_new_days_gives_empty_summary(self):
+        base = {"a": {"periode": "2026-11-01", "hari": 7, "biaya": 900_000, "omzet": 9_000_000}}
+        frame, summary = A.evaluate(base, base, {"a": 200_000}, target_roas=8)
+        self.assertTrue(frame.empty)
+        self.assertEqual(summary, {})
+
+    def test_new_single_ad_is_matched_to_report_product_key(self):
+        base = {"grup:A": {"periode": "2026-11-01", "hari": 7, "biaya": 700_000, "omzet": 7_000_000}}
+        now = {"grup:A": {"periode": "2026-11-01", "hari": 8, "biaya": 800_000, "omzet": 8_000_000},
+               "produk:42": {"periode": "2026-11-01", "hari": 8, "biaya": 50_000, "omzet": 600_000}}
+        frame, _summary = A.evaluate(base, now, {"grup:A": 100_000, "pisah:42": 50_000}, target_roas=8)
+        row = frame.set_index("_key").loc["pisah:42"]
+        self.assertEqual(row["Hari dievaluasi"], 1)
+        self.assertEqual(row["Rekomendasi dijalankan"], "Ya")

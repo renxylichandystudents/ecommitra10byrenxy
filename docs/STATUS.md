@@ -179,6 +179,16 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Status stok konsisten di semua modul (`inventory.py`, `decision_table.py`, `restock.py`, tampilan).
 - Tes: 103 lolos di lingkungan pemeriksaan. Tes yang butuh `sqlalchemy`, `streamlit`, `statsmodels`, dan `xgboost` belum dijalankan di sana karena paketnya tidak terpasang. Jalankan `python -m pytest -q` di `.venv` lokal untuk hasil lengkap.
 
+## Iklan: rekomendasi, budget bertahap per minggu, evaluasi harian (8 Nov 2026)
+
+- Masalah: mengubah budget/ROAS seolah tidak berpengaruh. Penyebab: (1) pada target ROAS tinggi budget di atas batas tidak terserap (ROAS rata-rata akan turun), (2) batas 2× Shopee dulu dihitung sekali untuk seluruh bulan, (3) batas tambahan omzet +50% prediksi produk membuat iklan maks. ±96% target.
+- `ads_strategy`: `week_blocks`, `ramp` (budget per iklan boleh naik maks. 2× tiap minggu, bertahap), `ramp_effect`, `weekly_table`, `unit_weekly_budget`, `recommend` (ROAS tertinggi dari 30 ke bawah yang menutup target dengan iklan saja), `month_totals`, `evaluate`. `Unit.lift` (daya dorong) dan `Unit.last_days`; `build_plan`/`recommend` menerima `lift`.
+- UI Iklan: setelan baru **Daya dorong iklan maks.** (+50% konservatif bawaan / +75% / +100%). Kotak **Rekomendasi sistem** + tombol "Pakai rekomendasi"; bila +50% tidak cukup, ditawarkan asumsi berikutnya yang mencapai target. Kartu budget menampilkan budget tidak terserap; kesimpulan menjelaskan apakah perlu turunkan ROAS atau naikkan budget. Jadwal budget per minggu + unduhan budget per iklan per minggu. Flash sale & exposure tidak dihitung.
+- Data nyata Nov 2026: +50% → maks. 96,3% (ROAS 11, Rp 329 jt); +75% → 101,8% target dengan ROAS 13, budget Rp 313 jt.
+- Campaign tersimpan menyimpan `rekomendasi` (dipakai/tidak), `jadwal_minggu`, `iklan_minggu`, `baseline` (total laporan iklan bulan berjalan saat disimpan), `daya_dorong`.
+- **Evaluasi pelaksanaan** di campaign tersimpan: laporan iklan terbaru − baseline (laporan bulanan kumulatif) → biaya & omzet harian per iklan sejak disimpan; "dijalankan" = biaya 60–140% budget usulan minggu berjalan (dijeda: ≈ 0). Iklan tunggal baru (`pisah:`/`baru:`) dicocokkan ke `produk:<kode>`. Bila laporan belum ada hari baru: minta unggah laporan esok hari.
+- Nama campaign ikut setelan terbaru selama belum diketik manual.
+
 ## Langkah berikutnya
 
 Audit ulang per menu bersama pengguna, satu per satu:
