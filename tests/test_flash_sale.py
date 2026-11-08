@@ -37,11 +37,19 @@ class CandidatesTest(unittest.TestCase):
 
     def test_price_never_below_break_even(self):
         cands, skipped = F.candidates(pd.DataFrame([item("tight", stok=100, harga=100_000, floor=94_000),
-                                                    item("none", stok=100, harga=100_000, floor=99_000)]))
+                                                    item("none", stok=100, harga=100_000, floor=99_000)]), below_floor=False)
         row = cands.set_index("sku").loc["tight"]
         self.assertGreaterEqual(row["harga_flash"], 94_000)
         self.assertEqual(row["diskon"], 5)
         self.assertIn("none", set(skipped["SKU · produk · varian"]))
+
+    def test_sales_priority_keeps_item_below_break_even_with_loss_noted(self):
+        cands, skipped = F.candidates(pd.DataFrame([item("rugi", stok=100, harga=100_000, floor=120_000)]))
+        row = cands.set_index("sku").loc["rugi"]
+        self.assertEqual(row["diskon"], 5)
+        self.assertEqual(row["margin_unit"], 95_000 - 120_000)
+        self.assertIn("di bawah impas", row["alasan"])
+        self.assertTrue(skipped.empty)
 
     def test_cancel_limit_relative_to_store(self):
         items = pd.DataFrame([item("a", stok=100, batal=30), item("b", stok=100, batal=30), item("c", stok=100, batal=70)])

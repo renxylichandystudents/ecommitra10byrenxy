@@ -9,8 +9,9 @@ Per SKU (yang laku dan punya prediksi):
   boleh dengan batas beli 1/pembeli.
 - Sumber kuota (urut): stok toko di atas SS + kebutuhan 7 hari → transfer dari DC 10062/10036 (dikirim paling lambat
   H-3) → kuota kecil dari stok di atas SS (maks. separuhnya). Stok 0 / di bawah SS dan DC kosong → tidak dijadwalkan.
-- Harga flash = harga × (1 − diskon) dibulatkan ke atas Rp 100, tidak di bawah harga impas (margin 0). Diskon dicoba
-  dari yang terbesar: pendorong 10/7/5%, habiskan stok 20/15/10/5%.
+- Harga flash = harga × (1 − diskon) dibulatkan ke atas Rp 100, tidak di bawah harga impas (margin 0, tanpa biaya iklan
+  karena pesanan flash sale tidak lewat iklan). Diskon dicoba dari yang terbesar: pendorong 10/7/5%, habiskan stok
+  20/15/10/5%. Mode prioritas omzet: bila tidak ada ruang, diskon minimal dipakai dan rugi per unit dicatat.
 - Jadwal harian: tiap hari `per_day` SKU (+3 di tanggal kembar, gajian 25, Harbolnas), campuran pendorong & habiskan
   stok, SKU sama berjarak ≥ 7 hari (≥ 3 hari bila kandidat kurang), SKU dari DC baru boleh tampil ≥ 3 hari setelah hari
   ini (waktu transfer).
@@ -39,7 +40,7 @@ CANCEL_LIMIT = 15.0
 
 INPUT_COLUMNS = ("sku", "label", "nama", "harga", "stok", "ada_stok", "ss", "harian", "dc", "terjual", "m_sales", "batal_pct", "floor", "momentum")
 CANDIDATE_COLUMNS = ["sku", "label", "nama", "tujuan", "sumber", "kuota", "harga", "harga_flash", "diskon", "skor", "stok", "dc", "hari_stok",
-                     "batas_beli", "alasan"]
+                     "batas_beli", "margin_unit", "alasan"]
 
 
 def _num(value, default: float = float("nan")) -> float:
@@ -59,8 +60,11 @@ def flash_price(price: float, discounts: tuple[float, ...], floor: float | None)
     return None
 
 
-def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(kandidat, tidak dijadwalkan). items: kolom INPUT_COLUMNS (lihat `rekomendasi_plus._flash_items`)."""
+def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_floor: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(kandidat, tidak dijadwalkan). items: kolom INPUT_COLUMNS (lihat `rekomendasi_plus._flash_items`).
+
+    below_floor=True (prioritas omzet): SKU yang harga impasnya tidak memberi ruang diskon tetap ikut dengan diskon minimal
+    5%, rugi per unit dicatat. False: SKU itu tidak dijadwalkan."""
     excluded = excluded or set()
     limit = cancel_limit(items)
     rows, skipped = [], []
@@ -108,10 +112,14 @@ def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None) -> tupl
         else:
             skip("data stok belum ada dan DC kosong" if not known else "stok 0 / di bawah SS dan DC kosong: restock dulu")
             continue
-        priced = flash_price(price, DISCOUNTS[purpose], _num(r.get("floor")))
-        if priced is None:
+        floor = _num(r.get("floor"))
+        priced = flash_price(price, DISCOUNTS[purpose], floor)
+        if priced is None and not below_floor:
             skip("harga impas tidak memberi ruang diskon ≥ 5%")
             continue
+        if priced is None:
+            priced = flash_price(price, (min(DISCOUNTS[purpose]),), None)
+            notes.append(f"di bawah impas: rugi ±Rp {floor - priced[0]:,.0f}/unit (diskon minimal)".replace(",", "."))
         flash, disc = priced
         momentum = _num(r.get("momentum"), 0.0)
         if purpose == DRIVER:
@@ -122,7 +130,8 @@ def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None) -> tupl
             notes.append(f"stok cukup {cover:.0f} hari: diskon lebih besar untuk memutar stok")
         rows.append({"sku": sku, "label": label, "nama": str(r.get("nama") or label), "tujuan": purpose, "sumber": source, "kuota": max(quota, 1),
                      "harga": price, "harga_flash": flash, "diskon": disc * 100, "skor": score, "stok": stok, "dc": dc,
-                     "hari_stok": cover, "batas_beli": 1 if cancel == cancel and cancel > CANCEL_LIMIT else None, "alasan": "; ".join(notes)})
+                     "hari_stok": cover, "batas_beli": 1 if cancel == cancel and cancel > CANCEL_LIMIT else None,
+                     "margin_unit": flash - floor if floor == floor else np.nan, "alasan": "; ".join(notes)})
     return pd.DataFrame(rows, columns=CANDIDATE_COLUMNS), pd.DataFrame(skipped, columns=["SKU · produk · varian", "Stok toko", "Stok DC", "Alasan"])
 
 
@@ -144,7 +153,7 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
              gap_days: int = 7, clear_share: float = 0.4) -> pd.DataFrame:
     """Jadwal harian flash sale toko. Selalu terisi selama ada kandidat."""
     cols = ["Tanggal", "Momen", "Jam", "Tujuan", "SKU", "Produk", "Harga normal", "Harga flash", "Diskon (%)", "Kuota", "Batas beli/pembeli",
-            "Sumber stok", "Kirim dari DC paling lambat", "Estimasi omzet maks.", "Alasan"]
+            "Sumber stok", "Kirim dari DC paling lambat", "Estimasi omzet maks.", "Margin/unit", "Alasan"]
     if cands is None or cands.empty:
         return pd.DataFrame(columns=cols)
     specials: dict[date, str] = {}
@@ -190,7 +199,7 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
                 "Batas beli/pembeli": int(item["batas_beli"]) if pd.notna(item.get("batas_beli")) else int(min(max(quota // 5, 1), 5)),
                 "Sumber stok": item["sumber"],
                 "Kirim dari DC paling lambat": day - timedelta(days=TRANSFER_DAYS) if item["sumber"] == SRC_DC else None,
-                "Estimasi omzet maks.": quota * item["harga_flash"], "Alasan": item["alasan"],
+                "Estimasi omzet maks.": quota * item["harga_flash"], "Margin/unit": item.get("margin_unit", np.nan), "Alasan": item["alasan"],
             })
     return pd.DataFrame(rows, columns=cols)
 

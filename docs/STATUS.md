@@ -142,6 +142,14 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Dua tujuan: Pendorong omzet (laris, diskon 10/7/5%, kuota 3 × prediksi harian) dan Habiskan stok lebih (stok ≥ 90 hari, diskon 20/15/10/5%, kuota ≤ penjualan 30 hari). Harga flash tidak di bawah impas.
 - Batas batal relatif: maks(15%, 1,5 × rata-rata batal toko tertimbang omzet) — data 8 Nov: 44%. Produk andalan bulky (kloset, water heater) batal 28–36%, jadi batas tetap 15% membuang semuanya; SKU batal > 15% diberi batas beli 1/pembeli.
 - Jadwal harian (+3 SKU di tanggal kembar/gajian/Harbolnas), SKU sama berjarak ≥ 7 hari (≥ 3 bila kandidat kurang), daftar transfer DC, unduhan template Shopee, simpan rencana (`kv_setting` kunci `flash_plan:<tanggal>`).
+- Harga impas flash = File margin tanpa biaya iklan (pesanan flash tidak lewat iklan). Menurut File margin, produk andalan (kloset, lem silicone) impasnya 1,18–1,37 × harga sekarang (program Shopee ±33%), jadi aturan impas ketat membuang semuanya. Pilihan "Aturan harga flash": Prioritas omzet (default; diskon minimal 5%, kolom Margin/unit + total rugi maks. di kartu) atau Tidak di bawah impas. Data 8 Nov: 73 slot, 42 di bawah impas, rugi maks. ±Rp 177 jt bila semua kuota habis. Perlu ditinjau: modal/program di File margin.
+
+## Ranking kategori dirombak (8 Nov 2026)
+
+- Logika di `src/core/category_rank.py` (tes `tests/test_category_rank.py`); tampilan `rekomendasi_plus.show_ranking`. Skor kesiapan & Brand Portal lama dipindah ke expander "Data lain".
+- Baris toko "Mitra10" dihitung milik kita walau `own_shop` False. Label kategori = frasa terbanyak di judul daftar itu.
+- Status per produk: Sudah Top 10 / Dekat (11–50) / Menengah (51–500) / Jauh. Perkiraan penjualan untuk Top 10 = penjualan produk kita yang sudah Top 10 di daftar itu × peringkatnya ÷ 10 (bila tidak ada, penjualan produk itu sendiri × peringkat ÷ 10) → "Kali lipat".
+- Langkah per produk: restock → iklan tunggal → flash sale (peringkat ≤ 500) → kata kunci Top 10 yang belum ada di judul (hanya bila jenis produk sama) → tag promo → konten. Data 8 Nov: 5 produk sudah Top 10 (Kloset Duduk, Water Heater), 16 Dekat.
 
 ## Exposure Shopee Video & media sosial dirombak (8 Nov 2026)
 
