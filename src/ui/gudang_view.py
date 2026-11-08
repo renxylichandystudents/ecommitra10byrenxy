@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core import gudang
-from src.ui.common import batched_view, card, centered_download, download_excel, explain, fmt_num, fmt_pct
+from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct
 from src.utils.format import show_table
 
 STATUS_ICON = {"Kosong": "🔴 Kosong", "Hampir habis": "🟠 Hampir habis", "Stok berlebih": "🟣 Stok berlebih", "Aman": "🟢 Aman"}
@@ -657,10 +657,30 @@ def _category_table(view: dict) -> None:
         return "–" if not np.isfinite(value) or value >= 999 else fmt_pct(value, 0)
 
     cats = cats.sort_values("kategori").reset_index(drop=True)  # urut abjad
+    # Omzet & prediksi per kategori (jumlah SKU di kategori itu).
+    items = view["items"]
+    money = items.groupby("kategori").agg(
+        q30=("qty_30", "sum"), s30=("omzet_30", "sum"), pq=("pred_30", "sum"), ps=("pred_omzet_30", "sum"),
+    ) if not items.empty else pd.DataFrame(columns=["q30", "s30", "pq", "ps"])
+    prev = None
+    if not items.empty and "tren_pct" in items.columns:
+        base = items.assign(_prev=np.where(np.isfinite(items["tren_pct"]), items["omzet_30"] / (1 + items["tren_pct"] / 100), 0.0))
+        prev = base.groupby("kategori")["_prev"].sum()
+    money = money.reindex(cats["kategori"])
+    trend = [
+        (s30 - p) / p * 100 if prev is not None and p and p > 0 else np.nan
+        for s30, p in zip(money["s30"].fillna(0), (prev.reindex(cats["kategori"]).fillna(0) if prev is not None else [0] * len(cats)))
+    ]
+    has_pred = bool(view.get("has_pred"))
     frame = pd.DataFrame({
         "Kategori": cats["kategori"].str.title(),
         "Prioritas": cats["_lvl"].map(PRIORITY_LABEL),
         "Yang perlu dikerjakan": cats["_job"],
+        "Terjual 30 hari (QTY)": money["q30"].fillna(0).to_numpy(),
+        "Omzet 30 hari": money["s30"].fillna(0).to_numpy(),
+        "Tren omzet": [_trend_text(v) for v in trend],
+        "Prediksi QTY 30 hari": money["pq"].to_numpy() if has_pred else np.nan,
+        "Prediksi omzet 30 hari": money["ps"].to_numpy() if has_pred else np.nan,
         "Rak terpakai": cats["rak_pct"].map(pct),
         "Lokasi rak": cats["lokasi_rak"], "SKU besar berstok": cats["sku_besar_berstok"],
         "Gondola terpakai": cats["gondola_pct"].map(pct),
@@ -670,19 +690,30 @@ def _category_table(view: dict) -> None:
     })
     rack_total, rack_sku = int(frame["Lokasi rak"].sum()), int(frame["SKU besar berstok"].sum())
     gon_total, gon_used = int(frame["Lokasi gondola"].sum()), int(frame["Gondola terisi"].sum())
+    sales_now = float(frame["Omzet 30 hari"].sum())
+    sales_prev = float(prev.sum()) if prev is not None else 0.0
     total = {
         "Kategori": "Total", "Prioritas": f"{len(groups[0])} tinggi · {len(groups[1])} sedang", "Yang perlu dikerjakan": "",
+        "Terjual 30 hari (QTY)": frame["Terjual 30 hari (QTY)"].sum(), "Omzet 30 hari": sales_now,
+        "Tren omzet": _trend_text((sales_now - sales_prev) / sales_prev * 100 if sales_prev > 0 else np.nan),
+        "Prediksi QTY 30 hari": frame["Prediksi QTY 30 hari"].sum() if has_pred else np.nan,
+        "Prediksi omzet 30 hari": frame["Prediksi omzet 30 hari"].sum() if has_pred else np.nan,
         "Rak terpakai": pct(rack_sku / rack_total * 100) if rack_total else "–", "Lokasi rak": rack_total, "SKU besar berstok": rack_sku,
         "Gondola terpakai": pct(gon_used / gon_total * 100) if gon_total else "–", "Lokasi gondola": gon_total, "Gondola terisi": gon_used,
         "SKU kecil tanpa lokasi": frame["SKU kecil tanpa lokasi"].sum(), "SKU perlu diisi ulang": frame["SKU perlu diisi ulang"].sum(),
         "Unit berlebih": frame["Unit berlebih"].sum(), "Stok 10037": frame["Stok 10037"].sum(),
     }
     full = pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
-    show_table(
-        full, bold_label="Total", kinds={"Stok 10037": "count", "Unit berlebih": "count"}, max_height=10_000,
-        column_config={"Yang perlu dikerjakan": st.column_config.TextColumn(width="large")},
+    _omzet_note(view)
+    kinds = {**OMZET_KINDS, "Unit berlebih": "count"}
+    batched_view(
+        len(frame), key="gudang-cat", noun="kategori",
+        render=lambda lo, hi: show_table(
+            pd.concat([full.iloc[:1], full.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label="Total", kinds=kinds, max_height=10_000,
+            column_config={"Yang perlu dikerjakan": st.column_config.TextColumn(width="large")},
+        ),
+        download=lambda: download_excel(full, "kapasitas_per_kategori.xlsx", key="xl-gudang-cat"),
     )
-    centered_download("gudang-cat-dl", lambda: download_excel(full, "kapasitas_per_kategori.xlsx", key="xl-gudang-cat"))
 
 
 def _sku_table(view: dict) -> None:
