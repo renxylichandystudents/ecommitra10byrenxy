@@ -12,7 +12,7 @@ import streamlit as st
 
 from src.core import shopee_fee as fee
 from src.core.promo import product_label
-from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct
+from src.ui.common import batched_view, card, download_excel, fmt_idr, fmt_num, fmt_pct
 from src.utils.format import angka, desimal, input_rupiah, parse_angka, show_table
 
 KEY_PROGRAMS = "shopee_mall_program"
@@ -112,10 +112,14 @@ def _parameter_panel(features, *, may_edit: bool, username: str, require) -> Non
                 "Untuk memperbarui, unduh tabel ini, ubah di Excel, lalu unggah kembali.</div>",
                 unsafe_allow_html=True,
             )
-            show_table(fees[["kategori", "sub_kategori", "jenis_produk", "biaya_admin_pct", "catatan"]].rename(columns={
-                "kategori": "Kategori", "sub_kategori": "Sub kategori", "jenis_produk": "Jenis produk", "biaya_admin_pct": "Biaya admin (%)", "catatan": "Catatan"}),
-                max_height=320, kinds={"Biaya admin (%)": "dec"})
-            download_excel(fees[["kategori", "sub_kategori", "jenis_produk", "biaya_admin_pct", "catatan"]], "biaya_kategori_shopee_mall.xlsx", key="xl-fee-cat", label="Unduh tabel kategori")
+            cat_view = fees[["kategori", "sub_kategori", "jenis_produk", "biaya_admin_pct", "catatan"]].sort_values(["kategori", "sub_kategori"]).rename(columns={
+                "kategori": "Kategori", "sub_kategori": "Sub kategori", "jenis_produk": "Jenis produk", "biaya_admin_pct": "Biaya admin (%)", "catatan": "Catatan"}).reset_index(drop=True)
+            batched_view(
+                len(cat_view), key="fee-cat", noun="baris",
+                render=lambda lo, hi: show_table(cat_view.iloc[lo:hi], kinds={"Biaya admin (%)": "dec"}, max_height=10_000,
+                                                 column_config={"Jenis produk": st.column_config.TextColumn(width="large")}),
+                download=lambda: download_excel(fees[["kategori", "sub_kategori", "jenis_produk", "biaya_admin_pct", "catatan"]], "biaya_kategori_shopee_mall.xlsx", key="xl-fee-cat", label="Unduh tabel kategori"),
+            )
             if may_edit:
                 upload = st.file_uploader("Unggah tabel kategori (Excel/CSV: kategori, sub_kategori, jenis_produk, biaya_admin_pct)", type=["xlsx", "csv"], key="fee-cat-upload")
                 if upload is not None:
@@ -141,7 +145,14 @@ def _parameter_panel(features, *, may_edit: bool, username: str, require) -> Non
                 unsafe_allow_html=True,
             )
             if not aff.empty:
-                show_table(aff.rename(columns={"product_code": "Produk ID", "nama": "Nama produk", "komisi_pct": "Komisi (%)"}), max_height=260, kinds={"Komisi (%)": "dec"})
+                aff_view = aff.rename(columns={"product_code": "Produk ID", "nama": "Nama produk", "komisi_pct": "Komisi (%)"})
+                aff_view = aff_view.sort_values("Komisi (%)", ascending=False, kind="mergesort").reset_index(drop=True)
+                st.markdown("<div class='field-hint'>Urutan: komisi tertinggi di atas (paling memotong margin bila terjual lewat affiliate).</div>", unsafe_allow_html=True)
+                batched_view(
+                    len(aff_view), key="fee-aff", noun="produk",
+                    render=lambda lo, hi: show_table(aff_view.iloc[lo:hi], kinds={"Komisi (%)": "dec"}, max_height=10_000),
+                    download=lambda: download_excel(aff_view, "komisi_affiliate.xlsx", key="xl-fee-aff"),
+                )
             if may_edit:
                 upload = st.file_uploader("Unggah file komisi affiliate (xlsx)", type=["xlsx", "csv"], key="fee-aff-upload")
                 if upload is not None:
