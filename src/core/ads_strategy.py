@@ -30,6 +30,8 @@ import pandas as pd
 
 STEP_DAILY = 25_000.0     # kenaikan alokasi per langkah (Rp/hari)
 MAX_MULTIPLE = 3.0        # tambahan maksimal per unit = 3× biaya harian saat ini
+MAX_CHANGE = 2.0          # Shopee: budget harian naik maks. 2× / turun ke ≥ ½ per evaluasi agar ROAS protection tetap aktif
+MAX_SHOPEE_ROAS = 30.0    # Shopee: Target ROAS maks. 30 (di atasnya ROAS protection mati)
 NEW_DAILY = 50_000.0      # budget awal iklan produk tunggal baru (Rp/hari)
 EFFICIENT_MARGIN = 1.2    # Efisien: ROAS marginal ≥ 1,2 × ROAS impas
 STRATEGIES = ("Kejar target", "Seimbang", "Efisien")
@@ -311,28 +313,41 @@ def ad_sales(u: Unit, cost: float) -> float:
 
 
 def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, budget_daily: float | None = None,
-                    max_multiple: float = MAX_MULTIPLE) -> Plan:
+                    max_change: float = MAX_CHANGE) -> Plan:
     """Rencana mengejar target dengan ROAS & budget yang ditetapkan pengguna (margin dan stok tidak membatasi).
 
     Target ROAS = ROAS rata-rata seluruh iklan di rencana (total omzet iklan / total biaya iklan), sama dengan arti
-    Target ROAS di Shopee.
+    Target ROAS di Shopee. Batas Shopee: budget harian iklan berjalan hanya boleh naik maks. `max_change`× atau turun ke
+    ≥ 1/`max_change` per evaluasi (lebih dari itu ROAS protection mati), selain dijeda.
     1. Budget dipindah dari iklan dengan tambahan omzet per Rp terendah ke yang tertinggi selama omzet naik.
     2. Bila biaya di atas budget atau ROAS rata-rata di bawah target, iklan yang paling tidak efektif dipangkas dulu.
     3. Sisa budget ditambahkan bertahap (Rp 25 rb/hari) ke iklan paling efektif sampai kekurangan omzet harian
-       tertutup, selama ROAS rata-rata tetap ≥ target dan tambahan per iklan ≤ `max_multiple` × biaya saat ini.
+       tertutup, selama ROAS rata-rata tetap ≥ target.
     """
     floor = {u.key: float(target_roas) for u in units}
     cost = {u.key: _base(u) for u in units}
-    caps = {u.key: max(u.daily_cost * (1 + max_multiple) if u.daily_cost > 0 else NEW_DAILY * 2, cost[u.key]) for u in units}
+    caps = {u.key: max(u.daily_cost * max_change if u.daily_cost > 0 else NEW_DAILY * 2, cost[u.key]) for u in units}
+    lower = {u.key: cost[u.key] / max_change for u in units}
     sales = {u.key: ad_sales(u, cost[u.key]) for u in units}
     total_cost, total_sales = sum(cost.values()), sum(sales.values())
     target_left = gap_daily - sum(sales[u.key] - _now_sales(u) for u in units)
+
+    def cut_step(u: Unit) -> float:
+        c, lo = cost[u.key], lower[u.key]
+        return c if c <= lo + 1e-6 else min(STEP_DAILY, c - lo)
+
+    def add_step(u: Unit, step: float) -> float:
+        return max(lower[u.key], step) if cost[u.key] <= 0 else step
 
     def gain(u: Unit, step: float) -> float:
         return ad_sales(u, cost[u.key] + step) - sales[u.key]
 
     def loss(u: Unit, step: float) -> float:
         return sales[u.key] - ad_sales(u, cost[u.key] - step)
+
+    def loss_rate(u: Unit) -> float:
+        step = cut_step(u)
+        return loss(u, step) / step if step > 0 else float("inf")
 
     def move(u: Unit, delta: float) -> None:
         nonlocal total_cost, total_sales, target_left
@@ -347,19 +362,20 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
         live = [u for u in units if cost[u.key] > 0]
         if not live:
             break
-        donor = min(live, key=lambda u: loss(u, min(STEP_DAILY, cost[u.key])) / min(STEP_DAILY, cost[u.key]))
-        step = min(STEP_DAILY, cost[donor.key])
-        lost = loss(donor, step)
-        best, best_gain = None, 0.0
+        donor = min(live, key=loss_rate)
+        freed = cut_step(donor)
+        lost = loss(donor, freed)
+        best, best_gain, best_step = None, 0.0, 0.0
         for u in units:
-            if u.key != donor.key and cost[u.key] + step <= caps[u.key] + 1e-6:
+            step = add_step(u, freed)
+            if u.key != donor.key and step <= freed + 1e-6 and cost[u.key] + step <= caps[u.key] + 1e-6:
                 g = gain(u, step)
                 if g > best_gain:
-                    best, best_gain = u, g
+                    best, best_gain, best_step = u, g, step
         if best is None or best_gain <= lost + 1.0:
             break
-        move(donor, -step)
-        move(best, step)
+        move(donor, -freed)
+        move(best, best_step)
 
     for _ in range(20_000):
         over_budget = budget_daily is not None and total_cost > budget_daily + 1e-6
@@ -369,11 +385,8 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
         live = [u for u in units if cost[u.key] > 0]
         if not live:
             break
-        worst = min(live, key=lambda u: loss(u, min(STEP_DAILY, cost[u.key])) / min(STEP_DAILY, cost[u.key]))
-        cut = min(STEP_DAILY, cost[worst.key])
-        if over_budget and not under_roas:
-            cut = min(cut, total_cost - budget_daily)
-        move(worst, -cut)
+        worst = min(live, key=loss_rate)
+        move(worst, -cut_step(worst))
 
     for _ in range(8000):
         if target_left <= 0:
@@ -381,16 +394,17 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
         room = None if budget_daily is None else budget_daily - total_cost
         if room is not None and room < 1:
             break
-        step = STEP_DAILY if room is None else min(STEP_DAILY, room)
-        best, best_gain = None, 0.0
+        base_step = STEP_DAILY if room is None else min(STEP_DAILY, room)
+        best, best_gain, best_step = None, 0.0, 0.0
         for u in units:
-            if cost[u.key] + step <= caps[u.key] + 1e-6:
+            step = add_step(u, base_step)
+            if (room is None or step <= room + 1e-6) and cost[u.key] + step <= caps[u.key] + 1e-6:
                 g = gain(u, step)
-                if g > best_gain:
-                    best, best_gain = u, g
-        if best is None or (total_sales + best_gain) < target_roas * (total_cost + step):
+                if g / step > (best_gain / best_step if best_step else 0.0):
+                    best, best_gain, best_step = u, g, step
+        if best is None or (total_sales + best_gain) < target_roas * (total_cost + best_step):
             break
-        move(best, step)
+        move(best, best_step)
     return Plan("Kejar target", cost, floor)
 
 
@@ -451,10 +465,15 @@ def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.D
         if np.isfinite(u.contribution) and u.contribution <= 0 and d_sales > 0:
             notes.append("margin minus: tambahan omzet ikut menambah rugi")
         planned = ad_sales(u, new)
+        roas_shopee = planned / new if new > 0 else np.nan
+        if roas_shopee == roas_shopee and roas_shopee > MAX_SHOPEE_ROAS:
+            estimate = f"{roas_shopee:.1f}".replace(".", ",")
+            notes.append(f"Target ROAS diisi {MAX_SHOPEE_ROAS:.0f} (maks. Shopee); perkiraan ROAS iklan ini {estimate}")
+            roas_shopee = MAX_SHOPEE_ROAS
         rows.append({
             "key": u.key, "Tindakan": act, "Iklan": u.nama, "Jenis": "Produk tunggal" if u.jenis.startswith("Produk tunggal") else u.jenis,
             "Anggota": len(u.members), "Budget harian sekarang": now, "Budget harian usulan": new,
-            "Perubahan/hari": new - now, "Target ROAS Shopee": round(planned / new, 1) if new > 0 else np.nan,
+            "Perubahan/hari": new - now, "Target ROAS Shopee": round(roas_shopee, 1) if roas_shopee == roas_shopee else np.nan,
             "ROAS bulan terakhir": u.roas, "Tambahan omzet/hari": d_sales, "Catatan": "; ".join(notes),
         })
     frame = pd.DataFrame(rows)
@@ -606,3 +625,133 @@ def group_hygiene(members: pd.DataFrame, units: list[Unit], contribution_by_code
                              "ROAS": roas, "Porsi omzet grup": share * 100, "Saran": advice})
     frame = pd.DataFrame(rows, columns=cols)
     return frame.sort_values("Biaya/hari", ascending=False).reset_index(drop=True)
+
+
+SELECTION_ORDER = ("Buat iklan tunggal", "Jadikan iklan tunggal", "Pertahankan iklan tunggal", "Tambahkan ke grup", "Pertahankan di grup",
+                   "Pindahkan ke grup", "Keluarkan dari grup", "Jeda sampai restock")
+
+
+def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.DataFrame, contribution_by_code: dict[str, float], *,
+                      target_roas: float, plan: Plan | None = None, top_single: int = 15, top_group: int = 60,
+                      max_promote: int = 10) -> pd.DataFrame:
+    """Pemilihan produk untuk iklan produk tunggal vs iklan grup, per Kode Produk.
+
+    Dasar: hasil iklan 2 bulan terakhir per produk (biaya, omzet, ROAS, porsi omzet di grup), prediksi omzet harian dari
+    analisa (permintaan), stok, dan margin (catatan). target_roas = target ROAS pengguna (maks. 30).
+    - Jadikan iklan tunggal: andalan grup (porsi omzet ≥ 30% di grup > 2 produk, ROAS ≥ 80% target) atau omzet iklan
+      tertinggi dengan ROAS ≥ target → budget & target ROAS dikendalikan sendiri (maks. `max_promote` per minggu, sisanya kandidat).
+    - Keluarkan dari grup: ada biaya tanpa omzet, atau ROAS < 50% target.
+    - Pindahkan ke grup: iklan tunggal dengan ROAS < 50% target dan omzet di bawah median iklan tunggal.
+    - Buat iklan tunggal / Tambahkan ke grup: produk belum diiklankan dengan prediksi omzet tertinggi (peringkat ≤ top_single)
+      / berikutnya (≤ top_group).
+    - Jeda sampai restock: produk diiklankan yang stoknya 0.
+    """
+    cols = ["Saran", "Produk", "Kode produk", "Iklan sekarang", "Biaya iklan/hari", "Omzet iklan/hari", "ROAS 2 bulan", "Porsi omzet grup",
+            "Prediksi omzet/hari", "Stok", "Alasan"]
+    target = min(float(target_roas), MAX_SHOPEE_ROAS)
+    by_key = {u.key: u for u in units}
+    prod = products.set_index("product_code") if not products.empty else pd.DataFrame(columns=["nama", "omzet_harian", "stok_room", "stok"])
+    demand = prod["omzet_harian"].fillna(0.0) if "omzet_harian" in prod.columns else pd.Series(dtype=float)
+    rank = demand.rank(ascending=False, method="first") if not demand.empty else demand
+
+    hist = pd.DataFrame(columns=["unit", "product_code", "nama", "biaya", "omzet"])
+    if not members.empty:
+        periods = sorted(members["periode"].unique())[-2:]
+        recent = members.loc[members["periode"].isin(periods)]
+        per = recent.groupby(["unit", "product_code", "periode"], as_index=False).agg(nama=("nama", "last"), biaya=("biaya", "sum"), omzet=("omzet", "sum"))
+        hist = per.groupby(["unit", "product_code"], as_index=False).agg(nama=("nama", "last"), biaya=("biaya", "mean"), omzet=("omzet", "mean"))
+    group_total = hist.loc[hist["unit"].str.startswith("grup:")].groupby("unit")["omzet"].sum().to_dict() if not hist.empty else {}
+    group_size = hist.loc[hist["unit"].str.startswith("grup:")].groupby("unit")["product_code"].nunique().to_dict() if not hist.empty else {}
+    singles = hist.loc[hist["unit"].str.startswith("produk:")] if not hist.empty else hist
+    single_median = float(singles["omzet"].median()) if not singles.empty else 0.0
+    top_ads = float(hist["omzet"].quantile(0.9)) if len(hist) >= 10 else float("inf")
+
+    def stock_of(code: str) -> tuple[float, float]:
+        if code not in prod.index:
+            return float("nan"), float("nan")
+        row = prod.loc[code]
+        return float(row.get("stok", np.nan)), float(row.get("stok_room", np.nan))
+
+    def notes_for(code: str, base: list[str]) -> str:
+        contrib = contribution_by_code.get(code)
+        stok, room = stock_of(code)
+        out = list(base)
+        if room == room and room <= 0 and not (stok == stok and stok <= 0):
+            out.append("stok hanya cukup untuk penjualan biasa: siapkan restock bila iklan dinaikkan")
+        if contrib is not None and contrib <= 0:
+            out.append("margin minus (info)")
+        return "; ".join(out)
+
+    rows, seen = [], set()
+    for r in hist.itertuples(index=False):
+        if r.unit == "auto":
+            continue
+        unit = by_key.get(r.unit)
+        code = str(r.product_code)
+        roas = r.omzet / r.biaya if r.biaya > 0 else float("nan")
+        stok, _room = stock_of(code)
+        running = unit is not None and _running(unit)
+        is_group = r.unit.startswith("grup:")
+        label = (f"Grup: {unit.nama if unit else r.unit[5:]}" if is_group else "Iklan tunggal") + ("" if running else " (dijeda)")
+        share = r.omzet / group_total[r.unit] if is_group and group_total.get(r.unit, 0) > 0 else float("nan")
+        reason: list[str] = []
+        if stok == stok and stok <= 0 and running:
+            act, reason = "Jeda sampai restock", ["stok 0: iklan tidak bisa menghasilkan penjualan; aktifkan lagi setelah barang masuk"]
+        elif is_group:
+            if r.biaya > 0 and r.omzet <= 0:
+                act, reason = "Keluarkan dari grup", ["ada biaya tanpa omzet 2 bulan terakhir"]
+            elif roas == roas and roas < target * 0.5 and r.biaya >= 5_000:
+                act, reason = "Keluarkan dari grup", [f"ROAS {roas:.1f} < 50% target {target:.1f}: menyedot budget grup".replace(".", ",")]
+            elif (share == share and share >= 0.3 and group_size.get(r.unit, 0) > 2 and roas == roas and roas >= target * 0.8) or \
+                    (r.omzet >= top_ads and roas == roas and roas >= target):
+                act, reason = "Jadikan iklan tunggal", [f"andalan grup ({share * 100:.0f}% omzet grup, ROAS {roas:.1f}): budget & target ROAS dikendalikan sendiri".replace(".", ",")
+                                                        if share == share else f"omzet iklan tertinggi dengan ROAS {roas:.1f}".replace(".", ",")]
+            else:
+                act, reason = "Pertahankan di grup", []
+        else:
+            if r.biaya > 0 and r.omzet <= 0:
+                act, reason = "Pindahkan ke grup", ["ada biaya tanpa omzet: tidak layak budget sendiri"]
+            elif roas == roas and roas < target * 0.5 and r.omzet < single_median:
+                act, reason = "Pindahkan ke grup", [f"ROAS {roas:.1f} < 50% target dan omzet kecil: lebih efisien ditopang produk lain di grup".replace(".", ",")]
+            else:
+                act, reason = "Pertahankan iklan tunggal", []
+        seen.add(code)
+        name = str(r.nama) or (str(prod.loc[code, "nama"]) if code in prod.index else code)
+        rows.append({"Saran": act, "Produk": name, "Kode produk": code, "Iklan sekarang": label, "Biaya iklan/hari": r.biaya, "Omzet iklan/hari": r.omzet,
+                     "ROAS 2 bulan": roas, "Porsi omzet grup": share * 100 if share == share else np.nan,
+                     "Prediksi omzet/hari": float(demand.get(code, np.nan)) if code in demand.index else np.nan, "Stok": stok,
+                     "Alasan": notes_for(code, reason)})
+    advertised = {c for u in units if not u.jenis.endswith("(baru)") for c in u.members} | seen
+    planned_new = {u.members[0]: (plan.cost.get(u.key, 0.0) if plan else 0.0) for u in units if u.jenis.endswith("(baru)") and u.members}
+    if not demand.empty:
+        for code in rank.sort_values().index:
+            code = str(code)
+            if code in advertised or demand.get(code, 0) <= 0:
+                continue
+            stok, _room = stock_of(code)
+            if stok == stok and stok <= 0:
+                continue
+            position = int(rank[code])
+            if position <= top_single:
+                act = "Buat iklan tunggal"
+                reason = [f"peringkat {position} prediksi omzet, belum diiklankan"]
+                if planned_new.get(code, 0) > 0:
+                    reason.append(f"budget awal Rp {planned_new[code]:,.0f}/hari di rencana".replace(",", "."))
+            elif position <= top_group:
+                act, reason = "Tambahkan ke grup", [f"peringkat {position} prediksi omzet, belum diiklankan: masukkan ke grup produk sejenis"]
+            else:
+                break
+            rows.append({"Saran": act, "Produk": str(prod.loc[code, "nama"]), "Kode produk": code, "Iklan sekarang": "Belum diiklankan",
+                         "Biaya iklan/hari": 0.0, "Omzet iklan/hari": 0.0, "ROAS 2 bulan": np.nan, "Porsi omzet grup": np.nan,
+                         "Prediksi omzet/hari": float(demand[code]), "Stok": stok, "Alasan": notes_for(code, reason)})
+    frame = pd.DataFrame(rows, columns=cols)
+    if frame.empty:
+        return frame
+    removal = frame["Saran"].isin(["Keluarkan dari grup", "Pindahkan ke grup", "Jeda sampai restock"])
+    frame["_v"] = (frame["Omzet iklan/hari"].fillna(0) + frame["Prediksi omzet/hari"].fillna(0)).where(~removal, frame["Biaya iklan/hari"].fillna(0))
+    promote = frame.loc[frame["Saran"] == "Jadikan iklan tunggal"].sort_values("_v", ascending=False)
+    later = promote.index[max_promote:]
+    frame.loc[later, "Saran"] = "Pertahankan di grup"
+    frame.loc[later, "Alasan"] = "kandidat iklan tunggal minggu berikutnya: " + frame.loc[later, "Alasan"].astype(str)
+    frame["_o"] = frame["Saran"].map({k: i for i, k in enumerate(SELECTION_ORDER)}).fillna(99)
+    return frame.sort_values(["_o", "_v"], ascending=[True, False]).drop(columns=["_o", "_v"]).reset_index(drop=True)

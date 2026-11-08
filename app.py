@@ -232,7 +232,31 @@ def current_params() -> dict:
             params = {**params, "margin": margin}
     except Exception:
         pass
+    room = warehouse_capacity()
+    if room:
+        gudang_cfg = {**(params.get("gudang") or {}), "kapasitas_unit": int(round(room["unit"])), "kapasitas_sumber": room["sumber"]}
+        params = {**params, "gudang": gudang_cfg}
     return params
+
+
+def warehouse_capacity() -> dict | None:
+    """Kapasitas restock dari replenishment Site 10037 terbaru (Setting › Kapasitas gudang)."""
+    version = st.session_state.get("_feature-version", 0)
+    cached = st.session_state.get("_wh-capacity")
+    if isinstance(cached, tuple) and cached[0] == version:
+        return cached[1]
+    try:
+        from src.core.gudang import restock_capacity
+        from src.ui.gudang_view import load_replenishment
+
+        repl, snapshot, _dates = load_replenishment(get_features())
+        room = restock_capacity(repl)
+        if room:
+            room["sumber"] = f"Replenishment Site 10037 {snapshot}"
+    except Exception:
+        room = None
+    st.session_state["_wh-capacity"] = (version, room)
+    return room
 
 
 def import_lead_time() -> tuple[float, float] | None:

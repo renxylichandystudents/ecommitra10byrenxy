@@ -108,6 +108,13 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
   - Margin → File margin; lead time impor → Setting › Kedatangan impor; kapasitas gudang → Setting › Kapasitas gudang.
   - Lead time lokal (7 hari) dan kapasitas unit optimasi restock (100.000) tetap dari `config/business_params.yaml` / nilai tersimpan; rumus safety stock tidak berubah.
 
+## Parameter gudang & batas Shopee untuk iklan (8 Nov 2026)
+
+- Setting › Kapasitas gudang: expander **"Parameter perhitungan stok & restock"** (`gudang_view.show_parameters`) menampilkan nilai yang dipakai algoritma beserta sumbernya: lead time lokal (diisi tim, bisa diubah di sini — file replenishment tidak memuat lead time; ROP di file ≈ 40 hari cakupan), σ lead time, lead time impor (dari Kedatangan impor), kapasitas restock, MOQ, biaya simpan/kehabisan.
+- Kapasitas restock kini dari replenishment terbaru: Σ max(Max − stok, 0) per SKU (`gudang.restock_capacity`, disuntikkan di `app.current_params`). Snapshot 23/09/2026: 6.589 unit, 253 dari 756 SKU masih punya ruang. Nilai 100.000 hanya dipakai bila replenishment belum ada.
+- Iklan mengikuti batas Shopee: Target ROAS per iklan maks. 30 (`MAX_SHOPEE_ROAS`); perubahan budget harian per minggu dibatasi ½×–2× atau jeda (`MAX_CHANGE = 2`), iklan baru maks. Rp 100 rb/hari. Rencana dibuat **mingguan**, diubah di Shopee setiap Senin dan tidak diubah sampai Minggu.
+- Langkah baru **Pemilihan produk iklan** (`ads_strategy.product_selection`): dari hasil iklan 2 bulan, porsi omzet dalam grup, peringkat prediksi omzet, dan stok → Buat iklan tunggal, Jadikan iklan tunggal (maks. 10/minggu), Pertahankan, Pindahkan ke grup, Keluarkan dari grup, Jeda sampai restock. ROAS per iklan boleh bervariasi; yang dijaga ROAS rata-rata rencana ≥ target.
+
 ## Hasil pemeriksaan
 
 - Lint (`ruff`, aturan F dan E9): bersih, tidak ada nama tak terdefinisi.

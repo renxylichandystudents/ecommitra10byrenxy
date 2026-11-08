@@ -336,6 +336,59 @@ def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: 
     _sku_table(view)
 
 
+def show_parameters(features, user_root, *, may_edit: bool) -> None:
+    """Nilai yang dipakai algoritma stok & restock: sumbernya, dan di mana dipakai. Lead time lokal satu-satunya yang diisi manual."""
+    from src.core.config import load_params, save_params
+    from src.core.warehouse import lead_time_stats
+
+    params = load_params(user_root)
+    lead = params.get("lead_time", {}) or {}
+    cfg = params.get("gudang", {}) or {}
+    repl, snapshot, _dates = load_replenishment(features)
+    room = gudang.restock_capacity(repl)
+    try:
+        notes = features.read("import_note") if features is not None else pd.DataFrame()
+        stats = lead_time_stats(notes)
+    except Exception:
+        stats = None
+    local = float(lead.get("lokal_hari", 7) or 7)
+    sigma = float(lead.get("lokal_sigma_hari", 0) or 0)
+    rows = [
+        {"Parameter": "Lead time lokal", "Nilai": f"{fmt_num(local)} hari",
+         "Sumber": "diisi tim (tidak ada di file unggahan) · ubah di bawah",
+         "Dipakai untuk": "Safety stock = Z × σ permintaan harian × √lead time; titik pesan ulang (ROP) = prediksi harian × lead time + SS; simulasi stok di Laporan"},
+        {"Parameter": "Variasi lead time lokal (σ)", "Nilai": f"{fmt_num(sigma)} hari", "Sumber": "nilai tetap",
+         "Dipakai untuk": "0 = lead time dianggap stabil; bila > 0 safety stock memakai rumus umum (variasi permintaan + variasi lead time)"},
+        {"Parameter": "Lead time impor",
+         "Nilai": f"rata-rata {fmt_num(stats[0], 1)} · maks. {fmt_num(stats[1])} hari" if stats else "belum ada PO diterima",
+         "Sumber": "Setting › Kedatangan impor (Diterima DC − tanggal PO)",
+         "Dipakai untuk": "SS impor = (lead time maks − rata-rata) × permintaan harian; dipakai hanya bila mode impor aktif (saat ini nonaktif: semua SKU memakai lead time lokal)"},
+        {"Parameter": "Kapasitas restock",
+         "Nilai": f"{fmt_num(room['unit'])} unit" if room else f"{fmt_num(cfg.get('kapasitas_unit', 100000))} unit (bawaan)",
+         "Sumber": (f"replenishment {snapshot}: Σ (Max − stok) per SKU · {fmt_num(room['sku_ada_ruang'])} dari {fmt_num(room['sku'])} SKU masih punya ruang "
+                    f"· total Max {fmt_num(room['max_total'])} unit, stok {fmt_num(room['soh_total'])} unit") if room else "unggah data stok harian (replenishment) di atas",
+         "Dipakai untuk": "Batas total unit pembelian pada optimasi restock MILP Top 50 (Evaluasi model)"},
+        {"Parameter": "MOQ", "Nilai": f"{fmt_num(cfg.get('moq_unit', 1))} unit", "Sumber": "nilai tetap", "Dipakai untuk": "Pembelian minimal per SKU pada optimasi restock"},
+        {"Parameter": "Biaya simpan · biaya kehabisan",
+         "Nilai": f"{fmt_num(cfg.get('biaya_simpan_pct_tahun', 20))}%/tahun · {fmt_num(cfg.get('biaya_kehabisan_pct', 30))}% harga",
+         "Sumber": "nilai tetap",
+         "Dipakai untuk": "Rekomendasi service level = Cu ÷ (Cu + Co); Cu = margin + biaya kehabisan, Co = biaya simpan × hari periode ÷ 365"},
+    ]
+    with st.expander("Parameter perhitungan stok & restock", expanded=False):
+        st.caption("Nilai di bawah dipakai oleh analisa safety stock, ROP, dan optimasi restock. Semua diambil dari data yang diunggah, kecuali lead time lokal.")
+        show_table(pd.DataFrame(rows), max_height=10_000, column_config={
+            "Sumber": st.column_config.TextColumn(width="large"), "Dipakai untuk": st.column_config.TextColumn(width="large")})
+        if not may_edit:
+            return
+        c1, c2 = st.columns([1, 3], vertical_alignment="bottom")
+        new = c1.number_input("Lead time lokal (hari)", min_value=1, max_value=120, value=int(local), step=1, key="gudang-lead-lokal",
+                              help="Hari dari pesan ulang ke DC sampai barang siap dijual di Site 10037.")
+        if c2.button("Simpan lead time", key="gudang-lead-save", disabled=int(new) == int(local)):
+            params.setdefault("lead_time", {})["lokal_hari"] = int(new)
+            save_params(params, user_root)
+            st.success(f"Lead time lokal {int(new)} hari disimpan. Jalankan analisa lagi agar safety stock dan ROP memakai nilai baru.")
+
+
 def _denah_info(features) -> tuple[str, str]:
     """(kapan, oleh siapa) denah terakhir diunggah."""
     try:

@@ -395,6 +395,24 @@ def _item_action(row) -> str:
     return "; ".join(notes) or "—"
 
 
+def restock_capacity(repl: pd.DataFrame | None) -> dict | None:
+    """Kapasitas pembelian (unit) = Σ ruang kosong sampai batas Max tiap SKU di replenishment Site 10037.
+
+    SKU yang stoknya sudah di atas Max dihitung 0 (tidak mengurangi ruang SKU lain)."""
+    if repl is None or repl.empty or "max_stock" not in repl.columns:
+        return None
+    max_stock = pd.to_numeric(repl["max_stock"], errors="coerce").fillna(0.0)
+    soh = pd.to_numeric(repl.get("soh", 0), errors="coerce").fillna(0.0).clip(lower=0)
+    has_max = max_stock > 0
+    if not has_max.any():
+        return None
+    room = (max_stock - soh).clip(lower=0).where(has_max, 0.0)
+    return {
+        "unit": float(room.sum()), "sku": int(has_max.sum()), "sku_ada_ruang": int((room > 0).sum()),
+        "max_total": float(max_stock[has_max].sum()), "soh_total": float(soh[has_max].sum()),
+    }
+
+
 def capacity_card(view: dict) -> tuple[str, str]:
     """(nilai, keterangan) untuk kartu Kapasitas gudang di dashboard."""
     loc = view["locations"]

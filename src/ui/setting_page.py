@@ -221,9 +221,10 @@ def _margin_report_tab(features, table: pd.DataFrame, data: FeatureData, orders:
 
 def _capacity_tab(features, table: pd.DataFrame, data: FeatureData, role: str, username: str, today: date, user_root: Path, orders: pd.DataFrame | None = None) -> None:
     """Gudang Site 10037: denah bawaan + replenishment harian + stok 10037 (lihat src/ui/gudang_view.py)."""
-    from src.ui.gudang_view import show_capacity
+    from src.ui.gudang_view import show_capacity, show_parameters
 
     show_capacity(features, table, may_upload=allowed(role, "setting_kapasitas_gudang", "upload"), username=username, require=_require, orders=orders)
+    show_parameters(features, user_root, may_edit=allowed(role, "setting_kapasitas_gudang", "edit"))
 
 
 # ---------------------------------------------------------------- Kedatangan impor

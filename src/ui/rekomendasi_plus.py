@@ -114,10 +114,11 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
             if stok == stok:
                 spare = max(stok - float(r.get("pred_harian", 0) or 0) * days_left, 0.0)
                 room[code] = room.get(code, 0.0) + spare * price / max(days_left, 1)
-            rows.append({"product_code": code, "nama": r.get("product_name", ""), "omzet_harian": float(r.get("pred_harian", 0) or 0) * price})
+            rows.append({"product_code": code, "nama": r.get("product_name", ""), "omzet_harian": float(r.get("pred_harian", 0) or 0) * price, "stok": stok})
     contribution = {c: sum(v * w for v, w in vals) / sum(w for _v, w in vals) for c, vals in contrib.items()}
     A.attach_economics(units, members, contribution, room)
-    products = pd.DataFrame(rows).groupby(["product_code"], as_index=False).agg(nama=("nama", "first"), omzet_harian=("omzet_harian", "sum")) if rows else pd.DataFrame(columns=["product_code", "nama", "omzet_harian"])
+    products = (pd.DataFrame(rows).groupby(["product_code"], as_index=False).agg(nama=("nama", "first"), omzet_harian=("omzet_harian", "sum"), stok=("stok", lambda v: v.sum(min_count=1)))
+                if rows else pd.DataFrame(columns=["product_code", "nama", "omzet_harian", "stok"]))
     products["stok_room"] = products["product_code"].map(room)
     running = [u for u in units if u.daily_cost > 0]
     store_roas = sum(u.daily_sales for u in running) / sum(u.daily_cost for u in running) if running else 8.0
