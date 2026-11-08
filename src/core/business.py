@@ -1,10 +1,10 @@
 """Satu sumber untuk target bisnis: target penjualan bulanan dan margin minimum promo.
 
 Urutan sumber (sama di semua menu):
-- Target penjualan: target bulan itu (diunggah di Pengaturan bisnis › Target sales bulanan, atau disimpan di
+- Target penjualan: target bulan itu (diunggah di Ubah data latih › Menu upload › Target, atau disimpan di
   Rekomendasi › Target penjualan) → bila belum ada, belum ada target. Tidak ada satu angka untuk semua bulan.
 - Margin minimum (syarat SKU boleh dipromosikan/diiklankan): nilai yang disimpan bersama target periode → bila belum ada, 0%
-  (asal tidak rugi). Margin per SKU tidak lagi dari perkiraan HPP di Pengaturan bisnis, melainkan dari File margin
+  (asal tidak rugi). Margin per SKU tidak lagi dari perkiraan HPP, melainkan dari File margin
   (Setting › Kalkulator biaya / Laporan margin).
 """
 

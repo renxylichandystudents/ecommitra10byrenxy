@@ -75,8 +75,7 @@ from src.ui.decision_view import (
     top50_matrix,
 )
 from src.ui.region import show_region_analysis
-from src.ui.settings import show_business_settings
-from src.ui.targets_view import achievement_line, monthly_targets
+from src.ui.targets_view import achievement_line, monthly_targets, show_target_uploader, target_upload_label
 from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
@@ -214,7 +213,7 @@ def show_vault_status() -> None:
 
 
 def current_params() -> dict:
-    """Pengaturan bisnis; lead time impor diganti lead time aktual dari Setting › Kedatangan impor bila sudah ada."""
+    """Parameter bisnis (config/business_params.yaml); lead time impor diganti lead time aktual dari Setting › Kedatangan impor bila sudah ada."""
     params = load_params(USER_ROOT)
     stats = import_lead_time()
     if stats:
@@ -222,7 +221,7 @@ def current_params() -> dict:
         lead["impor_rata_hari"], lead["impor_maks_hari"] = int(round(stats[0])), int(round(stats[1]))
         lead["impor_sumber"] = "Kedatangan impor"
         params = {**params, "lead_time": lead}
-    # Margin tidak diatur di Pengaturan bisnis: margin kotor toko dari File margin (Setting › Laporan margin) bila sudah diunggah.
+    # Margin kotor toko dari File margin (Setting › Laporan margin) bila sudah diunggah.
     try:
         from src.ui.margin_data import load_margin
 
@@ -1764,11 +1763,13 @@ def _source_status_map(store: LocalDataStore) -> dict[str, str]:
     return {spec.key: str(by_label.get(spec.label, "Kosong")) for spec in source_menu()}
 
 
+TARGET_UPLOAD = "sales_target"
 UPLOAD_GROUPS = (
     ("Penjualan", ("transactions", "performance")),
     ("Iklan", ("ads_overall", "ads_auto", "ads_group", "ads_search")),
     ("Stok", ("stock", "stock_10062", "stock_10036")),
     ("Produk", ("product_descriptions", "competitors")),
+    ("Target", (TARGET_UPLOAD,)),
 )
 
 
@@ -1876,6 +1877,8 @@ def show_training_uploads() -> tuple[list[str], str | None]:
     by_key = {spec.key: spec for spec in specs}
 
     def menu_label(spec) -> str:
+        if spec == TARGET_UPLOAD:
+            return target_upload_label(get_features())
         status = statuses.get(spec.key, "Kosong")
         if status == "Siap" and spec.key in done:
             return f"{spec.label} · ✓ Siap (baru disimpan)"
@@ -1885,7 +1888,7 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         return f"{spec.label} · {status}"
 
     selected_key = st.session_state.get("upload-source", specs[0].key)
-    if selected_key not in by_key:
+    if selected_key not in by_key and selected_key != TARGET_UPLOAD:
         selected_key = specs[0].key
 
     def pick(group: str) -> None:
@@ -1900,20 +1903,25 @@ def show_training_uploads() -> tuple[list[str], str | None]:
     with left:
         st.markdown("<div class='side-section'>Menu upload</div>", unsafe_allow_html=True)
         for group, keys in UPLOAD_GROUPS:
-            keys = [key for key in keys if key in by_key]
+            keys = [key for key in keys if key in by_key or key == TARGET_UPLOAD]
             if not keys:
                 continue
             widget = f"upload-group-{group}"
             if widget not in st.session_state:
                 st.session_state[widget] = selected_key if selected_key in keys else None
-            st.radio(group, options=keys, format_func=lambda key: menu_label(by_key[key]), key=widget, on_change=pick, args=(group,))
-        selected_spec = by_key[st.session_state.get("upload-source", selected_key)]
+            st.radio(group, options=keys, format_func=lambda key: menu_label(by_key.get(key, key)), key=widget, on_change=pick, args=(group,))
+        picked_key = st.session_state.get("upload-source", selected_key)
         filled = sum(1 for status in statuses.values() if status == "Siap")
         st.caption(
             f"{filled} dari {len(specs)} menu berisi data. ✓ Siap = diunggah dan disimpan di sesi ini; "
             "tersimpan = data dari unggahan sebelumnya (tanggal unggahan terakhir)."
         )
     with right:
+        if picked_key == TARGET_UPLOAD:
+            st.markdown("<div class='side-section'>Target sales bulanan</div>", unsafe_allow_html=True)
+            show_target_uploader(get_features(), username=AUTH_USER.username, today=date.today(), title=False)
+            return imported_keys, load_error
+        selected_spec = by_key[picked_key]
         st.markdown(f"<div class='side-section'>{html.escape(selected_spec.label)}</div>", unsafe_allow_html=True)
         result_key = f"upload-result-{selected_spec.key}"
         with st.form(f"upload-form-{selected_spec.key}", clear_on_submit=True, border=False):
@@ -2230,7 +2238,7 @@ def current_data_hash(keys) -> str:
 
 
 def training_exclude() -> bool:
-    """Setelan data latih "Kecualikan batal & retur" untuk analisa BARU: tersimpan di Pengaturan bisnis,
+    """Setelan data latih "Kecualikan batal & retur" untuk analisa BARU: tersimpan di parameter pengguna,
     tidak ikut berubah saat membuka analisa lama atau menggeser saklar tampilan di halaman hasil."""
     saved = (current_params().get("analisa") or {}).get("kecualikan_batal_retur")
     if saved is not None:
@@ -2833,7 +2841,6 @@ def show_prediction_inputs() -> None:
     upload_box = st.container(border=True)
     summary_box = st.container(border=True)
     period_box = st.container(border=True)
-    settings_box = st.container()
     with upload_box:
         imported_keys, load_error = show_training_uploads()
     with summary_box:
@@ -2905,8 +2912,7 @@ def show_prediction_inputs() -> None:
         if not rebuilt.empty:
             orders_raw = rebuilt
 
-    with settings_box:
-        params = show_business_settings(current_params(), USER_ROOT, features=get_features(), username=AUTH_USER.username)
+    params = current_params()
     training_months = len(st.session_state.get("active-library-keys", tuple()))
     with st.container(border=True):
         st.markdown("<div class='side-section'>Periode prediksi</div>", unsafe_allow_html=True)
@@ -6907,7 +6913,7 @@ def _forecast_stock_as_of(history: pd.DataFrame | None, as_of: date, period: str
 
 
 def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, period: str, as_of: date, service: int, params: dict) -> pd.DataFrame:
-    """Safety stock dari Pengaturan bisnis: lead time lokal, variasi lead time, atau impor."""
+    """Safety stock dari parameter bisnis: lead time lokal, variasi lead time, atau impor."""
     lead = params.get("lead_time", {})
     impor = bool(lead.get("impor_aktif", False))
     return recommend_stock(

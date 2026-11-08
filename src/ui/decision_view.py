@@ -305,7 +305,7 @@ def safety_stock_box(
             )
         cols = st.columns(4)
         card(cols[0], "Service level", f"{fmt_num(service or 0)}%", hint=f"Z = {fmt_num(z, 2)}" if z is not None else "")
-        card(cols[1], "Lead time", f"{fmt_num(lead_days or 0)} hari", hint="asumsi default Pengaturan bisnis" if used_default else "dari Pengaturan bisnis")
+        card(cols[1], "Lead time", f"{fmt_num(lead_days or 0)} hari", hint="lead time impor dari Setting › Kedatangan impor" if import_mode else ("asumsi lead time lokal (bawaan)" if used_default else "lead time lokal tersimpan"))
         card(cols[2], "Total SS", f"{fmt_qty(ss.sum())} unit", hint=f"rata-rata {fmt_qty(ss.mean() if len(ss) else 0)} unit per SKU · sama di setiap periode")
         card(
             cols[3],

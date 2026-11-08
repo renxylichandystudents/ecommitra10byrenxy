@@ -82,7 +82,7 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 
 ## Target sales bulanan & pencapaian (8 Nov 2026)
 
-- Pengaturan bisnis › **Target sales bulanan**: unduh template (Bulan, Target (Rp)), isi, unggah, simpan. Disimpan per bulan di tabel `sales_target` (bulan yang sama diganti; margin minimum & strategi iklan bulan itu tetap).
+- Ubah data latih › Menu upload › **Target › Target sales bulanan** (dulu di Pengaturan bisnis): unduh template (Bulan, Target (Rp)), isi, unggah, simpan. Disimpan per bulan di tabel `sales_target` (bulan yang sama diganti; margin minimum & strategi iklan bulan itu tetap).
 - Kolom lama "Target sales bulanan (Rp)" (satu angka untuk semua bulan) dihapus; `business_targets` tidak lagi memakai angka itu. Bulan tanpa target = "belum diunggah".
 - Pencapaian = sales aktual ÷ target bulan yang sama. Rentang sebagian bulan memakai target prorata per hari kalender (contoh 1–8 Nov = target Nov × 8/30); persen ≥ 100% biru, di bawahnya merah.
 - Tampil di: Ringkasan (kartu Sales bersih), Data (kartu Sales bersih), Laporan (kartu Sales bersih + garis target di grafik tren + tabel pencapaian per bulan), Prediksi vs aktual (omzet seluruh toko hari itu vs target harian), Folder data (kolom Target & Pencapaian target, baris Total), Kalkulator biaya (penjualan aktual & prediksi pencapaian).
@@ -99,6 +99,14 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Tabel per iklan: tindakan, budget harian sekarang → usulan, Target ROAS Shopee per iklan (ROAS rata-rata iklan itu pada budget usulan), tambahan omzet/hari, catatan; filter jenis & tindakan; Excel.
 - Expander lama "Rencana iklan per periode (perhitungan sebelumnya)" dihapus.
 - Kode: `src/core/ads_strategy.py` (`allocate_target`, `plan_effect`, `target_actions`, `budget_needed`, `roas_for_budget`, `ad_sales`), `src/ui/ads_target.py`; proyeksi bulan berjalan `src/ui/targets_view.py::month_outlook` (dipakai juga Kalkulator biaya). Tes: `tests/test_ads_target.py`.
+
+## Pengaturan bisnis dihapus (8 Nov 2026)
+
+- Expander "Pengaturan bisnis" di Ubah data latih dihapus (`src/ui/settings.py` dihapus). Semua angka diambil dari data/menu masing-masing:
+  - Target sales bulanan → Menu upload › Target.
+  - Target ROAS & budget iklan → Rekomendasi › Iklan per bulan. Bila bulan ini belum disimpan: target ROAS bulan terakhir yang tersimpan, lalu ROAS iklan berjalan. Laporan memakai target ROAS bulan laporan.
+  - Margin → File margin; lead time impor → Setting › Kedatangan impor; kapasitas gudang → Setting › Kapasitas gudang.
+  - Lead time lokal (7 hari) dan kapasitas unit optimasi restock (100.000) tetap dari `config/business_params.yaml` / nilai tersimpan; rumus safety stock tidak berubah.
 
 ## Hasil pemeriksaan
 

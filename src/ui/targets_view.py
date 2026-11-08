@@ -1,4 +1,4 @@
-"""Target sales bulanan: unggah di Pengaturan bisnis, dan baris pencapaian untuk kartu sales aktual."""
+"""Target sales bulanan: unggah di Ubah data latih › Menu upload › Target, dan baris pencapaian untuk kartu sales aktual."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def achievement_line(actual: float, start: date | None, end: date | None, featur
     result, missing = T.achievement(actual, start, end, targets)
     if result is None:
         names = ", ".join(T.month_label(m) for m in missing[:3]) or "periode ini"
-        return f"<span style='color:#94a3b8'>Target {html.escape(names)} belum diunggah (Pengaturan bisnis)</span>"
+        return f"<span style='color:#94a3b8'>Target {html.escape(names)} belum diunggah (Ubah data latih › Target)</span>"
     pct = f"<b style='color:{_tone(result.pct)}'>{fmt_pct(result.pct, 1)}</b>"
     if result.single_month and not result.full_months:
         month_pct = f"<b style='color:{_tone(result.month_pct)}'>{fmt_pct(result.month_pct, 1)}</b>"
@@ -95,9 +95,50 @@ def month_outlook(orders: pd.DataFrame | None, features, ref: date | None = None
     }
 
 
-def show_target_uploader(features, *, username: str, today: date) -> None:
+def saved_plan(features, periode: str) -> dict:
+    """Setelan rencana iklan yang disimpan untuk bulan itu (target ROAS, budget sisa, dll.); {} bila belum ada."""
+    import json
+
+    try:
+        frame = features.read("sales_target", {"periode": periode})
+        raw = frame["budget_json"].iloc[0] if not frame.empty else "{}"
+        plan = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    return plan if isinstance(plan, dict) else {}
+
+
+def target_roas_for(features, periode: str) -> float | None:
+    """Target ROAS bulan itu dari Rekomendasi › Iklan; bila belum disimpan, bulan terakhir yang punya target ROAS."""
+    try:
+        frame = features.read("sales_target")
+    except Exception:
+        return None
+    import json
+
+    if frame.empty:
+        return None
+    for key, raw in sorted(zip(frame["periode"].astype(str), frame["budget_json"]), reverse=True):
+        if key > periode:
+            continue
+        try:
+            value = (json.loads(raw or "{}") or {}).get("target_roas")
+        except (TypeError, ValueError, AttributeError):
+            value = None
+        if value:
+            return float(value)
+    return None
+
+
+def target_upload_label(features) -> str:
+    saved = monthly_targets(features)
+    return f"Target sales bulanan · {len(saved)} bulan tersimpan" if saved else "Target sales bulanan · Kosong"
+
+
+def show_target_uploader(features, *, username: str, today: date, title: bool = True) -> None:
     """Unggah target sales per bulan (Bulan, Target (Rp)); disimpan ke tabel sales_target per bulan."""
-    st.markdown("**Target sales bulanan**")
+    if title:
+        st.markdown("**Target sales bulanan**")
     st.caption(
         "Setiap bulan punya target sendiri. Pencapaian sales aktual di Ringkasan, Data, Laporan, Prediksi vs aktual, "
         "Folder data, dan Kalkulator biaya dihitung terhadap target bulan yang sama. Bulan tanpa target ditandai belum diunggah."

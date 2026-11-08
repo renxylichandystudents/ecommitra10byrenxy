@@ -10,7 +10,7 @@ from src.core.business import business_targets
 class BusinessTargetTest(unittest.TestCase):
     def test_targets_priority(self):
         params = {"margin": {"hpp_pct_harga": 55, "margin_min_pct": 30}, "target": {"sales_bulanan_rp": 5_500_000_000}}
-        # Satu angka di Pengaturan bisnis tidak lagi berlaku untuk semua bulan.
+        # Satu angka target untuk semua bulan tidak lagi berlaku untuk semua bulan.
         goals = business_targets(params, None)
         self.assertEqual(goals.target_sales, 0)
         self.assertEqual(goals.target_source, "belum diisi")

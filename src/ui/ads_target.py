@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 
 import numpy as np
 import pandas as pd
@@ -19,7 +20,7 @@ from src.core.business import business_targets
 from src.core.targets import month_label
 from src.ui.common import batched_view, card, download_excel, explain, fmt_idr, fmt_num, fmt_pct
 from src.ui.feature_data import bump, target_for
-from src.ui.targets_view import month_outlook
+from src.ui.targets_view import month_outlook, target_roas_for
 from src.utils.format import angka, input_rupiah, show_table
 
 UP = "#1d4ed8"
@@ -113,13 +114,14 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     # ---------------- 1. Setelan
     _step(1, "Setelan", f"· {month_name}, sisa {days_left} hari · angka berubah, rencana langsung dihitung ulang")
     key_target, key_roas, key_budget = f"adt-target-{periode}", f"adt-roas-{periode}", f"adt-budget-{periode}"
-    default_roas = float(saved_plan.get("target_roas") or params.get("iklan", {}).get("target_roas", 8) or 8)
+    current_roas = math.floor(sales_now / cost_now * 2) / 2 if cost_now > 0 else 0.0
+    default_roas = float(saved_plan.get("target_roas") or target_roas_for(features, periode) or current_roas or 8.0)
     default_budget = float(saved_plan.get("budget_sisa") or cost_now * days_left)
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.25, 0.8, 1.25])
         with c1:
             target = float(input_rupiah(f"Target sales {month_name}", int(goals.target_sales), key=key_target,
-                                        help="Bawaan dari Pengaturan bisnis › Target sales bulanan. Simpan di sini untuk mengganti target bulan ini."))
+                                        help="Bawaan dari Ubah data latih › Menu upload › Target sales bulanan. Simpan di sini untuk mengganti target bulan ini."))
         if key_roas not in st.session_state:
             st.session_state[key_roas] = default_roas
         roas = float(c2.number_input("Target ROAS", min_value=1.0, max_value=100.0, step=0.5, key=key_roas,
@@ -141,7 +143,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     gap = target - projection
     gap_daily = gap / days_left
     if target <= 0:
-        _box("Target bulan ini belum ada", f"Isi target {month_name} di atas atau unggah di Pengaturan bisnis › Target sales bulanan.", DOWN)
+        _box("Target bulan ini belum ada", f"Isi target {month_name} di atas atau unggah di Ubah data latih › Menu upload › Target sales bulanan.", DOWN)
         return
     if not has_ads or not units:
         _step(2, "Posisi target")
@@ -314,7 +316,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         "<b>Setiap 3 hari</b> — unggah laporan iklan terbaru dan buka menu ini: rencana dihitung ulang dari data terbaru.",
         f"<b>Tanggal {min(last.day + 7, outlook['month_days'])}</b> — cek pencapaian di Ringkasan (kartu Sales bersih): bila di bawah jalur target, "
         "turunkan target ROAS 1–2 poin atau naikkan budget lewat tombol pilihan di atas.",
-        "<b>Akhir bulan</b> — evaluasi di Laporan › Iklan; isi target bulan berikutnya di Pengaturan bisnis.",
+        "<b>Akhir bulan</b> — evaluasi di Laporan › Iklan; unggah target bulan berikutnya di Ubah data latih › Menu upload › Target.",
     ]
     _box("Tindak lanjut", "<ol style='margin:0 0 0 1.1rem;padding:0'>" + "".join(f"<li>{t}</li>" for t in steps) + "</ol>", "#ee4d2d")
     with st.expander("Cara rencana dihitung"):

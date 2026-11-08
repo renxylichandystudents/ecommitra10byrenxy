@@ -21,7 +21,7 @@ from src.core.metrics import ads_metrics
 from src.core.periods import format_period_label, last_full_month
 from src.core.restock import recommendation_records, records_display
 from src.utils.format import show_table
-from src.ui.targets_view import achievement_line, monthly_targets
+from src.ui.targets_view import achievement_line, monthly_targets, target_roas_for
 from src.ui.common import ID_MONTHS, cached_order_metrics, card, download_excel, explain, fmt_date, fmt_idr, fmt_idr_short, fmt_num, fmt_pct, fmt_qty, metric_card, status_key, table_toolbar
 
 ALL_SECTIONS = "Semua bagian (untuk dibaca berurutan / dicetak)"
@@ -182,7 +182,7 @@ def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, 
             (basis, "Harga setelah diskon × QTY" + (" (tanpa batal & retur)" if exclude else " (termasuk pesanan batal)") + "; dasar yang sama dengan prediksi"),
             ("Sales bersih", "Total Pembayaran per pesanan dikurangi batal & retur; sama dengan kartu Ringkasan eksekutif"),
             ("Kenapa berbeda", "Total Pembayaran sudah dipotong voucher dan termasuk ongkir, sedangkan sales produk tidak"),
-            ("Target sales bulanan", "target per bulan dari Pengaturan bisnis; pencapaian = sales bersih ÷ target bulan itu"),
+            ("Target sales bulanan", "target per bulan dari Ubah data latih › Menu upload › Target; pencapaian = sales bersih ÷ target bulan itu"),
         ]
     )
     if bersih and any(targets.get(k, 0) > 0 for k in month_keys):
@@ -267,6 +267,9 @@ def show_report(
 
     target = business_targets(params, saved_target).target_sales
     month_targets = monthly_targets(features)
+    report_month = pd.to_datetime(report_orders["order_time"]).max()
+    roas_goal = (target_roas_for(features, f"{report_month.year:04d}-{report_month.month:02d}") if features is not None else None) \
+        or params.get("iklan", {}).get("target_roas", 8)
     month_col = "m_sales_exp" if table is not None and "m_sales_exp" in table.columns else "m_sales"
     month_pred = float(table[month_col].sum()) if table is not None and not table.empty and month_col in table.columns else 0.0
     pred_label = format_period_label("prediksi", window_start)
@@ -312,7 +315,7 @@ def show_report(
                     metric_card(cols[0], "sales_bersih", fmt_idr(sales_now), hint=(f"{fmt_pct(growth, 1, signed=True)} vs periode sebelumnya" if np.isfinite(growth) else "periode sebelumnya belum ada") + (f"<br>{reach}" if reach else ""))
                     window_text = f"{fmt_date(window_start, short=True)} – {fmt_date(window_end, short=True)}"
                     card(cols[1], f"{pred_label} · sales", fmt_idr(month_pred), hint=f"{window_text} · target {fmt_idr(target)}" if target > 0 else window_text)
-                    metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {params.get('iklan', {}).get('target_roas', 8)}")
+                    metric_card(cols[2], "roas", fmt_num(roas, 1), hint=f"target {fmt_num(roas_goal, 1)}")
                     short_hint = f"stok di bawah {pred_label} + SS · {fmt_num(shortage['kosong'])} kosong (stok 0)"
                     if shortage["tanpa_data"]:
                         short_hint += f" · {fmt_num(shortage['tanpa_data'])} tanpa data stok"
@@ -442,7 +445,7 @@ def show_report(
                             else None
                         ),
                         "roas": roas,
-                        "target_roas": params.get("iklan", {}).get("target_roas", 8),
+                        "target_roas": roas_goal,
                         "cancel_pct": cancel_rate,
                         "top50_short": short_top,
                         "unpaid_orders": unpaid,
@@ -482,11 +485,11 @@ def show_report(
                             "target_sales": basis,
                             "target_text": fmt_idr(basis),
                             "daily_target_text": fmt_idr(basis / days_in_month),
-                            "target_roas": params.get("iklan", {}).get("target_roas", 8),
+                            "target_roas": roas_goal,
                         }
                     )
                     if target <= 0:
-                        st.caption(f"Acuan panduan = {pred_label} (target bulan ini belum diunggah di Pengaturan bisnis).")
+                        st.caption(f"Acuan panduan = {pred_label} (target bulan ini belum diunggah di Ubah data latih › Target).")
                     for name, tasks in guide.items():
                         st.markdown(f"**{name}**")
                         show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))
