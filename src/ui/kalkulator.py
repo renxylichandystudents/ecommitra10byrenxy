@@ -627,15 +627,19 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
     add("Tanpa diskon & voucher penjual", replace(inp, diskon=0.0, voucher=0.0))
     if np.isfinite(floor):
         add(f"Harga impas tanpa iklan ({fmt_idr(floor)})", replace(inp, harga=floor, iklan=0.0))
-    # Detail dibuka selebar halaman (bukan popover sempit) agar tabel tidak perlu digeser.
-    with st.expander("Skenario cepat · dampak bila iklan/program/diskon diubah"):
+    # Tiga tombol dalam satu baris (ringkas); hanya satu detail terbuka, tampil selebar halaman di bawahnya.
+    detail = st.segmented_control(
+        "Detail", ["Skenario cepat", "Rincian biaya lengkap", "Analisa lengkap"], default=None, key=f"calc-detail-{sku}",
+        label_visibility="collapsed", width="stretch",
+    )
+    if detail == "Skenario cepat":
         show_table(pd.DataFrame(scen), kinds={"Margin bersih/unit": "money", "Selisih vs sekarang": "money", "Margin bersih": "pct"}, bold_label="Sekarang", max_height=10_000)
-    with st.expander("Rincian biaya lengkap per unit"):
+    elif detail == "Rincian biaya lengkap":
         frame = fee.breakdown(inp)
         show_table(frame, kinds={"Rp per unit": "money", "% harga akhir": "pct"}, bold_label=str(frame["Komponen"].iloc[-1]), max_height=10_000,
                    column_config={"Komponen": st.column_config.TextColumn(width="medium"), "Dasar": st.column_config.TextColumn(width="medium"),
                                   "Tarif": st.column_config.TextColumn(width="medium")})
-    with st.expander("Analisa lengkap"):
+    elif detail == "Analisa lengkap":
         notes = fee.analysis(inp, target_pct=target, qty_30=float(base_row["qty_30"]) if base_row is not None else None,
                              pred_qty_30=_prediction_30(table, features, sku), roas=roas, sumber=sumber)
         st.markdown("".join(
