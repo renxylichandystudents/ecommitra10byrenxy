@@ -80,7 +80,7 @@ from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, sou
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
 from src.utils.format import excel_bytes as numeric_excel_bytes
-from src.utils.format import drop_blank_rows, help_columns, show_table, style_frame, table_height, wrap_layout
+from src.utils.format import drop_blank_rows, show_table, style_frame, table_height, wrap_layout
 from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
@@ -4679,6 +4679,65 @@ def _short_reasons(text, keep: int = 2) -> str:
     return " · ".join(items[:keep]) + f" · +{len(items) - keep} lainnya"
 
 
+ISSUE_MONEY = {"Nominal retur", "Nominal batal"}
+ISSUE_RENAME = {"Qty retur": "Unit retur", "Qty batal": "Unit batal"}
+
+
+def _issue_table_html(total_part: pd.DataFrame, part: pd.DataFrame, reason_cols: list[str], tips: dict | None = None) -> str:
+    """Tabel SKU retur/batal sebagai HTML: alasan panjang diringkas, tombol "Lihat semua" membuka seluruh
+    alasan di sel yang sama (tanpa tabel baru)."""
+    columns = list(part.columns if not part.empty else total_part.columns)
+    numeric = {c for c in columns if c not in {"Rank", "SKU", "Produk", "Varian", *reason_cols}}
+
+    def cell(column: str, value, bold: bool = False) -> str:
+        if column in reason_cols:
+            items = _reason_items(value)
+            if len(items) <= 2:
+                text = html.escape(" · ".join(items))
+            else:
+                short = html.escape(" · ".join(items[:2]))
+                full = "".join(f"<li>{html.escape(item)}</li>" for item in items)
+                text = (
+                    f"{short}<details class='reason-more'><summary>Lihat semua ({len(items)})</summary>"
+                    f"<ul>{full}</ul></details>"
+                )
+            return f"<td class='reason'>{text}</td>"
+        if column in numeric:
+            number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+            text = "" if pd.isna(number) else (format_idr(number) if column in ISSUE_MONEY else format_number(number, 0))
+            return f"<td class='num'>{'<b>' + text + '</b>' if bold else text}</td>"
+        text = "" if value is None or (isinstance(value, float) and np.isnan(value)) else html.escape(str(value))
+        return f"<td>{'<b>' + text + '</b>' if bold else text}</td>"
+
+    tips = tips or {}
+    head = "".join(
+        f"<th class='{'num' if c in numeric else ''}' title='{html.escape(tips.get(c, ''))}'>{html.escape(ISSUE_RENAME.get(c, c))}</th>"
+        for c in columns
+    )
+    rows = []
+    for _, record in total_part.iterrows():
+        rows.append("<tr class='total'>" + "".join(cell(c, record.get(c), bold=True) for c in columns) + "</tr>")
+    for _, record in part.iterrows():
+        rows.append("<tr>" + "".join(cell(c, record.get(c)) for c in columns) + "</tr>")
+    style = (
+        "<style>"
+        ".issue-table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:.875rem;color:#31333f}"
+        ".issue-table th{position:sticky;top:0;background:#f1f5f9;color:#6b6d76;font-weight:500;text-align:left;padding:8px;border-bottom:1px solid #e2e8f0;white-space:nowrap}"
+        ".issue-table td{padding:8px;border-bottom:1px solid #e2e8f0;vertical-align:top;background:#fff}"
+        ".issue-table td.num,.issue-table th.num{text-align:right;white-space:nowrap}"
+        ".issue-table tr.total td{background:#f8fafc}"
+        ".issue-table td.reason{min-width:260px;max-width:420px;white-space:normal}"
+        ".reason-more{margin-top:4px}"
+        ".reason-more summary{display:inline-block;cursor:pointer;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;"
+        "border-radius:999px;padding:1px 10px;font-size:.78rem;font-weight:700;list-style:none}"
+        ".reason-more summary::-webkit-details-marker{display:none}"
+        ".reason-more[open] summary{color:#475569;background:#f1f5f9;border-color:#cbd5e1}"
+        ".reason-more ul{margin:6px 0 0 16px;padding:0}"
+        "</style>"
+    )
+    return style + f"<div class='sheet-scroll' style='max-height:640px'><table class='issue-table'><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+
+
 def reason_picker(options: list[str], *, key: str) -> list[str]:
     """Filter alasan ringkas: satu tombol (popover) berisi Semua/Kosongkan dan checkbox per alasan,
     dikelompokkan menurut sumber (Pembeli, Sistem Shopee, Penjual, ...) dengan teks lengkap."""
@@ -4752,41 +4811,11 @@ def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None
     is_total = shown_sheet["SKU"].astype(str).eq("Total")
     total_part, body = shown_sheet.loc[is_total], shown_sheet.loc[~is_total].reset_index(drop=True)
     export = pd.concat([total_part, body], ignore_index=True)
-    config = help_columns(tips, shown_sheet, {"Qty retur": "Unit retur", "Qty batal": "Unit batal"})
     reason_cols = [c for c in ("Alasan retur", "Alasan batal") if c in body.columns]
 
     def _render_issue(lo: int, hi: int) -> None:
         part = body.iloc[lo:hi].reset_index(drop=True)
-        view = pd.concat([total_part, part], ignore_index=True)
-        # Alasan panjang diringkas (2 alasan teratas + "+N lainnya"); rincian lengkap muncul saat baris diklik.
-        long_any = False
-        for column in reason_cols:
-            short = view[column].map(_short_reasons)
-            long_any |= bool((short != view[column].fillna("").astype(str)).any())
-            view[column] = short
-        if long_any:
-            view.insert(len(view.columns), "Detail", ["" if i == 0 else "Lihat ▸" for i in range(len(view))])
-        event = show_table(
-            view,
-            kinds={"Nominal retur": "money", "Nominal batal": "money"},
-            bold_label="Total",
-            column_config=config,
-            on_select="rerun",
-            selection_mode="single-row",
-            key=f"sku-issue-table-{issue_kind}-{hi}",
-        )
-        rows = getattr(getattr(event, "selection", None), "rows", []) or []
-        if rows and rows[0] > 0:
-            row = part.iloc[rows[0] - 1]
-            with st.container(border=True):
-                st.markdown(f"**Detail alasan · {html.escape(str(row.get('SKU', '')))} · {html.escape(str(row.get('Produk', '')))}**")
-                for column in reason_cols:
-                    items = _reason_items(row.get(column))
-                    if items:
-                        st.markdown(f"<div class='field-hint'><b>{column}</b></div>", unsafe_allow_html=True)
-                        st.markdown("\n".join(f"- {html.escape(item)}" for item in items))
-        elif long_any:
-            st.caption("Klik baris (kotak di kiri) untuk melihat seluruh alasan SKU itu.")
+        st.markdown(_issue_table_html(total_part, part, reason_cols, tips), unsafe_allow_html=True)
 
     batched_view(
         len(body),
