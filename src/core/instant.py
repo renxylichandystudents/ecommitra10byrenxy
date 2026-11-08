@@ -18,7 +18,8 @@ INSTANT_GROUPS = ("Instant", "Instant Prioritas", "Same Day")
 SERVICE_ORDER = ("Instant", "Instant Prioritas", "Same Day", "Next Day", "Reguler", "Hemat Kargo / Trucking", "Kirim toko", "Lainnya")
 SLOW_HOURS = 2.0
 LINE_COLUMNS = ["order_id", "order_time", "pay_time", "ship_time", "done_time", "status", "cancelled", "cancel_reason", "shipping", "layanan", "kurir",
-                "instan", "city", "buyer", "sku", "product_name", "qty", "returned_qty", "net_price", "payment_total"]
+                "instan", "city", "buyer", "sku", "product_name", "qty", "returned_qty", "net_price", "payment_total", "payment_method", "weight_kg",
+                "ship_deadline"]
 
 
 def service_of(option: str) -> str:
@@ -69,7 +70,8 @@ def instant_lines(source: pd.DataFrame) -> pd.DataFrame:
 
     extra = {"payment_total": ("total pembayaran", "total payment"), "net_price": ("harga setelah diskon", "net price"),
              "cancel_reason": ("alasan pembatalan", "cancel reason"), "buyer": ("username (pembeli)", "username pembeli"),
-             "city": ("kota/kabupaten", "kota", "city"), "sku": ("nomor referensi sku", "sku"), "returned_qty": ("returned quantity", "jumlah retur")}
+             "city": ("kota/kabupaten", "kota", "city"), "sku": ("nomor referensi sku", "sku"), "returned_qty": ("returned quantity", "jumlah retur"),
+             "payment_method": ("metode pembayaran", "payment method"), "weight": ("total berat", "total weight")}
 
     def col(key):
         return mapping.get(key) or (_exact_column(table, extra[key]) if key in extra else None)
@@ -104,6 +106,12 @@ def instant_lines(source: pd.DataFrame) -> pd.DataFrame:
     frame["returned_qty"] = np.minimum(frame["returned_qty"], frame["qty"])
     frame["net_price"] = number("net_price")
     frame["payment_total"] = number("payment_total")
+    frame["payment_method"] = text("payment_method").replace("", "Tidak diketahui")
+    weight = col("weight")
+    frame["weight_kg"] = (pd.to_numeric(table[weight].astype(str).str.extract(r"([\d.,]+)")[0].str.replace(",", ".", regex=False), errors="coerce") / 1000
+                          if weight else np.nan)
+    deadline = next((c for c in table.columns if c.lower().startswith("pesanan harus dikirimkan sebelum")), None)
+    frame["ship_deadline"] = _parse_datetime(table[deadline]) if deadline else pd.NaT
     frame = frame.dropna(subset=["order_time"])
     frame = frame.loc[frame["order_id"].ne("")]
     return frame[LINE_COLUMNS].reset_index(drop=True)
@@ -112,7 +120,7 @@ def instant_lines(source: pd.DataFrame) -> pd.DataFrame:
 def order_frame(lines: pd.DataFrame) -> pd.DataFrame:
     """Satu baris per pesanan: nilai, batal, retur, sales bersih, jam proses (bayar → pengiriman diatur)."""
     cols = ["order_id", "order_time", "day", "hour", "layanan", "kurir", "instan", "city", "buyer", "cancelled", "cancel_reason", "unpaid",
-            "returned", "qty_bersih", "sales_bersih", "nilai", "proses_jam", "selesai_jam"]
+            "returned", "qty_bersih", "sales_bersih", "nilai", "proses_jam", "selesai_jam", "payment_method", "weight_kg", "ship_time", "ship_deadline", "terlambat"]
     if lines is None or lines.empty:
         return pd.DataFrame(columns=cols)
     work = lines.assign(return_value=lines["net_price"] * lines["returned_qty"], line_value=lines["net_price"] * lines["qty"],
@@ -121,7 +129,8 @@ def order_frame(lines: pd.DataFrame) -> pd.DataFrame:
     out = grouped.agg(order_time=("order_time", "first"), pay_time=("pay_time", "first"), ship_time=("ship_time", "first"), done_time=("done_time", "first"),
                       layanan=("layanan", "first"), kurir=("kurir", "first"), instan=("instan", "first"), city=("city", "first"), buyer=("buyer", "first"),
                       cancelled=("cancelled", "any"), cancel_reason=("cancel_reason", "first"), payment=("payment_total", "first"),
-                      line_value=("line_value", "sum"), return_value=("return_value", "sum"), returned_qty=("returned_qty", "sum"), qty_net=("qty_net", "sum"))
+                      line_value=("line_value", "sum"), return_value=("return_value", "sum"), returned_qty=("returned_qty", "sum"), qty_net=("qty_net", "sum"),
+                      payment_method=("payment_method", "first"), weight_kg=("weight_kg", "first"), ship_deadline=("ship_deadline", "first"))
     out["nilai"] = out["payment"].where(out["payment"] > 0, out["line_value"])
     out["returned"] = out["returned_qty"] > 0
     out["sales_bersih"] = np.where(out["cancelled"], 0.0, out["nilai"] - out["return_value"])
@@ -131,6 +140,7 @@ def order_frame(lines: pd.DataFrame) -> pd.DataFrame:
     out["proses_jam"] = hours.where(hours >= 0)
     done = (out["done_time"] - out["order_time"]).dt.total_seconds() / 3600
     out["selesai_jam"] = done.where(done >= 0)
+    out["terlambat"] = (out["ship_time"] > out["ship_deadline"]) & out["ship_time"].notna() & out["ship_deadline"].notna()
     out["day"] = out["order_time"].dt.normalize()
     out["hour"] = out["order_time"].dt.hour
     return out.reset_index()[cols]

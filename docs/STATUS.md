@@ -213,3 +213,20 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 
 Audit ulang per menu bersama pengguna, satu per satu:
 Beranda → Data latih & Jalankan analisa → Ringkasan & Prediksi → Prediksi vs aktual → Data → Folder data → Rekomendasi → Laporan → Evaluasi model → Setting → Kelola user.
+
+## Audit menyeluruh 8 Nov 2026
+
+Perbaikan logika:
+- Iklan bertahap (`ads_strategy.ramp`): kekurangan tiap minggu dikurangi tambahan omzet yang sudah terbawa dari minggu sebelumnya. Dulu rencana 1,7–2× kekurangan, sekarang ±1,2×.
+- Flash sale: stok flash per SKU dibagi ke semua slotnya; slot berulang tidak memakai stok/transfer DC yang sama dua kali. Aturan harga bawaan = **Tidak di bawah impas**. SKU tanpa data margin diberi catatan.
+- Iklan: peringatan bila periode campaign di luar sisa bulan target; kunci cache rekomendasi ikut omzet iklan, produk & kontribusi; pesan "permintaan sudah penuh" diganti penjelasan batas prediksi (+ jumlah iklan tanpa prediksi).
+- File margin: persen "8.5", "0,5%", "1" dan angka "1.250.000" dibaca benar (dulu 85%, 50%, 100%).
+- Label ⚠ Perlu perhatian butuh min. 5 baris pesanan.
+- Exposure: playbook Bak cuci piring; naskah 12–22 dtk tidak lagi "demo <manfaat>".
+- Evaluasi model: SKU-lipatan dengan hari stok kosong di periode uji tidak dinilai (dulu dianggap 0). Bobot ensemble, faktor bias, dan pilihan segmen diungkap sebagai in-sample. Angka baru muncul setelah analisa dijalankan ulang.
+
+Tampilan & wording: actual → aktual, Potensi loss → Potensi … hilang, Dashboard prioritas → Prioritas hari ini, ROAS protection → perlindungan ROAS Shopee, E-commerce Jakarta, footer Beranda, warna naik hijau → biru, font kalkulator/iklan/Top 50 ikut skala `--fs-*`, judul bagian Laporan, data gudang > 1 hari ditandai merah, galat Rekomendasi tanpa teks teknis di depan, nama produk di kalender dipotong per kata.
+
+Data baru dimanfaatkan: tab Data › **Pembayaran, berat & ketepatan kirim** (Metode Pembayaran, Total Berat, Pesanan Harus Dikirimkan Sebelum). Okt 2026: Online Payment batal 33,7% vs ShopeePay 9,9%; paket ≥ 20 kg lebih sering batal; 13,2% pesanan diatur kirim setelah batas Shopee (Instant 56%).
+
+Belum diubah (menunggu keputusan): dasar sales untuk target (sales bersih vs sales produk), rumus SS (Z mode impor, √(L+R)), perlakuan Belum Bayar, Monte Carlo σ·√L, MA28 setelah stok kosong > 28 hari, winsorize per SKU, XYZ & batas ABC. Kolom voucher Shopee & potongan ongkir belum dipakai karena format angkanya ambigu ("10.138" vs "167.21").
