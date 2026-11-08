@@ -435,12 +435,40 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
         _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, may_edit=may_edit, username=username, require=require)
 
 
+def _bar(parts: list[tuple[str, float, str]], base: float) -> str:
+    """Batang komposisi harga jual akhir (HTML)."""
+    if base <= 0:
+        return ""
+    segs = "".join(
+        f"<div title='{html.escape(label)} {fmt_idr(value)}' style='width:{max(value, 0) / base * 100:.2f}%;background:{color}'></div>"
+        for label, value, color in parts if value > 0
+    )
+    legend = "".join(
+        f"<span style='margin-right:.8rem;white-space:nowrap'><span style='display:inline-block;width:.6rem;height:.6rem;border-radius:2px;background:{color};margin-right:.25rem'></span>"
+        f"{html.escape(label)} {fmt_pct(value / base * 100, 1)}</span>"
+        for label, value, color in parts if value > 0
+    )
+    return (f"<div style='display:flex;height:14px;border-radius:7px;overflow:hidden;background:#f1f5f9;margin:.35rem 0 .3rem'>{segs}</div>"
+            f"<div style='font-size:.78rem;color:#475569;line-height:1.7'>{legend}</div>")
+
+
+def _line(label: str, value: float, base: float, *, bold: bool = False, sub: str = "") -> str:
+    weight = "700" if bold else "400"
+    color = "#b91c1c" if value < 0 and bold else "#0f172a"
+    pct = f"<span style='color:#64748b;font-size:.8rem;margin-left:.4rem'>{fmt_pct(value / base * 100, 1)}</span>" if base > 0 else ""
+    note = f"<div style='color:#64748b;font-size:.75rem'>{html.escape(sub)}</div>" if sub else ""
+    border = "border-top:1px solid #e2e8f0;padding-top:.35rem;margin-top:.15rem;" if bold else ""
+    return (f"<div style='display:flex;justify-content:space-between;align-items:flex-start;{border}padding-bottom:.25rem'>"
+            f"<div style='font-weight:{weight}'>{html.escape(label)}{note}</div>"
+            f"<div style='font-weight:{weight};color:{color};white-space:nowrap'>{fmt_idr(value)}{pct}</div></div>")
+
+
 def _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, *, may_edit: bool, username: str, require) -> None:
     from dataclasses import replace
 
+    from src.core.margin_file import DEFAULT_TAX_SHARE
     from src.ui.feature_data import product_frame
 
-    st.markdown("<div class='field-hint'>Pilih SKU (urut prioritas perbaikan), ubah harga/iklan/program untuk melihat dampaknya. Simulasi tidak menyimpan apa pun kecuali kategori SKU bila disimpan.</div>", unsafe_allow_html=True)
     products = product_frame(table).drop_duplicates("sku")
     if products.empty:
         st.info("Daftar SKU belum tersedia. Unggah data stok atau jalankan analisa sekali.")
@@ -448,7 +476,7 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
     labels = {s: product_label(s, n, v) for s, n, v in zip(products["sku"], products["product_name"], products["variation"])}
     ordered = list(port["sku"]) + [s for s in labels if s not in set(port["sku"])] if not port.empty else list(labels)
     ordered = [s for s in ordered if s in labels]
-    sku = st.selectbox("SKU (urut prioritas perbaikan)", ordered, format_func=lambda s: labels[s], key="calc-sku", placeholder="Ketik SKU atau nama produk…")
+    sku = st.selectbox("Pilih SKU · urut prioritas perbaikan", ordered, format_func=lambda s: labels[s], key="calc-sku", placeholder="Ketik SKU atau nama produk…")
     base_row = rows.loc[rows["sku"] == sku].iloc[0] if not rows.empty and (rows["sku"] == sku).any() else None
     product = products.loc[products["sku"] == sku].iloc[0]
     sku_cat = features.get_json(KEY_SKU_CAT, {}) or {}
@@ -459,53 +487,59 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
         default_index = int(match[0]) if len(match) else None
     suggested = default_index is None
     if default_index is None:
-        default_index = fee.suggest_category(product["product_name"], fees)
-    c1, c2 = st.columns([1.7, 1])
-    pick = c1.selectbox(
-        "Kategori Shopee (biaya administrasi)", list(range(len(fees))), index=default_index, key=f"calc-cat-{sku}",
-        format_func=lambda i: f"{fees.loc[i, 'label']} · {fmt_num(fees.loc[i, 'biaya_admin_pct'], 2)}%" if pd.notna(fees.loc[i, "biaya_admin_pct"]) else fees.loc[i, "label"],
-        placeholder="Pilih kategori (bila tidak ada, pakai 11,70%)",
-    )
-    admin_pct = float(fees.loc[pick, "biaya_admin_pct"]) if pick is not None and pd.notna(fees.loc[pick, "biaya_admin_pct"]) else fee.DEFAULT_ADMIN_PCT
-    note = ("usulan otomatis dari nama produk" if suggested else "kategori tersimpan") if pick is not None else f"memakai {fmt_num(fee.DEFAULT_ADMIN_PCT, 2)}%"
-    if pick is not None and fees.loc[pick, "catatan"]:
-        note += " · tarif perlu dicek"
-    c1.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
-    with c2:
-        st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
-        if may_edit and pick is not None and st.button("Simpan kategori SKU", key=f"calc-cat-save-{sku}", use_container_width=True):
-            require("setting_kalkulator_biaya", "edit")
-            sku_cat[sku] = {"kategori": fees.loc[pick, "kategori"], "sub_kategori": fees.loc[pick, "sub_kategori"], "jenis_produk": fees.loc[pick, "jenis_produk"]}
-            features.set_json(KEY_SKU_CAT, sku_cat, username=username)
-            st.toast("Kategori SKU tersimpan.")
-            st.rerun()
+        default_index = fee.admin_for(sku, product["product_name"], fees, sku_cat)[0]
 
     harga0 = float(base_row["harga"]) if base_row is not None else float(product["price"])
     voucher0 = float(base_row["voucher_unit"]) if base_row is not None else 0.0
     iklan0 = float(data.ad_per_unit.get(sku, 0.0) or 0.0)
     aff_pct = float(base_row["affiliate_pct"]) if base_row is not None else 0.0
     roas = float(base_row["roas"]) if base_row is not None and base_row["roas"] == base_row["roas"] else None
-    r = st.columns(5)
-    with r[0]:
-        harga = float(input_rupiah("Harga jual", int(round(harga0)), key=f"calc-price-{sku}", help="Bawaan = harga transaksi rata-rata 30 hari (sudah setelah diskon), atau harga data produk"))
-    with r[1]:
-        diskon = float(input_rupiah("Diskon tambahan per unit", 0, key=f"calc-disc-{sku}"))
-    with r[2]:
-        voucher = float(input_rupiah("Voucher penjual per unit", int(round(voucher0)), key=f"calc-vou-{sku}", help="Bawaan = rata-rata voucher penjual per unit di transaksi"))
-    with r[3]:
-        iklan = float(input_rupiah("Biaya iklan per unit", int(round(iklan0)), key=f"calc-ad-{sku}", help="Bawaan = biaya iklan SKU dari data iklan ÷ QTY terjual"))
-    qty_order = float(r[4].number_input("Unit per pesanan", 1, 100, 1, key=f"calc-qty-{sku}", help="Biaya Proses Pesanan dibagi ke jumlah unit ini"))
-    sim_programs = {k: dict(v) for k, v in programs.items()}
-    optional = [k for k, v in programs.items() if not v.get("wajib")]
-    cols = st.columns(4)
-    for i, key in enumerate(optional):
-        prog = programs[key]
-        sim_programs[key]["on"] = cols[i % 4].checkbox(f"{prog['label']} ({fmt_num(prog['pct'], 2)}%)", value=bool(prog.get("on")), key=f"calc-prog-{key}-{sku}")
-    big = cols[len(optional) % 4].checkbox("Barang ukuran khusus (Gratis Ongkir)", value=_is_big(product["product_name"]), key=f"calc-big-{sku}",
-                                          help="Otomatis tercentang untuk produk bertanda PACKING KAYU")
-    aff_on = cols[(len(optional) + 1) % 4].checkbox(f"Terjual via affiliate ({fmt_num(aff_pct, 1)}%)", value=False, key=f"calc-aff-{sku}")
 
-    from src.core.margin_file import DEFAULT_TAX_SHARE
+    left, right = st.columns([1, 1.25], gap="large")
+    with left:
+        with st.container(border=True):
+            st.markdown("<div style='font-weight:700;margin-bottom:.2rem'>Atur simulasi</div>", unsafe_allow_html=True)
+            r1 = st.columns(2)
+            with r1[0]:
+                harga = float(input_rupiah("Harga jual", int(round(harga0)), key=f"calc-price-{sku}", help="Bawaan = harga transaksi rata-rata 30 hari (sudah setelah diskon), atau harga data produk"))
+            with r1[1]:
+                iklan = float(input_rupiah("Biaya iklan per unit", int(round(iklan0)), key=f"calc-ad-{sku}", help="Bawaan = biaya iklan SKU dari data iklan ÷ QTY terjual"))
+            r2 = st.columns(2)
+            with r2[0]:
+                diskon = float(input_rupiah("Diskon tambahan per unit", 0, key=f"calc-disc-{sku}"))
+            with r2[1]:
+                voucher = float(input_rupiah("Voucher penjual per unit", int(round(voucher0)), key=f"calc-vou-{sku}", help="Bawaan = rata-rata voucher penjual per unit di transaksi"))
+            sim_programs = {k: dict(v) for k, v in programs.items()}
+            optional = [k for k, v in programs.items() if not v.get("wajib")]
+            on_count = sum(bool(programs[k].get("on")) for k in optional)
+            with st.expander(f"Program Shopee & pengaturan lain · {on_count} program aktif"):
+                cols = st.columns(2)
+                for i, key in enumerate(optional):
+                    prog = programs[key]
+                    label = prog["label"].replace(" (ukuran biasa)", "")
+                    sim_programs[key]["on"] = cols[i % 2].checkbox(f"{label} ({fmt_num(prog['pct'], 1)}%)", value=bool(prog.get("on")), key=f"calc-prog-{key}-{sku}")
+                big = st.checkbox("Barang ukuran khusus (tarif Gratis Ongkir khusus)", value=_is_big(product["product_name"]), key=f"calc-big-{sku}",
+                                  help="Otomatis tercentang untuk produk bertanda PACKING KAYU")
+                aff_on = st.checkbox(f"Terjual via affiliate (komisi {fmt_num(aff_pct, 1)}%)", value=False, key=f"calc-aff-{sku}")
+                qty_order = float(st.number_input("Unit per pesanan", 1, 100, 1, key=f"calc-qty-{sku}", help="Biaya Proses Pesanan dibagi ke jumlah unit ini"))
+                pick = st.selectbox(
+                    "Kategori Shopee (biaya administrasi)", list(range(len(fees))), index=default_index, key=f"calc-cat-{sku}",
+                    format_func=lambda i: f"{fees.loc[i, 'sub_kategori']} › {fees.loc[i, 'jenis_produk'][:40]} · {fmt_num(fees.loc[i, 'biaya_admin_pct'], 2)}%"
+                    if pd.notna(fees.loc[i, "biaya_admin_pct"]) else fees.loc[i, "label"],
+                    placeholder="Pilih kategori (bila tidak ada, pakai 11,70%)",
+                )
+                note = ("usulan otomatis dari nama produk" if suggested else "kategori tersimpan") if pick is not None else f"memakai {fmt_num(fee.DEFAULT_ADMIN_PCT, 2)}%"
+                if pick is not None and fees.loc[pick, "catatan"]:
+                    note += " · tarif perlu dicek"
+                st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
+                if may_edit and pick is not None and st.button("Simpan kategori SKU", key=f"calc-cat-save-{sku}"):
+                    require("setting_kalkulator_biaya", "edit")
+                    sku_cat[sku] = {"kategori": fees.loc[pick, "kategori"], "sub_kategori": fees.loc[pick, "sub_kategori"], "jenis_produk": fees.loc[pick, "jenis_produk"]}
+                    features.set_json(KEY_SKU_CAT, sku_cat, username=username)
+                    st.toast("Kategori SKU tersimpan.")
+                    st.rerun()
+            st.markdown("<div class='field-hint'>Simulasi tidak mengubah data apa pun.</div>", unsafe_allow_html=True)
+    admin_pct = float(fees.loc[pick, "biaya_admin_pct"]) if pick is not None and pd.notna(fees.loc[pick, "biaya_admin_pct"]) else fee.DEFAULT_ADMIN_PCT
 
     hit = _margin_cols(md, sku)
     kotor0, sumber = hit["margin_kotor_pct"], hit["sumber"]
@@ -513,36 +547,67 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
         kotor0, sumber = md.store_kotor_pct, "rata-rata toko"
     tax = hit["pajak_share"] if np.isfinite(hit["pajak_share"]) else DEFAULT_TAX_SHARE
     # Modal tetap dalam Rupiah: dihitung dari harga transaksi rata-rata (bukan harga simulasi) × (1 − pajak − margin kotor file).
-    ref = float(base_row["harga"]) - float(base_row["voucher_unit"]) if base_row is not None else float(product["price"])
-    modal = max(ref * (1 - tax - kotor0 / 100.0), 0.0) if np.isfinite(kotor0) else 0.0
+    ref = harga0 - voucher0 if base_row is not None else float(product["price"])
+    known = np.isfinite(kotor0)
+    modal = max(ref * (1 - tax - kotor0 / 100.0), 0.0) if known else 0.0
     inp = fee.Inputs(harga=harga, diskon=diskon, voucher=voucher, qty_per_order=qty_order, admin_pct=admin_pct, programs=sim_programs,
                      order_fee=order_fee, affiliate_pct=aff_pct, affiliate_on=aff_on, iklan=iklan, ukuran_khusus=big,
-                     hpp=modal, pajak_share=tax if np.isfinite(kotor0) else 0.0)
+                     hpp=modal, pajak_share=tax if known else 0.0)
     value, pct = fee.margin(inp)
     base = inp.harga_akhir
-    potong = fee.potongan(inp)
     target = acuan if np.isfinite(acuan) else 0.0
-    if not np.isfinite(kotor0):
-        st.info("SKU ini belum ada di file margin dan rata-rata toko belum tersedia: angka di bawah adalah penerimaan sebelum modal.")
-    k = st.columns(4)
-    card(k[0], "Harga jual akhir", fmt_idr(base), hint="setelah diskon & voucher penjual")
-    card(k[1], "Margin kotor", fmt_pct(fee.kotor_pct(inp), 1) if np.isfinite(kotor0) else "–", hint=f"file margin · {sumber}" if sumber else "belum ada di file margin")
-    card(k[2], "Potongan Shopee + iklan", fmt_idr(potong), hint=f"{fmt_pct(potong / base * 100 if base else 0, 1)} dari harga akhir")
-    status = "rugi" if pct < 0 else ("margin rendah" if pct < target else "margin tinggi")
-    card(k[3], "Margin bersih per unit", fmt_idr(value), hint=f"{fmt_pct(pct, 1)} · {status}" if np.isfinite(kotor0) else "sebelum modal")
-    left, right = st.columns([1.25, 1])
-    with left:
-        frame = fee.breakdown(inp)
-        show_table(frame, kinds={"Rp per unit": "money", "% harga akhir": "pct"}, bold_label=str(frame["Komponen"].iloc[-1]), max_height=10_000)
+    shopee_rp = fee.shopee_fees(inp)
+    aff_rp = base * aff_pct / 100 if aff_on else 0.0
+    tax_rp = base * inp.pajak_share
+    kotor_rp = base - tax_rp - modal
+
     with right:
-        notes = fee.analysis(inp, target_pct=target, qty_30=float(base_row["qty_30"]) if base_row is not None else None,
-                             pred_qty_30=_prediction_30(table, features, sku), roas=roas, sumber=sumber)
-        items = "".join(
-            f"<div style='background:{TONE[t][0]};color:{TONE[t][1]};border-radius:10px;padding:.45rem .7rem;margin-bottom:.35rem;font-size:.88rem'>"
-            f"{TONE[t][2]} {html.escape(text)}</div>"
-            for t, text in notes
+        if pct < 0:
+            tone, word = ("#fef2f2", "#b91c1c"), "Rugi"
+        elif pct < target:
+            tone, word = ("#fffbeb", "#b45309"), "Margin rendah"
+        else:
+            tone, word = ("#ecfdf5", "#047857"), "Margin tinggi"
+        if not known:
+            tone, word = ("#f8fafc", "#334155"), "Tanpa data margin"
+        st.markdown(
+            f"<div style='background:{tone[0]};border-radius:14px;padding:.8rem 1rem;margin-bottom:.6rem'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+            f"<div><div style='font-size:.78rem;color:#475569;font-weight:600;letter-spacing:.02em'>MARGIN BERSIH PER UNIT</div>"
+            f"<div style='font-size:1.7rem;font-weight:800;color:{tone[1]}'>{fmt_idr(value)}</div></div>"
+            f"<div style='text-align:right'><span style='background:{tone[1]};color:#fff;border-radius:999px;padding:.2rem .7rem;font-size:.8rem;font-weight:700'>{word}</span>"
+            f"<div style='font-size:1.1rem;font-weight:700;color:{tone[1]};margin-top:.3rem'>{fmt_pct(pct, 1) if np.isfinite(pct) else '–'}</div>"
+            f"<div style='font-size:.72rem;color:#64748b'>batas margin rendah {fmt_pct(target, 1)}</div></div></div>"
+            + _bar([("Modal + pajak", modal + tax_rp, "#94a3b8"), ("Potongan Shopee", shopee_rp, "#f97316"), ("Iklan", iklan, "#ef4444"),
+                    ("Affiliate", aff_rp, "#a855f7"), ("Margin bersih", max(value, 0), "#16a34a")], base)
+            + "</div>",
+            unsafe_allow_html=True,
         )
-        st.markdown(f"<div style='font-weight:700;margin-bottom:.35rem'>Analisa agar tetap profit</div>{items}", unsafe_allow_html=True)
+        lines = [_line("Harga jual akhir", base, 0, sub="setelah diskon & voucher penjual")]
+        if known:
+            lines.append(_line("Margin kotor", kotor_rp, base, sub=f"file margin · {sumber}"))
+        lines.append(_line("− Potongan Shopee", -shopee_rp, base, sub=f"admin kategori {fmt_num(admin_pct, 2)}% + program + proses pesanan"))
+        if iklan:
+            lines.append(_line("− Iklan", -iklan, base, sub=f"ROAS {fmt_num(roas, 1)}" if roas else ""))
+        if aff_rp:
+            lines.append(_line("− Komisi affiliate", -aff_rp, base))
+        lines.append(_line("Margin bersih", value, base, bold=True))
+        st.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.6rem .9rem;font-size:.9rem'>{''.join(lines)}</div>", unsafe_allow_html=True)
+
+        todo = fee.fixes(inp, 0.0 if pct < 0 else target) if known else []
+        floor = fee.min_price(replace(inp, iklan=0.0), 0.0) if known else float("nan")
+        st.markdown("<div style='font-weight:700;margin:.7rem 0 .3rem'>Yang perlu dilakukan</div>", unsafe_allow_html=True)
+        if todo:
+            st.markdown("<ol style='margin:0 0 0 1.1rem;padding:0;line-height:1.6;font-size:.9rem'>" + "".join(f"<li>{html.escape(t)}</li>" for t in todo[:4]) + "</ol>",
+                        unsafe_allow_html=True)
+        elif known:
+            st.markdown(f"<div style='font-size:.9rem'>Margin sudah sehat. Iklan maksimal agar tetap di atas batas: <b>{fmt_idr(max(fee.max_iklan(inp, target), 0))}</b>/unit.</div>",
+                        unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='font-size:.9rem'>SKU belum ada di file margin. Unggah file margin terbaru di tab ⚙️ Parameter biaya.</div>", unsafe_allow_html=True)
+        if np.isfinite(floor):
+            st.caption(f"Harga impas tanpa iklan: {fmt_idr(floor)}")
+
     scen = []
 
     def add(name: str, trial: fee.Inputs) -> None:
@@ -554,8 +619,17 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
     add("Tanpa komisi affiliate" if aff_on else f"Bila via affiliate {fmt_num(aff_pct, 1)}%", replace(inp, affiliate_on=not aff_on))
     add("Tanpa Live & Video XTRA", replace(inp, programs={k: {**v, "on": v.get("on") and k not in ("live_xtra", "video_xtra")} for k, v in sim_programs.items()}))
     add("Tanpa diskon & voucher penjual", replace(inp, diskon=0.0, voucher=0.0))
-    st.markdown("**Skenario cepat**")
-    floor = fee.min_price(replace(inp, iklan=0.0), 0.0)
-    if np.isfinite(floor) and np.isfinite(kotor0):
+    if np.isfinite(floor):
         add(f"Harga impas tanpa iklan ({fmt_idr(floor)})", replace(inp, harga=floor, iklan=0.0))
-    show_table(pd.DataFrame(scen), kinds={"Margin bersih/unit": "money", "Selisih vs sekarang": "money", "Margin bersih": "pct"}, bold_label="Sekarang", max_height=10_000)
+    d1, d2, d3 = st.columns(3)
+    with d1.popover("Skenario cepat", use_container_width=True):
+        show_table(pd.DataFrame(scen), kinds={"Margin bersih/unit": "money", "Selisih vs sekarang": "money", "Margin bersih": "pct"}, bold_label="Sekarang", max_height=10_000)
+    with d2.popover("Rincian biaya lengkap", use_container_width=True):
+        frame = fee.breakdown(inp)
+        show_table(frame, kinds={"Rp per unit": "money", "% harga akhir": "pct"}, bold_label=str(frame["Komponen"].iloc[-1]), max_height=10_000)
+    with d3.popover("Analisa lengkap", use_container_width=True):
+        notes = fee.analysis(inp, target_pct=target, qty_30=float(base_row["qty_30"]) if base_row is not None else None,
+                             pred_qty_30=_prediction_30(table, features, sku), roas=roas, sumber=sumber)
+        st.markdown("".join(
+            f"<div style='background:{TONE[t][0]};color:{TONE[t][1]};border-radius:10px;padding:.45rem .7rem;margin-bottom:.35rem;font-size:.88rem'>"
+            f"{TONE[t][2]} {html.escape(text)}</div>" for t, text in notes), unsafe_allow_html=True)
