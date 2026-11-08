@@ -144,7 +144,14 @@ def show_prediction_checklist(
             key=f"chk-{lo}",
         )
 
-    batched_view(len(frame), key="chk", render=_render, noun="SKU")
+    batched_view(
+        len(frame),
+        key="chk",
+        render=_render,
+        noun="SKU",
+        fragment=False,  # centang Pilih harus memperbarui penjelasan di bawah tabel (rerun penuh)
+        download=lambda: download_excel(frame.drop(columns=["Pilih", "_key"]), "prediksi_pilih_sku.xlsx", key="xl-chk"),
+    )
     keys_on_page = set(frame["_key"])
     names = dict(zip(frame["_key"], frame["SKU"] + " · " + frame["Produk"]))
     default = sorted(picked_before & keys_on_page)
@@ -153,10 +160,7 @@ def show_prediction_checklist(
     if sorted(mobile_pick) != default:
         picked = (picked_before - keys_on_page) | set(mobile_pick)
     st.session_state["chk-picked"] = sorted(picked)
-    c2, c3 = st.columns([1, 3])
-    with c2:
-        download_excel(frame.drop(columns=["Pilih", "_key"]), "prediksi_pilih_sku.xlsx", key="xl-chk")
-    c3.markdown(f"<div class='field-hint' style='text-align:right'>{fmt_num(len(work))} SKU sesuai saringan</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='field-hint' style='text-align:right'>{fmt_num(len(work))} SKU sesuai saringan</div>", unsafe_allow_html=True)
     chosen = table.loc[table["item_key"].astype(str).isin(picked)]
     if chosen.empty:
         st.caption("Centang kolom Pilih untuk menampilkan penjelasan prediksi per SKU.")

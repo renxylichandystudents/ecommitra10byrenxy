@@ -169,10 +169,13 @@ def show_priority_dashboard(
                     key=f"dash-restock-{lo}",
                 )
 
-            batched_view(len(view), key="dash-restock", render=_render, noun="SKU")
-            _b1, b2 = st.columns([1, 1])
-            with b2:
-                download_excel(view, "restock_prioritas.xlsx", key="xl-dash-restock")
+            batched_view(
+                len(view),
+                key="dash-restock",
+                render=_render,
+                noun="SKU",
+                download=lambda: download_excel(view, "restock_prioritas.xlsx", key="xl-dash-restock"),
+            )
 
 
 def restock_view(priority: pd.DataFrame) -> pd.DataFrame:

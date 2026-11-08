@@ -922,6 +922,14 @@ st.markdown(
         box-shadow: 0 4px 10px rgba(6, 95, 70, 0.15);
     }
     [data-testid="stDownloadButton"] button p { font-weight: 700 !important; }
+    /* Bilah tombol tabel (Muat lebih banyak · Tutup · Unduh Excel): sama tinggi, teks satu baris, lebar penuh kolom. */
+    div[class*="st-key-"][class*="-actions"] button {
+        min-height: 42px !important; width: 100% !important; border-radius: 10px !important;
+        white-space: nowrap !important; padding-left: .8rem !important; padding-right: .8rem !important;
+    }
+    div[class*="st-key-"][class*="-actions"] button p { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; }
+    div[class*="st-key-"][class*="-actions"] [data-testid="stDownloadButton"],
+    div[class*="st-key-"][class*="-actions"] [data-testid="stButton"] { width: 100% !important; }
     /* Tulisan "Press Enter to submit form/apply" di kolom isian mengganggu saat mengetik: disembunyikan. */
     [data-testid="InputInstructions"] { display: none !important; }
     .stock-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 700; }
@@ -1968,10 +1976,12 @@ def paged_table(frame: pd.DataFrame, *, key: str, filename: str, kinds: dict | N
     """Tabel bernomor urut, tampil bertahap (Muat lagi) + unduh Excel lengkap."""
     full = frame.reset_index(drop=True)
     full.insert(0, "No", range(1, len(full) + 1))
-    batched_view(len(full), key=key, render=lambda a, b: show_table(full.iloc[a:b], kinds=kinds, max_height=10_000))
-    _left, mid, _gap = st.columns([1.3, 1.2, 3])
-    with mid:
-        download_excel(full, filename.replace("/", "-").replace(" ", "_"), key=f"{key}-xl", label=f"Unduh Excel ({len(full)} baris)")
+    batched_view(
+        len(full),
+        key=key,
+        render=lambda a, b: show_table(full.iloc[a:b], kinds=kinds, max_height=10_000),
+        download=lambda: download_excel(full, filename.replace("/", "-").replace(" ", "_"), key=f"{key}-xl"),
+    )
 
 
 @st.cache_data(show_spinner=False, max_entries=2)

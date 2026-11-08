@@ -452,50 +452,73 @@ def batched_view(
     first: int = BATCH_FIRST,
     step: int = BATCH_STEP,
     rerun_scope: str = "app",
+    fragment: bool | None = None,
+    download=None,
 ) -> None:
     """Satu tabel: `first` baris pertama, Muat lebih banyak menambah `step` baris, Tutup kembali ke `first`.
-    render(start, end) menggambar baris [start, end)."""
-    if total <= first:
-        render(0, total)
-        return
-    shown_key = f"{key}-shown"
-    shown = min(total, max(first, int(st.session_state.get(shown_key, first))))
-    render(0, shown)
-    st.markdown(BATCH_CSS, unsafe_allow_html=True)
 
-    def _rerun() -> None:
-        if rerun_scope != "app":
-            try:
-                st.rerun(scope=rerun_scope)
-            except st.errors.StreamlitAPIException:
-                # Klik terjadi pada rerun penuh (bukan rerun fragment): ulangi seluruh halaman.
-                st.rerun()
-        st.rerun()
+    render(start, end) menggambar baris [start, end). download() (opsional) menggambar tombol Unduh Excel di
+    bilah tombol yang sama. Bila fragment=True (bawaan untuk tabel tampilan), klik Muat/Tutup hanya menjalankan
+    ulang tabel ini sehingga halaman tidak ikut dimuat ulang dan posisi layar tetap di tabel."""
+    if fragment is None:
+        fragment = rerun_scope == "app"
 
-    rest = total - shown
-    if rest <= 0:
-        st.markdown(
-            f"<div class='batch-done'><b>✓ Semua data telah ditampilkan</b>{total} dari {total} {noun}</div>",
-            unsafe_allow_html=True,
-        )
-    # Tombol selalu di tengah: satu tombol = satu kolom tengah, dua tombol = dua kolom tengah sama lebar.
-    actions = (["more"] if rest > 0 else []) + (["close"] if shown > first else [])
-    if len(actions) == 1:
-        slots = [st.columns([1, 1.3, 1])[1]]
+    def _body() -> None:
+        scope = "fragment" if fragment else rerun_scope
+        if total <= first:
+            render(0, total)
+            _action_bar(key, [], download)
+            return
+        shown_key = f"{key}-shown"
+        shown = min(total, max(first, int(st.session_state.get(shown_key, first))))
+        render(0, shown)
+        st.markdown(BATCH_CSS, unsafe_allow_html=True)
+        rest = total - shown
+        if rest <= 0:
+            st.markdown(
+                f"<div class='batch-done'><b>✓ Semua data telah ditampilkan</b>{total} dari {total} {noun}</div>",
+                unsafe_allow_html=True,
+            )
+        actions = []
+        if rest > 0:
+            actions.append(("more", f"Muat lebih banyak (+{min(step, rest)})", ":material/expand_more:", "primary", shown + step))
+        if shown > first:
+            actions.append(("close", "Tutup", ":material/expand_less:", "secondary", first))
+        clicked = _action_bar(key, actions, download)
+        if clicked is not None:
+            st.session_state[shown_key] = clicked
+            _rerun(scope)
+
+    if fragment:
+        st.fragment(_body)()
     else:
-        _a, left, right, _b = st.columns([0.7, 1.3, 1.3, 0.7])
-        slots = [left, right]
-    for slot, action in zip(slots, actions):
-        if action == "more":
-            if slot.button(
-                f"Muat lebih banyak · {min(step, rest)} {noun} berikutnya",
-                key=f"{key}-more",
-                icon=":material/expand_more:",
-                use_container_width=True,
-                type="primary",
-            ):
-                st.session_state[shown_key] = shown + step
-                _rerun()
-        elif slot.button("Tutup", key=f"{key}-close", icon=":material/expand_less:", use_container_width=True):
-            st.session_state[shown_key] = first
-            _rerun()
+        _body()
+
+
+def _rerun(scope: str) -> None:
+    if scope != "app":
+        try:
+            st.rerun(scope=scope)
+        except st.errors.StreamlitAPIException:
+            # Klik terjadi pada rerun penuh (bukan rerun fragment): ulangi seluruh halaman.
+            st.rerun()
+    st.rerun()
+
+
+def _action_bar(key: str, actions: list, download) -> int | None:
+    """Bilah tombol rapi di tengah: Muat lebih banyak · Tutup · Unduh Excel, sama tinggi, teks tidak terlipat."""
+    count = len(actions) + (1 if download else 0)
+    if count == 0:
+        return None
+    clicked = None
+    with st.container(key=f"{key}-actions"):
+        side = {1: 1.6, 2: 1.0, 3: 0.45}[count]
+        cols = st.columns([side] + [1.25] * count + [side], gap="small")
+        slots = cols[1:-1]
+        for slot, (name, label, icon, kind, target) in zip(slots, actions):
+            if slot.button(label, key=f"{key}-{name}", icon=icon, type=kind, use_container_width=True):
+                clicked = target
+        if download:
+            with slots[len(actions)]:
+                download()
+    return clicked

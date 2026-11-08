@@ -279,7 +279,7 @@
       body = allRows.slice(0, shown).map(rowHtml).join("");
       const rest = total - shown;
       const info = rest > 0 ? "" : `<div class="done"><b>✓ Semua data telah ditampilkan</b> ${total} dari ${total} ${noun}</div>`;
-      const more = rest > 0 ? `<button class="btn primary" data-act="more">⌄ Muat lebih banyak · ${Math.min(step, rest)} ${noun} berikutnya</button>` : "";
+      const more = rest > 0 ? `<button class="btn primary" data-act="more">⌄ Muat lebih banyak (+${Math.min(step, rest)})</button>` : "";
       const close = shown > first ? `<button class="btn" data-act="close">⌃ Tutup</button>` : "";
       foot = `<div class="foot">${info}<div class="row">${more}${close}</div></div>`;
     } else {

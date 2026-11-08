@@ -184,7 +184,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
         for sku, value in zip(part["_sku"], edited["Budget tambahan"]):
             edits[sku] = float(value or 0)
 
-    batched_view(len(alloc), key=f"tgt-{choice}", render=_render_alloc, noun="SKU")
+    batched_view(len(alloc), key=f"tgt-{choice}", render=_render_alloc, noun="SKU", fragment=False)
     final = dict(plan)
     final.update({sku: float(value or 0) for sku, value in edits.items()})
     strategy_budget = float(frame.set_index("Strategi").loc[choice, "Budget tambahan"])
@@ -489,6 +489,6 @@ def show_ranking(table: pd.DataFrame, *, features, frames, username: str, can_ed
         key="rank",
         render=lambda lo, hi: show_table(shown.iloc[lo:hi], column_config={"Langkah prioritas": st.column_config.TextColumn(width="large")}),
         noun="SKU",
+        download=lambda: download_excel(frame, "skor_kesiapan_ranking.xlsx", key="xl-rank"),
     )
-    download_excel(frame, "skor_kesiapan_ranking.xlsx", key="xl-rank")
 

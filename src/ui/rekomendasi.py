@@ -96,20 +96,24 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
             st.session_state["name-picked"] = lo + int(rows[0])
 
     # Tabel selebar penuh per kelompok; detail baris terpilih tampil di bawahnya.
-    batched_view(len(display), key="names", render=_render_names, noun="SKU")
+    batched_view(
+        len(display),
+        key="names",
+        render=_render_names,
+        noun="SKU",
+        fragment=False,  # pilihan baris menampilkan rincian di bawah tabel (rerun penuh)
+        download=lambda: download_excel(
+            view[["SKU", "Nama produk saat ini", "Rekomendasi nama baru", "Kata kunci utama", "Kata kunci pendukung", "Rekomendasi deskripsi"]],
+            "rekomendasi_nama_deskripsi.xlsx",
+            key="xl-names",
+        ),
+    )
     picked_row = st.session_state.get("name-picked")
     with st.container(border=True):
         if picked_row is not None and 0 <= int(picked_row) < len(page):
             _name_detail(page.iloc[int(picked_row)])
         else:
             st.caption("Pilih satu baris untuk melihat nama rekomendasi, kata kunci, dan deskripsi lengkap.")
-    _left, right = st.columns(2)
-    with right:
-        download_excel(
-            view[["SKU", "Nama produk saat ini", "Rekomendasi nama baru", "Kata kunci utama", "Kata kunci pendukung", "Rekomendasi deskripsi"]],
-            "rekomendasi_nama_deskripsi.xlsx",
-            key="xl-names",
-        )
     return recs
 
 
