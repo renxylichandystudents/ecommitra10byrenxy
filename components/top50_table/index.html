@@ -344,8 +344,24 @@
     const newBox = root.querySelector(".box");
     newBox.scrollTop = keepTop;
     newBox.scrollLeft = keepLeft;
-    post("streamlit:setFrameHeight", { height: Math.ceil(root.getBoundingClientRect().height) + 4 });
+    postHeight();
   }
+
+  /* Tinggi iframe mengikuti isi: diukur ulang setiap ukuran berubah (font selesai dimuat, baris bertambah,
+     lebar kolom diubah). Tanpa ini, baris yang terlipat setelah font dimuat membuat tombol Muat lebih banyak
+     dan scrollbar terpotong di bawah iframe. */
+  let lastHeight = 0;
+  function postHeight() {
+    const root = document.getElementById("root");
+    const height = Math.ceil(root.getBoundingClientRect().height) + 6;
+    if (height !== lastHeight) {
+      lastHeight = height;
+      post("streamlit:setFrameHeight", { height: height });
+    }
+  }
+  if (window.ResizeObserver) new ResizeObserver(() => postHeight()).observe(document.getElementById("root"));
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => postHeight());
+  window.addEventListener("load", () => postHeight());
 
   function markDragged() {
     state.justDragged = true;
