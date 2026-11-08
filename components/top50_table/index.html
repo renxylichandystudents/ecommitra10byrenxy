@@ -83,12 +83,19 @@
   .labels .chip.more { cursor: help; background: #f1f5f9; }
   /* Muat lebih banyak: 5 baris, +10 per klik, Tutup kembali ke 5 (sama dengan batched_view di Streamlit). */
   .info { color: #64748b; font-size: var(--fs-sm); font-weight: 600; }
-  .foot { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 4px 4px; }
-  .foot .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
-  .foot .row .btn { min-width: 220px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-  .btn { font-family: inherit; font-weight: 700; font-size: var(--fs-sm); border-radius: 10px; padding: 9px 18px; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; }
-  .btn.primary { background: #ee4d2d; border-color: #ee4d2d; color: #fff; }
-  .btn.primary:hover { background: #d9411f; }
+  /* Bilah tombol bawah: sama dengan tombol Streamlit di app.py (Muat = primary oranye, Tutup = putih, Unduh = hijau). */
+  .foot { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 2px 6px; }
+  .foot .row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(200px, 260px); gap: 10px; justify-content: center; width: 100%; }
+  .btn { font-family: inherit; font-weight: 700; font-size: 0.95rem; border-radius: 12px; min-height: 2.75rem; padding: 0 16px;
+    cursor: pointer; border: 1px solid #d0d5dd; background: #fff; color: #0f172a; display: inline-flex; align-items: center;
+    justify-content: center; gap: 8px; white-space: nowrap; text-decoration: none; box-sizing: border-box;
+    transition: transform .18s ease, box-shadow .18s ease, background .18s ease; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08); }
+  .btn.primary { background: linear-gradient(135deg, #ff7348 0%, #ee4d2d 100%); border: none; color: #fff; }
+  .btn.primary:hover { background: linear-gradient(135deg, #ff8158 0%, #e24122 100%); }
+  .btn.dl { background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border: 1px solid #6ee7b7; color: #065f46; }
+  .btn.dl:hover { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); border-color: #34d399; color: #064e3b; }
+  .btn svg { width: 18px; height: 18px; flex: 0 0 auto; }
   .done { border: 1px solid #a7f3d0; background: #ecfdf5; color: #047857; border-radius: 10px; padding: 6px 14px; text-align: center; font-size: var(--fs-sm); }
   .chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 0 0; border-radius: 999px; background: #f1f5f9; border: 1px solid #e2e8f0; font-weight: 600; }
 </style>
@@ -158,6 +165,30 @@
   function esc(text) {
     return String(text == null ? "" : text)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  const ICON_DOWN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+  const ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>';
+  const ICON_DL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><polyline points="7 10 12 15 17 10"/><path d="M5 20h14"/></svg>';
+
+  /* Unduh Excel dari dalam komponen: isi file (base64) dikirim Python, sehingga tombol berada di bilah yang sama. */
+  function downloadButton(args) {
+    const d = args.download;
+    if (!d || !d.b64) return "";
+    return `<button class="btn dl" data-act="download">${ICON_DL} ${esc(d.label || "Unduh Excel")}</button>`;
+  }
+
+  function saveDownload(d) {
+    const raw = atob(d.b64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = d.name || "tabel.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
 
   function cellHtml(cell) {
@@ -279,11 +310,12 @@
       body = allRows.slice(0, shown).map(rowHtml).join("");
       const rest = total - shown;
       const info = rest > 0 ? "" : `<div class="done"><b>✓ Semua data telah ditampilkan</b> ${total} dari ${total} ${noun}</div>`;
-      const more = rest > 0 ? `<button class="btn primary" data-act="more">⌄ Muat lebih banyak (+${Math.min(step, rest)})</button>` : "";
-      const close = shown > first ? `<button class="btn" data-act="close">⌃ Tutup</button>` : "";
-      foot = `<div class="foot">${info}<div class="row">${more}${close}</div></div>`;
+      const more = rest > 0 ? `<button class="btn primary" data-act="more">${ICON_DOWN} Muat lebih banyak (+${Math.min(step, rest)})</button>` : "";
+      const close = shown > first ? `<button class="btn" data-act="close">${ICON_UP} Tutup</button>` : "";
+      foot = `<div class="foot">${info}<div class="row">${more}${close}${downloadButton(args)}</div></div>`;
     } else {
       body = allRows.slice(0, limit).map(rowHtml).join("");
+      if (args.download) foot = `<div class="foot"><div class="row">${downloadButton(args)}</div></div>`;
     }
 
     const root = document.getElementById("root");
@@ -335,6 +367,7 @@
     root.querySelectorAll("[data-act]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const batch = state.args.batch || {};
+        if (btn.getAttribute("data-act") === "download") { saveDownload(state.args.download); return; }
         if (btn.getAttribute("data-act") === "more") state.shown += batch.step || 10;
         else state.shown = batch.first || 5;
         render();

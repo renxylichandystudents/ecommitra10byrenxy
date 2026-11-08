@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, centered_download, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -7031,6 +7031,7 @@ def _render_movement_board(
     _TOP50_TABLE(
         columns=columns, rows=rows, total=total_row, selected="", height=620, sort="", key="movement-top50", default="",
         limit=0, batch={"first": MOVEMENT_STEP, "step": 10, "noun": "SKU"},
+        download=excel_payload(pd.DataFrame(export_rows), "pergerakan_top50.xlsx") if export_rows else None,
     )
     return pd.DataFrame(export_rows)
 
@@ -7225,8 +7226,7 @@ def show_analysis_movement(
             "<div class='field-hint'>Pada rentang ini tidak ada item Top 50 yang prediksinya berubah.</div>",
             unsafe_allow_html=True,
         )
-    else:
-        centered_download("movement-xlbar", lambda: offer_excel(export, "pergerakan_top50.xlsx"))
+    # Unduh Excel ada di bilah tombol tabel (di dalam komponen).
     return detail
 
 

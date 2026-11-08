@@ -24,8 +24,7 @@ from src.ui.common import (
     STATUS_CLASS,
     UP_COLOR,
     card,
-    centered_download,
-    download_excel,
+    excel_payload,
     fmt_date,
     fmt_idr,
     fmt_idr_short,
@@ -236,13 +235,13 @@ def show_decision_table(
         height=height,
         limit=0,
         batch=batch,
+        download=excel_payload(export, filename),
         sort="rank",
         key=key,
         default=previous if previous in keys else "",
     )
     picked = str(picked or "")
     st.session_state[f"{key}-value"] = picked
-    centered_download(f"{key}-xlbar", lambda: download_excel(export, filename, key=f"xl-{key}"))
     return picked if picked in keys else ""
 
 

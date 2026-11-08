@@ -505,6 +505,15 @@ def _rerun(scope: str) -> None:
     st.rerun()
 
 
+def excel_payload(frame: pd.DataFrame, filename: str) -> dict:
+    """Isi file Excel untuk tombol Unduh di dalam komponen tabel (base64 + nama + label)."""
+    import base64
+
+    name = filename if filename.endswith(".xlsx") else f"{filename}.xlsx"
+    label = f"Unduh Excel · {len(frame):,} baris".replace(",", ".")
+    return {"b64": base64.b64encode(excel_bytes(frame)).decode("ascii"), "name": name, "label": label}
+
+
 def centered_download(key: str, download) -> None:
     """Tombol Unduh Excel di tengah, gaya sama dengan bilah tombol tabel."""
     _action_bar(key, [], download)
