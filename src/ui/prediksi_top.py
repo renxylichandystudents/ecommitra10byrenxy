@@ -12,10 +12,10 @@ import streamlit as st
 
 from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date, fmt_date_short
-from src.core.pred_actual import daily_comparison, lost_sales_from_stock
+from src.core.pred_actual import cause_group, daily_comparison, diagnose, lost_sales_from_stock
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
-from src.ui.common import batched_view, card, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
+from src.ui.common import batched_view, card, centered_download, page_navigator, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
 from src.ui.dashboard import status_badges
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table, table_height, wrap_layout
@@ -310,7 +310,7 @@ def _backtest_snapshot(matrix: pd.DataFrame, table: pd.DataFrame | None, day: da
     return pd.DataFrame(rows, columns=columns)
 
 
-def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.DataFrame) -> None:
+def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.DataFrame, orders_all: pd.DataFrame | None = None) -> None:
     st.markdown("<div class='section-title'>Prediksi vs aktual harian</div>", unsafe_allow_html=True)
     if features is None or orders is None or orders.empty:
         st.write("Belum ada data.")
@@ -364,21 +364,37 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
             xaxis=dict(type="date", tickformat="%d/%m", dtick=86_400_000),  # satu label per hari
         )
         st.plotly_chart(fig, use_container_width=True, key="pva-trend")
-    stock_miss = rows.loc[rows["status"].isin(["Hampir", "Tidak"]) & rows["penyebab"].astype(str).str.startswith("Stok")]
-    st.markdown(
-        f"<div class='field-hint'>{fmt_num(len(stock_miss))} SKU tidak tercapai karena stok; potensi omzet hilang "
-        f"{fmt_idr(lost_sales_from_stock(rows))}.</div>",
-        unsafe_allow_html=True,
-    )
+    # Diagnosa penyebab per SKU (harga, stok, batal, pola jual, kondisi toko) + saran aksi.
+    dc = {}
+    if table is not None and not table.empty:
+        for code in ("10062", "10036"):
+            if f"stok_{code}" in table.columns:
+                for sku, value in zip(table["sku"].astype(str), pd.to_numeric(table[f"stok_{code}"], errors="coerce").fillna(0.0)):
+                    dc[sku] = dc.get(sku, 0.0) + float(value)
+    rows = diagnose(rows, lines, last, lines_all=orders_all, stock_by_sku=stock, dc_by_sku=dc)
+    rows["kelompok"] = rows["penyebab"].map(cause_group)
+    rows["selisih"] = rows["aktual_sales"] - rows["pred_sales"]
+    _cause_summary(rows, last)
+
     names = table.drop_duplicates("sku").set_index(table["sku"].astype(str).drop_duplicates())["product_name"].to_dict() if table is not None and not table.empty else {}
     view = rows.assign(Produk=rows["sku"].map(names).fillna(""))
     # Prioritas dampak: selisih omzet aktual vs prediksi terbesar (meleset atau melebihi) lebih dulu.
-    view["Selisih omzet"] = view["aktual_sales"] - view["pred_sales"]
+    view["Selisih omzet"] = view["selisih"]
     view = view.sort_values("Selisih omzet", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
     view["pred_qty"] = pd.to_numeric(view["pred_qty"], errors="coerce").round(1)
-    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY (laju harian)", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi omzet", "aktual_sales": "Aktual omzet", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab"})
-    columns = ["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "Selisih omzet", "% capaian", "Status", "Penyebab"]
-    view = view[columns]
+    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY (laju harian)", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi omzet", "aktual_sales": "Aktual omzet", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab", "aksi": "Saran aksi"})
+    columns = ["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "Selisih omzet", "% capaian", "Status", "Penyebab", "Saran aksi"]
+
+    f1, f2, f3 = st.columns([1.3, 1.6, 0.8])
+    status_pick = f1.multiselect("Status", options=["Tidak", "Hampir", "Tercapai", "Melebihi"], key="pva-status", placeholder="Semua")
+    group_options = [g for g in view["kelompok"].value_counts().index.tolist()]
+    cause_pick = f2.multiselect("Penyebab", options=group_options, key="pva-cause", placeholder="Semua")
+    page_size = int(f3.selectbox("Baris/halaman", options=[5, 10, 20, 50, 100], index=0, key="pva-size"))
+    if status_pick:
+        view = view.loc[view["Status"].isin(status_pick)]
+    if cause_pick:
+        view = view.loc[view["kelompok"].isin(cause_pick)]
+    view = view[columns].reset_index(drop=True)
     total = {c: "" for c in columns}
     total["SKU"] = "Total"
     total["Produk"] = f"{fmt_num(len(view))} SKU"
@@ -386,16 +402,78 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         total[c] = float(pd.to_numeric(view[c], errors="coerce").fillna(0).sum())
     total["% capaian"] = total["Aktual omzet"] / total["Prediksi omzet"] * 100 if total["Prediksi omzet"] else None
     total_row = pd.DataFrame([total], columns=columns)
-    st.markdown("<div class='field-hint'>Urutan: SKU dengan selisih omzet aktual vs prediksi terbesar (paling berdampak) lebih dulu. Baris Total di atas.</div>", unsafe_allow_html=True)
-    batched_view(
-        len(view),
-        key="pva-table",
-        render=lambda lo, hi: show_table(
-            pd.concat([total_row, view.iloc[lo:hi]], ignore_index=True),
-            bold_label="Total",
-            kinds={"Prediksi omzet": "money", "Aktual omzet": "money", "Selisih omzet": "money", "% capaian": "pct"},
-            max_height=10_000,
-        ),
-        noun="SKU",
-        download=lambda: download_excel(pd.concat([total_row, view], ignore_index=True), f"prediksi_vs_aktual_{last:%Y%m%d}.xlsx", key="xl-pva"),
+
+    sig = (tuple(status_pick), tuple(cause_pick), page_size)
+    if st.session_state.get("pva-sig") != sig:
+        st.session_state["pva-sig"] = sig
+        st.session_state["pva-page-n"] = 1
+    pages = max((len(view) - 1) // page_size + 1, 1)
+    page = min(max(int(st.session_state.get("pva-page-n", 1)), 1), pages)
+    page = page_navigator(page, pages, key="pva-page", total=len(view), page_size=page_size, noun="SKU")
+    st.markdown(
+        "<div class='field-hint'>Urutan: selisih omzet aktual vs prediksi terbesar (paling berdampak) lebih dulu. Baris Total (sesuai filter) di atas.</div>",
+        unsafe_allow_html=True,
+    )
+    show_table(
+        pd.concat([total_row, view.iloc[(page - 1) * page_size : page * page_size]], ignore_index=True),
+        bold_label="Total",
+        kinds={"Prediksi omzet": "money", "Aktual omzet": "money", "Selisih omzet": "money", "% capaian": "pct"},
+        max_height=10_000,
+    )
+    centered_download(
+        "pva-dl",
+        lambda: download_excel(pd.concat([total_row, view], ignore_index=True), f"prediksi_vs_aktual_{last:%Y%m%d}.xlsx", key="xl-pva"),
+    )
+
+
+def _cause_summary(rows: pd.DataFrame, day: date) -> None:
+    """Ringkasan penyebab: berapa SKU, dampak omzet, dan aksi utama — dari yang paling merugikan."""
+    under = rows.loc[rows["status"].isin(["Hampir", "Tidak"])]
+    over = rows.loc[rows["status"].eq("Melebihi")]
+    actions = {
+        "Stok": "isi stok dari DC 10062/10036 atau ajukan restock",
+        "Harga naik": "tinjau harga — kembalikan/beri voucher toko, cek harga kompetitor",
+        "Batal": "tindak lanjuti pembeli yang batal, cek alasan batal",
+        "Tidak terjual": "cek stok di Shopee & status listing (nonaktif/diturunkan) — produk kemungkinan tidak tampil",
+        "Permintaan turun": "cek iklan, ulasan, dan harga kompetitor; pertimbangkan promosi",
+        "Laku tidak setiap hari": "wajar untuk SKU jarang laku; nilai per 7 hari, bukan per hari",
+        "Seluruh toko sepi": "bukan masalah SKU; pantau besok",
+        "Fluktuasi": "pantau; bertindak bila 3 hari berturut-turut di bawah prediksi",
+    }
+    items = []
+    if not under.empty:
+        grouped = under.groupby("kelompok").agg(n=("sku", "size"), gap=("selisih", "sum")).sort_values("gap")
+        for name, row in grouped.iterrows():
+            extra = ""
+            if name == "Harga naik" and "harga_sejak" in under.columns:
+                # Tanggal kenaikan harga yang paling banyak — membantu mengecek promo/campaign apa yang berakhir.
+                dates = pd.to_datetime(under.loc[under["kelompok"].eq(name), "harga_sejak"].dropna()).dt.date.value_counts()
+                dates = dates.loc[dates >= 2].sort_index(ascending=False).head(4)
+                if len(dates):
+                    extra = "<br><span class='field-hint'>Tanggal harga naik terbanyak: " + ", ".join(
+                        f"{fmt_date(d)} ({fmt_num(int(n))} SKU)" for d, n in dates.items()
+                    ) + " — cek promo/diskon apa yang berakhir pada tanggal itu.</span>"
+            items.append(
+                f"<li><b>{html.escape(name)}</b> — {fmt_num(int(row['n']))} SKU, omzet kurang {fmt_idr(abs(row['gap']))}"
+                f" → <i>{html.escape(actions.get(name, 'pantau'))}</i>{extra}</li>"
+            )
+    up = ""
+    if not over.empty:
+        grouped = over.groupby("kelompok").agg(n=("sku", "size"), gap=("selisih", "sum")).sort_values("gap", ascending=False)
+        parts = [f"{html.escape(name)} {fmt_num(int(r['n']))} SKU (+{fmt_idr(r['gap'])})" for name, r in grouped.iterrows()]
+        up = f"<div class='field-hint' style='margin-top:.35rem'><b>Di atas prediksi:</b> {' · '.join(parts)}.</div>"
+    lost = lost_sales_from_stock(rows)
+    lost_text = f" Potensi omzet hilang karena stok: <b>{fmt_idr(lost)}</b>." if lost > 0 else ""
+    st.markdown(
+        f"<div class='tip-box' style='background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:.7rem .9rem;margin:.4rem 0 .6rem'>"
+        f"<div style='font-weight:700;margin-bottom:.25rem'>Kenapa meleset pada {fmt_date(day)} &amp; apa yang dilakukan</div>"
+        f"<div class='field-hint'>SKU di bawah prediksi, dikelompokkan menurut penyebab (paling merugikan di atas).{lost_text}</div>"
+        f"<ul style='margin:.3rem 0 0 1.1rem;padding:0'>{''.join(items) or '<li>Tidak ada SKU di bawah prediksi.</li>'}</ul>{up}"
+        "<div class='field-hint' style='margin-top:.35rem'><b>Cara baca:</b><br>"
+        "• <b>Harga naik</b>: harga jual sekarang vs sebelum perubahan terakhir (30 hari). Disebut penyebab hanya bila laju jual SKU "
+        "(maks. 14 hari sebelum vs sesudah perubahan) turun ≥15% <i>dan</i> lebih dalam dari tren pesanan toko di periode yang sama. "
+        "Pesanan borongan dibatasi agar tidak menggelembungkan laju.<br>"
+        "• <b>Batal</b>: pesanan hari itu yang dibatalkan. <b>Pola jual</b>: 30 hari terakhir. <b>Toko</b>: total penjualan hari itu vs rata-rata 14 hari.</div>"
+        "</div>",
+        unsafe_allow_html=True,
     )

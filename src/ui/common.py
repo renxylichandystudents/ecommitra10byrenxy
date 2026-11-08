@@ -605,3 +605,46 @@ def _action_bar(key: str, actions: list, download) -> int | None:
             with slots[len(actions)]:
                 download()
     return clicked
+
+
+def page_navigator(page: int, pages: int, *, key: str, total: int, page_size: int, noun: str) -> int:
+    """Navigasi halaman bernomor: « ‹ 1 2 3 … 80 › » + keterangan baris yang tampil. Mengembalikan halaman aktif."""
+    state = f"{key}-n"
+
+    def _go(target: int) -> None:
+        st.session_state[state] = max(1, min(pages, target))
+
+    lo_row = (page - 1) * page_size + 1 if total else 0
+    hi_row = min(page * page_size, total)
+    caption = (
+        f"<div class='field-hint' style='padding-top:.45rem'>Baris <b>{fmt_num(lo_row)}–{fmt_num(hi_row)}</b> "
+        f"dari <b>{fmt_num(total)}</b> {noun} · hal. {page}/{pages}</div>"
+    )
+    if pages <= 1:
+        st.markdown(caption, unsafe_allow_html=True)
+        return page
+    # Nomor halaman: selalu 1 dan terakhir, plus 2 di kiri-kanan halaman aktif; celah ditulis "…".
+    numbers = sorted({1, pages, *range(max(1, page - 2), min(pages, page + 2) + 1)})
+    items: list = []
+    for number in numbers:
+        if items and isinstance(items[-1], int) and number - items[-1] > 1:
+            items.append("…")
+        items.append(number)
+    slots = ["prev", *items, "next"]
+    info, nav = st.columns([1, 1.25], vertical_alignment="center")
+    info.markdown(caption, unsafe_allow_html=True)
+    with nav.container(key=f"{key}-nav"):
+        cols = st.columns(len(slots), gap="small")
+        for col, item in zip(cols, slots):
+            if item == "prev":
+                col.button("‹", key=f"{key}-prev", disabled=page <= 1, on_click=_go, args=(page - 1,), use_container_width=True, help="Halaman sebelumnya")
+            elif item == "next":
+                col.button("›", key=f"{key}-next", disabled=page >= pages, on_click=_go, args=(page + 1,), use_container_width=True, help="Halaman berikutnya")
+            elif item == "…":
+                col.markdown("<div style='text-align:center;color:#6b7280'>…</div>", unsafe_allow_html=True)
+            else:
+                col.button(
+                    str(item), key=f"{key}-p{item}", type="primary" if item == page else "secondary",
+                    on_click=_go, args=(item,), use_container_width=True,
+                )
+    return min(max(int(st.session_state.get(state, page)), 1), pages)
