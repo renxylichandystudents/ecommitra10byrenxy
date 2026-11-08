@@ -214,13 +214,14 @@ def show_decision_table(
     resume_label: str,
     window_label: str,
     key: str,
-    filename: str,
+    filename: str | None,
     height: int = 680,
     step: int | None = None,
     sort: str = "rank",
 ) -> str:
     """Tabel bersama R8 dan Prediksi semua produk. Mengembalikan item_key yang dicentang di kolom Grafik.
 
+    filename=None: tombol unduh tidak dibuat di dalam tabel (pemanggil menaruhnya di bilah navigasi halaman).
     step: tampilkan `step` baris teratas (setelah diurutkan) lalu tombol Muat lagi menambah `step` baris.
     """
     columns, rows, total, export = table_parts(view, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label)
@@ -236,7 +237,7 @@ def show_decision_table(
         height=height,
         limit=0,
         batch=batch,
-        download=excel_payload(export, filename),
+        download=excel_payload(export, filename) if filename else None,
         sort=sort,
         key=key,
         default=previous if previous in keys else "",

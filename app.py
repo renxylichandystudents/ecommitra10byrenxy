@@ -8222,7 +8222,14 @@ with PAGE_ROOT.container(key="page-root"):
             page_size = int(f4.selectbox("Baris/halaman", options=[5, 10, 20, 50, 100], index=0, key="pred-size"))
             pages = max((total - 1) // page_size + 1, 1)
             page = min(max(int(st.session_state.get("pred-page-n", 1)), 1), pages)
-            page = page_navigator(page, pages, key="pred-page", total=total, page_size=page_size, noun="SKU")
+            def _allpred_excel() -> None:
+                from src.ui.decision_view import table_parts
+
+                export = table_parts(work, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label)[3]
+                download_excel(export, "prediksi_semua_produk.xlsx", key="xl-allpred")
+
+            # Tombol Excel di bilah navigasi (sejajar nomor halaman), berisi semua SKU sesuai saringan, bukan hanya halaman ini.
+            page = page_navigator(page, pages, key="pred-page", total=total, page_size=page_size, noun="SKU", download=_allpred_excel)
             page_view = work.iloc[(page - 1) * page_size : page * page_size].reset_index(drop=True)
             if page_view.empty:
                 st.write("Tidak ada SKU yang cocok dengan filter.")
@@ -8235,7 +8242,7 @@ with PAGE_ROOT.container(key="page-root"):
                     resume_label=resume_label,
                     window_label=window_label,
                     key=f"allpred-{metric}-{period}-{page}-{page_size}",
-                    filename="prediksi_semua_produk.xlsx",
+                    filename=None,
                     height=720,
                     sort="",
                 )
