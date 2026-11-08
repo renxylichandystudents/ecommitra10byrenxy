@@ -55,3 +55,32 @@ def test_bulk_order_does_not_inflate_rate_before_price_change():
     text = diagnose(daily_comparison(snap, lines, day), lines, day)["penyebab"].iloc[0]
     # Tanpa batas: (13×6 + 46)/14 ≈ 8,9/hari; dengan batas 2× median (12 pcs) → 6,9/hari.
     assert "laku 6,9 →" in text, text
+
+
+def test_shopee_voucher_drop_is_diagnosed():
+    rows = []
+    start = date(2026, 10, 10)
+    for i in range(29):
+        day = start + timedelta(days=i)
+        before = day < date(2026, 11, 1)
+        qty = 4 if before else (1 if i % 2 else 0)
+        for k in range(qty):
+            rows.append({"order_time": pd.Timestamp(day) + pd.Timedelta(hours=10), "sku": "A", "qty": 1, "sales": 500_000, "list_price": 500_000,
+                         "shopee_voucher": 100_000 if before else 0.0, "order_id": f"o{i}-{k}", "status": "Selesai"})
+    lines = pd.DataFrame(rows)
+    day = date(2026, 11, 7)
+    snap = pd.DataFrame({"tanggal": [day], "sku": ["A"], "varian": [""], "pred_qty": [3.0], "pred_sales": [1_500_000]})
+    out = diagnose(daily_comparison(snap, lines, day), lines, day)
+    text = out["penyebab"].iloc[0]
+    assert text.startswith("Dukungan Shopee berkurang (hilang)"), text
+    assert "Rp400.000 → Rp500.000" in text
+    assert cause_group(text) == "Dukungan Shopee berkurang"
+
+
+def test_money_values_parsed_from_excel_numbers():
+    from src.ingest import _money_value
+
+    assert _money_value(171.72) == 171_720
+    assert _money_value("171.720") == 171_720
+    assert _money_value(171_720.5) == 171_720.5
+    assert _money_value(0.0) == 0.0

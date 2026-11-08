@@ -179,6 +179,27 @@ def price_change(daily: pd.DataFrame, day: date, *, lookback: int = 45, toleranc
     }
 
 
+def _window(daily: pd.DataFrame, start: date, end: date) -> dict:
+    """Ringkasan satu jendela tanggal [start, end]: laju jual (qty dibatasi) per hari, dukungan Shopee & harga bayar per unit."""
+    part = daily.loc[(daily.index >= start) & (daily.index <= end)] if not daily.empty else daily
+    days = max((end - start).days + 1, 1)
+    q = float(part["q"].sum()) if len(part) else 0.0
+    rate_col = "qc" if "qc" in part.columns else "q"
+    return {
+        "rate": float(part[rate_col].sum()) / days if len(part) else 0.0,
+        "q": q,
+        "support": float(part["sp"].sum()) / q if q and "sp" in part.columns else np.nan,
+        "pay": float(part["s"].sum() - part.get("sp", 0).sum() - part.get("sv", 0).sum()) / q if q else np.nan,
+        "price": float(part["s"].sum()) / q if q else np.nan,
+    }
+
+
+def _store_trend(store_orders: pd.Series, before: tuple[date, date], after: tuple[date, date]) -> float:
+    sb = store_orders.loc[(store_orders.index >= before[0]) & (store_orders.index <= before[1])]
+    sa = store_orders.loc[(store_orders.index >= after[0]) & (store_orders.index <= after[1])]
+    return float(sa.mean() / sb.mean()) if len(sb) and len(sa) and sb.mean() > 0 else np.nan
+
+
 def diagnose(
     rows: pd.DataFrame,
     lines: pd.DataFrame,
@@ -210,7 +231,11 @@ def diagnose(
     )
     work = work.loc[work["d"].notna() & (work["d"] <= day) & (work["d"] >= day - timedelta(days=60))]
     lp = pd.to_numeric(work["list_price"], errors="coerce") if "list_price" in work.columns else pd.Series(np.nan, index=work.index)
-    work = work.assign(lp=lp * work["q"])
+    def _col(name: str) -> pd.Series:
+        return pd.to_numeric(work[name], errors="coerce").fillna(0.0) if name in work.columns else pd.Series(0.0, index=work.index)
+
+    # Dukungan Shopee = voucher ditanggung Shopee + diskon dari Shopee (dibagi ke baris pesanan saat impor).
+    work = work.assign(lp=lp * work["q"], sp=_col("shopee_voucher") + _col("shopee_discount"), sv=_col("seller_voucher"))
     # Qty per pesanan dibatasi (maks. 3 atau 2× median pesanan SKU tsb) untuk menghitung laju jual "normal".
     oid = work["order_id"].astype(str) if "order_id" in work.columns else pd.Series(work.index.astype(str), index=work.index)
     per_order = work.assign(o=oid).groupby(["sku", "d", "o"])["q"].sum().reset_index()
@@ -218,7 +243,7 @@ def diagnose(
     per_order["qc"] = per_order["q"].clip(upper=per_order["sku"].map(cap))
     capped = per_order.groupby(["sku", "d"])["qc"].sum()
     store_orders = per_order.groupby("d")["o"].nunique()
-    daily_all = work.groupby(["sku", "d"]).agg(q=("q", "sum"), s=("s", "sum"), lp=("lp", "sum"))
+    daily_all = work.groupby(["sku", "d"]).agg(q=("q", "sum"), s=("s", "sum"), lp=("lp", "sum"), sp=("sp", "sum"), sv=("sv", "sum"))
     daily_all["qc"] = capped.reindex(daily_all.index).fillna(0.0)
     daily_all["lp"] = daily_all["lp"] / daily_all["q"].replace(0, np.nan)
     store = work.groupby("d")["q"].sum()
@@ -249,7 +274,7 @@ def diagnose(
         try:
             daily = daily_all.loc[sku]
         except KeyError:
-            daily = pd.DataFrame(columns=["q", "s", "lp", "qc"])
+            daily = pd.DataFrame(columns=["q", "s", "lp", "qc", "sp", "sv"])
         full = daily["q"].reindex(pd.date_range(day - timedelta(days=29), day).date, fill_value=0.0)
         last30 = full.iloc[:-1]
         avg30 = float(last30.mean()) if len(last30) else 0.0
@@ -257,6 +282,24 @@ def diagnose(
         sold_days = int((last30 > 0).sum())
         change = price_change(daily, day) if not daily.empty else None
         recent_change = change is not None and (day - change["since"]).days <= 30
+        # Jendela "sebelum vs sesudah": sekitar perubahan harga terakhir bila ada, kalau tidak 14 hari vs 7 hari terakhir.
+        if recent_change and (change["since"] - change["before_start"]).days >= 7 and (day - change["since"]).days >= 2:
+            win_a = (change["since"], day)
+            win_b = (change["before_start"], change["since"] - timedelta(days=1))
+        else:
+            win_a = (day - timedelta(days=6), day)
+            win_b = (day - timedelta(days=20), day - timedelta(days=7))
+        wa, wb = _window(daily, *win_a), _window(daily, *win_b)
+        support_trend = _store_trend(store_orders, win_b, win_a)
+        sku_rate_trend = wa["rate"] / wb["rate"] if wb["rate"] > 0 else np.nan
+        sup_b = wb["support"] if np.isfinite(wb["support"]) else 0.0
+        sup_a = wa["support"] if np.isfinite(wa["support"]) else 0.0
+        ref_price = wa["price"] if np.isfinite(wa["price"]) else wb["price"]
+        support_gap = sup_b - sup_a
+        pay_text = (
+            f"; harga bayar pembeli {_rp(wb['pay'])} → {_rp(wa['pay'])}"
+            if np.isfinite(wb["pay"]) and np.isfinite(wa["pay"]) and wb["pay"] > 0 and wa["pay"] > 0 else ""
+        )
         notes: list[str] = []
         todo = ""
         if status in {"Hampir", "Tidak"}:
@@ -289,6 +332,26 @@ def diagnose(
                 todo = todo or (
                     f"Tinjau harga: kembali ke ±{_rp(change['old'])} atau beri voucher/diskon toko; bandingkan harga kompetitor"
                 )
+            support_hurt = (
+                # Voucher hanya terlihat dari pesanan: butuh ≥3 unit sebelum dan ≥1 unit sesudah agar bisa dibandingkan.
+                wb["q"] >= 3 and wa["q"] >= 1 and sup_b > 0 and sup_a < 0.7 * sup_b
+                and np.isfinite(ref_price) and support_gap >= 0.03 * ref_price
+                and np.isfinite(sku_rate_trend) and sku_rate_trend < 0.85
+                and (not np.isfinite(support_trend) or sku_rate_trend < 0.85 * support_trend)
+            )
+            if support_hurt:
+                gone = "hilang" if sup_a < 1 else f"turun {_num(support_gap / sup_b * 100, 0)}%"
+                notes.append(
+                    f"Dukungan Shopee berkurang ({gone}): voucher/diskon Shopee {_rp(sup_b)} → {_rp(sup_a)} per unit"
+                    f" ({_tgl(win_b[0])}–{_tgl(win_b[1])} vs {_tgl(win_a[0])}–{_tgl(win_a[1])}){pay_text}"
+                    f"; laku {_num(wb['rate'])} → {_num(wa['rate'])}/hari"
+                )
+                todo = todo or (
+                    f"Daftarkan SKU ke program/voucher Shopee (Voucher Xtra, Flash Sale, campaign) atau tutup selisih "
+                    f"±{_rp(support_gap)}/unit dengan voucher toko"
+                )
+            elif price_hurt and pay_text:
+                notes[-1] += pay_text
             got = cancel.get(sku)
             if got and got[0] > 0:
                 reason = f", alasan utama: {got[1]}" if got[1] else ""
@@ -317,6 +380,12 @@ def diagnose(
                 kind = "Diskon toko" if change["list_changed"] is False else "Harga turun"
                 notes.append(f"{kind} {_num(abs(change['change']) * 100)}% sejak {_tgl(change['since'])} ({_rp(change['old'])} → {_rp(change['new'])})")
                 todo = "Pastikan stok cukup untuk laju baru; cek margin masih aman"
+            if (
+                not notes and wb["q"] >= 1 and wa["q"] >= 1 and sup_a > max(1.5 * sup_b, 1.0)
+                and np.isfinite(ref_price) and (sup_a - sup_b) >= 0.03 * ref_price
+            ):
+                notes.append(f"Dukungan Shopee bertambah: voucher/diskon Shopee {_rp(sup_b)} → {_rp(sup_a)} per unit{pay_text}")
+                todo = "Manfaatkan selama program berjalan: pastikan stok cukup; siapkan voucher toko bila program Shopee berakhir"
             if biggest >= 3 and act > 0 and biggest >= 0.3 * act:
                 notes.append(f"Ada pesanan borongan {int(biggest)} pcs dalam 1 pesanan")
                 todo = todo or "Lonjakan dari 1 pembeli, bukan tren; jangan naikkan stok berlebihan"
@@ -345,8 +414,26 @@ def diagnose(
 def cause_group(text: str) -> str:
     """Kelompok penyebab untuk ringkasan."""
     text = str(text)
-    for key in ("Stok", "Harga naik", "Diskon toko berakhir", "Batal", "Laku tidak setiap hari", "Tidak terjual", "Permintaan turun", "Seluruh toko sepi",
+    for key in ("Stok", "Harga naik", "Diskon toko berakhir", "Dukungan Shopee berkurang", "Dukungan Shopee bertambah", "Batal", "Laku tidak setiap hari", "Tidak terjual", "Permintaan turun", "Seluruh toko sepi",
                 "Fluktuasi", "Harga turun", "Diskon toko", "Ada pesanan borongan", "Permintaan naik", "Seluruh toko ramai", "Lonjakan", "Sesuai"):
         if text.startswith(key):
             return {"Diskon toko berakhir": "Harga naik", "Ada pesanan borongan": "Pesanan borongan"}.get(key, key)
     return "Lainnya"
+
+
+def store_support(lines: pd.DataFrame, day: date) -> tuple[float, float]:
+    """Dukungan Shopee (voucher Shopee + diskon Shopee) sebagai % omzet: 7 hari s.d. D vs 14 hari sebelumnya."""
+    if lines is None or lines.empty or "shopee_voucher" not in lines.columns:
+        return np.nan, np.nan
+    d = pd.to_datetime(lines["order_time"], errors="coerce").dt.date
+    sp = pd.to_numeric(lines["shopee_voucher"], errors="coerce").fillna(0.0)
+    if "shopee_discount" in lines.columns:
+        sp = sp + pd.to_numeric(lines["shopee_discount"], errors="coerce").fillna(0.0)
+    sales = pd.to_numeric(lines["sales"], errors="coerce").fillna(0.0)
+
+    def pct(lo: date, hi: date) -> float:
+        mask = (d >= lo) & (d <= hi)
+        total = float(sales[mask].sum())
+        return float(sp[mask].sum()) / total * 100 if total > 0 else np.nan
+
+    return pct(day - timedelta(days=20), day - timedelta(days=7)), pct(day - timedelta(days=6), day)

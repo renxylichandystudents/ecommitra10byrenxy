@@ -12,7 +12,7 @@ import streamlit as st
 
 from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date, fmt_date_short
-from src.core.pred_actual import cause_group, daily_comparison, diagnose, lost_sales_from_stock
+from src.core.pred_actual import cause_group, daily_comparison, diagnose, lost_sales_from_stock, store_support
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
 from src.ui.common import batched_view, card, centered_download, page_navigator, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
@@ -374,7 +374,7 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     rows = diagnose(rows, lines, last, lines_all=orders_all, stock_by_sku=stock, dc_by_sku=dc)
     rows["kelompok"] = rows["penyebab"].map(cause_group)
     rows["selisih"] = rows["aktual_sales"] - rows["pred_sales"]
-    _cause_summary(rows, last)
+    _cause_summary(rows, last, support=store_support(lines, last))
 
     names = table.drop_duplicates("sku").set_index(table["sku"].astype(str).drop_duplicates())["product_name"].to_dict() if table is not None and not table.empty else {}
     view = rows.assign(Produk=rows["sku"].map(names).fillna(""))
@@ -426,7 +426,7 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     )
 
 
-def _cause_summary(rows: pd.DataFrame, day: date) -> None:
+def _cause_summary(rows: pd.DataFrame, day: date, support: tuple[float, float] = (np.nan, np.nan)) -> None:
     """Ringkasan penyebab: berapa SKU, dampak omzet, dan aksi utama — dari yang paling merugikan."""
     under = rows.loc[rows["status"].isin(["Hampir", "Tidak"])]
     over = rows.loc[rows["status"].eq("Melebihi")]
@@ -434,6 +434,7 @@ def _cause_summary(rows: pd.DataFrame, day: date) -> None:
         "Stok": "isi stok dari DC 10062/10036 atau ajukan restock",
         "Harga naik": "tinjau harga — kembalikan/beri voucher toko, cek harga kompetitor",
         "Batal": "tindak lanjuti pembeli yang batal, cek alasan batal",
+        "Dukungan Shopee berkurang": "voucher/diskon dari Shopee berkurang atau hilang — daftarkan SKU ke program Shopee atau ganti dengan voucher toko",
         "Tidak terjual": "cek stok di Shopee & status listing (nonaktif/diturunkan) — produk kemungkinan tidak tampil",
         "Permintaan turun": "cek iklan, ulasan, dan harga kompetitor; pertimbangkan promosi",
         "Laku tidak setiap hari": "wajar untuk SKU jarang laku; nilai per 7 hari, bukan per hari",
@@ -462,17 +463,29 @@ def _cause_summary(rows: pd.DataFrame, day: date) -> None:
         grouped = over.groupby("kelompok").agg(n=("sku", "size"), gap=("selisih", "sum")).sort_values("gap", ascending=False)
         parts = [f"{html.escape(name)} {fmt_num(int(r['n']))} SKU (+{fmt_idr(r['gap'])})" for name, r in grouped.iterrows()]
         up = f"<div class='field-hint' style='margin-top:.35rem'><b>Di atas prediksi:</b> {' · '.join(parts)}.</div>"
+    sup_text = ""
+    before, after = support
+    if np.isfinite(before) and np.isfinite(after):
+        move = after - before
+        tone = "turun" if move < -1 else ("naik" if move > 1 else "stabil")
+        sup_text = (
+            f"<div class='field-hint' style='margin-top:.35rem'><b>Dukungan Shopee seluruh toko</b> (voucher + diskon dari Shopee): "
+            f"{fmt_pct(before, 1)} dari omzet (14 hari sebelumnya) → {fmt_pct(after, 1)} (7 hari terakhir), <b>{tone}</b>.</div>"
+        )
     lost = lost_sales_from_stock(rows)
     lost_text = f" Potensi omzet hilang karena stok: <b>{fmt_idr(lost)}</b>." if lost > 0 else ""
     st.markdown(
         f"<div class='tip-box' style='background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:.7rem .9rem;margin:.4rem 0 .6rem'>"
         f"<div style='font-weight:700;margin-bottom:.25rem'>Kenapa meleset pada {fmt_date(day)} &amp; apa yang dilakukan</div>"
         f"<div class='field-hint'>SKU di bawah prediksi, dikelompokkan menurut penyebab (paling merugikan di atas).{lost_text}</div>"
-        f"<ul style='margin:.3rem 0 0 1.1rem;padding:0'>{''.join(items) or '<li>Tidak ada SKU di bawah prediksi.</li>'}</ul>{up}"
+        f"<ul style='margin:.3rem 0 0 1.1rem;padding:0'>{''.join(items) or '<li>Tidak ada SKU di bawah prediksi.</li>'}</ul>{up}{sup_text}"
         "<div class='field-hint' style='margin-top:.35rem'><b>Cara baca:</b><br>"
         "• <b>Harga naik</b>: harga jual sekarang vs sebelum perubahan terakhir (30 hari). Disebut penyebab hanya bila laju jual SKU "
         "(maks. 14 hari sebelum vs sesudah perubahan) turun ≥15% <i>dan</i> lebih dalam dari tren pesanan toko di periode yang sama. "
         "Pesanan borongan dibatasi agar tidak menggelembungkan laju.<br>"
+        "• <b>Dukungan Shopee</b>: voucher ditanggung Shopee + diskon dari Shopee per unit, sebelum vs sesudah (sekitar perubahan harga, "
+        "atau 14 hari vs 7 hari terakhir); disebut penyebab bila berkurang ≥30% (≥3% harga) dan laju jual ikut turun lebih dalam dari toko. "
+        "Harga bayar pembeli = harga jual − voucher Shopee − voucher toko.<br>"
         "• <b>Batal</b>: pesanan hari itu yang dibatalkan. <b>Pola jual</b>: 30 hari terakhir. <b>Toko</b>: total penjualan hari itu vs rata-rata 14 hari.</div>"
         "</div>",
         unsafe_allow_html=True,

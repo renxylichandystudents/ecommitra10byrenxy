@@ -225,6 +225,23 @@ def _parse_number(series: pd.Series) -> pd.Series:
     return series.map(_parse_number_token)
 
 
+def _money_value(value) -> float:
+    """Nominal Rupiah. Angka (bukan teks) 0 < x < 1000 berasal dari teks "171.720" yang dibaca Excel/CSV
+    sebagai desimal 171,72 — titik di laporan Shopee adalah pemisah ribuan, jadi dikalikan 1000.
+    Teks tetap dibaca lewat `_parse_number_token` ("171.720" → 171720, "1.226.842" → 1226842)."""
+    if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
+        number = float(value)
+        if np.isfinite(number) and 0 < abs(number) < 1000:
+            return round(number * 1000)
+        return number
+    return _parse_number_token(value)
+
+
+def _parse_money(series: pd.Series) -> pd.Series:
+    """Kolom nominal (voucher, diskon, ongkir). Lihat `_money_value`."""
+    return series.map(_money_value).astype(float)
+
+
 def _normalize_status(value: str) -> str:
     text = str(value).strip()
     if text.lower() in {"", "nan", "none"}:
@@ -319,7 +336,7 @@ def _attach_promo_columns(frame: pd.DataFrame, table: pd.DataFrame) -> pd.DataFr
     for name, aliases in LINE_PROMO_COLUMNS.items():
         column = _exact_column(table, aliases)
         frame[name] = (
-            _parse_number(table.loc[frame.index, column]).fillna(0).clip(lower=0) if column else float("nan")
+            _parse_money(table.loc[frame.index, column]).fillna(0).clip(lower=0) if column else float("nan")
         )
     for name, aliases in ORDER_TEXT_COLUMNS.items():
         column = _exact_column(table, aliases)
@@ -331,10 +348,17 @@ def _attach_promo_columns(frame: pd.DataFrame, table: pd.DataFrame) -> pd.DataFr
         share = (base / order_total.where(order_total > 0)).fillna(1.0 / lines)
     else:
         share = pd.Series(1.0, index=frame.index)
+    order_base = base.groupby(frame["order_id"]).transform("sum") if "order_id" in frame.columns else base
     for name, aliases in ORDER_PROMO_COLUMNS.items():
         column = _exact_column(table, aliases)
         if column:
-            frame[name] = _parse_number(table.loc[frame.index, column]).fillna(0).clip(lower=0) * share
+            raw_values = table.loc[frame.index, column]
+            money = _parse_money(raw_values).fillna(0).clip(lower=0)
+            # Koreksi ×1000 tidak masuk akal bila potongan jadi lebih besar dari nilai pesanan (mis. Rp632 asli) → pakai nilai asli.
+            if name not in {"buyer_shipping", "shipping_rebate"}:
+                plain = _parse_number(raw_values).fillna(0).clip(lower=0)
+                money = money.where(~((money > order_base) & (order_base > 0)), plain)
+            frame[name] = money * share
         else:
             frame[name] = float("nan")
     return frame
