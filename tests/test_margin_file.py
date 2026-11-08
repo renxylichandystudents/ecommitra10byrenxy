@@ -38,3 +38,27 @@ def test_read_and_lookup():
     assert round(mf.store_average(shopee), 6) == 30.0
     assert mf.sku_key("0200012180") == "200012180"
     assert mf.classify(-1, 10) == "Rugi" and mf.classify(5, 10) == "Rendah" and mf.classify(12, 10) == "Tinggi" and mf.classify(np.nan, 10) == "Tanpa data"
+
+
+def test_report_period_and_inactive():
+    from src.core import margin_report as mr
+
+    shopee = pd.DataFrame({"sku": ["1", "2", "3"], "item_code": ["01", "02", "03"], "nama": ["A", "B", "C"],
+                           "sales_incl": [1100.0, 1100.0, 1100.0], "sales_excl": [1000.0, 1000.0, 1000.0], "gm_value": [550.0, 88.0, 440.0]})
+    look = mf.lookup(shopee, None)
+    orders = pd.DataFrame({
+        "order_time": pd.to_datetime(["2026-09-05", "2026-10-03", "2026-10-04", "2026-10-05", "2026-06-01", "2026-08-20"]),
+        "sku": ["1", "1", "2", "9", "3", "3"], "qty": [1, 2, 1, 1, 1, 1], "sales": [100_000, 200_000, 100_000, 50_000, 100_000, 100_000],
+        "status": ["Selesai"] * 6, "product_name": ["A", "A", "B", "X", "C", "C"],
+    })
+    period = mr.sales_by_sku(orders, pd.Timestamp("2026-10-01").date(), pd.Timestamp("2026-10-31").date())
+    assert set(period["sku"]) == {"1", "2", "9"} and float(period.loc[period["sku"] == "1", "penjualan"].iloc[0]) == 200_000
+    rep = mr.build(period, look, programs={}, order_fee=0, admin={"1": 10, "2": 10, "9": 10})
+    status = dict(zip(rep["sku"], rep["status"]))
+    assert status["1"] == "Tinggi" and status["2"] == "Rugi" and status["9"] == "Tanpa data margin"
+    a = rep.loc[rep["sku"] == "1"].iloc[0]
+    assert round(a["kotor_rp"]) == 100_000 and round(a["bersih_rp"]) == 80_000
+    hist = mr.sales_by_sku(orders)
+    off = mr.inactive_impact(hist.loc[hist["sku"] == "3"], look, acuan_pct=10.0, programs={}, order_fee=0, admin={"3": 10})
+    row = off.iloc[0]
+    assert row["bulan"] == 3 and round(row["dampak_bulan"]) == round((200_000 * 0.4 - 20_000) / 3)

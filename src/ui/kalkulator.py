@@ -218,6 +218,12 @@ def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | 
         voucher=("seller_voucher", "sum") if "seller_voucher" in work.columns else ("qty", lambda s: 0.0),
     )
     grouped = grouped.loc[grouped["qty"] > 0]
+    active, _at = st.session_state.get("_active_skus") or (set(), "")
+    if active:
+        # SKU nonaktif (tidak ada di unggahan stok terakhir) tidak bisa diperbaiki; dampaknya ada di Laporan margin › SKU nonaktif.
+        from src.core.margin_file import sku_key
+
+        grouped = grouped.loc[[sku_key(s) in active for s in grouped.index]]
     names = dict(zip(products["sku"], products["product_name"]))
     prices = dict(zip(products["sku"], products["price"]))
     sku_cat = features.get_json(KEY_SKU_CAT, {}) or {}

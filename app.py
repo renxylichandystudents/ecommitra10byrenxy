@@ -2755,6 +2755,25 @@ def _sku_product_codes() -> dict[str, str]:
     return {s: c for s, c in zip(sku, code) if s and c}
 
 
+def _active_skus() -> tuple[set[str], str]:
+    """SKU aktif = SKU pada unggahan data stok terakhir (daftar produk yang masih tayang di Shopee), memakai kunci tanpa nol depan."""
+    try:
+        frame = store_frames().stock
+    except Exception:
+        return set(), ""
+    if frame is None or frame.empty or "sku" not in frame.columns:
+        return set(), ""
+    from src.core.margin_file import sku_key
+
+    work = frame
+    stamp = ""
+    if "_submitted_at" in work.columns:
+        stamp = str(work["_submitted_at"].astype(str).max())
+        work = work.loc[work["_submitted_at"].astype(str).eq(stamp)]
+    skus = {sku_key(s) for s in work["sku"].fillna("").astype(str) if str(s).strip()}
+    return skus, stamp[:10]
+
+
 def _with_ads(table: pd.DataFrame, orders: pd.DataFrame | None) -> pd.DataFrame:
     """Tambahkan biaya iklan, omzet iklan, dan QTY 30 hari terakhir per SKU dari data iklan yang diunggah."""
     try:
@@ -7704,6 +7723,7 @@ with PAGE_ROOT.container(key="page-root"):
                 setting_table = _with_ads(setting_table, setting_orders)
                 st.session_state["_setting-ads"] = (ads_key, setting_table)
         st.session_state["_sku_product_code"] = _sku_product_codes()
+        st.session_state["_active_skus"] = _active_skus()
         setting_data = cached_feature_data(st.session_state, get_features(), setting_table, date.today(), periode="", stamp="setting")
         shown_tab = show_setting(
             str(st.session_state.get("setting-slug", "") or ""),

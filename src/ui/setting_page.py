@@ -54,7 +54,7 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
     elif picked == "kalkulator-biaya":
         _calculator_tab(features, table, data, username, today, user_root=user_root, orders=orders)
     elif picked == "laporan-margin":
-        _margin_report_tab(features, table, data, username)
+        _margin_report_tab(features, table, data, orders)
     elif picked == "kapasitas-gudang":
         _capacity_tab(features, table, data, role, username, today, user_root, orders)
     elif picked == "kedatangan-impor":
@@ -209,19 +209,11 @@ def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: 
 # ---------------------------------------------------------------- Laporan margin
 
 
-def _margin_report_tab(features, table: pd.DataFrame, data: FeatureData, username: str) -> None:
-    """Laporan margin dari File margin (tanpa HPP; lihat src/ui/laporan_margin.py)."""
+def _margin_report_tab(features, table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | None) -> None:
+    """Laporan margin per periode kalender (tarif dari File margin; lihat src/ui/laporan_margin.py)."""
     from src.ui.laporan_margin import show_margin_report
 
-    may_edit = False
-    try:
-        from auth.ui import current_user
-
-        user = current_user()
-        may_edit = allowed(getattr(user, "role", ""), "setting_kalkulator_biaya", "edit") if user else True
-    except Exception:
-        pass
-    show_margin_report(features, table, data, username=username, may_edit=may_edit, require=_require)
+    show_margin_report(features, table, data, orders)
 
 
 # ---------------------------------------------------------------- Kapasitas gudang

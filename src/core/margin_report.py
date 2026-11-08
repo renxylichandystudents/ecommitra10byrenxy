@@ -1,12 +1,14 @@
-"""Laporan margin per item dari File margin (realisasi penjualan Shopee per periode).
+"""Laporan margin per item untuk periode kalender bebas.
 
-Per item (sheet Margin Shopee periode terpilih):
-  margin kotor Rp   = Gross Margin Value (file)
-  potongan Shopee % = biaya admin kategori + program Shopee Mall + biaya proses pesanan (estimasi, dari harga jual)
-  iklan %           = biaya iklan per unit ÷ harga (data iklan terakhir)
-  margin bersih Rp  = margin kotor − penjualan termasuk pajak × (potongan Shopee % + iklan %)
-Status: Rugi (margin bersih < 0) · Rendah (untung, di bawah rata-rata item yang untung) · Tinggi (≥ rata-rata itu) · Data tidak wajar.
-Prioritas tindak lanjut: Rugi menurut kerugian Rp → Rendah menurut selisih Rp ke batas; Tinggi menurut margin Rp.
+File margin berisi total setahun (tanpa tanggal), jadi dipakai sebagai TARIF margin per SKU; volume per periode diambil dari
+data transaksi Shopee pada rentang tanggal yang dipilih:
+  penjualan         = Σ sales transaksi (tidak batal) pada periode, termasuk pajak
+  margin kotor Rp   = penjualan × margin kotor % (File margin: Gross Margin ÷ Sales Include Tax; Shopee → Nasional)
+  potongan Shopee % = admin kategori + program Shopee Mall + proses pesanan, dari harga transaksi rata-rata
+  iklan %           = biaya iklan per unit ÷ harga transaksi rata-rata
+  margin bersih Rp  = margin kotor − penjualan × (potongan Shopee % + iklan %)
+Status: Rugi (< 0) · Rendah (untung, di bawah rata-rata item yang untung) · Tinggi · Data tidak wajar · Tanpa data margin.
+SKU nonaktif (tidak ada di unggahan stok terakhir) dipisah: tidak ikut analisa, tetapi dampaknya per bulan tetap dihitung.
 """
 
 from __future__ import annotations
@@ -18,75 +20,108 @@ from src.core import margin_file as mf
 from src.core import shopee_fee as fee
 
 GAP_NASIONAL_PP = 5.0  # margin Shopee lebih rendah ≥ 5 poin dari nasional → harga/diskon Shopee perlu ditinjau
-
-
-def _rp(x: float) -> str:
-    return ("−" if x < 0 else "") + "Rp" + f"{abs(x):,.0f}".replace(",", ".")
+COLUMNS = ["sku", "nama", "penjualan", "qty", "harga", "kotor_rp", "kotor_pct", "kotor_file_pct", "sumber", "shopee_pct", "iklan_pct",
+           "bersih_rp", "bersih_pct", "nasional_pct", "selisih_nasional", "status", "rugi_rp", "kurang_rp", "tindak_lanjut", "catatan"]
 
 
 def _pc(x: float) -> str:
     return f"{x:.1f}%".replace(".", ",")
 
 
-def build(shopee: pd.DataFrame, nasional: pd.DataFrame | None = None, previous: pd.DataFrame | None = None, *,
-          price: dict[str, float] | None = None, admin: dict[str, float] | None = None, names: dict[str, str] | None = None,
-          ad_unit: dict[str, float] | None = None, programs: dict | None = None, order_fee: float = fee.DEFAULT_ORDER_FEE,
-          big: set[str] | None = None) -> pd.DataFrame:
-    """Satu baris per item terjual di sheet Shopee. Semua kunci dict memakai margin_file.sku_key."""
-    columns = ["sku", "nama", "penjualan", "kotor_rp", "kotor_pct", "kotor_file_pct", "shopee_pct", "iklan_pct", "bersih_rp", "bersih_pct",
-               "nasional_pct", "selisih_nasional", "kotor_lalu_pct", "status", "rugi_rp", "kurang_rp", "tindak_lanjut", "catatan"]
-    if shopee is None or shopee.empty:
-        return pd.DataFrame(columns=columns)
+def sales_by_sku(orders: pd.DataFrame | None, start=None, end=None) -> pd.DataFrame:
+    """sku (kunci tanpa nol depan), nama, penjualan, qty, pertama, terakhir, bulan dari transaksi tidak batal."""
+    cols = ["sku", "nama", "penjualan", "qty", "pertama", "terakhir", "bulan"]
+    if orders is None or orders.empty:
+        return pd.DataFrame(columns=cols)
+    work = orders
+    if "status" in work.columns:
+        from src.ingest import cancelled_status_mask
+
+        work = work.loc[~cancelled_status_mask(work["status"])]
+    stamp = pd.to_datetime(work["order_time"], errors="coerce")
+    if start is not None:
+        keep = stamp.dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))
+        work, stamp = work.loc[keep], stamp.loc[keep]
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+    frame = pd.DataFrame({
+        "sku": work["sku"].astype(str).map(mf.sku_key), "nama": work.get("product_name", pd.Series("", index=work.index)).fillna("").astype(str),
+        "penjualan": pd.to_numeric(work["sales"], errors="coerce").fillna(0.0), "qty": pd.to_numeric(work["qty"], errors="coerce").fillna(0.0), "t": stamp,
+    })
+    out = frame.groupby("sku").agg(nama=("nama", "last"), penjualan=("penjualan", "sum"), qty=("qty", "sum"), pertama=("t", "min"), terakhir=("t", "max")).reset_index()
+    first, last = out["pertama"].dt.to_period("M"), out["terakhir"].dt.to_period("M")
+    out["bulan"] = [(b - a).n + 1 if pd.notna(a) and pd.notna(b) else 1 for a, b in zip(first, last)]
+    return out.loc[out["penjualan"] > 0, cols].reset_index(drop=True)
+
+
+def build(sales: pd.DataFrame, lookup: pd.DataFrame, *, admin: dict[str, float] | None = None, ad_unit: dict[str, float] | None = None,
+          programs: dict | None = None, order_fee: float = fee.DEFAULT_ORDER_FEE, big: set[str] | None = None,
+          acuan_pct: float | None = None) -> pd.DataFrame:
+    """Satu baris per SKU terjual. sales: sku, nama, penjualan, qty. lookup: margin_file.lookup(...)."""
+    if sales is None or sales.empty:
+        out = pd.DataFrame(columns=COLUMNS)
+        out.attrs.update({"acuan_pct": float("nan"), "overall_pct": float("nan")})
+        return out
     programs = programs if programs is not None else fee.DEFAULT_PROGRAMS
-    price, admin, names, ad_unit, big = price or {}, admin or {}, names or {}, ad_unit or {}, big or set()
-    work = mf.with_pct(shopee)
-    work = work.loc[work["sales_incl"] > 0].copy()
-    nas = mf.with_pct(nasional).set_index("sku") if nasional is not None and not nasional.empty else pd.DataFrame()
-    prev = mf.with_pct(previous).set_index("sku") if previous is not None and not previous.empty else pd.DataFrame()
+    admin, ad_unit, big = admin or {}, ad_unit or {}, big or set()
+    look = lookup.set_index("sku") if lookup is not None and not lookup.empty else pd.DataFrame()
     rows = []
-    for r in work.itertuples(index=False):
-        p = float(price.get(r.sku, 0) or 0)
-        base = p if p > 0 else 100_000.0
+    for r in sales.itertuples(index=False):
+        price = float(r.penjualan) / float(r.qty) if r.qty else 0.0
+        base = price if price > 0 else 100_000.0
         inp = fee.Inputs(harga=base, admin_pct=float(admin.get(r.sku, fee.DEFAULT_ADMIN_PCT)), programs=programs,
-                         order_fee=order_fee if p > 0 else 0.0, ukuran_khusus=r.sku in big)
+                         order_fee=order_fee if price > 0 else 0.0, ukuran_khusus=r.sku in big)
         shopee_pct = fee.shopee_fees(inp) / base * 100
-        iklan_pct = float(ad_unit.get(r.sku, 0) or 0) / p * 100 if p > 0 else 0.0
-        kotor_pct = float(r.margin_kotor_pct)
-        bersih_rp = float(r.gm_value) - float(r.sales_incl) * (shopee_pct + iklan_pct) / 100
-        nas_pct = float(nas.loc[r.sku, "margin_kotor_pct"]) if not nas.empty and r.sku in nas.index and bool(nas.loc[r.sku, "wajar"]) else np.nan
-        lalu = float(prev.loc[r.sku, "margin_kotor_pct"]) if not prev.empty and r.sku in prev.index and bool(prev.loc[r.sku, "wajar"]) else np.nan
+        iklan_pct = float(ad_unit.get(r.sku, 0) or 0) / price * 100 if price > 0 else 0.0
+        hit = look.loc[r.sku] if not look.empty and r.sku in look.index else None
+        kotor = float(hit["margin_kotor_pct"]) if hit is not None else np.nan
+        sales_rp = float(r.penjualan)
+        kotor_rp = sales_rp * kotor / 100 if np.isfinite(kotor) else np.nan
+        bersih_rp = kotor_rp - sales_rp * (shopee_pct + iklan_pct) / 100 if np.isfinite(kotor) else np.nan
+        nas = float(hit["margin_nasional_pct"]) if hit is not None and pd.notna(hit["margin_nasional_pct"]) else np.nan
         rows.append({
-            "sku": r.sku, "nama": names.get(r.sku) or r.nama, "penjualan": float(r.sales_incl), "kotor_rp": float(r.gm_value), "kotor_pct": kotor_pct,
-            "kotor_file_pct": float(r.margin_file_pct), "shopee_pct": shopee_pct, "iklan_pct": iklan_pct, "bersih_rp": bersih_rp,
-            "bersih_pct": bersih_rp / float(r.sales_incl) * 100, "nasional_pct": nas_pct, "selisih_nasional": kotor_pct - nas_pct if np.isfinite(nas_pct) else np.nan,
-            "kotor_lalu_pct": lalu, "wajar": bool(r.wajar), "_inp": inp, "_price": p,
+            "sku": r.sku, "nama": r.nama, "penjualan": sales_rp, "qty": float(r.qty), "harga": price, "kotor_rp": kotor_rp, "kotor_pct": kotor,
+            "kotor_file_pct": float(hit["margin_file_pct"]) if hit is not None and pd.notna(hit["margin_file_pct"]) else np.nan,
+            "sumber": (hit["sumber"] if hit is not None else ""), "shopee_pct": shopee_pct, "iklan_pct": iklan_pct, "bersih_rp": bersih_rp,
+            "bersih_pct": bersih_rp / sales_rp * 100 if np.isfinite(bersih_rp) and sales_rp else np.nan,
+            "nasional_pct": nas, "selisih_nasional": kotor - nas if np.isfinite(kotor) and np.isfinite(nas) else np.nan,
+            "_odd": hit is not None and not np.isfinite(kotor), "_inp": inp,
         })
     frame = pd.DataFrame(rows)
-    valid = frame.loc[frame["wajar"]]
+    valid = frame.loc[frame["bersih_rp"].notna()]
     overall = float(valid["bersih_rp"].sum() / valid["penjualan"].sum() * 100) if valid["penjualan"].sum() > 0 else float("nan")
-    gain = valid.loc[valid["bersih_rp"] >= 0]
-    # Batas "margin rendah" = rata-rata margin bersih item yang untung (tetap bermakna walau rata-rata toko minus).
-    acuan = float(gain["bersih_rp"].sum() / gain["penjualan"].sum() * 100) if gain["penjualan"].sum() > 0 else float("nan")
-    frame["status"] = [mf.classify(p, acuan) if ok else "Data tidak wajar" for p, ok in zip(frame["bersih_pct"], frame["wajar"])]
-    frame["rugi_rp"] = (-frame["bersih_rp"]).clip(lower=0).where(frame["status"] == "Rugi", 0.0)
-    frame["kurang_rp"] = (frame["penjualan"] * (acuan - frame["bersih_pct"]).clip(lower=0) / 100).where(frame["status"] == "Rendah", 0.0)
+    if acuan_pct is None:
+        # Batas "margin rendah" = rata-rata margin bersih item yang untung (tetap bermakna walau rata-rata toko minus).
+        gain = valid.loc[valid["bersih_rp"] >= 0]
+        acuan_pct = float(gain["bersih_rp"].sum() / gain["penjualan"].sum() * 100) if gain["penjualan"].sum() > 0 else float("nan")
+    acuan = acuan_pct
+    frame["status"] = [("Data tidak wajar" if odd else "Tanpa data margin") if not np.isfinite(p) else mf.classify(p, acuan)
+                       for p, odd in zip(frame["bersih_pct"], frame["_odd"])]
+    frame["rugi_rp"] = (-frame["bersih_rp"]).clip(lower=0).where(frame["status"] == "Rugi", 0.0).fillna(0.0)
+    frame["kurang_rp"] = (frame["penjualan"] * (acuan - frame["bersih_pct"]).clip(lower=0) / 100).where(frame["status"] == "Rendah", 0.0).fillna(0.0)
     frame["tindak_lanjut"] = [_action(row, acuan) for row in frame.to_dict("records")]
-    frame["catatan"] = np.where(frame["wajar"], "", "Margin di file di luar −100%…95% (kemungkinan retur/penyesuaian); cek ke tim finance")
-    order = {"Rugi": 0, "Rendah": 1, "Tinggi": 2, "Data tidak wajar": 3}
+    frame["catatan"] = np.select(
+        [frame["status"] == "Data tidak wajar", frame["status"] == "Tanpa data margin", frame["sumber"] == "Nasional"],
+        ["Margin di file di luar −100%…95% (kemungkinan retur/penyesuaian); cek ke tim finance", "SKU tidak ada di File margin",
+         "Tidak ada di sheet Shopee, memakai margin nasional"], "")
+    order = {"Rugi": 0, "Rendah": 1, "Tinggi": 2, "Data tidak wajar": 3, "Tanpa data margin": 4}
     frame["_o"] = frame["status"].map(order)
-    frame["_v"] = np.select([frame["status"] == "Rugi", frame["status"] == "Rendah"], [frame["rugi_rp"], frame["kurang_rp"]], frame["bersih_rp"])
+    frame["_v"] = np.select([frame["status"] == "Rugi", frame["status"] == "Rendah", frame["status"] == "Tinggi"],
+                            [frame["rugi_rp"], frame["kurang_rp"], frame["bersih_rp"]], frame["penjualan"])
     frame = frame.sort_values(["_o", "_v", "penjualan"], ascending=[True, False, False]).reset_index(drop=True)
-    out = frame[columns]
+    out = frame[COLUMNS].copy()
     out.attrs.update({"acuan_pct": acuan, "overall_pct": overall})
     return out
 
 
 def _action(row: dict, acuan: float) -> str:
-    status, inp, price = row["status"], row["_inp"], row["_price"]
+    status, inp, price = row["status"], row["_inp"], row["harga"]
     kotor, shopee, iklan = row["kotor_pct"], row["shopee_pct"], row["iklan_pct"]
     gap_nas = row["selisih_nasional"]
     if status == "Data tidak wajar":
         return "Cek data margin item ini ke tim finance sebelum diambil keputusan"
+    if status == "Tanpa data margin":
+        return "Margin belum ada di File margin"
     steps: list[str] = []
     if status == "Rugi":
         if kotor < 0:
@@ -99,10 +134,25 @@ def _action(row: dict, acuan: float) -> str:
         tax = mf.DEFAULT_TAX_SHARE
         trial = fee.Inputs(harga=price, admin_pct=inp.admin_pct, programs=inp.programs, order_fee=inp.order_fee, ukuran_khusus=inp.ukuran_khusus,
                            iklan=iklan / 100 * price, pajak_share=tax, hpp=max(price * (1 - tax - kotor / 100), 0.0))
-        target = 0.0 if status == "Rugi" else acuan
-        steps += fee.fixes(trial, target)[:2]
+        steps += fee.fixes(trial, 0.0 if status == "Rugi" else acuan)[:2]
     if status in ("Rugi", "Rendah") and np.isfinite(gap_nas) and gap_nas <= -GAP_NASIONAL_PP:
         steps.append(f"Margin kotor Shopee {_pc(-gap_nas)} poin di bawah nasional: tinjau harga/diskon di Shopee")
     if status == "Tinggi":
         steps.append("Pertahankan harga; dorong penjualan (iklan, flash sale, exposure)" if iklan < 5 else "Pertahankan; iklan masih sehat")
     return "; ".join(steps) if steps else "—"
+
+
+def inactive_impact(history: pd.DataFrame, lookup: pd.DataFrame, *, acuan_pct: float, **kwargs) -> pd.DataFrame:
+    """SKU nonaktif: margin bersih rata-rata per bulan selama masih terjual (riwayat transaksi).
+
+    dampak_bulan > 0 → potensi margin yang hilang karena dinonaktifkan; < 0 → kerugian yang berhenti."""
+    cols = COLUMNS + ["pertama", "terakhir", "bulan", "penjualan_bulan", "dampak_bulan"]
+    if history is None or history.empty:
+        return pd.DataFrame(columns=cols)
+    report = build(history, lookup, acuan_pct=acuan_pct, **kwargs)
+    extra = history.set_index("sku")[["pertama", "terakhir", "bulan"]]
+    report = report.join(extra, on="sku")
+    report["penjualan_bulan"] = report["penjualan"] / report["bulan"].clip(lower=1)
+    report["dampak_bulan"] = report["bersih_rp"] / report["bulan"].clip(lower=1)
+    report = report.sort_values("dampak_bulan", ascending=False, na_position="last").reset_index(drop=True)
+    return report[cols]
