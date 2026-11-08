@@ -76,3 +76,12 @@ merek:
 # Setelan data latih untuk setiap analisa baru (keputusan 7 Nov 2026: prediksi stok tanpa pesanan batal & retur).
 analisa:
   kecualikan_batal_retur: true
+
+# Batas kapasitas database (Supabase gratis 500 MB). Satu analisa ±9 MB (file hasil + snapshot prediksi).
+penyimpanan:
+  maks_riwayat_analisa: 12      # analisa terbaru yang disimpan beserta file hasilnya
+  maks_snapshot_prediksi: 30    # analisa terbaru yang snapshot prediksinya disimpan (uji maju tesis)
+  hari_log_aktivitas: 180
+  batas_darurat_mb: 400         # di atas ini analisa tertua dihapus sampai turun (minimal tersisa 3)
+  kuota_mb: 500
+  minimal_tersisa: 3

@@ -249,3 +249,10 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 - `scripts/pindah_ke_supabase.py` (+ `src/core/migrate.py`): buat tabel lewat kode app, salin 24 tabel SQLite lokal, unggah data latih (`team/…`) dan hasil analisa yang tercatat (`runs/<id>/…`) ke brankas dengan kunci yang dipakai server. Folder run yatim (7–11) tidak ikut.
 - Evaluasi mencocokkan riwayat run lewat `folder_of`, jadi path laptop di `result_path` tidak mengganggu di server.
 - Langkah pengguna: buat project Supabase (Singapore) → `scripts/cek_database.py` → `scripts/pindah_ke_supabase.py` → ganti `DATABASE_URL` di Secrets Streamlit → Reboot. Panduan di `DEPLOY_GRATIS.md`.
+
+## Batas kapasitas database (9 Nov 2026)
+
+- Supabase project `mitra10-prediksi` (Singapore, gratis, Data API mati) aktif di Streamlit Cloud; data laptop sudah dipindah (94 MB dari 500 MB).
+- Satu analisa ±9 MB (file hasil ±5,8 MB terkompres + snapshot prediksi ±2,9 MB). Tanpa batas, 90 hari analisa harian ±780 MB.
+- `src/core/storage_guard.py` + `config/business_params.yaml` › `penyimpanan`: simpan 12 analisa terbaru, snapshot prediksi 30 analisa, log aktivitas 180 hari, hapus file brankas milik analisa yang sudah dihapus; > 400 MB → VACUUM FULL lalu hapus analisa tertua (min. 3 tersisa). Dijalankan saat server mulai dan setiap analisa disimpan. Perkiraan stabil ±200 MB.
+- Data latih menampilkan "Database terpakai X dari 500 MB" dan peringatan bila > 400 MB.

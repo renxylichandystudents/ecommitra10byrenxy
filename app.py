@@ -86,6 +86,7 @@ from src.utils.format import drop_blank_rows, show_table, style_frame, table_hei
 from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
+from src.core.storage_guard import database_size_mb, enforce as enforce_storage, settings as storage_settings
 from src.core.userspace import deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
 from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, account_menu
@@ -210,11 +211,20 @@ def show_vault_status() -> None:
             )
         return
     files, size, stored = vault.summary()
+    cfg = storage_settings(current_params())
+    used = database_size_mb(get_engine())
+    usage = f" Database terpakai {format_number(used, 0)} dari {format_number(cfg['kuota_mb'])} MB." if used is not None else ""
     st.caption(
         f"Data latih dan hasil analisa tersimpan permanen di database: {format_number(files)} file · "
-        f"{format_number(size / 1024 / 1024, 1)} MB (terpakai {format_number(stored / 1024 / 1024, 1)} MB setelah dikompres, "
-        "kuota Supabase gratis 500 MB). Tetap terbaca walau server restart atau redeploy."
+        f"{format_number(size / 1024 / 1024, 1)} MB, dikompres menjadi {format_number(stored / 1024 / 1024, 1)} MB.{usage} "
+        f"Disimpan {cfg['maks_riwayat_analisa']} riwayat analisa terbaru; yang lebih lama dihapus otomatis agar kuota gratis tidak penuh."
     )
+    if used is not None and used > cfg["batas_darurat_mb"]:
+        st.warning(f"Database hampir penuh ({format_number(used, 0)} MB). Analisa tertua dihapus otomatis; "
+                   "kurangi `penyimpanan.maks_riwayat_analisa` bila peringatan ini sering muncul.")
+    report = st.session_state.pop("_storage-report", None)
+    if report is not None and report.runs_deleted:
+        st.caption(f"Pembersihan otomatis: riwayat analisa #{', #'.join(str(i) for i in sorted(report.runs_deleted))} dihapus.")
 
 
 def current_params() -> dict:
@@ -2439,7 +2449,17 @@ def show_data_status(status: dict) -> None:
 def run_repository() -> RunRepository:
     repo = RunRepository(get_engine())
     repo.cleanup()
+    guard_storage(repo)
     return repo
+
+
+def guard_storage(repo: RunRepository) -> None:
+    """Batas kapasitas database (config `penyimpanan`); gagal tidak menghentikan halaman."""
+    try:
+        report = enforce_storage(get_engine(), repo, current_params())
+        st.session_state["_storage-report"] = report
+    except Exception as exc:  # noqa: BLE001
+        st.session_state["_storage-error"] = str(exc)
 
 
 def current_data_hash(keys) -> str:
@@ -2613,6 +2633,7 @@ def save_analysis_run(analysis: dict, *, duration: float, window_start: date, wi
             duration=duration,
         )
         repo.cleanup()
+        guard_storage(repo)
     except Exception as exc:
         st.session_state["run-error"] = f"Analisa selesai, tetapi belum tersimpan ke riwayat: {exc}"
         return
@@ -2749,7 +2770,7 @@ def show_run_history() -> None:
             ("Sidik data", "berubah setiap ada unggahan baru (transaksi, stok, iklan, DC)"),
             ("Prediksi/hari", "total prediksi QTY per hari semua SKU; analisa dengan sidik data, setelan, dan tanggal sama harus bernilai sama"),
             ("⚠️", "muncul bila analisa yang seharusnya sama berbeda lebih dari 0,5%"),
-            "Riwayat lebih dari 90 hari dihapus otomatis.",
+            f"Disimpan {storage_settings(current_params())['maks_riwayat_analisa']} analisa terbaru (maks. 90 hari); yang lebih lama dihapus otomatis agar database gratis tidak penuh.",
         ]
     )
 
