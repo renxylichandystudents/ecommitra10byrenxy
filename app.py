@@ -4731,12 +4731,66 @@ def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None
         return
     start, end = period_bounds(period_view)
     ads = ads_metrics(frames.ads, frames.stock, period_view, start, end)
+    st.markdown("<div class='section-title'>Ringkasan iklan</div>", unsafe_allow_html=True)
+    monthly = ads_by_month(frames.ads, start, end)
     if ads["biaya_iklan"] > 0:
-        st.markdown("<div class='section-title'>Ringkasan iklan</div>", unsafe_allow_html=True)
-        cols = st.columns(3)
+        cols = st.columns(4)
         metric_card(cols[0], "biaya_iklan", format_idr(ads["biaya_iklan"]))
         metric_card(cols[1], "omzet_iklan", format_idr(ads["omzet_iklan"]))
         metric_card(cols[2], "roas", format_number(ads["roas"], 1))
+        show_metric(cols[3], "Hari laporan iklan", f"{format_number(ads['hari_iklan'])} hari", hint=f"{format_id_date(pd.Timestamp(start).date())} – {format_id_date(pd.Timestamp(end).date())}")
+    else:
+        available = ads_report_span(frames.ads)
+        st.info(
+            "Belum ada laporan iklan untuk periode ini."
+            + (f" Laporan iklan tersimpan mencakup {available}." if available else " Unggah laporan iklan di Ubah data latih › Iklan."),
+            icon=":material/info:",
+        )
+    if len(monthly) > 1:
+        st.markdown("**Iklan per bulan** (acuan: Semua laporan iklan, diprorata per hari laporan)")
+        show_table(monthly, kinds={"Biaya iklan": "money", "Omzet iklan": "money", "Hari laporan": "count"})
+
+
+def ads_report_span(ads_frames) -> str:
+    """Rentang tanggal seluruh laporan iklan tersimpan, untuk pesan bila periode terpilih tidak punya iklan."""
+    from src.core.ads import _prepare
+
+    try:
+        ads = _prepare(list(ads_frames or []))
+    except Exception:
+        return ""
+    if ads.empty or ads["_lo"].isna().all():
+        return ""
+    return f"{format_id_date(ads['_ulo'].min().date())} – {format_id_date(ads['_uhi'].max().date())}"
+
+
+def ads_by_month(ads_frames, start, end) -> pd.DataFrame:
+    """Biaya, omzet, ROAS all iklan per bulan kalender di dalam periode terpilih."""
+    from src.core.ads import OVERALL, ad_report_rows
+
+    rows = []
+    if start is None or end is None:
+        return pd.DataFrame()
+    for month in pd.period_range(pd.Timestamp(start), pd.Timestamp(end), freq="M"):
+        lo = max(month.start_time.normalize(), pd.Timestamp(start).normalize())
+        hi = min(month.end_time.normalize(), pd.Timestamp(end).normalize())
+        try:
+            part, _lo, _hi, days = ad_report_rows(list(ads_frames or []), start=lo, end=hi)
+        except Exception:
+            continue
+        overall = part.loc[part["_src"].eq(OVERALL)] if not part.empty else part
+        cost = float(overall["biaya_iklan"].sum()) if not overall.empty else 0.0
+        sales = float(overall["omzet_iklan"].sum()) if not overall.empty else 0.0
+        rows.append(
+            {
+                "Bulan": f"{ID_MONTHS[month.month - 1]} {month.year}",
+                "Biaya iklan": cost,
+                "Omzet iklan": sales,
+                "ROAS": round(sales / cost, 1) if cost > 0 else None,
+                "Hari laporan": days,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def show_folder_menu() -> None:

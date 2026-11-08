@@ -142,6 +142,22 @@ def _eligible():
     )
 
 
+class PartialOverlapTest(unittest.TestCase):
+    """Laporan bulan lalu yang ikut memuat tanggal 1 bulan ini tetap dipakai untuk hari yang belum dicakup."""
+
+    def test_laporan_lama_tetap_dipakai_untuk_hari_yang_belum_dicakup(self):
+        old = pd.DataFrame([{"product_code": "-", "product_name": "Semua", "cost": 3200.0, "ad_sales": 32000.0}]).assign(
+            _source_key="ads_overall", **{"Periode laporan (teks)": "01/10/2026 - 01/11/2026", "period": "2026-10-01", "_submitted_at": "2026-11-08T08:00"}
+        )
+        new = pd.DataFrame([{"product_code": "-", "product_name": "Semua", "cost": 800.0, "ad_sales": 8000.0}]).assign(
+            _source_key="ads_overall", **{"Periode laporan (teks)": "01/11/2026 - 08/11/2026", "period": "2026-11-01", "_submitted_at": "2026-11-08T09:00"}
+        )
+        october = attribute_ads([old, new], STOCK, start="2026-10-01", end="2026-10-31")
+        self.assertAlmostEqual(october.total_cost, 3200.0 * 31 / 32)
+        november = attribute_ads([old, new], STOCK, start="2026-11-01", end="2026-11-08")
+        self.assertAlmostEqual(november.total_cost, 800.0)
+
+
 class BudgetAllocationTest(unittest.TestCase):
     def test_small_budget_never_exceeded_and_prioritises_stock(self):
         alloc = allocate_budget(_eligible(), budget_max=100_000, target_roas=8, ad_share=0.3)

@@ -114,23 +114,41 @@ def _ranges(ads: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
 
 
 def _drop_overlapping_reports(ads: pd.DataFrame) -> pd.DataFrame:
-    """Per menu upload: laporan yang rentangnya tumpang tindih dengan laporan yang lebih baru dibuang."""
+    """Per menu upload: hari yang sudah dicakup laporan yang lebih baru tidak dihitung dua kali.
+
+    Laporan lama yang hanya sebagian tumpang tindih tetap dipakai untuk hari yang belum dicakup
+    (mis. laporan 1 Okt–1 Nov + laporan baru 1–8 Nov → laporan Oktober tetap dipakai untuk 1–31 Okt).
+    Kolom _ulo/_uhi = rentang yang dipakai; _lo/_hi tetap rentang asli (penyebut prorata)."""
     if ads.empty:
         return ads
     stamp = ads["_submitted_at"].astype(str) if "_submitted_at" in ads.columns else pd.Series("", index=ads.index)
     keys = pd.DataFrame({"src": ads["_src"], "lo": ads["_lo"], "hi": ads["_hi"], "at": stamp})
     reports = keys.drop_duplicates().sort_values(["at", "hi", "lo"], ascending=False)
-    accepted: dict[str, list[tuple[pd.Timestamp, pd.Timestamp]]] = {}
+    covered: dict[str, set] = {}
     keep_rows = []
     for row in reports.itertuples(index=False):
-        taken = accepted.setdefault(row.src, [])
-        if any(not (row.hi < lo or row.lo > hi) for lo, hi in taken):
+        taken = covered.setdefault(row.src, set())
+        days = pd.date_range(row.lo, row.hi, freq="D")
+        free = [day for day in days if day not in taken]
+        if not free:
             continue
-        taken.append((row.lo, row.hi))
-        keep_rows.append((row.src, row.lo, row.hi, row.at))
-    keep = pd.DataFrame(keep_rows, columns=["src", "lo", "hi", "at"])
-    marked = keys.reset_index().merge(keep, on=["src", "lo", "hi", "at"], how="inner")["index"]
-    return ads.loc[ads.index.isin(marked)]
+        # Rentang bebas terpanjang yang bersambung (tumpang tindih biasanya di tepi laporan).
+        best, current = [], [free[0]]
+        for day in free[1:]:
+            if day - current[-1] == pd.Timedelta(days=1):
+                current.append(day)
+            else:
+                best = current if len(current) > len(best) else best
+                current = [day]
+        best = current if len(current) > len(best) else best
+        taken.update(best)
+        keep_rows.append((row.src, row.lo, row.hi, row.at, best[0], best[-1]))
+    keep = pd.DataFrame(keep_rows, columns=["src", "lo", "hi", "at", "_ulo", "_uhi"])
+    merged = keys.reset_index().merge(keep, on=["src", "lo", "hi", "at"], how="inner").set_index("index")
+    out = ads.loc[ads.index.isin(merged.index)].copy()
+    out["_ulo"] = merged.loc[out.index, "_ulo"]
+    out["_uhi"] = merged.loc[out.index, "_uhi"]
+    return out
 
 
 def _prepare(ads_frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -154,6 +172,8 @@ def _prepare(ads_frames: list[pd.DataFrame]) -> pd.DataFrame:
     ads = ads.loc[ads["_lo"].notna()] if ads["_lo"].notna().any() else ads
     if ads["_lo"].notna().any():
         ads = _drop_overlapping_reports(ads)
+    if "_ulo" not in ads.columns:
+        ads["_ulo"], ads["_uhi"] = ads["_lo"], ads["_hi"]
     return ads
 
 
@@ -174,8 +194,10 @@ def _weight(ads: pd.DataFrame, lo, hi) -> pd.Series:
     if lo is None or hi is None or ads["_lo"].isna().all():
         return pd.Series(1.0, index=ads.index)
     days = (ads["_hi"] - ads["_lo"]).dt.days + 1
-    first = ads["_lo"].where(ads["_lo"] > lo, lo)
-    last = ads["_hi"].where(ads["_hi"] < hi, hi)
+    use_lo = ads["_ulo"] if "_ulo" in ads.columns else ads["_lo"]
+    use_hi = ads["_uhi"] if "_uhi" in ads.columns else ads["_hi"]
+    first = use_lo.where(use_lo > lo, lo)
+    last = use_hi.where(use_hi < hi, hi)
     overlap = ((last - first).dt.days + 1).clip(lower=0)
     return (overlap / days.where(days > 0, 1)).fillna(0.0)
 
@@ -184,7 +206,8 @@ def _covered_days(ads: pd.DataFrame, lo, hi) -> int:
     if ads.empty or lo is None or hi is None or ads["_lo"].isna().all():
         return 0
     days: set[pd.Timestamp] = set()
-    for a, b in ads[["_lo", "_hi"]].drop_duplicates().itertuples(index=False):
+    cols = ["_ulo", "_uhi"] if "_ulo" in ads.columns else ["_lo", "_hi"]
+    for a, b in ads[cols].drop_duplicates().itertuples(index=False):
         a, b = max(a, lo), min(b, hi)
         if a <= b:
             days.update(pd.date_range(a, b, freq="D"))
