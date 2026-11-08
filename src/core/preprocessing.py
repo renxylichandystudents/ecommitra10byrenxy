@@ -4,6 +4,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 from sklearn.impute import KNNImputer, SimpleImputer
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
@@ -155,19 +156,24 @@ def winsorize_outliers(
     columns: tuple[str, ...] = ("qty", "sales"),
     method: str = "iqr",
     promo_col: str = "is_promo",
+    group_col: str = "item_key",
 ) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Batas outlier dihitung per SKU agar hari normal SKU laris tidak terpotong oleh sebaran SKU lain."""
     out = frame.copy()
     stats = {"flagged": 0, "winsorized": 0, "promo_kept": 0}
     promo = out[promo_col].fillna(False).astype(bool) if promo_col in out.columns else pd.Series(False, index=out.index)
+    key = out[group_col].astype(str) if group_col in out.columns else pd.Series("", index=out.index)
     for column in columns:
         if column not in out.columns:
             continue
         values = pd.to_numeric(out[column], errors="coerce")
         positive = values[values > 0]
-        if len(positive) < 8:
-            continue
-        lo, hi = _outlier_bounds(positive, method)
-        mask = values.gt(hi) | ((values.gt(0)) & values.lt(lo))
+        bounds = positive.groupby(key.loc[positive.index]).apply(
+            lambda part: _outlier_bounds(part, method) if len(part) >= 8 else (np.nan, np.nan)
+        )
+        lower = key.map({k: v[0] for k, v in bounds.items()}).astype(float)
+        upper = key.map({k: v[1] for k, v in bounds.items()}).astype(float)
+        mask = (values.gt(upper) | (values.gt(0) & values.lt(lower))).fillna(False)
         if not bool(mask.any()):
             continue
         out[f"{column}_outlier"] = mask
@@ -178,7 +184,8 @@ def winsorize_outliers(
         if bool(normal_mask.any()):
             if not pd.api.types.is_float_dtype(out[column]):
                 out[column] = out[column].astype(float)
-            out.loc[normal_mask, column] = values.loc[normal_mask].clip(lower=max(lo, 0), upper=hi)
+            clipped = values.loc[normal_mask].clip(lower=lower.loc[normal_mask].clip(lower=0), upper=upper.loc[normal_mask])
+            out.loc[normal_mask, column] = clipped
             stats["winsorized"] += int(normal_mask.sum())
     return out, stats
 

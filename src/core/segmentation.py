@@ -28,6 +28,16 @@ def abc_xyz_segments(
         qty_std=(qty_col, "std") if qty_col in daily.columns else (sku_col, "size"),
     )
     grouped["qty_std"] = grouped["qty_std"].fillna(0.0)
+    if "date" in daily.columns and qty_col in daily.columns:
+        stamps = pd.to_datetime(daily["date"], errors="coerce")
+        span = int((stamps.max() - stamps.min()).days) + 1 if stamps.notna().any() else 0
+        if span > 1:
+            qty = pd.to_numeric(daily[qty_col], errors="coerce").fillna(0.0)
+            square = (qty * qty).groupby(daily[sku_col]).sum().reindex(grouped[sku_col]).to_numpy()
+            mean = grouped["qty_total"].to_numpy(dtype=float) / span
+            var = np.maximum(square - span * mean * mean, 0.0) / (span - 1)
+            grouped["qty_mean"] = mean
+            grouped["qty_std"] = np.sqrt(var)
     grouped["cv_qty"] = np.where(grouped["qty_mean"].gt(0), grouped["qty_std"] / grouped["qty_mean"], np.inf)
     grouped = grouped.sort_values(["sales_total", "qty_total", sku_col], ascending=[False, False, True], kind="mergesort")
     total_sales = float(grouped["sales_total"].sum())
@@ -37,7 +47,7 @@ def abc_xyz_segments(
         grouped["sales_share_cum"] = 1.0
     prior_share = grouped["sales_share_cum"].shift(fill_value=0.0)
     grouped["abc"] = np.select(
-        [prior_share.lt(0.70), prior_share.lt(0.90)],
+        [prior_share.lt(0.80), prior_share.lt(0.95)],
         ["A", "B"],
         default="C",
     )

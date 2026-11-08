@@ -356,7 +356,9 @@ def _s_stock(s: dict) -> None:
     if not pred["mc"].empty:
         st.markdown("**Skenario Monte Carlo (1.000 simulasi permintaan × lead time) 10 SKU teratas**")
         show_table(pred["mc"], kinds={"SS": "count", "ROP": "count"})
-        st.caption("ROP = permintaan harian × lead time + SS; restock pesimistis = kebutuhan kuantil 90%.")
+        st.caption("Tiap simulasi mengacak lead time lalu permintaan selama lead time (rata-rata harian × L, sebaran σ × √L). "
+                   "Restock moderat/pesimistis = kekurangan stok pada kuantil 50%/90%; risiko stockout = peluang permintaan lead time melebihi stok sekarang. "
+                   "ROP = permintaan harian × lead time + SS.")
 
 
 def _s_ads(s: dict) -> None:

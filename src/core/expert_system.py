@@ -163,7 +163,7 @@ def drivers_and_risks(facts: dict, row: pd.Series) -> tuple[list[str], list[str]
     if facts.get("label_terlaris"):
         up.append("Masuk 10 besar QTY dan sales (Terlaris)")
     if str(row.get("abc", "")) == "A":
-        up.append("Kelas A: penyumbang 70% omzet")
+        up.append("Kelas A: penyumbang 80% omzet")
     if str(row.get("xyz", "")) == "X":
         up.append("Permintaan stabil (kelas X)")
     elif str(row.get("xyz", "")) == "Z":

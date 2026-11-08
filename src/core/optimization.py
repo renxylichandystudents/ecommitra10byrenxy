@@ -22,10 +22,12 @@ def monte_carlo_stock_scenarios(
     simulations: int = 1000,
     random_state: int = 42,
 ) -> pd.DataFrame:
+    """Permintaan selama lead time ~ N(d·L, σ·√L) dengan L acak; SS tidak ditambahkan lagi karena
+    kuantil simulasi sudah menjadi penyangga. Risiko stockout = P(permintaan lead time > stok)."""
     rng = np.random.default_rng(random_state)
-    demand = rng.normal(float(demand_mean), max(float(demand_sigma), 0.0), int(simulations)).clip(min=0)
     lead = rng.normal(float(lead_time_mean), max(float(lead_time_sigma), 0.0), int(simulations)).clip(min=0)
-    required = demand * lead + max(float(safety_stock), 0.0)
+    noise = rng.standard_normal(int(simulations))
+    required = (float(demand_mean) * lead + max(float(demand_sigma), 0.0) * np.sqrt(lead) * noise).clip(min=0)
     stock = max(float(current_stock), 0.0)
     shortage = np.maximum(required - stock, 0.0)
     quantiles = {

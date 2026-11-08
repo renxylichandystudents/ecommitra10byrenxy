@@ -18,7 +18,7 @@ from src.core.evaluation import MAPE_TARGET_PCT, bias_pct, mape, rmse, wape
 
 STATE_FILE = "state.pkl"
 DETAIL_FILE = "eval_detail.pkl"
-DETAIL_VERSION = 1
+DETAIL_VERSION = 2
 HORIZON_ORDER = ("hari", "minggu", "bulan", "kuartal")
 HORIZON_NAMES = {"hari": "Hari", "minggu": "Minggu", "bulan": "Bulan", "kuartal": "Kuartal"}
 SEGMENT_LABEL = "Ensemble per segmen"
@@ -213,13 +213,13 @@ def pareto(profile: pd.DataFrame) -> pd.DataFrame:
 
 # ---------------------------------------------------------------- detail per lipatan
 
-def compute_detail(base_history: pd.DataFrame, weights: dict, *, horizons=(7, 30), eval_limit: int = 800) -> dict:
+def compute_detail(base_history: pd.DataFrame, weights: dict, *, horizons=(7, 30), eval_limit: int = 800, zero_since: dict | None = None) -> dict:
     """Prediksi tiap model per lipatan walk-forward (replikasi pengujian analisa) untuk grafik aktual vs prediksi."""
     from src.core.ensemble import build_demand_matrix, model_forecasts_multi
     from src.core.pipeline import _evaluation_subset
     from src.models.evaluate import abc_classes, month_cutoffs, segment_blend, xyz_classes
 
-    matrix = _evaluation_subset(build_demand_matrix(base_history), eval_limit)
+    matrix = _evaluation_subset(build_demand_matrix(base_history, zero_since=zero_since), eval_limit)
     total = matrix.values.shape[1] if matrix.values.size else 0
     cutoffs = month_cutoffs(matrix.dates)
     out = {"version": DETAIL_VERSION, "keys": list(matrix.keys), "folds": [], "daily_total": None}
@@ -237,7 +237,9 @@ def compute_detail(base_history: pd.DataFrame, weights: dict, *, horizons=(7, 30
         for days in wanted:
             preds = {name: np.asarray(values, dtype=float) for name, values in forecasts[days].items()}
             preds[SEGMENT_LABEL] = np.asarray(segment_blend(matrix.cut(cut), dict(preds), weights), dtype=float)
-            out["folds"].append({"cut": str(matrix.dates[cut].date()), "days": days, "actual": matrix.filled[:, cut:cut + days].sum(axis=1), "pred": preds})
+            valid = ~np.isnan(matrix.values[:, cut:cut + days]).any(axis=1)
+            out["folds"].append({"cut": str(matrix.dates[cut].date()), "days": days, "actual": matrix.filled[:, cut:cut + days].sum(axis=1),
+                                 "pred": preds, "valid": valid})
     return out
 
 
@@ -264,8 +266,9 @@ def fold_totals(detail: dict, days: int) -> pd.DataFrame:
     for fold in detail.get("folds", []):
         if fold["days"] != days:
             continue
-        row = {"Lipatan": fold["cut"], "Aktual": float(fold["actual"].sum())}
-        row.update({name: float(p.sum()) for name, p in fold["pred"].items()})
+        valid = fold.get("valid", np.ones(len(fold["actual"]), dtype=bool))
+        row = {"Lipatan": fold["cut"], "Aktual": float(fold["actual"][valid].sum())}
+        row.update({name: float(p[valid].sum()) for name, p in fold["pred"].items()})
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -278,8 +281,9 @@ def sku_pairs(detail: dict, days: int, model: str) -> pd.DataFrame:
     for fold in detail.get("folds", []):
         if fold["days"] != days or model not in fold["pred"]:
             continue
-        frames.append(pd.DataFrame({"Lipatan": fold["cut"], "SKU": detail["keys"], "Kelas ABC": abc, "Segmen": seg,
-                                    "Aktual": fold["actual"], "Prediksi": fold["pred"][model]}))
+        part = pd.DataFrame({"Lipatan": fold["cut"], "SKU": detail["keys"], "Kelas ABC": abc, "Segmen": seg,
+                             "Aktual": fold["actual"], "Prediksi": fold["pred"][model]})
+        frames.append(part[fold.get("valid", np.ones(len(part), dtype=bool))])
     if not frames:
         return pd.DataFrame(columns=["Lipatan", "SKU", "Kelas ABC", "Segmen", "Aktual", "Prediksi", "Galat"])
     out = pd.concat(frames, ignore_index=True)

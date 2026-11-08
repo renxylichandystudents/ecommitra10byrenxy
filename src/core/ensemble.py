@@ -122,6 +122,10 @@ def forecast_moving_average(matrix: DemandMatrix, horizon: int, window: int = 28
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         rate = np.nanmean(recent, axis=1)
+    for row in np.flatnonzero(np.isnan(rate)):
+        observed = matrix.values[row][~np.isnan(matrix.values[row])]
+        if observed.size:
+            rate[row] = float(observed[-window:].mean())
     return np.nan_to_num(rate, nan=0.0) * horizon
 
 

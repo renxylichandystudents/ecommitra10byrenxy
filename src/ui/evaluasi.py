@@ -438,7 +438,7 @@ def _detail(run_folder: Path | None, base_history: pd.DataFrame | None, weights:
     detail = H.load_detail(run_folder)
     if detail is None:
         with st.spinner("Mereplikasi lipatan walk-forward untuk kurva (sekali per analisa, ±15 detik)..."):
-            detail = H.compute_detail(base_history, weights)
+            detail = H.compute_detail(base_history, weights, zero_since=(st.session_state.get("analysis") or {}).get("zero_since"))
         H.save_detail(run_folder, detail)
     cache.clear()
     cache[key] = detail

@@ -229,4 +229,15 @@ Tampilan & wording: actual → aktual, Potensi loss → Potensi … hilang, Dash
 
 Data baru dimanfaatkan: tab Data › **Pembayaran, berat & ketepatan kirim** (Metode Pembayaran, Total Berat, Pesanan Harus Dikirimkan Sebelum). Okt 2026: Online Payment batal 33,7% vs ShopeePay 9,9%; paket ≥ 20 kg lebih sering batal; 13,2% pesanan diatur kirim setelah batas Shopee (Instant 56%).
 
-Belum diubah (menunggu keputusan): dasar sales untuk target (sales bersih vs sales produk), rumus SS (Z mode impor, √(L+R)), perlakuan Belum Bayar, Monte Carlo σ·√L, MA28 setelah stok kosong > 28 hari, winsorize per SKU, XYZ & batas ABC. Kolom voucher Shopee & potongan ongkir belum dipakai karena format angkanya ambigu ("10.138" vs "167.21").
+Keputusan pengguna (sudah diterapkan):
+- Target & proyeksi pakai **sales bersih** di semua halaman (Kalkulator, target iklan). Prediksi model (harga produk) dikali faktor sales bersih ÷ sales produk bulan berjalan (dibatasi 0,5–1,2); omzet tambahan iklan juga dikali faktor ini.
+- **Belum Bayar** yang masih terbuka dipisah: bukan batal, bukan terjual (Okt 2026: 6 pesanan, Rp 2.577.772). Batal = status batal saja. Sales bersih Okt tetap Rp 2.848.905.957.
+- **Safety stock** = Z × σ × √(L + R), R = periode tinjau (`lead_time.review_hari`, bawaan 7). Impor: Z × √((L+R)σ² + d²σ_L²), σ_L = (L maks − L rata) ÷ 1,645, jadi tingkat layanan ikut berpengaruh.
+- **MA28**: bila 28 hari terakhir semua tersensor (stok kosong), pakai rata-rata 28 hari terakhir yang teramati (dulu 0).
+- **Winsorize** dihitung per SKU (dulu batas gabungan semua SKU memotong hari normal SKU laris).
+- **XYZ** (segmentasi Dashboard/Rekomendasi) menghitung hari tanpa penjualan sebagai 0; batas **ABC** disamakan 80/95% seperti evaluasi.
+- **Monte Carlo**: permintaan lead time ~ N(d·L, σ·√L) dengan L acak; SS tidak ditambahkan lagi; risiko = P(permintaan lead time > stok).
+- Replikasi kurva Evaluasi memakai `zero_since` analisa aktif dan melewati SKU-lipatan tersensor (versi detail 2, dihitung ulang otomatis).
+- **Perlu dijalankan ulang**: analisa (Jalankan analisa) lalu buka Evaluasi model agar SS, ROP, bobot ensemble, dan kurva memakai rumus baru.
+
+Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya ambigu ("10.138" vs "167.21").

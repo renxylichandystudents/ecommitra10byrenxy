@@ -8269,6 +8269,7 @@ with PAGE_ROOT.container(key="page-root"):
         st.session_state["analysis"] = {
             "orders": orders,
             "orders_all": orders_all,
+            "zero_since": zero_since,
             "history": history,
             "combined": combined,
             "stock": stock,
