@@ -261,9 +261,9 @@ def label_legend() -> None:
     )
     st.markdown(
         "<style>.lg-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.4rem;margin:.1rem 0 .3rem}"
-        ".lg-item{display:flex;gap:.5rem;align-items:flex-start;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:.4rem .6rem;font-size:.82rem;line-height:1.25}"
-        ".lg-item span{color:#6b7280}.lg-ico{font-size:1rem;line-height:1.2}"
-        ".lg-note{font-size:.75rem;color:#6b7280;margin-bottom:.4rem}</style>"
+        ".lg-item{display:flex;gap:.5rem;align-items:flex-start;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:.4rem .6rem;font-size:var(--fs-sm);line-height:1.25}"
+        ".lg-item span{color:#6b7280}.lg-ico{font-size:var(--fs-base);line-height:1.2}"
+        ".lg-note{font-size:var(--fs-xs);color:#6b7280;margin-bottom:.4rem}</style>"
         f"<div class='lg-wrap'>{cards}</div>"
         "<div class='lg-note'>Dilihat/klik berasal dari laporan iklan; produk tanpa iklan tidak mendapat label Populer/Paling diminati.</div>",
         unsafe_allow_html=True,
@@ -387,12 +387,12 @@ def top50_matrix(
         rows.append(
             {
                 "Periode": f"{group.label} · {span}",
-                "Actual pembanding": act.get("label", "-"),
-                "QTY actual": fmt_qty(qty_act),
-                "Sales value actual": fmt_idr(sales_act),
+                "Aktual pembanding": act.get("label", "-"),
+                "QTY aktual": fmt_qty(qty_act),
+                "Sales value aktual": fmt_idr(sales_act),
                 "Prediksi QTY": fmt_qty(round(view[f"{p}_qty_exp"].sum() if f"{p}_qty_exp" in view.columns else view[f"{p}_qty"].sum())),
                 "Prediksi sales value": fmt_idr(pred_sales),
-                "Kontribusi actual Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)} (actual seluruh toko)" if share_base > 0 else "-",
+                "Kontribusi aktual Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)} (aktual seluruh toko)" if share_base > 0 else "-",
                 "Kontribusi prediksi Top 50": f"{fmt_pct(pred_share)} dari {fmt_idr(pred_base)} (prediksi All SKU)" if pred_base > 0 else "-",
             }
         )
@@ -410,13 +410,13 @@ def top50_matrix(
     extra_text = f"; {extra} = {extra.lower()} terakhir s.d. kemarin" if extra else ""
     explain(
         [
-            ("Actual hari", "hari penuh terakhir sebelum hari ini (hari ini masih berjalan)"),
-            ("Actual bulan", "bulan penuh terakhir" + (f"; {extra_text.lstrip('; ')}" if extra_text else "")),
+            ("Aktual hari", "hari penuh terakhir sebelum hari ini (hari ini masih berjalan)"),
+            ("Aktual bulan", "bulan penuh terakhir" + (f"; {extra_text.lstrip('; ')}" if extra_text else "")),
             ("Sales", "Harga setelah diskon × QTY, sesuai setelan Kecualikan batal & retur analisa ini"),
-            ("Kontribusi actual", "sales actual Top 50 ÷ sales actual seluruh toko pada tanggal actual pembanding yang sama"),
+            ("Kontribusi aktual", "sales aktual Top 50 ÷ sales aktual seluruh toko pada tanggal aktual pembanding yang sama"),
             ("Kontribusi prediksi", "prediksi sales Top 50 ÷ prediksi sales All SKU (angka yang sama dengan kartu Prediksi sales · All SKU)"),
-            ("Kenapa dasarnya berbeda", "actual = transaksi yang sudah terjadi (kemarin / bulan lalu); prediksi = perkiraan periode berjalan. Bandingkan actual dengan actual, prediksi dengan prediksi"),
-            ("Prediksi hari ini", "laju harian rata-rata periode prediksi (prediksi bulan ÷ jumlah hari), termasuk hari promo seperti 11.11, jadi bisa lebih tinggi dari actual satu hari biasa"),
+            ("Kenapa dasarnya berbeda", "aktual = transaksi yang sudah terjadi (kemarin / bulan lalu); prediksi = perkiraan periode berjalan. Bandingkan aktual dengan aktual, prediksi dengan prediksi"),
+            ("Prediksi hari ini", "laju harian rata-rata periode prediksi (prediksi bulan ÷ jumlah hari), termasuk hari promo seperti 11.11, jadi bisa lebih tinggi dari aktual satu hari biasa"),
             ("Beda dengan kartu Sales bersih", "kartu itu memakai Total Pembayaran per pesanan (setelah voucher, termasuk ongkir)"),
         ]
     )

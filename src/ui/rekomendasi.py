@@ -396,4 +396,7 @@ def show_recommendations(
         elif picked == "ranking-kategori":
             plus.show_ranking(table, features=features, frames=frames, username=username, can_edit=can_edit)
     except Exception as exc:
-        st.warning(f"Bagian ini belum bisa ditampilkan: {exc}")
+        st.warning("Bagian ini belum bisa ditampilkan. Coba muat ulang halaman; bila tetap muncul, periksa data yang diunggah terakhir "
+                   "(laporan iklan, stok, atau file margin).")
+        with st.expander("Detail teknis"):
+            st.code(f"{type(exc).__name__}: {exc}")

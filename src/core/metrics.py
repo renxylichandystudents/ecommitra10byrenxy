@@ -30,8 +30,8 @@ METRIC_DEFINITIONS: dict[str, str] = {
         "pada periode ini tidak dihitung."
     ),
     "belum_bayar_akun": "Jumlah akun pembeli unik pada pesanan belum bayar.",
-    "retur_unit": "Jumlah unit pada baris pengembalian yang disetujui (kolom Returned quantity).",
-    "nominal_retur": "Returned quantity × Harga Setelah Diskon pada baris pengembalian.",
+    "retur_unit": "Jumlah unit pada baris pengembalian yang disetujui (kolom Returned quantity di laporan Shopee).",
+    "nominal_retur": "Jumlah retur × Harga Setelah Diskon pada baris pengembalian.",
     "pesanan_retur_penuh": "Pesanan yang semua baris produknya diretur penuh.",
     "pesanan_bersih": "Pesanan semua status − pesanan batal − pesanan retur penuh.",
     "sales_bersih": "Sales bruto − nominal batal − nominal retur.",

@@ -519,7 +519,7 @@ def render(s: dict, *, key: str) -> None:
                        key=f"xl-{key}", label="Unduh semua tabel (Excel)")
     with body:
         for name in (SECTIONS if section == ALL_SECTIONS else (section,)):
-            st.markdown(f"### {name}")
+            st.markdown(f"<div class='section-title'>{html.escape(name)}</div>", unsafe_allow_html=True)
             st.caption(f"Periode laporan: {meta['label']} ({meta['hari']} hari)")
             try:
                 RENDER[name](s)

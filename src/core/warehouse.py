@@ -123,7 +123,7 @@ def weekly_projection(
 def capacity_color(pct: float) -> str:
     if pct is None or not np.isfinite(pct):
         return "#94a3b8"
-    return "#16a34a" if pct < 75 else ("#ea580c" if pct <= 90 else "#dc2626")
+    return "#1d4ed8" if pct < 75 else ("#ea580c" if pct <= 90 else "#dc2626")
 
 
 def first_full(projection: pd.DataFrame) -> tuple[str, date] | None:

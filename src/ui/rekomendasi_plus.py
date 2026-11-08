@@ -175,6 +175,14 @@ def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | 
 
 
 FLASH_ICON = {flash.DRIVER: "🔥", flash.CLEAR: "📦"}
+def _clip(text: str, limit: int) -> str:
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return (cut if len(cut) >= limit // 2 else text[:limit]).rstrip(" ,·-") + "…"
+
+
 FLASH_RULES = ("Prioritas omzet", "Tidak di bawah impas")
 
 
@@ -222,7 +230,7 @@ def _flash_render(plan: pd.DataFrame, skipped: pd.DataFrame, start: date, end: d
                 moment = part["Momen"].iloc[0] if not part.empty and part["Momen"].iloc[0] != "Harian" else ""
                 items = "".join(
                     f"<div title='{html.escape(str(p))}' style='font-size:var(--fs-xs);line-height:1.3;margin-top:3px;overflow-wrap:anywhere'>"
-                    f"{FLASH_ICON.get(t, '')}{'🚚' if s == flash.SRC_DC else ''} {html.escape(str(n)[:42])}</div>"
+                    f"{FLASH_ICON.get(t, '')}{'🚚' if s == flash.SRC_DC else ''} {html.escape(_clip(n, 42))}</div>"
                     for p, n, t, s in zip(part["Produk"], part["Produk"].str.split(" · ").str[1].fillna(part["Produk"]), part["Tujuan"], part["Sumber stok"])
                 )
                 column.markdown(
@@ -447,7 +455,7 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
                 part = plan.loc[plan["Tanggal"] == day]
                 lines = "".join(
                     f"<div title='{html.escape(str(p))}' style='font-size:var(--fs-xs);line-height:1.3;margin-top:4px;overflow-wrap:anywhere'>"
-                    f"{SEGMENT_ICON.get(s, '')} <b>{html.escape(j)}</b><br>{html.escape(str(p).split(' · ')[1][:44] if ' · ' in str(p) else str(p)[:44])}</div>"
+                    f"{SEGMENT_ICON.get(s, '')} <b>{html.escape(j)}</b><br>{html.escape(_clip(str(p).split(' · ')[1] if ' · ' in str(p) else p, 44))}</div>"
                     for p, s, j in zip(part["Produk"], part["Segmen"], part["Jam tayang"]))
                 empty = "<div style='color:#cbd5e1;font-size:var(--fs-xs)'>–</div>"
                 column.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:110px;background:{'#fff' if inside else '#f8fafc'};"

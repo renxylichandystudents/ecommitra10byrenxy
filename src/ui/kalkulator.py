@@ -345,7 +345,7 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
         chips.insert(1, f"Potongan Shopee rata-rata <b>{fmt_pct(float((known['omzet_30'] * known['shopee_pct']).sum() / omzet), 1)}</b> · iklan <b>{fmt_pct(float((known['omzet_30'] * known['iklan_pct']).sum() / omzet), 1)}</b>")
     st.markdown(
         "<div style='display:flex;flex-wrap:wrap;gap:.4rem;margin:.2rem 0 .6rem'>"
-        + "".join(f"<span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:.2rem .7rem;font-size:.8rem;color:#334155'>{t}</span>" for t in chips)
+        + "".join(f"<span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:.2rem .7rem;font-size:var(--fs-sm);color:#334155'>{t}</span>" for t in chips)
         + "</div>",
         unsafe_allow_html=True,
     )
@@ -372,7 +372,7 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
         st.markdown(
             "<div style='border:1px solid #e2e8f0;border-left:4px solid #ee4d2d;border-radius:12px;background:#fff;padding:.7rem 1rem;margin-bottom:.8rem'>"
             "<div style='font-weight:700;margin-bottom:.3rem'>Langkah yang disarankan</div>"
-            "<ol style='margin:0 0 0 1.1rem;padding:0;line-height:1.6;font-size:.92rem'>" + "".join(f"<li>{t}</li>" for t in steps) + "</ol></div>",
+            "<ol style='margin:0 0 0 1.1rem;padding:0;line-height:1.6;font-size:var(--fs-base)'>" + "".join(f"<li>{t}</li>" for t in steps) + "</ol></div>",
             unsafe_allow_html=True,
         )
 
@@ -436,8 +436,8 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir") 
 def show_calculator(features, table: pd.DataFrame, data, *, username: str, today: date, user_root: Path | None, may_edit: bool, require,
                     orders: pd.DataFrame | None = None) -> None:
     st.markdown(
-        "<div style='margin-bottom:.2rem'><span style='font-size:1.15rem;font-weight:800'>Kalkulator margin Shopee Mall</span>"
-        "<span style='color:#64748b;font-size:.9rem'> · seberapa besar potongan Shopee & iklan memakan margin, dan apa yang harus diperbaiki dulu</span></div>",
+        "<div style='margin-bottom:.2rem'><span style='font-size:var(--fs-lg);font-weight:800'>Kalkulator margin Shopee Mall</span>"
+        "<span style='color:#64748b;font-size:var(--fs-base)'> · seberapa besar potongan Shopee & iklan memakan margin, dan apa yang harus diperbaiki dulu</span></div>",
         unsafe_allow_html=True,
     )
     from src.ui.margin_data import load_margin
@@ -497,14 +497,14 @@ def _bar(parts: list[tuple[str, float, str]], base: float) -> str:
         for label, value, color in parts if value > 0
     )
     return (f"<div style='display:flex;height:14px;border-radius:7px;overflow:hidden;background:#f1f5f9;margin:.35rem 0 .3rem'>{segs}</div>"
-            f"<div style='font-size:.78rem;color:#475569;line-height:1.7'>{legend}</div>")
+            f"<div style='font-size:var(--fs-xs);color:#475569;line-height:1.7'>{legend}</div>")
 
 
 def _line(label: str, value: float, base: float, *, bold: bool = False, sub: str = "") -> str:
     weight = "700" if bold else "400"
     color = "#b91c1c" if value < 0 and bold else "#0f172a"
-    pct = f"<span style='color:#64748b;font-size:.8rem;margin-left:.4rem'>{fmt_pct(value / base * 100, 1)}</span>" if base > 0 else ""
-    note = f"<div style='color:#64748b;font-size:.75rem'>{html.escape(sub)}</div>" if sub else ""
+    pct = f"<span style='color:#64748b;font-size:var(--fs-sm);margin-left:.4rem'>{fmt_pct(value / base * 100, 1)}</span>" if base > 0 else ""
+    note = f"<div style='color:#64748b;font-size:var(--fs-xs)'>{html.escape(sub)}</div>" if sub else ""
     border = "border-top:1px solid #e2e8f0;padding-top:.35rem;margin-top:.15rem;" if bold else ""
     return (f"<div style='display:flex;justify-content:space-between;align-items:flex-start;{border}padding-bottom:.25rem'>"
             f"<div style='font-weight:{weight}'>{html.escape(label)}{note}</div>"
@@ -621,13 +621,13 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
         st.markdown(
             f"<div style='background:{tone[0]};border-radius:14px;padding:.8rem 1rem;margin-bottom:.6rem'>"
             f"<div style='display:flex;justify-content:space-between;align-items:center'>"
-            f"<div><div style='font-size:.78rem;color:#475569;font-weight:600;letter-spacing:.02em'>MARGIN BERSIH PER UNIT</div>"
-            f"<div style='font-size:1.7rem;font-weight:800;color:{tone[1]}'>{fmt_idr(value)}</div></div>"
-            f"<div style='text-align:right'><span style='background:{tone[1]};color:#fff;border-radius:999px;padding:.2rem .7rem;font-size:.8rem;font-weight:700'>{word}</span>"
-            f"<div style='font-size:1.1rem;font-weight:700;color:{tone[1]};margin-top:.3rem'>{fmt_pct(pct, 1) if np.isfinite(pct) else '–'}</div>"
-            f"<div style='font-size:.72rem;color:#64748b'>batas margin rendah {fmt_pct(target, 1)}</div></div></div>"
+            f"<div><div style='font-size:var(--fs-xs);color:#475569;font-weight:600;letter-spacing:.02em'>MARGIN BERSIH PER UNIT</div>"
+            f"<div style='font-size:var(--fs-2xl);font-weight:800;color:{tone[1]}'>{fmt_idr(value)}</div></div>"
+            f"<div style='text-align:right'><span style='background:{tone[1]};color:#fff;border-radius:999px;padding:.2rem .7rem;font-size:var(--fs-sm);font-weight:700'>{word}</span>"
+            f"<div style='font-size:var(--fs-lg);font-weight:700;color:{tone[1]};margin-top:.3rem'>{fmt_pct(pct, 1) if np.isfinite(pct) else '–'}</div>"
+            f"<div style='font-size:var(--fs-xs);color:#64748b'>batas margin rendah {fmt_pct(target, 1)}</div></div></div>"
             + _bar([("Modal + pajak", modal + tax_rp, "#94a3b8"), ("Potongan Shopee", shopee_rp, "#f97316"), ("Iklan", iklan, "#ef4444"),
-                    ("Affiliate", aff_rp, "#a855f7"), ("Margin bersih", max(value, 0), "#16a34a")], base)
+                    ("Affiliate", aff_rp, "#a855f7"), ("Margin bersih", max(value, 0), "#1d4ed8")], base)
             + "</div>",
             unsafe_allow_html=True,
         )
@@ -640,19 +640,19 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
         if aff_rp:
             lines.append(_line("− Komisi affiliate", -aff_rp, base))
         lines.append(_line("Margin bersih", value, base, bold=True))
-        st.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.6rem .9rem;font-size:.9rem'>{''.join(lines)}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.6rem .9rem;font-size:var(--fs-base)'>{''.join(lines)}</div>", unsafe_allow_html=True)
 
         todo = fee.fixes(inp, 0.0 if pct < 0 else target) if known else []
         floor = fee.min_price(replace(inp, iklan=0.0), 0.0) if known else float("nan")
         st.markdown("<div style='font-weight:700;margin:.7rem 0 .3rem'>Yang perlu dilakukan</div>", unsafe_allow_html=True)
         if todo:
-            st.markdown("<ol style='margin:0 0 0 1.1rem;padding:0;line-height:1.6;font-size:.9rem'>" + "".join(f"<li>{html.escape(t)}</li>" for t in todo[:4]) + "</ol>",
+            st.markdown("<ol style='margin:0 0 0 1.1rem;padding:0;line-height:1.6;font-size:var(--fs-base)'>" + "".join(f"<li>{html.escape(t)}</li>" for t in todo[:4]) + "</ol>",
                         unsafe_allow_html=True)
         elif known:
-            st.markdown(f"<div style='font-size:.9rem'>Margin sudah sehat. Iklan maksimal agar tetap di atas batas: <b>{fmt_idr(max(fee.max_iklan(inp, target), 0))}</b>/unit.</div>",
+            st.markdown(f"<div style='font-size:var(--fs-base)'>Margin sudah sehat. Iklan maksimal agar tetap di atas batas: <b>{fmt_idr(max(fee.max_iklan(inp, target), 0))}</b>/unit.</div>",
                         unsafe_allow_html=True)
         else:
-            st.markdown("<div style='font-size:.9rem'>SKU belum ada di file margin. Unggah file margin terbaru di tab ⚙️ Parameter biaya.</div>", unsafe_allow_html=True)
+            st.markdown("<div style='font-size:var(--fs-base)'>SKU belum ada di file margin. Unggah file margin terbaru di tab ⚙️ Parameter biaya.</div>", unsafe_allow_html=True)
         if np.isfinite(floor):
             st.caption(f"Harga impas tanpa iklan: {fmt_idr(floor)}")
 
@@ -685,5 +685,5 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
         notes = fee.analysis(inp, target_pct=target, qty_30=float(base_row["qty_30"]) if base_row is not None else None,
                              pred_qty_30=_prediction_30(table, features, sku), roas=roas, sumber=sumber)
         st.markdown("".join(
-            f"<div style='background:{TONE[t][0]};color:{TONE[t][1]};border-radius:10px;padding:.45rem .7rem;margin-bottom:.35rem;font-size:.88rem'>"
+            f"<div style='background:{TONE[t][0]};color:{TONE[t][1]};border-radius:10px;padding:.45rem .7rem;margin-bottom:.35rem;font-size:var(--fs-sm)'>"
             f"{TONE[t][2]} {html.escape(text)}</div>" for t, text in notes), unsafe_allow_html=True)

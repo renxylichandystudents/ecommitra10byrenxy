@@ -146,8 +146,8 @@ class RestockTests(unittest.TestCase):
         ]
         frame = restock.restock_priority(pd.DataFrame(rows), date(2026, 11, 2))
         self.assertEqual(list(frame["sku"]), ["D2", "D1", "P", "K"])
-        self.assertEqual(frame.set_index("sku").loc["D2", "Potensi loss sales"], 40 * 1500000)
-        self.assertEqual(frame.set_index("sku").loc["K", "Potensi loss QTY"], 25)
+        self.assertEqual(frame.set_index("sku").loc["D2", "Potensi sales hilang"], 40 * 1500000)
+        self.assertEqual(frame.set_index("sku").loc["K", "Potensi QTY hilang"], 25)
 
 
 class WarehouseTests(unittest.TestCase):
@@ -157,7 +157,7 @@ class WarehouseTests(unittest.TestCase):
         self.assertAlmostEqual(cap["Saniter"], 0.85)
 
     def test_warna(self):
-        self.assertEqual(warehouse.capacity_color(50), "#16a34a")
+        self.assertEqual(warehouse.capacity_color(50), "#1d4ed8")
         self.assertEqual(warehouse.capacity_color(80), "#ea580c")
         self.assertEqual(warehouse.capacity_color(95), "#dc2626")
 

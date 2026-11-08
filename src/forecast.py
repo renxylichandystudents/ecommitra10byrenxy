@@ -724,7 +724,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": MODEL_NAME,
             "Perkiraan ujian": round(robust_total, 1),
-            "Actual ujian": round(actual_total, 1),
+            "Aktual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(robust_total), 1),
             "Peran": "Dipakai",
         }
@@ -734,7 +734,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": "Tren harian",
             "Perkiraan ujian": round(trend_total, 1),
-            "Actual ujian": round(actual_total, 1),
+            "Aktual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(trend_total), 1),
             "Peran": "Pembanding",
         }
@@ -744,7 +744,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": "Naive",
             "Perkiraan ujian": round(naive, 1),
-            "Actual ujian": round(actual_total, 1),
+            "Aktual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(naive), 1),
             "Peran": "Pembanding",
         }
@@ -755,7 +755,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": "Moving Average",
             "Perkiraan ujian": round(moving, 1),
-            "Actual ujian": round(actual_total, 1),
+            "Aktual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(moving), 1),
             "Peran": "Pembanding",
         }
@@ -774,7 +774,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
             {
                 "Algoritma": result.name,
                 "Perkiraan ujian": round(float(result.forecast), 1),
-                "Actual ujian": round(actual_total, 1),
+                "Aktual ujian": round(actual_total, 1),
                 "Selisih (%)": round(gap(float(result.forecast)), 1),
                 "Peran": "Pembanding",
             }

@@ -16,7 +16,7 @@ from src.ui.common import batched_view, card, download_excel, fmt_idr, fmt_num, 
 from src.utils.format import show_table
 
 ICON = {"Rugi": "🔴 Rugi", "Rendah": "🟠 Rendah", "Tinggi": "🟢 Tinggi", "Data tidak wajar": "⚪ Data tidak wajar", "Tanpa data margin": "⚪ Tanpa data margin"}
-COLOR = {"Rugi": "#dc2626", "Rendah": "#f59e0b", "Tinggi": "#16a34a", "Data tidak wajar": "#94a3b8", "Tanpa data margin": "#cbd5e1"}
+COLOR = {"Rugi": "#dc2626", "Rendah": "#f59e0b", "Tinggi": "#1d4ed8", "Data tidak wajar": "#94a3b8", "Tanpa data margin": "#cbd5e1"}
 KINDS = {"Penjualan": "money", "Margin kotor": "money", "Margin bersih": "money", "Rugi": "money", "Kurang dari rata-rata": "money",
          "Margin kotor (%)": "pct", "Margin di file (%)": "pct", "Potongan Shopee (%)": "pct", "Iklan (%)": "pct", "Margin bersih (%)": "pct",
          "Margin nasional (%)": "pct", "Selisih vs nasional (poin)": "dec", "Terjual": "count", "No": "count",

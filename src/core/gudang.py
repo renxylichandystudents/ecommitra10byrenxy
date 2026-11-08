@@ -1,4 +1,4 @@
-"""Gudang Site 10037 (ECommerce Jakarta): denah, lokasi, data replenishment harian, dan analisa kapasitas.
+"""Gudang Site 10037 (E-commerce Jakarta): denah, lokasi, data replenishment harian, dan analisa kapasitas.
 
 Sumber:
 - Denah & lokasi: dari file LAYOUT_ECOM (sheet "LAY OUT" dan "Location") yang diunggah sekali di menu
@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 SITE = "10037"
-SITE_NAME = "ECommerce Jakarta"
+SITE_NAME = "E-commerce Jakarta"
 
 # Nama kategori di replenishment ↔ kategori lokasi (penulisan di file layout berbeda-beda).
 _CATEGORY_ALIASES = {

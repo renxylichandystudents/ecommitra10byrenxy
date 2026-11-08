@@ -106,7 +106,7 @@ def _add_excluded(features, username: str, rows: list[dict]) -> None:
 def _excluded_tab(features, table: pd.DataFrame, username: str, orders: pd.DataFrame | None = None) -> None:
     widths = [1.1, 3.4, 1.6, 0.9]
     st.markdown("**SKU dikecualikan**")
-    st.caption("SKU di sini keluar dari rank, safety stock, iklan, flash sale, dan exposure (filter di awal pipeline). Di tabel alokasi iklan tampil sebagai \"SKU jasa\".")
+    st.caption("SKU di sini (mis. jasa pasang/ongkir) tidak ikut peringkat, safety stock, iklan, flash sale, dan exposure. Di tabel alokasi iklan tampil sebagai \"SKU jasa\".")
     frame = features.read("excluded_sku")
     catalog = _sku_catalog(table, orders)
     excluded = set(frame["sku"].astype(str)) if not frame.empty else set()

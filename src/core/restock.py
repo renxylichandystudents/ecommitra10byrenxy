@@ -58,7 +58,7 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
 
 def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None) -> pd.DataFrame:
     """Tabel "Kebutuhan restock prioritas": kosong + ada stok DC dulu, lalu dampak omzet (sales value & QTY) terbesar."""
-    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi loss sales", "Potensi loss QTY", "_habis", "_pred_harian", "_sales_harian"]
+    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi sales hilang", "Potensi QTY hilang", "_habis", "_pred_harian", "_sales_harian"]
     if table is None or table.empty:
         return pd.DataFrame(columns=columns)
     po = po or {}
@@ -100,8 +100,8 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
                 "Stok habis": habis,
                 "Status": status,
                 "Inbound": f"{inbound['no_po']} · {inbound['eta'].strftime('%d/%m/%Y') if inbound.get('eta') else 'ETA belum ada'}" if inbound else "",
-                "Potensi loss sales": loss_qty * price,
-                "Potensi loss QTY": loss_qty,
+                "Potensi sales hilang": loss_qty * price,
+                "Potensi QTY hilang": loss_qty,
                 "_habis": habis or date.max,
                 "_pred_harian": daily,
                 "_sales_harian": daily * _num(row.get("harga_bersih")),
@@ -124,7 +124,7 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
         top = float(values.max()) if len(values) else 0.0
         return values / top if top > 0 else values * 0.0
 
-    frame["_dampak"] = 0.5 * _scale(frame["Potensi loss sales"].astype(float)) + 0.5 * _scale(frame["Potensi loss QTY"].astype(float))
+    frame["_dampak"] = 0.5 * _scale(frame["Potensi sales hilang"].astype(float)) + 0.5 * _scale(frame["Potensi QTY hilang"].astype(float))
     frame = frame.sort_values(["_prioritas", "_dampak", "_habis"], ascending=[True, False, True])
     return frame.drop(columns=["_prioritas", "_dampak"]).reset_index(drop=True)
 

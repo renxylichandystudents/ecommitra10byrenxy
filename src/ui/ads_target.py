@@ -54,11 +54,11 @@ def _progress_bar(actual: float, rest: float, extra: float, target: float) -> st
     )
     marker = (
         f"<div style='position:absolute;left:{target / scale * 100:.2f}%;top:-6px;bottom:-6px;width:3px;background:#0f172a;border-radius:2px'></div>"
-        f"<div style='position:absolute;left:{target / scale * 100:.2f}%;top:-1.45rem;transform:translateX(-50%);font-size:.72rem;font-weight:700;color:#0f172a;white-space:nowrap'>Target</div>"
+        f"<div style='position:absolute;left:{target / scale * 100:.2f}%;top:-1.45rem;transform:translateX(-50%);font-size:var(--fs-xs);font-weight:700;color:#0f172a;white-space:nowrap'>Target</div>"
         if target > 0 else ""
     )
     legend = (
-        "<div style='display:flex;flex-wrap:wrap;gap:1rem;font-size:.78rem;color:#475569;margin-top:.45rem'>"
+        "<div style='display:flex;flex-wrap:wrap;gap:1rem;font-size:var(--fs-xs);color:#475569;margin-top:.45rem'>"
         f"<span><i style='display:inline-block;width:10px;height:10px;background:#1e3a8a;border-radius:2px;margin-right:4px'></i>Aktual {fmt_idr(actual)}</span>"
         f"<span><i style='display:inline-block;width:10px;height:10px;background:#93c5fd;border-radius:2px;margin-right:4px'></i>Prediksi sisa bulan {fmt_idr(rest)}</span>"
         f"<span><i style='display:inline-block;width:10px;height:10px;background:#ee4d2d;border-radius:2px;margin-right:4px'></i>Perubahan dari rencana iklan {_signed(extra)}</span>"
@@ -75,7 +75,7 @@ def _progress_bar(actual: float, rest: float, extra: float, target: float) -> st
 def _box(title: str, body: str, color: str) -> None:
     st.markdown(
         f"<div style='border:1px solid #e2e8f0;border-left:5px solid {color};border-radius:12px;background:#fff;padding:.75rem 1rem;margin:.7rem 0'>"
-        f"<div style='font-weight:800;color:{color};margin-bottom:.25rem'>{title}</div><div style='font-size:.92rem;line-height:1.6;color:#1f2937'>{body}</div></div>",
+        f"<div style='font-weight:800;color:{color};margin-bottom:.25rem'>{title}</div><div style='font-size:var(--fs-base);line-height:1.6;color:#1f2937'>{body}</div></div>",
         unsafe_allow_html=True,
     )
 
@@ -83,9 +83,9 @@ def _box(title: str, body: str, color: str) -> None:
 def _step(number: int, title: str, note: str = "") -> None:
     st.markdown(
         f"<div style='display:flex;align-items:baseline;gap:.55rem;margin:1.1rem 0 .4rem'>"
-        f"<span style='background:#ee4d2d;color:#fff;border-radius:999px;min-width:1.6rem;height:1.6rem;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem'>{number}</span>"
-        f"<span style='font-weight:800;font-size:1.05rem'>{html.escape(title)}</span>"
-        f"<span style='color:#64748b;font-size:.85rem'>{html.escape(note)}</span></div>",
+        f"<span style='background:#ee4d2d;color:#fff;border-radius:999px;min-width:1.6rem;height:1.6rem;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:var(--fs-sm)'>{number}</span>"
+        f"<span style='font-weight:800;font-size:var(--fs-lg)'>{html.escape(title)}</span>"
+        f"<span style='color:#64748b;font-size:var(--fs-sm)'>{html.escape(note)}</span></div>",
         unsafe_allow_html=True,
     )
 
@@ -386,7 +386,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                                        default=(default_start, month_end if month_end >= default_start else default_start + timedelta(days=6)))
     period_days = (end - start).days + 1
     week_text = f"{fmt_date(start)} – {fmt_date(end)}"
-    _step(1, "Setelan", f"· {month_name}, sisa {days_left} hari data · campaign {week_text} ({period_days} hari), dievaluasi tiap Senin")
+    _step(1, "Setelan", f"· {month_name}: data s.d. {fmt_date(last)}, sisa {days_left} hari belum ada data · campaign {week_text} ({period_days} hari), dievaluasi tiap Senin")
     key_target, key_roas, key_budget = f"adt-target-{periode}", f"adt-roas-{periode}", f"adt-budget-{periode}-{start}-{end}"
     key_lift = f"adt-lift-{periode}"
     current_roas = min(math.floor(sales_now / cost_now * 2) / 2, A.MAX_SHOPEE_ROAS) if cost_now > 0 else 0.0
@@ -405,7 +405,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             st.session_state[key_roas] = default_roas
         roas = float(c2.number_input("Target ROAS", min_value=1.0, max_value=A.MAX_SHOPEE_ROAS, step=0.5, key=key_roas,
                                      help="ROAS rata-rata minimal seluruh iklan produk tunggal & grup di rencana (total omzet iklan ÷ total biaya iklan). "
-                                          "Makin rendah, makin banyak budget yang bisa dipakai untuk mengejar omzet. Maks. 30 (batas Shopee; di atasnya ROAS protection mati). "
+                                          "Makin rendah, makin banyak budget yang bisa dipakai untuk mengejar omzet. Maks. 30 (batas Shopee; di atasnya perlindungan ROAS Shopee mati). "
                                           "Hasil per iklan boleh berbeda-beda; yang dijaga rata-ratanya."))
         with c3:
             budget = float(input_rupiah(f"Budget iklan campaign ({period_days} hari)", int(default_budget), key=key_budget,
@@ -583,7 +583,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         for name, icon, color, note in sel_groups:
             count = int((selection["Saran"] == name).sum())
             if count:
-                chips.append(f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:.85rem;background:#fff'>{icon} "
+                chips.append(f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:var(--fs-sm);background:#fff'>{icon} "
                              f"<b style='color:{color}'>{name}</b> {fmt_num(count)} produk" + (f" · {note}" if note else "") + "</span>")
         st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + "".join(chips) + "</div>", unsafe_allow_html=True)
         names = [g[0] for g in sel_groups if (selection["Saran"] == g[0]).any()]
@@ -627,7 +627,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 continue
             delta = float(part["Perubahan/hari"].sum())
             chips.append(
-                f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:.85rem;background:#fff'>{icon} <b>{name}</b> "
+                f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:var(--fs-sm);background:#fff'>{icon} <b>{name}</b> "
                 f"{fmt_num(len(part))} iklan" + (f" · <b style='color:{color}'>{'+' if delta > 0 else '−'}{fmt_idr(abs(delta))}/hari</b>" if abs(delta) >= 1 else "") + "</span>"
             )
         st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + "".join(chips) + "</div>", unsafe_allow_html=True)
@@ -678,7 +678,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
 
     steps = [
         f"<b>{fmt_date(start)}</b> — ubah susunan produk (langkah 3) serta budget harian & Target ROAS tiap iklan (langkah 4) di Shopee, lalu simpan sebagai campaign di bawah agar terkunci. "
-        "Budget naik maks. 2× atau turun ke ≥ ½ agar ROAS protection tetap aktif.",
+        "Budget naik maks. 2× atau turun ke ≥ ½ agar perlindungan ROAS Shopee tetap aktif.",
         "<b>Selasa–Minggu</b> — jangan ubah budget; biarkan algoritma Shopee belajar. Pantau stok produk yang ditandai ⚠️.",
         "<b>Tiap Senin</b> — unggah laporan iklan minggu lalu dan buka menu ini: campaign tersimpan dicek dengan data terbaru. Bila statusnya perlu ditinjau, "
         "buat campaign baru dari saran (campaign lama dihentikan otomatis); budget naik maks. 2× per minggu.",
@@ -695,7 +695,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                        "3) sisa budget diberikan ke iklan paling efektif sampai kekurangan omzet tertutup atau ROAS rata-rata menyentuh target"),
             ("Target ROAS Shopee per iklan", "ROAS rata-rata iklan itu pada budget usulan, maks. 30; boleh berbeda antar iklan selama rata-ratanya ≥ target"),
             ("Batas per iklan", "budget harian naik maks. 2× atau turun ke ≥ ½ dari sekarang per minggu (selain dijeda), iklan baru maks. Rp 100 rb/hari: "
-                                "di luar batas itu ROAS protection Shopee mati"),
+                                "di luar batas itu perlindungan ROAS Shopee mati"),
             ("Siklus", "rencana dibagi per minggu: budget tiap iklan boleh naik maks. 2× dari minggu sebelumnya, jadi budget bisa naik bertahap sampai akhir bulan; "
                        "pelaksanaan dievaluasi tiap hari dari laporan iklan terbaru"),
             ("Rekomendasi", "dicoba dari target ROAS tertinggi (30) ke bawah; dipilih ROAS tertinggi yang menutup kekurangan target dengan iklan saja, "

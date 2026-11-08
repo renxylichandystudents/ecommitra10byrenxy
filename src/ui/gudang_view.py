@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -461,8 +461,10 @@ def _upload_cards(features, view: dict, *, may_upload: bool, username: str, requ
         snap = view.get("snapshot")
         st.markdown("**📦 Data stok harian (replenishment)**")
         if snap:
+            age = (date.today() - (snap.date() if hasattr(snap, "date") else snap)).days
+            mark = "✓" if age <= 1 else f"<span style='color:#dc2626'>⚠️ {age} hari lalu</span> ·"
             st.markdown(
-                f"<div class='field-hint'>✓ Data terakhir: <b>{snap:%d/%m/%Y}</b> · {fmt_num(len(view['items']))} SKU"
+                f"<div class='field-hint'>{mark} Data terakhir: <b>{snap:%d/%m/%Y}</b> · {fmt_num(len(view['items']))} SKU"
                 f"<br>Unggah file baru setiap hari dari sistem replenishment.</div>",
                 unsafe_allow_html=True,
             )

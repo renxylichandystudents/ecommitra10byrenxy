@@ -1013,7 +1013,7 @@ st.markdown(
         margin-right: 0.4rem;
         vertical-align: -1px;
     }
-    .qty-legend .up { background: #16a34a; }
+    .qty-legend .up { background: #1d4ed8; }
     .qty-legend .down { background: #dc2626; }
     .qty-legend .flat { background: #64748b; }
     .qty-card { padding: 0.95rem 0.15rem 1.05rem; }
@@ -1071,7 +1071,7 @@ st.markdown(
         white-space: nowrap;
         box-sizing: border-box;
     }
-    .qty-fill.naik { background: #16a34a; }
+    .qty-fill.naik { background: #1d4ed8; }
     .qty-fill.turun { background: #dc2626; }
     .qty-fill.tetap { background: #64748b; }
     .qty-base {
@@ -2105,7 +2105,7 @@ def show_match_diagnostics(store, stamp: float) -> None:
             t1, t2, t3, t4 = st.columns(4)
             card(t1, "SKU tidak ada di Data stok", format_number(len(miss_tx), 0))
             card(t2, "QTY terjual", format_number(miss_tx["QTY terjual"].sum(), 0), hint=period_text)
-            card(t3, "Potensi loss sales", format_idr(miss_tx["Sales value"].sum()), hint="Sales value SKU yang tidak lagi terdaftar di toko")
+            card(t3, "Potensi sales hilang", format_idr(miss_tx["Sales value"].sum()), hint="Sales value SKU yang tidak lagi terdaftar di toko")
             dc_cols = [c for c in miss_tx.columns if c.startswith("Stok Site")]
             dc_ready = int((miss_tx[dc_cols].sum(axis=1) > 0).sum()) if dc_cols else 0
             card(t4, "Masih ada stok di DC", f"{format_number(dc_ready, 0)} SKU", hint="Site 10062 / 10036 · bisa didaftarkan ulang")
@@ -2134,7 +2134,7 @@ def show_match_diagnostics(store, stamp: float) -> None:
             a1, a2, a3, a4 = st.columns(4)
             card(a1, "Kode produk", format_number(len(miss_ads), 0))
             card(a2, "Biaya iklan", format_idr(miss_ads["Biaya iklan"].sum()), hint=period_text)
-            card(a3, "Potensi loss omzet", format_idr(miss_ads["Omzet iklan"].sum()), hint="Omzet iklan yang tidak masuk ROAS per SKU")
+            card(a3, "Potensi omzet hilang", format_idr(miss_ads["Omzet iklan"].sum()), hint="Omzet iklan yang tidak masuk ROAS per SKU")
             spend = float(miss_ads["Biaya iklan"].sum())
             card(a4, "ROAS kode ini", format_number(miss_ads["Omzet iklan"].sum() / spend, 1) if spend > 0 else "–")
             paged_table(diag["ads_miss"], key="diag-ads", filename=f"iklan_belum_terpetakan_{period_text}", kinds={"Biaya iklan": "money", "Omzet iklan": "money"})
@@ -2214,7 +2214,7 @@ def show_homepage() -> None:
             <div class="home-title">Keputusan e&#8209;commerce,<br>dalam satu ruang kerja.</div>
             <div class="home-lead">
                 Ruang kerja manajer e-commerce dan digital marketing, sekaligus artefak tesis
-                Magister Teknik Informatika Renxy Lichandy for Mitra10 - 2026.
+                Magister Teknik Informatika · Renxy Lichandy untuk Mitra10 · 2026.
             </div>
         </div>
         """,
@@ -4369,7 +4369,7 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
         chips = "".join(parts)
     return (
         "<div class='qty-line'>"
-        "<div class='qty-metric'>Stok Site 10037<small>snapshot terakhir</small></div>"
+        "<div class='qty-metric'>Stok Site 10037<small>data stok terakhir</small></div>"
         f"<div class='qty-track stock-row'>{chips}</div>"
         f"<div class='qty-base'>{stock_text}<small>unit</small></div>"
         "</div>"
@@ -4783,7 +4783,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
         sku_hint = "Tidak ada status yang dicentang"
     elif return_only:
         filtered = period_view.loc[period_view["returned_qty"] > 0].copy()
-        sales_hint = "Nilai barang yang diretur: Returned quantity × Harga Setelah Diskon"
+        sales_hint = "Nilai barang yang diretur: jumlah retur × Harga Setelah Diskon"
         order_hint = "No. Pesanan yang ada retur"
         sku_hint = "SKU yang ada unit retur"
     elif cancel_only:
@@ -5208,8 +5208,8 @@ def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None
         st.write("Tidak ada SKU dengan retur atau batal pada filter ini.")
         return
     tips = {
-        "Qty retur": "Returned quantity pada laporan",
-        "Nominal retur": "Returned quantity × Harga Setelah Diskon",
+        "Qty retur": "Jumlah retur (kolom Returned quantity di laporan Shopee)",
+        "Nominal retur": "Jumlah retur × Harga Setelah Diskon",
         "Qty batal": "Jumlah pada baris berstatus batal",
         "Invoice batal": "No. Pesanan unik berstatus batal",
         "Nominal batal": "Harga Setelah Diskon × Jumlah pada baris batal",
@@ -5948,14 +5948,14 @@ def item_qty_chart(view: pd.DataFrame, scope_label: str) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
-            name="Actual",
+            name="Aktual",
             x=actual,
             y=labels,
             orientation="h",
             text=actual_text,
             marker_color="#4C78A8",
             customdata=full_labels,
-            hovertemplate="%{customdata}<br>Actual: %{text}<extra></extra>",
+            hovertemplate="%{customdata}<br>Aktual: %{text}<extra></extra>",
             **placement,
         )
     )
@@ -5978,7 +5978,7 @@ def item_qty_chart(view: pd.DataFrame, scope_label: str) -> go.Figure:
         barmode="group",
         bargap=0.28,
         bargroupgap=0.08,
-        title=dict(text=f"QTY actual vs prediksi ({scope_label})", font=dict(size=16)),
+        title=dict(text=f"QTY aktual vs prediksi ({scope_label})", font=dict(size=16)),
         xaxis_title="QTY",
         yaxis_title="",
     )
@@ -6025,14 +6025,14 @@ def item_sales_chart(view: pd.DataFrame, scope_label: str) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
-            name="Sales actual",
+            name="Sales aktual",
             x=actual_x,
             y=labels,
             orientation="h",
             text=actual_text,
             marker_color="#4C78A8",
             customdata=np.column_stack([full_labels, _actual_hover]),
-            hovertemplate="%{customdata[0]}<br>Sales actual: %{customdata[1]}<extra></extra>",
+            hovertemplate="%{customdata[0]}<br>Sales aktual: %{customdata[1]}<extra></extra>",
             **placement,
         )
     )
@@ -6244,17 +6244,17 @@ def sales_drop_note(
     gap = actual_sales - pred_sales
     percent = gap / actual_sales * 100
     sentences = [
-        f"Prediksi sales {scope} lebih rendah {format_idr(gap)} ({format_number(percent, 1)}%) dari sales actual.",
+        f"Prediksi sales {scope} lebih rendah {format_idr(gap)} ({format_number(percent, 1)}%) dari sales aktual.",
         "Sales prediksi = prediksi QTY × harga jual. Penurunan sales mengikuti qty dan harga, bukan model omzet terpisah.",
     ]
     if actual_qty > 0 and pred_qty + 0.5 < actual_qty:
         sentences.append(
-            f"Prediksi QTY {format_qty(pred_qty)} berada di bawah QTY actual {format_qty(actual_qty)}. "
+            f"Prediksi QTY {format_qty(pred_qty)} berada di bawah QTY aktual {format_qty(actual_qty)}. "
             "Level 28 hari terakhir lebih sepi daripada periode yang ditampilkan."
         )
     elif actual_qty > 0:
         sentences.append(
-            "Prediksi QTY tidak lebih rendah dari QTY actual. Penurunan sales datang dari harga jual pada campuran qty itu."
+            "Prediksi QTY tidak lebih rendah dari QTY aktual. Penurunan sales datang dari harga jual pada campuran qty itu."
         )
     sentences.append("Stok yang disiapkan tetap prediksi QTY ditambah safety stock, pada tabel.")
     return " ".join(sentences)
@@ -6263,7 +6263,7 @@ def sales_drop_note(
 def daily_actual_chart(scope_orders: pd.DataFrame, scope_label: str, value: str) -> go.Figure:
     del scope_label
     money = value == "sales"
-    title = "Sales value actual per hari" if money else "QTY actual per hari"
+    title = "Sales value aktual per hari" if money else "QTY aktual per hari"
     axis = "Sales value (Rp)" if money else "QTY"
     fig = go.Figure()
     if scope_orders.empty:
@@ -6302,14 +6302,14 @@ def daily_actual_chart(scope_orders: pd.DataFrame, scope_label: str, value: str)
 
 
 def comparison_chart(title: str, axis_title: str, values: list[float], *, money: bool = False) -> go.Figure:
-    """Dua batang Actual dan Prediksi. Angka selalu di dalam batang."""
+    """Dua batang Aktual dan Prediksi. Angka selalu di dalam batang."""
     series = pd.Series(values, dtype=float)
     peak = float(series.max() or 1)
     positions, colors = _bar_label_style(series, peak)
     texts = [format_idr(value) if money else format_number(value, 0) for value in values]
     fig = go.Figure(
         go.Bar(
-            x=["Actual", "Prediksi"],
+            x=["Aktual", "Prediksi"],
             y=values,
             text=texts,
             textposition=positions,
