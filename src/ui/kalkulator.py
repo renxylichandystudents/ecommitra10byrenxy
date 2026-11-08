@@ -13,13 +13,26 @@ import streamlit as st
 from src.core import shopee_fee as fee
 from src.core.promo import product_label
 from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct
-from src.utils.format import input_rupiah, show_table
+from src.utils.format import angka, desimal, input_rupiah, parse_angka, show_table
 
 KEY_PROGRAMS = "shopee_mall_program"
 KEY_CATEGORY = "shopee_mall_category_fee"
 KEY_AFFILIATE = "shopee_affiliate_commission"
 KEY_SKU_CAT = "shopee_sku_category"
 TONE = {"ok": ("#ecfdf5", "#047857", "✅"), "warn": ("#fffbeb", "#b45309", "⚠️"), "bad": ("#fef2f2", "#b91c1c", "⛔"), "info": ("#f8fafc", "#334155", "•")}
+
+
+def _pct_text(value) -> float:
+    """"4,5" / "4.5" / 4.5 → 4.5 (tarif persen)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip().replace("%", "").replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def _programs(features) -> tuple[dict, float, float]:
@@ -66,28 +79,28 @@ def _parameter_panel(features, *, may_edit: bool, username: str, require) -> Non
             )
             rows = []
             for k, v in programs.items():
-                rows.append({"Kode": k, "Biaya": v["label"], "Tarif (%)": float(v["pct"]), "Maks per kuantitas (Rp)": float(v.get("cap") or 0),
+                rows.append({"Kode": k, "Biaya": v["label"], "Tarif (%)": desimal(v["pct"], 2), "Maks per kuantitas (Rp)": angka(v.get("cap") or 0),
                              "Ikut": bool(v.get("on")), "Keterangan": v.get("rentang", "wajib" if v.get("wajib") else "")})
                 if k == "gratis_ongkir":
-                    rows.append({"Kode": "gratis_ongkir_khusus", "Biaya": "Gratis Ongkir XTRA (ukuran khusus)", "Tarif (%)": float(v.get("pct_khusus", 9.5)),
-                                 "Maks per kuantitas (Rp)": float(v.get("cap_khusus", 60_000)), "Ikut": bool(v.get("on")), "Keterangan": "dipakai untuk barang besar"})
+                    rows.append({"Kode": "gratis_ongkir_khusus", "Biaya": "Gratis Ongkir XTRA (ukuran khusus)", "Tarif (%)": desimal(v.get("pct_khusus", 9.5), 2),
+                                 "Maks per kuantitas (Rp)": angka(v.get("cap_khusus", 60_000)), "Ikut": bool(v.get("on")), "Keterangan": "dipakai untuk barang besar"})
             edited = st.data_editor(
                 pd.DataFrame(rows), hide_index=True, use_container_width=True, disabled=["Kode", "Biaya", "Keterangan"] if may_edit else True,
-                column_config={"Kode": None, "Tarif (%)": st.column_config.NumberColumn(format="%.2f", min_value=0.0, max_value=50.0, step=0.05),
-                               "Maks per kuantitas (Rp)": st.column_config.NumberColumn(format="%d", min_value=0, step=1000),
+                column_config={"Kode": None, "Tarif (%)": st.column_config.TextColumn(help="Pakai koma untuk desimal, mis. 4,5"),
+                               "Maks per kuantitas (Rp)": st.column_config.TextColumn(help="Ketik angka; titik ribuan otomatis dibaca (0 = tanpa batas)"),
                                "Keterangan": st.column_config.TextColumn(width="large")},
                 key="fee-programs-editor",
             )
-            order = st.number_input("Biaya Proses Pesanan (Rp per pesanan selesai)", 0.0, 50_000.0, float(order_fee), 50.0, key="fee-order", disabled=not may_edit)
+            order = float(input_rupiah("Biaya Proses Pesanan (Rp per pesanan selesai)", int(order_fee), key="fee-order"))
             st.caption("Batas total potongan tidak diisi di sini: dihitung dari Pengaturan bisnis (margin kotor − margin minimum).")
             if may_edit and st.button("Simpan parameter", type="primary", key="fee-programs-save"):
                 require("setting_kalkulator_biaya", "edit")
                 payload_programs = {}
                 for r in edited.to_dict("records"):
                     if r["Kode"] == "gratis_ongkir_khusus":
-                        payload_programs.setdefault("gratis_ongkir", {}).update({"pct_khusus": float(r["Tarif (%)"]), "cap_khusus": float(r["Maks per kuantitas (Rp)"])})
+                        payload_programs.setdefault("gratis_ongkir", {}).update({"pct_khusus": _pct_text(r["Tarif (%)"]), "cap_khusus": parse_angka(r["Maks per kuantitas (Rp)"])})
                     else:
-                        payload_programs.setdefault(r["Kode"], {}).update({"pct": float(r["Tarif (%)"]), "cap": float(r["Maks per kuantitas (Rp)"]), "on": bool(r["Ikut"])})
+                        payload_programs.setdefault(r["Kode"], {}).update({"pct": _pct_text(r["Tarif (%)"]), "cap": parse_angka(r["Maks per kuantitas (Rp)"]), "on": bool(r["Ikut"])})
                 features.set_json(KEY_PROGRAMS, {"programs": payload_programs, "order_fee": float(order)}, username=username)
                 st.session_state.pop("_calc-portfolio", None)
                 st.toast("Parameter biaya tersimpan.")

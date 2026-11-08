@@ -19,7 +19,7 @@ from src.core.promo import momentum_14d, product_label, promo_eligible
 from src.ui.common import batched_view, card, download_excel, explain, fmt_idr, fmt_num
 from src.ui.feature_data import FeatureData, bump, product_frame
 from src.core.ads import roas_estimate
-from src.utils.format import input_rupiah, show_table, wrap_layout
+from src.utils.format import input_rupiah, parse_angka, rupiah as rupiah_text, show_table, wrap_layout
 
 STEP = 20
 CANDIDATE_LIMIT = 300
@@ -175,15 +175,18 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
     alloc["Budget tambahan"] = [float(edits.get(sku, value)) for sku, value in zip(alloc["_sku"], alloc["Budget tambahan"])]
     alloc_cfg = {
         "SKU · produk · varian": st.column_config.TextColumn(width="large"),
-        "Budget saat ini / bulan": st.column_config.NumberColumn(format="localized"),
-        "Budget tambahan": st.column_config.NumberColumn(format="localized", step=500_000, min_value=0),
+        "Budget saat ini / bulan": st.column_config.TextColumn(),
+        "Budget tambahan": st.column_config.TextColumn(help="Ketik nominal; titik ribuan otomatis dibaca"),
         "ROAS marginal": st.column_config.NumberColumn(format="%.1f"),
     }
     def _render_alloc(lo: int, hi: int) -> None:
         part = alloc.iloc[lo:hi]
         row_px, cfg = wrap_layout(part.drop(columns="_sku"), dict(alloc_cfg))
+        shown = part.drop(columns="_sku").copy()
+        shown["Budget saat ini / bulan"] = shown["Budget saat ini / bulan"].map(rupiah_text)
+        shown["Budget tambahan"] = shown["Budget tambahan"].map(rupiah_text)
         edited = st.data_editor(
-            part.drop(columns="_sku"),
+            shown,
             row_height=row_px,
             hide_index=True,
             use_container_width=True,
@@ -192,7 +195,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
             key=f"tgt-alloc-{choice}-{hi}",
         )
         for sku, value in zip(part["_sku"], edited["Budget tambahan"]):
-            edits[sku] = float(value or 0)
+            edits[sku] = parse_angka(value)
 
     batched_view(len(alloc), key=f"tgt-{choice}", render=_render_alloc, noun="SKU", fragment=False)
     final = dict(plan)

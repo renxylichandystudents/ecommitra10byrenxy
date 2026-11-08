@@ -381,3 +381,14 @@ def _build_excel(frames: dict[str, pd.DataFrame]) -> bytes:
                     cell.number_format = fmt
                 ws.column_dimensions[letter].width = max(12, min(40, len(str(column)) + 4))
     return buffer.getvalue()
+
+
+def parse_angka(text: object) -> float:
+    """Kebalikan dari angka(): "Rp 1.250.000" / "1.250.000" / 1250000 → 1250000.0 (kosong → 0)."""
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        return float(text) if text == text else 0.0
+    digits = re.sub(r"[^0-9,\-]", "", str(text or "")).replace(",", ".")
+    try:
+        return float(digits) if digits not in ("", "-", ".") else 0.0
+    except ValueError:
+        return 0.0
