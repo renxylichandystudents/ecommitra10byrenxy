@@ -58,7 +58,7 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
     elif picked == "laporan-margin":
         _margin_report_tab(table, data, orders, today)
     elif picked == "kapasitas-gudang":
-        _capacity_tab(features, table, data, role, username, today, user_root)
+        _capacity_tab(features, table, data, role, username, today, user_root, orders)
     elif picked == "kedatangan-impor":
         _import_tab(features, table, role, username, today)
     elif picked == "kelola-user":
@@ -326,11 +326,11 @@ def _margin_report_tab(table: pd.DataFrame, data: FeatureData, orders: pd.DataFr
 # ---------------------------------------------------------------- Kapasitas gudang
 
 
-def _capacity_tab(features, table: pd.DataFrame, data: FeatureData, role: str, username: str, today: date, user_root: Path) -> None:
+def _capacity_tab(features, table: pd.DataFrame, data: FeatureData, role: str, username: str, today: date, user_root: Path, orders: pd.DataFrame | None = None) -> None:
     """Gudang Site 10037: denah bawaan + replenishment harian + stok 10037 (lihat src/ui/gudang_view.py)."""
     from src.ui.gudang_view import show_capacity
 
-    show_capacity(features, table, may_upload=allowed(role, "setting_kapasitas_gudang", "upload"), username=username, require=_require)
+    show_capacity(features, table, may_upload=allowed(role, "setting_kapasitas_gudang", "upload"), username=username, require=_require, orders=orders)
 
 
 # ---------------------------------------------------------------- Kedatangan impor

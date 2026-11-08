@@ -258,9 +258,14 @@ def build_view(
     stock: dict[str, float] | None = None,
     names: dict[str, str] | None = None,
     pred_daily: dict[str, float] | None = None,
+    price: dict[str, float] | None = None,
+    sales: pd.DataFrame | None = None,
 ) -> dict:
-    """Gabungkan lokasi + replenishment + stok 10037 + prediksi aplikasi → tabel SKU, lokasi gondola, kategori, bay."""
+    """Gabungkan lokasi + replenishment + stok 10037 + prediksi aplikasi → tabel SKU, lokasi gondola, kategori, bay.
+
+    sales: hasil `sales_summary` (QTY & omzet 30 hari terakhir dan 30 hari sebelumnya per SKU)."""
     stock = stock or {}
+    price = price or {}
     names = names or {}
     pred_daily = pred_daily or {}
     items = repl.copy() if repl is not None else pd.DataFrame(columns=["sku", *NUMERIC])
@@ -270,6 +275,25 @@ def build_view(
     items["sumber_stok"] = ["Data stok 10037" if s in stock else "SOH replenishment" for s in items["sku"]]
     items["nama"] = [names.get(s) or n for s, n in zip(items["sku"], items["nama"])]
     items["pred_30"] = [float(pred_daily.get(s, np.nan)) * 30 if s in pred_daily else np.nan for s in items["sku"]]
+    # Omzet: penjualan 30 hari terakhir, tren vs 30 hari sebelumnya, dan prediksi 30 hari (QTY × harga bersih).
+    if sales is not None and not sales.empty:
+        joined = sales.reindex(items["sku"])
+        items["qty_30"] = joined["q30"].fillna(0.0).to_numpy()
+        items["omzet_30"] = joined["s30"].fillna(0.0).to_numpy()
+        prev = joined["sprev"].fillna(0.0).to_numpy()
+        items["tren_pct"] = np.where(prev > 0, (items["omzet_30"] - prev) / np.where(prev > 0, prev, 1) * 100, np.where(items["omzet_30"] > 0, np.inf, np.nan))
+    else:
+        items["qty_30"], items["omzet_30"], items["tren_pct"] = np.nan, np.nan, np.nan
+    unit_price = [
+        float(price[s]) if s in price and price[s] else (float(o) / float(q) if q and q == q and q > 0 else np.nan)
+        for s, o, q in zip(items["sku"], items["omzet_30"], items["qty_30"])
+    ]
+    items["pred_omzet_30"] = items["pred_30"] * pd.Series(unit_price, index=items.index)
+    items["hari_cukup"] = [
+        float(st_) / (p / 30) if p == p and p > 0 else np.nan for st_, p in zip(items["stok"], items["pred_30"])
+    ]
+    # Dampak omzet = prediksi omzet 30 hari (bila ada), selain itu omzet 30 hari terakhir.
+    items["dampak_omzet"] = items["pred_omzet_30"].where(items["pred_omzet_30"].notna(), items["omzet_30"]).fillna(0.0)
     known = set(locations["lokasi"])
     items["lokasi_valid"] = items["pick_location"].isin(known)
     loc_cat = locations.set_index("lokasi")["kategori"].to_dict()
@@ -401,3 +425,30 @@ def snapshot_stamp(value) -> str:
     if isinstance(value, (date, datetime)):
         return value.strftime("%Y-%m-%d")
     return str(value or "")
+
+
+def sales_summary(orders: pd.DataFrame | None, days: int = 30) -> pd.DataFrame:
+    """Per SKU: QTY & omzet `days` hari terakhir (q30, s30) dan periode sebelumnya (qprev, sprev); pesanan batal dibuang."""
+    columns = ["q30", "s30", "qprev", "sprev"]
+    if orders is None or orders.empty or not {"sku", "order_time", "qty", "sales"} <= set(orders.columns):
+        return pd.DataFrame(columns=columns)
+    work = orders
+    if "status" in work.columns:
+        from src.ingest import cancelled_status_mask
+
+        work = work.loc[~cancelled_status_mask(work["status"])]
+    stamp = pd.to_datetime(work["order_time"], errors="coerce").dt.normalize()
+    if stamp.dropna().empty:
+        return pd.DataFrame(columns=columns)
+    end = stamp.max()
+    lo = end - pd.Timedelta(days=days - 1)
+    prev_lo = lo - pd.Timedelta(days=days)
+    frame = pd.DataFrame({
+        "sku": work["sku"].map(norm_sku), "d": stamp,
+        "q": pd.to_numeric(work["qty"], errors="coerce").fillna(0.0), "s": pd.to_numeric(work["sales"], errors="coerce").fillna(0.0),
+    })
+    now = frame.loc[frame["d"] >= lo].groupby("sku")[["q", "s"]].sum().rename(columns={"q": "q30", "s": "s30"})
+    before = frame.loc[(frame["d"] >= prev_lo) & (frame["d"] < lo)].groupby("sku")[["q", "s"]].sum().rename(columns={"q": "qprev", "s": "sprev"})
+    out = now.join(before, how="outer").fillna(0.0)
+    out.attrs["end"] = end.date()
+    return out[columns]

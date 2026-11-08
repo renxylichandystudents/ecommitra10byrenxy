@@ -66,8 +66,8 @@ def load_replenishment(features) -> tuple[pd.DataFrame, object, list]:
     return frame, dates[0], dates
 
 
-def _table_maps(table: pd.DataFrame | None) -> tuple[dict, dict, dict]:
-    stock, names, pred = {}, {}, {}
+def _table_maps(table: pd.DataFrame | None) -> tuple[dict, dict, dict, dict]:
+    stock, names, pred, price = {}, {}, {}, {}
     if isinstance(table, pd.DataFrame) and not table.empty and "sku" in table.columns:
         skus = table["sku"].map(gudang.norm_sku)
         if "stok" in table.columns:
@@ -79,20 +79,32 @@ def _table_maps(table: pd.DataFrame | None) -> tuple[dict, dict, dict]:
             names = dict(zip(skus, table["product_name"].astype(str)))
         if "pred_harian" in table.columns:
             pred = pd.DataFrame({"sku": skus, "p": pd.to_numeric(table["pred_harian"], errors="coerce").fillna(0)}).groupby("sku")["p"].sum().to_dict()
-    return stock, names, pred
+        if "harga_bersih" in table.columns:
+            price = pd.DataFrame({"sku": skus, "h": pd.to_numeric(table["harga_bersih"], errors="coerce")}).dropna().groupby("sku")["h"].max().to_dict()
+    return stock, names, pred, price
 
 
-def cached_view(features, table: pd.DataFrame | None) -> dict | None:
+def cached_view(features, table: pd.DataFrame | None, orders: pd.DataFrame | None = None) -> dict | None:
     """Analisa gudang (disimpan di sesi; dihitung ulang bila snapshot replenishment/tabel berubah)."""
     repl, snap, _dates = load_replenishment(features)
     locations = load_locations(features)
     denah = load_denah(features)
-    stamp = (gudang.snapshot_stamp(snap), len(repl), 0 if table is None else len(table), len(locations), 0 if denah is None else len(denah["cells"]))
+    if orders is None:
+        orders = st.session_state.get("_gudang_orders")
+    else:
+        st.session_state["_gudang_orders"] = orders
+    stamp = (
+        gudang.snapshot_stamp(snap), len(repl), 0 if table is None else len(table), len(locations),
+        0 if denah is None else len(denah["cells"]), 0 if orders is None else len(orders),
+    )
     cache = st.session_state.get("_gudang_view")
     if cache and cache[0] == stamp:
         return cache[1]
-    stock, names, pred = _table_maps(table)
-    view = gudang.build_view(locations, repl, stock=stock, names=names, pred_daily=pred)
+    stock, names, pred, price = _table_maps(table)
+    sales = gudang.sales_summary(orders)
+    view = gudang.build_view(locations, repl, stock=stock, names=names, pred_daily=pred, price=price, sales=sales)
+    view["sales_end"] = sales.attrs.get("end") if not sales.empty else None
+    view["has_pred"] = bool(pred)
     view["snapshot"] = snap
     view["has_repl"] = not repl.empty
     view["has_stock"] = bool(stock)
@@ -226,9 +238,9 @@ def _legend(mode: str, palette: dict[str, str]) -> str:
 # --------------------------------------------------------------------------- halaman
 
 
-def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: str, require) -> None:
+def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: str, require, orders: pd.DataFrame | None = None) -> None:
     st.markdown(f"**Kapasitas gudang · Site {gudang.SITE} {gudang.SITE_NAME}**")
-    view = cached_view(features, table)
+    view = cached_view(features, table, orders)
     loc = view["locations"]
     _upload_cards(features, view, may_upload=may_upload, username=username, require=require)
     if loc.empty:
@@ -395,6 +407,53 @@ def _upload_cards(features, view: dict, *, may_upload: bool, username: str, requ
                         st.rerun()
 
 
+OMZET_KINDS = {
+    "Terjual 30 hari (QTY)": "count", "Omzet 30 hari": "money", "Prediksi QTY 30 hari": "count", "Prediksi omzet 30 hari": "money",
+    "Stok 10037": "count", "Min": "count", "Titik pesan ulang": "count", "Max": "count", "Barang dalam perjalanan": "count",
+}
+
+
+def _trend_text(value) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "–"
+    if np.isinf(value):
+        return "▲ baru laku"
+    arrow = "▲" if value > 0.5 else ("▼" if value < -0.5 else "＝")
+    return f"{arrow} {fmt_pct(abs(value), 0)}"
+
+
+def _days_text(value) -> str:
+    if value is None or not np.isfinite(value):
+        return "–"
+    return "habis" if value <= 0 else f"{fmt_num(value, 0)} hari"
+
+
+def _omzet_columns(src: pd.DataFrame) -> dict:
+    """Kolom omzet & prediksi yang sama untuk tabel lorong dan tabel SKU."""
+    return {
+        "Terjual 30 hari (QTY)": src["qty_30"], "Omzet 30 hari": src["omzet_30"], "Tren omzet": src["tren_pct"].map(_trend_text),
+        "Prediksi QTY 30 hari": src["pred_30"].round(0), "Prediksi omzet 30 hari": src["pred_omzet_30"].round(0),
+        "Stok cukup untuk": src["hari_cukup"].map(_days_text),
+    }
+
+
+def _with_total(frame: pd.DataFrame, label_col: str, label: str) -> pd.DataFrame:
+    total = {c: (np.nan if pd.api.types.is_numeric_dtype(frame[c]) else "") for c in frame.columns}
+    total[label_col] = label
+    for column in ("Terjual 30 hari (QTY)", "Omzet 30 hari", "Prediksi QTY 30 hari", "Prediksi omzet 30 hari", "Stok 10037"):
+        if column in frame.columns:
+            total[column] = float(pd.to_numeric(frame[column], errors="coerce").fillna(0).sum())
+    return pd.concat([pd.DataFrame([total], columns=frame.columns), frame], ignore_index=True)
+
+
+def _omzet_note(view: dict) -> None:
+    end = view.get("sales_end")
+    bits = [f"Omzet & QTY 30 hari s.d. {end:%d/%m/%Y} (tanpa pesanan batal); tren = dibanding 30 hari sebelumnya." if end else "Data penjualan belum termuat, kolom omzet kosong."]
+    if not view.get("has_pred"):
+        bits.append("Prediksi tampil setelah analisa dibuka (menu Hasil analisa).")
+    st.markdown(f"<div class='field-hint'>{' '.join(bits)}</div>", unsafe_allow_html=True)
+
+
 LANE_PRIORITY = {"Kosong": 0, "Hampir habis": 1, "Stok berlebih": 2, "Lokasi kosong": 3, "Aman": 4}
 
 
@@ -411,12 +470,13 @@ def _lane_detail(view: dict) -> None:
         status = joined["status"].where(joined["status"].notna(), "Lokasi kosong")
         stock = joined["stok_sku"] if "stok_sku" in joined else joined["stok"]
         frame = pd.DataFrame({
-            "_status": status,
+            "_status": status, "_impact": joined["dampak_omzet"].fillna(0.0),
             "Status": status.map(lambda v: STATUS_ICON.get(v, "⚪ Lokasi kosong")),
-            "Lokasi": joined["lokasi"], "Bay": joined["bay"], "Level": joined["level"], "Kategori lokasi": joined["kategori"].str.title(),
-            "SKU": joined["sku"].fillna(""), "Nama": joined["nama"].fillna("— kosong —"), "Stok 10037": stock,
-            "Min": joined["min_stock"], "Titik pesan ulang": joined["rop"], "Max": joined["max_stock"],
+            "Lokasi": joined["lokasi"], "SKU": joined["sku"].fillna(""), "Nama": joined["nama"].fillna("— kosong —"),
+            **_omzet_columns(joined),
+            "Stok 10037": stock, "Min": joined["min_stock"], "Titik pesan ulang": joined["rop"], "Max": joined["max_stock"],
             "Saran": joined["saran"].fillna("Lokasi kosong — bisa dipakai barang kecil yang belum punya lokasi ambil"),
+            "Kategori lokasi": joined["kategori"].str.title(), "Bay": joined["bay"], "Level": joined["level"],
         })
         note = (
             f"{fmt_num(int(part['terisi'].sum()))} dari {fmt_num(len(part))} lokasi terisi · "
@@ -426,10 +486,11 @@ def _lane_detail(view: dict) -> None:
         cats = sorted(set(part["kategori"]))
         big = items.loc[items["kategori"].isin(cats) & items["spesifikasi"].str.lower().eq("besar")]
         frame = pd.DataFrame({
-            "_status": big["status"],
+            "_status": big["status"], "_impact": big["dampak_omzet"].fillna(0.0),
             "Status": big["status"].map(lambda v: STATUS_ICON.get(v, v)),
-            "SKU": big["sku"], "Nama": big["nama"], "Kategori": big["kategori"].str.title(), "Stok 10037": big["stok"],
-            "Min": big["min_stock"], "Titik pesan ulang": big["rop"], "Max": big["max_stock"], "Saran": big["saran"],
+            "SKU": big["sku"], "Nama": big["nama"], **_omzet_columns(big),
+            "Stok 10037": big["stok"], "Min": big["min_stock"], "Titik pesan ulang": big["rop"], "Max": big["max_stock"],
+            "Saran": big["saran"], "Kategori": big["kategori"].str.title(),
         })
         note = (
             f"Racking {lane}: {fmt_num(len(part))} lokasi, zona {', '.join(c.title() for c in cats)}. "
@@ -449,26 +510,25 @@ def _lane_detail(view: dict) -> None:
     )
     if picked:
         frame = frame.loc[frame["_status"].isin(picked)]
-    # Prioritas tindak lanjut: Kosong → Hampir habis → Stok berlebih → Lokasi kosong → Aman.
-    # Dalam status yang sama: kekurangan terhadap Max terbesar dulu (Kosong/Hampir habis), kelebihan terbesar dulu (Stok berlebih).
-    stock = pd.to_numeric(frame["Stok 10037"], errors="coerce").fillna(0)
-    cap = pd.to_numeric(frame["Max"], errors="coerce").fillna(0)
-    gap = np.where(frame["_status"].eq("Stok berlebih"), stock - cap, cap - stock)
+    # Prioritas tindak lanjut: status dulu (Kosong → Hampir habis → Stok berlebih → Lokasi kosong → Aman),
+    # lalu dampak omzet terbesar (prediksi omzet 30 hari; bila belum ada, omzet 30 hari terakhir).
     frame = (
-        frame.assign(_p=frame["_status"].map(LANE_PRIORITY).fillna(9), _g=gap)
-        .sort_values(["_p", "_g"], ascending=[True, False], kind="mergesort")
-        .drop(columns=["_p", "_g", "_status"])
+        frame.assign(_p=frame["_status"].map(LANE_PRIORITY).fillna(9))
+        .sort_values(["_p", "_impact"], ascending=[True, False], kind="mergesort")
+        .drop(columns=["_p", "_impact", "_status"])
         .reset_index(drop=True)
     )
     st.markdown(
-        "<div class='field-hint'>Urutan: prioritas tindak lanjut — 🔴 Kosong → 🟠 Hampir habis → 🟣 Stok berlebih → ⚪ Lokasi kosong → 🟢 Aman; "
-        "dalam status yang sama, selisih terhadap batas Max terbesar di atas.</div>",
+        "<div class='field-hint'>Urutan prioritas: 🔴 Kosong → 🟠 Hampir habis → 🟣 Stok berlebih → ⚪ Lokasi kosong → 🟢 Aman; "
+        "dalam status yang sama, <b>omzet terbesar di atas</b> (prediksi omzet 30 hari, atau omzet 30 hari terakhir bila prediksi belum ada).</div>",
         unsafe_allow_html=True,
     )
+    _omzet_note(view)
+    frame = _with_total(frame, "Status", f"Total · {fmt_num(len(frame))} baris")
     key = f"gudang-lane-{lane}-{'-'.join(sorted(picked))}"
     batched_view(
-        len(frame), key=key, noun="baris",
-        render=lambda lo, hi: show_table(frame.iloc[lo:hi], kinds={"Stok 10037": "count", "Min": "count", "Titik pesan ulang": "count", "Max": "count"}),
+        len(frame) - 1, key=key, noun="baris",
+        render=lambda lo, hi: show_table(pd.concat([frame.iloc[:1], frame.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label=str(frame.iloc[0]["Status"]), kinds=OMZET_KINDS),
         download=lambda: download_excel(frame, f"isi_lorong_{lane}.xlsx", key=f"xl-lane-{lane}"),
     )
 
@@ -593,20 +653,25 @@ def _sku_table(view: dict) -> None:
     if spec_pick:
         work = work.loc[work["spesifikasi"].str.title().isin(spec_pick)]
     order = {"Kosong": 0, "Hampir habis": 1, "Stok berlebih": 2, "Aman": 3}
-    gap = np.where(work["status"].eq("Stok berlebih"), work["stok"] - work["max_stock"], work["max_stock"] - work["stok"])
-    work = work.assign(_o=work["status"].map(order), _g=gap).sort_values(["_o", "_g"], ascending=[True, False])
+    work = work.assign(_o=work["status"].map(order)).sort_values(["_o", "dampak_omzet"], ascending=[True, False], kind="mergesort")
     frame = pd.DataFrame({
-        "SKU": work["sku"], "Nama": work["nama"], "Kategori": work["kategori"].str.title(), "Barang": work["spesifikasi"].str.title(),
-        "Lokasi ambil (gondola)": work["pick_location"].replace("", "—"), "Stok 10037": work["stok"], "Sumber stok": work["sumber_stok"],
-        "Min": work["min_stock"], "Titik pesan ulang": work["rop"], "Max": work["max_stock"], "Barang dalam perjalanan": work["out_po"] + work["out_tr"],
-        "Prediksi 30 hari": work["pred_30"].round(0), "Status": work["status"].map(lambda v: STATUS_ICON.get(v, v)), "Saran": work["saran"],
+        "Status": work["status"].map(lambda v: STATUS_ICON.get(v, v)), "SKU": work["sku"], "Nama": work["nama"],
+        **_omzet_columns(work),
+        "Stok 10037": work["stok"], "Min": work["min_stock"], "Titik pesan ulang": work["rop"], "Max": work["max_stock"],
+        "Barang dalam perjalanan": work["out_po"] + work["out_tr"], "Saran": work["saran"],
+        "Kategori": work["kategori"].str.title(), "Barang": work["spesifikasi"].str.title(),
+        "Lokasi ambil (gondola)": work["pick_location"].replace("", "—"), "Sumber stok": work["sumber_stok"],
     }).reset_index(drop=True)
     explain([
-        ("Urutan", "Kosong → Hampir habis → Stok berlebih → Aman; dalam tiap status, selisih terbesar di atas"),
-        ("Prediksi 30 hari", "dari analisa aplikasi (laju harian × 30), dibandingkan dengan Max untuk menyarankan Max dinaikkan/diturunkan"),
+        ("Urutan", "status dulu (Kosong → Hampir habis → Stok berlebih → Aman), lalu omzet terbesar di atas: prediksi omzet 30 hari, atau omzet 30 hari terakhir bila prediksi belum ada"),
+        ("Tren omzet", "omzet 30 hari terakhir dibanding 30 hari sebelumnya (▲ naik, ▼ turun)"),
+        ("Stok cukup untuk", "stok Site 10037 ÷ prediksi QTY harian"),
+        ("Prediksi 30 hari", "dari analisa aplikasi; dibandingkan dengan Max untuk menyarankan Max dinaikkan/diturunkan"),
     ])
+    _omzet_note(view)
+    frame = _with_total(frame, "Status", f"Total · {fmt_num(len(frame))} SKU")
     batched_view(
-        len(frame), key="gudang-sku", noun="SKU",
-        render=lambda lo, hi: show_table(frame.iloc[lo:hi], kinds={"Stok 10037": "count", "Min": "count", "Titik pesan ulang": "count", "Max": "count", "Barang dalam perjalanan": "count", "Prediksi 30 hari": "count"}),
+        len(frame) - 1, key="gudang-sku", noun="SKU",
+        render=lambda lo, hi: show_table(pd.concat([frame.iloc[:1], frame.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label=str(frame.iloc[0]["Status"]), kinds=OMZET_KINDS),
         download=lambda: download_excel(frame, "gudang_10037_sku.xlsx", key="xl-gudang-sku"),
     )
