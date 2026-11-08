@@ -54,7 +54,7 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
     _require(menu, "view")
     table = table if isinstance(table, pd.DataFrame) else pd.DataFrame()
     if picked == "sku-dikecualikan":
-        _excluded_tab(features, table, username)
+        _excluded_tab(features, table, username, orders)
     elif picked == "kalkulator-biaya":
         _calculator_tab(features, table, data, username, today, user_root=user_root)
     elif picked == "laporan-margin":
@@ -73,50 +73,123 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
 # ---------------------------------------------------------------- SKU dikecualikan
 
 
-def _excluded_tab(features, table: pd.DataFrame, username: str) -> None:
+def _sku_catalog(table: pd.DataFrame, orders: pd.DataFrame | None) -> dict[str, str]:
+    """SKU → nama produk dari hasil analisa + transaksi (termasuk SKU jasa yang tidak masuk rank)."""
+    names: dict[str, str] = {}
+    for frame in (orders, table):
+        if isinstance(frame, pd.DataFrame) and not frame.empty and {"sku", "product_name"} <= set(frame.columns):
+            part = frame[["sku", "product_name"]].dropna()
+            part = part.assign(sku=part["sku"].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True))
+            for sku, name in zip(part["sku"], part["product_name"].astype(str)):
+                if sku and sku.lower() not in {"nan", "none"}:
+                    names[sku] = name
+    return names
+
+
+def _exc_row(cols, sku: str, name: str, note: str, *, bold: bool = False) -> None:
+    sku_text = html.escape(sku) if sku else "<span style='color:#94a3b8'>tanpa SKU</span>"
+    cols[0].markdown(f"<div style='font-weight:{700 if bold else 500}'>{sku_text}</div>", unsafe_allow_html=True)
+    cols[1].markdown(f"<div style='line-height:1.35'>{html.escape(name or '-')}</div>", unsafe_allow_html=True)
+    cols[2].markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
+
+
+def _exc_header(labels: list[str], widths: list[float]) -> None:
+    cols = st.columns(widths, vertical_alignment="center")
+    for col, text in zip(cols, labels):
+        col.markdown(f"<div style='font-size:.8rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.02em'>{text}</div>", unsafe_allow_html=True)
+
+
+def _add_excluded(features, username: str, rows: list[dict]) -> None:
+    _require("setting_sku_dikecualikan", "edit")
+    stamp = datetime.now()
+    payload = [{"sku": r["sku"], "nama": r["nama"], "jenis": r["jenis"], "added_by": username, "added_at": stamp} for r in rows]
+    features.replace("excluded_sku", payload, keys=["sku"], username=username, action="tambah:sku_dikecualikan")
+    bump(st.session_state)
+
+
+def _excluded_tab(features, table: pd.DataFrame, username: str, orders: pd.DataFrame | None = None) -> None:
+    widths = [1.1, 3.4, 1.6, 0.9]
     st.markdown("**SKU dikecualikan**")
     st.caption("SKU di sini keluar dari rank, safety stock, iklan, flash sale, dan exposure (filter di awal pipeline). Di tabel alokasi iklan tampil sebagai \"SKU jasa\".")
     frame = features.read("excluded_sku")
+    catalog = _sku_catalog(table, orders)
+    excluded = set(frame["sku"].astype(str)) if not frame.empty else set()
+
+    # 1) Tambah: cari SKU — saat diketik muncul "SKU · nama produk" agar jelas SKU mana yang dipilih.
+    with st.container(border=True):
+        st.markdown("**Tambah SKU**")
+        options = [f"{sku} · {name}" for sku, name in sorted(catalog.items()) if sku not in excluded]
+        lookup = {label: label.split(" · ", 1)[0] for label in options}
+        a1, a2, a3 = st.columns([3, 2, 0.9], vertical_alignment="bottom")
+        picked = a1.selectbox(
+            "Cari SKU atau nama produk",
+            options=options,
+            index=None,
+            placeholder="Ketik SKU atau nama produk…",
+            accept_new_options=True,
+            key="exc-search",
+        )
+        reason = a2.text_input("Alasan (opsional)", key="exc-reason", placeholder="mis. SKU jasa / biaya tambahan")
+        sku = ""
+        if picked:
+            sku = lookup.get(picked, str(picked).split(" · ", 1)[0].strip())
+        name = catalog.get(sku, "")
+        if a3.button("Tambah", type="primary", use_container_width=True, disabled=not sku, key="exc-add"):
+            if sku in excluded:
+                st.warning(f"SKU {sku} sudah ada di daftar.")
+            else:
+                _add_excluded(features, username, [{"sku": sku, "nama": (reason.strip() or name), "jenis": "Manual"}])
+                for k in ("exc-search", "exc-reason"):
+                    st.session_state.pop(k, None)
+                st.rerun()
+        if picked:
+            if name:
+                st.markdown(f"<div class='field-hint'>Akan dikecualikan: <b>{html.escape(sku)}</b> — {html.escape(name)}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div class='field-hint' style='color:#b45309'>SKU <b>{html.escape(sku)}</b> tidak ditemukan di data penjualan. Periksa kembali sebelum menambah.</div>", unsafe_allow_html=True)
+
+    # 2) Daftar SKU yang sudah dikecualikan.
+    st.markdown(f"**Daftar SKU dikecualikan** · {fmt_num(len(frame))} SKU")
     if frame.empty:
         st.info("Belum ada SKU yang dikecualikan.")
     else:
-        for _, row in frame.sort_values("sku").iterrows():
-            c1, c2, c3, c4 = st.columns([1.2, 3, 1.4, 0.8], vertical_alignment="center")
-            c1.markdown(f"**{html.escape(str(row['sku']))}**")
-            c2.markdown(html.escape(str(row["nama"] or "-")))
-            c3.caption(f"{row['jenis'] or '-'} · {row['added_by']}")
-            if c4.button("Hapus", key=f"exc-del-{row['sku']}", use_container_width=True):
+        with st.container(border=True):
+            _exc_header(["SKU", "Nama produk", "Jenis · oleh", ""], widths)
+            for _, row in frame.sort_values("sku").iterrows():
+                sku_row = str(row["sku"])
+                display = catalog.get(sku_row) or str(row["nama"] or "-")
+                added = row.get("added_at")
+                when = f" · {fmt_date_short(pd.Timestamp(added).date())}" if pd.notna(added) else ""
+                cols = st.columns(widths, vertical_alignment="center")
+                _exc_row(cols, sku_row, display, f"{row['jenis'] or '-'} · {row['added_by']}{when}", bold=True)
+                if cols[3].button("Hapus", key=f"exc-del-{sku_row}", use_container_width=True):
 
-                def _delete(sku: str = str(row["sku"])) -> None:
-                    _require("setting_sku_dikecualikan", "edit")
-                    features.remove("excluded_sku", {"sku": sku}, username=username, action="hapus:sku_dikecualikan")
-                    bump(st.session_state)
+                    def _delete(sku: str = sku_row) -> None:
+                        _require("setting_sku_dikecualikan", "edit")
+                        features.remove("excluded_sku", {"sku": sku}, username=username, action="hapus:sku_dikecualikan")
+                        bump(st.session_state)
 
-                confirm_action("Hapus dari SKU dikecualikan?", f"SKU {html.escape(str(row['sku']))} akan kembali masuk rank dan rekomendasi.", _delete, confirm_label="Ya, hapus")
-    with st.form("exc-add", clear_on_submit=True):
-        a1, a2, a3 = st.columns([1.2, 3, 1])
-        sku = a1.text_input("SKU")
-        name = a2.text_input("Nama / alasan")
-        a3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
-        if a3.form_submit_button("Tambah", type="primary") and sku.strip():
-            _require("setting_sku_dikecualikan", "edit")
-            features.replace("excluded_sku", [{"sku": sku.strip(), "nama": name.strip(), "jenis": "Manual", "added_by": username, "added_at": datetime.now()}], keys=["sku"], username=username, action="tambah:sku_dikecualikan")
-            bump(st.session_state)
-            st.rerun()
-    products = table[["sku", "product_name"]] if not table.empty else pd.DataFrame(columns=["sku", "product_name"])
-    suggestions = exclusion_suggestions(products, set(frame["sku"].astype(str)) if not frame.empty else set())
+                    confirm_action("Hapus dari SKU dikecualikan?", f"SKU {html.escape(sku_row)} akan kembali masuk rank dan rekomendasi.", _delete, confirm_label="Ya, hapus")
+
+    # 3) Usulan sistem (hanya yang punya SKU; produk tanpa SKU tidak bisa dikecualikan).
+    products = pd.DataFrame({"sku": list(catalog), "product_name": list(catalog.values())})
+    suggestions = exclusion_suggestions(products, excluded)
+    suggestions = suggestions.loc[suggestions["sku"].astype(str).str.strip().ne("")].drop_duplicates("sku")
     if not suggestions.empty:
-        st.markdown("**Usulan** (nama berisi packing, bubble wrap, biaya, ongkir) — tekan Kecualikan untuk mengonfirmasi.")
-        for _, row in suggestions.iterrows():
-            c1, c2, c3, c4 = st.columns([1.2, 3, 1.4, 0.8], vertical_alignment="center")
-            c1.markdown(html.escape(str(row["sku"])))
-            c2.markdown(html.escape(str(row["nama"])))
-            c3.caption(str(row["alasan"]))
-            if c4.button("Kecualikan", key=f"exc-sug-{row['sku']}", use_container_width=True):
-                _require("setting_sku_dikecualikan", "edit")
-                features.replace("excluded_sku", [{"sku": str(row["sku"]), "nama": str(row["nama"]), "jenis": "SKU jasa", "added_by": username, "added_at": datetime.now()}], keys=["sku"], username=username, action="tambah:sku_dikecualikan")
-                bump(st.session_state)
-                st.rerun()
+        head, bulk = st.columns([3, 1], vertical_alignment="center")
+        head.markdown(f"**Usulan sistem** · {fmt_num(len(suggestions))} SKU")
+        head.markdown("<div class='field-hint'>Nama berisi packing, bubble wrap, biaya, atau ongkir. Tekan Kecualikan untuk mengonfirmasi.</div>", unsafe_allow_html=True)
+        if bulk.button(f"Kecualikan semua ({len(suggestions)})", key="exc-sug-all", use_container_width=True):
+            _add_excluded(features, username, [{"sku": str(r["sku"]), "nama": str(r["nama"]), "jenis": "SKU jasa"} for _, r in suggestions.iterrows()])
+            st.rerun()
+        with st.container(border=True):
+            _exc_header(["SKU", "Nama produk", "Alasan", ""], widths)
+            for _, row in suggestions.iterrows():
+                cols = st.columns(widths, vertical_alignment="center")
+                _exc_row(cols, str(row["sku"]), str(row["nama"]), str(row["alasan"]))
+                if cols[3].button("Kecualikan", key=f"exc-sug-{row['sku']}", use_container_width=True):
+                    _add_excluded(features, username, [{"sku": str(row["sku"]), "nama": str(row["nama"]), "jenis": "SKU jasa"}])
+                    st.rerun()
 
 
 # ---------------------------------------------------------------- Kalkulator biaya
