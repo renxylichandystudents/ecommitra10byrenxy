@@ -903,6 +903,25 @@ st.markdown(
     .qty-track.stock-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: #fff7ed; border-radius: 8px; padding: 5px 6px; height: auto; min-height: 1.85rem; overflow: visible; }
     .qty-track.stock-row.dc { background: #f0f9ff; }
     .stock-chip.info { background: #dbeafe; color: #1e3a8a; }
+    /* Tombol unduh Excel: hijau lembut, ikon unduh, sudut membulat (sama di semua halaman). */
+    [data-testid="stDownloadButton"] button {
+        background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%) !important;
+        color: #065f46 !important;
+        border: 1px solid #6ee7b7 !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        padding: 0.45rem 1.05rem !important;
+        box-shadow: 0 1px 2px rgba(6, 95, 70, 0.10);
+        transition: background .15s ease, transform .15s ease, box-shadow .15s ease;
+    }
+    [data-testid="stDownloadButton"] button:hover {
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%) !important;
+        border-color: #34d399 !important;
+        color: #064e3b !important;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(6, 95, 70, 0.15);
+    }
+    [data-testid="stDownloadButton"] button p { font-weight: 700 !important; }
     /* Tulisan "Press Enter to submit form/apply" di kolom isian mengganggu saat mengetik: disembunyikan. */
     [data-testid="InputInstructions"] { display: none !important; }
     .stock-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 700; }
@@ -6111,6 +6130,7 @@ def offer_excel(frame: pd.DataFrame, filename: str) -> None:
         file_name=safe,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"excel-{safe}",
+        icon=":material/download:",
     )
 
 
@@ -7145,7 +7165,7 @@ def show_analysis_movement(
         [
             "SKU Top 50 yang prediksinya berubah pada rentang tanggal yang dipilih.",
             ("Urutan", "dampak ke omzet terbesar lebih dulu: gabungan besar perubahan prediksi bulan dalam sales value (Rp) dan QTY, naik maupun turun"),
-            ("Tampilan", "kelompok #1 berisi 5 SKU; Muat lebih banyak menambah kelompok 10 SKU; klik judul kelompok untuk membuka/menutup. Unduh Excel berisi semua SKU"),
+            ("Tampilan", "5 SKU teratas; Muat lebih banyak menambah 10 SKU, Tutup kembali ke 5 SKU. Unduh Excel berisi semua SKU"),
             ("Angka kecil di sel", "besar perubahan: ▲ naik, ▼ turun"),
             ("Stok Site 10062 / 10036 · Ambil dari DC", "bila stok Site 10037 kurang, cek apakah DC bisa memenuhi sebelum PO"),
             ("Kolom", "klik judul untuk mengurutkan, geser judul untuk memindah, tarik tepi judul untuk mengubah lebar"),

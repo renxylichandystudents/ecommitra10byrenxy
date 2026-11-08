@@ -100,6 +100,7 @@ def _chart_and_table(table: pd.DataFrame, column: str, title: str, filename: str
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"excel-{filename}",
+        icon=":material/download:",
     )
 
 

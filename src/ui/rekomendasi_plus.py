@@ -179,7 +179,7 @@ def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, param
             use_container_width=True,
             disabled=["SKU · produk · varian", "Keputusan", "Budget saat ini / bulan", "ROAS marginal"],
             column_config=cfg,
-            key=f"tgt-alloc-{choice}-{lo}",
+            key=f"tgt-alloc-{choice}-{hi}",
         )
         for sku, value in zip(part["_sku"], edited["Budget tambahan"]):
             edits[sku] = float(value or 0)

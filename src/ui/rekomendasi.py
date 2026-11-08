@@ -88,7 +88,7 @@ def _names_tab(table: pd.DataFrame, frames, params: dict) -> pd.DataFrame:
             display.iloc[lo:hi],
             on_select="rerun",
             selection_mode="single-row",
-            key=f"name-table-{current}-{lo}",
+            key=f"name-table-{current}-{hi}",
             column_config={"Ringkasan deskripsi": st.column_config.TextColumn(width="medium")},
         )
         rows = getattr(getattr(event, "selection", None), "rows", []) or []

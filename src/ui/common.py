@@ -182,12 +182,16 @@ def excel_bytes(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> bytes:
 
 def download_excel(frames: dict[str, pd.DataFrame] | pd.DataFrame, filename: str, *, key: str | None = None, label: str = "Unduh Excel") -> None:
     name = filename if filename.endswith(".xlsx") else f"{filename}.xlsx"
+    rows = len(frames) if isinstance(frames, pd.DataFrame) else sum(len(f) for f in frames.values() if isinstance(f, pd.DataFrame))
+    text = label if "(" in label or not rows else f"{label} · {rows:,} baris".replace(",", ".")
+    # Gaya tombol unduh (hijau, ikon) diatur global lewat CSS [data-testid="stDownloadButton"] di app.py.
     st.download_button(
-        label,
+        text,
         data=excel_bytes(frames),
         file_name=name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=key or f"xl-{name}",
+        icon=":material/download:",
     )
 
 
@@ -421,45 +425,23 @@ def sku_cards(rows: list[dict], *, key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Muat bertahap per kelompok (Terbuka / Tertutup)
+# Muat lebih banyak: 5 baris pertama, +10 per klik, Tutup kembali ke 5 baris
 # ---------------------------------------------------------------------------
 BATCH_FIRST = 5
 BATCH_STEP = 10
 
 BATCH_CSS = """
 <style>
-.batch-head { display:flex; align-items:center; gap:12px; min-height:44px; }
-.batch-no { flex:0 0 auto; background:#4f46e5; color:#fff; font-weight:800; font-size:.82rem;
-  border-radius:8px; padding:6px 8px; min-width:34px; text-align:center; }
-.batch-title { font-weight:800; color:#0f172a; line-height:1.25; }
-.batch-sub { color:#64748b; font-size:.8rem; font-weight:500; }
-.batch-pill { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 12px;
-  font-size:.8rem; font-weight:800; white-space:nowrap; }
-.batch-pill.open { background:#dcfce7; color:#047857; border:1px solid #86efac; }
-.batch-pill.closed { background:#fef9c3; color:#92400e; border:1px solid #fde68a; }
-.batch-done { border:1px solid #a7f3d0; background:#ecfdf5; border-radius:14px; padding:16px; text-align:center;
-  color:#047857; margin:6px auto 4px; max-width:560px; }
-.batch-done b { display:block; font-size:1rem; margin-bottom:2px; }
+.more-info { text-align:center; color:#64748b; font-size:.82rem; font-weight:600; margin:6px 0 2px; }
+.batch-done { border:1px solid #a7f3d0; background:#ecfdf5; border-radius:12px; padding:10px 14px; text-align:center;
+  color:#047857; font-size:.85rem; margin:6px auto 2px; max-width:520px; }
+.batch-done b { display:block; }
 </style>
 """
 
 
-def batch_ranges(total: int, groups: int, *, first: int = BATCH_FIRST, step: int = BATCH_STEP) -> list[tuple[int, int]]:
-    """Rentang baris tiap kelompok: kelompok 1 = `first` baris, berikutnya `step` baris."""
-    out, start = [], 0
-    for index in range(max(1, groups)):
-        size = first if index == 0 else step
-        end = min(total, start + size)
-        if start >= end:
-            break
-        out.append((start, end))
-        start = end
-    return out
-
-
 def reset_batches(key: str) -> None:
-    for suffix in ("groups", "open"):
-        st.session_state.pop(f"{key}-{suffix}", None)
+    st.session_state.pop(f"{key}-shown", None)
 
 
 def batched_view(
@@ -472,16 +454,14 @@ def batched_view(
     step: int = BATCH_STEP,
     rerun_scope: str = "app",
 ) -> None:
-    """Data ditampilkan per kelompok. Kelompok 1 berisi `first` baris; tombol Muat lebih banyak menambah
-    kelompok `step` baris. Tiap kelompok bisa dibuka/ditutup (Terbuka/Tertutup). render(start, end) menggambar
-    baris [start, end)."""
+    """Satu tabel: `first` baris pertama, Muat lebih banyak menambah `step` baris, Tutup kembali ke `first`.
+    render(start, end) menggambar baris [start, end)."""
     if total <= first:
         render(0, total)
         return
-    groups_key, open_key = f"{key}-groups", f"{key}-open"
-    groups = int(st.session_state.get(groups_key, 1))
-    ranges = batch_ranges(total, groups, first=first, step=step)
-    opened = set(st.session_state.get(open_key, {len(ranges) - 1}))
+    shown_key = f"{key}-shown"
+    shown = min(total, max(first, int(st.session_state.get(shown_key, first))))
+    render(0, shown)
     st.markdown(BATCH_CSS, unsafe_allow_html=True)
 
     def _rerun() -> None:
@@ -493,41 +473,24 @@ def batched_view(
                 st.rerun()
         st.rerun()
 
-    for index, (start, end) in enumerate(ranges):
-        is_open = index in opened
-        with st.container(border=True, key=f"{key}-grp-{index}"):
-            head, pill, toggle = st.columns([7, 1.6, 0.6], vertical_alignment="center")
-            head.markdown(
-                f"<div class='batch-head'><span class='batch-no'>#{index + 1}</span><div>"
-                f"<div class='batch-title'>Kelompok {noun} ({start + 1} – {end})</div>"
-                f"<div class='batch-sub'>Dimuat pada pemanggilan data ke-{index + 1}</div></div></div>",
-                unsafe_allow_html=True,
-            )
-            pill.markdown(
-                f"<span class='batch-pill {'open' if is_open else 'closed'}'>{'👁 Terbuka' if is_open else '🙈 Tertutup'}</span>",
-                unsafe_allow_html=True,
-            )
-            if toggle.button("⌃" if is_open else "⌄", key=f"{key}-tg-{index}", help="Tutup kelompok" if is_open else "Buka kelompok"):
-                opened = (opened - {index}) if is_open else (opened | {index})
-                st.session_state[open_key] = opened
-                _rerun()
-            if is_open:
-                render(start, end)
-
-    loaded = ranges[-1][1]
-    rest = total - loaded
-    _l, mid, _r = st.columns([1, 1.4, 1])
+    rest = total - shown
     if rest > 0:
-        if mid.button(f"Muat lebih banyak ▾ · {min(step, rest)} {noun} berikutnya (sisa {rest})", key=f"{key}-more", use_container_width=True, type="primary"):
-            st.session_state[groups_key] = len(ranges) + 1
-            # Kelompok baru terbuka, kelompok sebelumnya otomatis tertutup agar halaman tetap ringkas.
-            st.session_state[open_key] = {len(ranges)}
-            _rerun()
+        st.markdown(f"<div class='more-info'>Menampilkan {shown} dari {total} {noun}</div>", unsafe_allow_html=True)
     else:
         st.markdown(
-            f"<div class='batch-done'><b>✓ Semua data telah ditampilkan</b>{total} dari {total} {noun}.</div>",
+            f"<div class='batch-done'><b>✓ Semua data telah ditampilkan</b>{total} dari {total} {noun}</div>",
             unsafe_allow_html=True,
         )
-        if mid.button("↺ Tutup semua, kembali ke awal", key=f"{key}-reset", use_container_width=True):
-            reset_batches(key)
-            _rerun()
+    _l, more_col, close_col, _r = st.columns([0.6, 1.5, 1, 0.6])
+    if rest > 0 and more_col.button(
+        f"Muat lebih banyak · {min(step, rest)} {noun} berikutnya",
+        key=f"{key}-more",
+        icon=":material/expand_more:",
+        use_container_width=True,
+        type="primary",
+    ):
+        st.session_state[shown_key] = shown + step
+        _rerun()
+    if shown > first and close_col.button("Tutup", key=f"{key}-close", icon=":material/expand_less:", use_container_width=True):
+        st.session_state[shown_key] = first
+        _rerun()

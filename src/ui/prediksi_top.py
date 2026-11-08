@@ -125,7 +125,7 @@ def show_prediction_checklist(
             use_container_width=True,
             disabled=[c for c in part.columns if c not in ("Pilih", "_key")],
             column_config=cfg,
-            key=f"chk-editor-{lo}-{filter_sig}",
+            key=f"chk-editor-{hi}-{filter_sig}",
             height=table_height(len(part), 720, row_px),
         )
         # Centang per kelompok digabung; kelompok yang ditutup tetap menyimpan pilihannya.
