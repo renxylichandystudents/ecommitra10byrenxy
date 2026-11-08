@@ -134,7 +134,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         c1, c2, c3 = st.columns([1.25, 0.8, 1.25])
         with c1:
             target = float(input_rupiah(f"Target sales {month_name}", int(goals.target_sales), key=key_target,
-                                        help="Bawaan dari Ubah data latih › Menu upload › Target sales bulanan. Simpan di sini untuk mengganti target bulan ini."))
+                                        help="Bawaan dari Upload data › Target sales bulanan. Simpan di sini untuk mengganti target bulan ini."))
         if key_roas not in st.session_state or float(st.session_state[key_roas]) > A.MAX_SHOPEE_ROAS:
             st.session_state[key_roas] = default_roas
         roas = float(c2.number_input("Target ROAS", min_value=1.0, max_value=A.MAX_SHOPEE_ROAS, step=0.5, key=key_roas,
@@ -157,7 +157,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     gap = target - projection
     gap_daily = gap / days_left
     if target <= 0:
-        _box("Target bulan ini belum ada", f"Isi target {month_name} di atas atau unggah di Ubah data latih › Menu upload › Target sales bulanan.", DOWN)
+        _box("Target bulan ini belum ada", f"Isi target {month_name} di atas atau unggah di Upload data › Target sales bulanan.", DOWN)
         return
     if not has_ads or not units:
         _step(2, "Posisi target")
@@ -359,7 +359,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         "<b>Selasa–Minggu</b> — jangan ubah budget; biarkan algoritma Shopee belajar. Pantau stok produk yang ditandai ⚠️.",
         f"<b>Senin {next_monday:%d/%m}</b> — unggah laporan iklan minggu lalu, buka menu ini, evaluasi pencapaian; bila masih di bawah target, "
         "naikkan lagi budget iklan yang efektif (maks. 2×) atau turunkan target ROAS lewat tombol pilihan.",
-        "<b>Akhir bulan</b> — evaluasi di Laporan › Iklan; unggah target bulan berikutnya di Ubah data latih › Menu upload › Target.",
+        "<b>Akhir bulan</b> — evaluasi di Laporan › Iklan; unggah target bulan berikutnya di Upload data › Target.",
     ]
     _box("Tindak lanjut", "<ol style='margin:0 0 0 1.1rem;padding:0'>" + "".join(f"<li>{t}</li>" for t in steps) + "</ol>", "#ee4d2d")
     with st.expander("Cara rencana dihitung"):

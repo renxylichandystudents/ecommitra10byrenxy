@@ -62,7 +62,7 @@ MENU_LABELS = {
     "rekomendasi": "Rekomendasi",
     "laporan": "Laporan",
     "evaluasi_model": "Evaluasi model",
-    "data_latih": "Ubah data latih & Jalankan analisa",
+    "data_latih": "Upload data & Jalankan analisa",
     "setting_sku_dikecualikan": "Setting › SKU dikecualikan",
     "setting_kalkulator_biaya": "Setting › Kalkulator biaya",
     "setting_laporan_margin": "Setting › Laporan margin",

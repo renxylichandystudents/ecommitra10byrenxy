@@ -1,4 +1,4 @@
-"""Target sales bulanan: unggah di Ubah data latih › Menu upload › Target, dan baris pencapaian untuk kartu sales aktual."""
+"""Target sales bulanan: unggah di Upload data › Target, dan baris pencapaian untuk kartu sales aktual."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def achievement_line(actual: float, start: date | None, end: date | None, featur
     result, missing = T.achievement(actual, start, end, targets)
     if result is None:
         names = ", ".join(T.month_label(m) for m in missing[:3]) or "periode ini"
-        return f"<span style='color:#94a3b8'>Target {html.escape(names)} belum diunggah (Ubah data latih › Target)</span>"
+        return f"<span style='color:#94a3b8'>Target {html.escape(names)} belum diunggah (Upload data › Target)</span>"
     pct = f"<b style='color:{_tone(result.pct)}'>{fmt_pct(result.pct, 1)}</b>"
     if result.single_month and not result.full_months:
         month_pct = f"<b style='color:{_tone(result.month_pct)}'>{fmt_pct(result.month_pct, 1)}</b>"

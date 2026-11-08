@@ -182,7 +182,7 @@ def _show_trend(orders: pd.DataFrame, orders_all: pd.DataFrame, *, today: date, 
             (basis, "Harga setelah diskon × QTY" + (" (tanpa batal & retur)" if exclude else " (termasuk pesanan batal)") + "; dasar yang sama dengan prediksi"),
             ("Sales bersih", "Total Pembayaran per pesanan dikurangi batal & retur; sama dengan kartu Ringkasan eksekutif"),
             ("Kenapa berbeda", "Total Pembayaran sudah dipotong voucher dan termasuk ongkir, sedangkan sales produk tidak"),
-            ("Target sales bulanan", "target per bulan dari Ubah data latih › Menu upload › Target; pencapaian = sales bersih ÷ target bulan itu"),
+            ("Target sales bulanan", "target per bulan dari Upload data › Target; pencapaian = sales bersih ÷ target bulan itu"),
         ]
     )
     if bersih and any(targets.get(k, 0) > 0 for k in month_keys):
@@ -489,7 +489,7 @@ def show_report(
                         }
                     )
                     if target <= 0:
-                        st.caption(f"Acuan panduan = {pred_label} (target bulan ini belum diunggah di Ubah data latih › Target).")
+                        st.caption(f"Acuan panduan = {pred_label} (target bulan ini belum diunggah di Upload data › Target).")
                     for name, tasks in guide.items():
                         st.markdown(f"**{name}**")
                         show_table(pd.DataFrame(tasks, columns=["Tugas", "Ukuran berhasil"]))

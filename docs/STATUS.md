@@ -115,6 +115,17 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Iklan mengikuti batas Shopee: Target ROAS per iklan maks. 30 (`MAX_SHOPEE_ROAS`); perubahan budget harian per minggu dibatasi ½×–2× atau jeda (`MAX_CHANGE = 2`), iklan baru maks. Rp 100 rb/hari. Rencana dibuat **mingguan**, diubah di Shopee setiap Senin dan tidak diubah sampai Minggu.
 - Langkah baru **Pemilihan produk iklan** (`ads_strategy.product_selection`): dari hasil iklan 2 bulan, porsi omzet dalam grup, peringkat prediksi omzet, dan stok → Buat iklan tunggal, Jadikan iklan tunggal (maks. 10/minggu), Pertahankan, Pindahkan ke grup, Keluarkan dari grup, Jeda sampai restock. ROAS per iklan boleh bervariasi; yang dijaga ROAS rata-rata rencana ≥ target.
 
+## Alur harian dirapikan (8 Nov 2026)
+
+- Satu alur: **Upload data → Jalankan analisa → Lihat hasil**. Analisa yang dipakai selalu analisa sukses terakhir; status dihitung di satu tempat (`app.analysis_status`, logika murni `src/core/journey.py`, tes `tests/test_journey.py`).
+- Status: *Belum ada analisa* · *Ada data baru sejak analisa terakhir* (sidik data berubah / bulan baru) · *Hasil analisa sudah terbaru* · *Transaksi hari ini belum diunggah*. Tombol utama mengikuti status.
+- Beranda: kartu "Pekerjaan hari ini" (3 langkah + tombol), tabel "Status data" (terakhir diunggah, jadwal: transaksi setiap hari, data lain bila berubah, target awal bulan), Riwayat analisa dilipat.
+- Header: "Ubah data latih" → **Upload data**, "Analisa prediksi" → **Hasil analisa**; judul header mengikuti halaman.
+- Halaman Upload data: Langkah 1 Upload (menu transaksi diberi ⚠️ bila belum diunggah hari ini; setelah simpan ada ajakan ke Langkah 3), Langkah 2 Setelan analisa (terisi dari analisa terakhir + bulan terbaru; saklar "Kecualikan batal & retur" kini ada di sini), Langkah 3 Jalankan analisa (memberi tahu bila setelan berbeda dari analisa harian). Halaman ini tidak lagi mengubah data analisa yang sedang dibuka sebelum Jalankan analisa ditekan.
+- Jalankan analisa harian (Beranda / halaman hasil) memakai setelan analisa terakhir dan rentang bulannya diperpanjang ke bulan tersimpan terbaru (sebelumnya bulan baru bisa tertinggal).
+- Halaman hasil: baris status di atas menu (analisa mana, transaksi s.d., terbaru / ada data baru + tombol Jalankan analisa / analisa lama + tombol Buka analisa terakhir).
+- Rumus prediksi dan safety stock tidak berubah.
+
 ## Hasil pemeriksaan
 
 - Lint (`ruff`, aturan F dan E9): bersih, tidak ada nama tak terdefinisi.

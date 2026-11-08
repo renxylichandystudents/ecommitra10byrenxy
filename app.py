@@ -88,7 +88,7 @@ from src.core.userspace import deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
 from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, account_menu
 from auth.ui import logout as auth_logout
-from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_RESULT, PAGE_SETTING, apply_route, route_from_state, sync_route
+from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_PASSWORD, PAGE_RESULT, PAGE_SETTING, PAGE_USERS, apply_route, route_from_state, sync_route
 from src.core.promo import drop_excluded
 from src.core.periods import last_full_month
 from src.core.warehouse import lead_time_stats
@@ -99,6 +99,7 @@ from src.ui.setting_page import show_setting
 from src.core.access import allowed as allowed_access, setting_tabs
 from src.core.fmt import fmt_date_short
 from src.core.runs import RunRepository, data_hash as training_data_hash
+from src.core import journey
 import src.library as library_store
 from src.library import configure_root as configure_library_root
 from src.movement import configure_root as configure_movement_root
@@ -1301,6 +1302,19 @@ st.markdown(
         color: #64748b;
         margin: 0.2rem 0 0.55rem;
     }
+    .journey-step {
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #ffffff;
+        min-height: 128px;
+    }
+    .journey-title { font-weight: 700; color: #0f172a; margin-bottom: 4px; }
+    .journey-num {
+        display: inline-block; width: 22px; height: 22px; line-height: 22px; text-align: center;
+        border-radius: 999px; background: #0f172a; color: #ffffff; font-size: var(--fs-xs); margin-right: 2px;
+    }
+    .journey-line { font-size: var(--fs-sm); color: #475569; line-height: 1.5; }
     .feature-badge {
         display: inline-block;
         background: #fff1ec;
@@ -1885,10 +1899,11 @@ def show_training_uploads() -> tuple[list[str], str | None]:
     load_error: str | None = None
     st.markdown(
         """
-        <div class="home-section">UPLOAD DATA LATIH</div>
+        <div class="home-section">LANGKAH 1 · UPLOAD DATA</div>
         <div class="feature-copy">
-        Pilih menu sesuai jenis laporan, unggah file, lalu tekan Simpan. Data yang tersimpan menjadi data latih. Unggahan
-        berikutnya memperbarui data: baris yang sama diganti, bukan digandakan.
+        <b>Transaksi</b> diunggah setiap hari dan boleh diunggah ulang kapan saja: pesanan yang sama diganti, bukan digandakan.
+        <b>Data lain</b> (stok, iklan, produk, target) cukup diunggah bila berubah; data yang sudah tersimpan tetap dipakai.
+        Pilih menu, unggah file, lalu tekan Simpan.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1908,7 +1923,8 @@ def show_training_uploads() -> tuple[list[str], str | None]:
             return f"{spec.label} · ✓ Siap (baru disimpan)"
         if status == "Siap":
             when = updated.get(spec.key)
-            return f"{spec.label} · tersimpan {when}" if when else f"{spec.label} · tersimpan"
+            due = " · ⚠️ belum hari ini" if journey.upload_due(spec.key, _parse_day(when or ""), date.today()) else ""
+            return (f"{spec.label} · tersimpan {when}" if when else f"{spec.label} · tersimpan") + due
         return f"{spec.label} · {status}"
 
     selected_key = st.session_state.get("upload-source", specs[0].key)
@@ -1937,8 +1953,8 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         picked_key = st.session_state.get("upload-source", selected_key)
         filled = sum(1 for status in statuses.values() if status == "Siap")
         st.caption(
-            f"{filled} dari {len(specs)} menu berisi data. ✓ Siap = diunggah dan disimpan di sesi ini; "
-            "tersimpan = data dari unggahan sebelumnya (tanggal unggahan terakhir)."
+            f"{filled} dari {len(specs)} menu berisi data. ✓ Siap = baru disimpan di sesi ini; "
+            "tersimpan = tanggal unggahan terakhir; ⚠️ = transaksi belum diunggah hari ini."
         )
     with right:
         if picked_key == TARGET_UPLOAD:
@@ -1987,6 +2003,7 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         if isinstance(saved, dict):
             if saved.get("level") == "success":
                 st.success(saved.get("message", ""))
+                st.info("Data tersimpan. Lanjut ke **Langkah 3 · Jalankan analisa** di bawah agar hasil memakai data ini.")
             elif saved.get("message"):
                 st.error(saved["message"])
             if saved.get("warning"):
@@ -2002,7 +2019,6 @@ def show_training_uploads() -> tuple[list[str], str | None]:
 def show_training_summary() -> None:
     """Ringkasan data latih tersimpan dan hasil konsolidasi antar-sumber."""
     store = DATA_STORE
-    st.markdown("<div class='home-section'>RINGKASAN DATA</div>", unsafe_allow_html=True)
     stored_summary = store.source_summaries()
     with st.expander("Ringkasan data tersimpan", expanded=False):
         toggle_table(stored_summary, key="stored-summary")
@@ -2189,56 +2205,220 @@ def show_homepage() -> None:
                 Magister Teknik Informatika Renxy Lichandy for Mitra10 - 2026.
             </div>
         </div>
-        <div class="home-section">1. Analisa prediksi</div>
         """,
         unsafe_allow_html=True,
     )
     notice = st.session_state.pop("run-error", None)
     if notice:
         st.error(notice)
-    with st.container(border=True):
-        st.markdown(
-            """
-            <div class="feature-badge">Fitur 01 · Prediksi item terlaris</div>
-            <div class="feature-copy">
-                Jalankan analisa memakai data latih dan parameter terakhir. Ubah data latih untuk mengunggah
-                laporan baru, memilih bulan, periode, parameter, dan safety stock sebelum analisa.
-            </div>
-            """,
-            unsafe_allow_html=True,
+    status = analysis_status()
+    st.markdown("<div class='home-section'>Pekerjaan hari ini</div>", unsafe_allow_html=True)
+    show_daily_journey(status, where="home")
+    st.markdown("<div class='home-section'>Status data</div>", unsafe_allow_html=True)
+    show_data_status(status)
+    with st.expander("Riwayat analisa (30 terakhir) — buka hasil lama untuk perbandingan", expanded=False):
+        show_run_history()
+
+
+SETTING_LABELS = {"qty": "QTY terjual", "sales": "Sales value"}
+STATE_TONE = {
+    journey.STATE_EMPTY: ("#475569", "#f1f5f9"),
+    journey.STATE_NEW_DATA: ("#1d4ed8", "#dbeafe"),
+    journey.STATE_CURRENT: ("#166534", "#dcfce7"),
+    journey.STATE_WAITING: ("#92400e", "#fef3c7"),
+}
+
+
+def _run_keys_map() -> dict:
+    return st.session_state.setdefault("_run-keys", {})
+
+
+def daily_run_keys(latest=None) -> tuple[str, ...]:
+    """Bulan untuk Jalankan analisa harian: rentang analisa terakhir diperpanjang sampai bulan tersimpan terbaru."""
+    saved = [item["key"] for item in list_months()]
+    previous = _run_keys_map().get(latest.id, ()) if latest is not None else ()
+    if latest is not None and not previous:
+        previous = tuple(st.session_state.get("active-library-keys") or ())
+    return journey.next_run_keys(previous, saved)
+
+
+def newest_order_day() -> date | None:
+    """Tanggal pesanan terakhir di data transaksi tersimpan."""
+    dated = sorted(item["key"] for item in list_months() if str(item["key"])[:4].isdigit())
+    if not dated:
+        return None
+    orders = _orders_from_library([dated[-1]])[0]
+    if orders.empty or "order_time" not in orders.columns:
+        return None
+    stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
+    return None if pd.isna(stamp) else stamp.date()
+
+
+def run_data_until(run_id: int | None) -> date | None:
+    if run_id is None:
+        return None
+    try:
+        info = get_features().read("run_info")
+        match = info.loc[info["run_id"].astype(int) == int(run_id), "data_until"]
+    except Exception:
+        return None
+    if match.empty or pd.isna(match.iloc[0]):
+        return None
+    return pd.Timestamp(match.iloc[0]).date()
+
+
+def _opened_run_id() -> int | None:
+    active = st.session_state.get("active-run")
+    if "analysis" not in st.session_state or not isinstance(active, tuple) or not active:
+        return None
+    return int(active[0])
+
+
+def analysis_status() -> dict:
+    """Satu sumber status untuk Beranda, Upload data, dan halaman hasil."""
+    today = date.today()
+    latest = _latest_ready_run()
+    keys = daily_run_keys(latest)
+    changed = latest is not None and (not keys or current_data_hash(keys) != str(latest.data_hash or ""))
+    run_day = None
+    if latest is not None:
+        try:
+            run_day = datetime.fromisoformat(str(latest.run_at)).date()
+        except ValueError:
+            run_day = None
+    return {
+        "today": today,
+        "latest": latest,
+        "keys": keys,
+        "state": journey.analysis_state(has_run=latest is not None, run_day=run_day, today=today, data_changed=changed),
+        "data_until": newest_order_day(),
+        "run_until": run_data_until(latest.id if latest is not None else None),
+        "opened": _opened_run_id(),
+        "updated": _source_updated_map(DATA_STORE),
+    }
+
+
+def _state_copy(status: dict) -> tuple[str, str]:
+    latest = status["latest"]
+    stamp = run_stamp_text(latest.run_at) if latest is not None else ""
+    until = f" (transaksi s.d. {format_id_date(status['run_until'])})" if status.get("run_until") else ""
+    state = status["state"]
+    if state == journey.STATE_EMPTY:
+        return "Belum ada analisa", "Upload data transaksi, lalu jalankan analisa pertama."
+    if state == journey.STATE_NEW_DATA:
+        return (
+            "Ada data baru sejak analisa terakhir",
+            f"Analisa {stamp}{until} belum memakai unggahan terbaru. Jalankan analisa agar prediksi, stok, dan iklan memakai data ini.",
         )
-        run_col, train_col, open_col, _gap = st.columns([1.2, 1.2, 1.5, 1.6])
-        may_run = can(AUTH_USER.role, "jalankan_analisa")
-        latest = _latest_ready_run() if "analysis" not in st.session_state else None
-        if latest is not None and open_col.button("Buka analisa terakhir", use_container_width=True, key="home-open-last", help=f"Hasil {run_stamp_text(latest.run_at)} oleh {latest.run_by}"):
-            with st.spinner("Membuka hasil analisa terakhir…"):
-                opened_ok = open_saved_run(latest.id)
-            if opened_ok:
+    if state == journey.STATE_CURRENT:
+        return "Hasil analisa sudah terbaru", f"Analisa {stamp}{until} sudah memakai semua data yang tersimpan. Langsung lihat hasil."
+    return (
+        "Transaksi hari ini belum diunggah",
+        f"Analisa terakhir {stamp}{until}. Upload transaksi terbaru lalu jalankan analisa. Selama belum ada data baru, hasil terakhir tetap dipakai.",
+    )
+
+
+def _step_html(number: int, title: str, lines: list[str], done: bool) -> str:
+    mark = "<span style='color:#166534'>✓</span>" if done else f"<span class='journey-num'>{number}</span>"
+    body = "".join(f"<div class='journey-line'>{line}</div>" for line in lines)
+    return f"<div class='journey-step'><div class='journey-title'>{mark} {html.escape(title)}</div>{body}</div>"
+
+
+def run_daily_analysis(status: dict) -> None:
+    request_analysis_run(**{**last_run_settings(), "keys": status["keys"]})
+
+
+def view_latest_result(status: dict) -> None:
+    latest = status["latest"]
+    if latest is not None and status["opened"] != latest.id:
+        with st.spinner("Membuka hasil analisa terbaru…"):
+            if not open_saved_run(latest.id):
                 st.rerun()
-        if not may_run:
-            st.caption("Role Anda melihat hasil analisa terakhir. Buka hasil dari Riwayat analisa di bawah.")
-        if may_run and run_col.button("Jalankan analisa", type="primary", use_container_width=True, key="home-run"):
-            request_analysis_run(**last_run_settings())
+    _go(PAGE_RESULT)
+
+
+def show_daily_journey(status: dict, *, where: str) -> None:
+    """Tiga langkah harian dengan satu tombol utama sesuai status data."""
+    role = AUTH_USER.role
+    may_upload = can(role, "ubah_data_latih")
+    may_run = can(role, "jalankan_analisa")
+    latest = status["latest"]
+    action = journey.STATE_ACTION[status["state"]]
+    if action == journey.ACTION_UPLOAD and not may_upload:
+        action = journey.ACTION_RUN if may_run else journey.ACTION_VIEW
+    if action == journey.ACTION_RUN and not may_run:
+        action = journey.ACTION_VIEW
+    with st.container(border=True):
+        show_status_banner(status)
+        today = status["today"]
+        tx_updated = status["updated"].get("transactions", "")
+        tx_today = not journey.upload_due("transactions", _parse_day(tx_updated), today)
+        settings = last_run_settings()
+        cols = st.columns(3, gap="medium")
+        upload_lines = [
+            f"Transaksi s.d. <b>{format_id_date(status['data_until'])}</b>" if status["data_until"] else "Belum ada transaksi tersimpan",
+            f"Terakhir diunggah {tx_updated}" if tx_updated else "Belum pernah diunggah",
+            "Stok, iklan, produk, target: unggah hanya bila berubah.",
+        ]
+        cols[0].markdown(_step_html(1, "Upload data", upload_lines, tx_today), unsafe_allow_html=True)
+        months = len(status["keys"])
+        run_lines = [
+            f"{PERIOD_LABELS.get(settings['period'], settings['period'])} · {SETTING_LABELS.get(settings['metric'], settings['metric'])} · safety stock {settings['service']}%",
+            f"{months} bulan data · batal & retur {'dikecualikan' if settings['exclude'] else 'ikut dihitung'}",
+            "Setelan sama dengan analisa terakhir; ubah di Upload data › Setelan analisa.",
+        ]
+        cols[1].markdown(_step_html(2, "Jalankan analisa", run_lines, status["state"] == journey.STATE_CURRENT), unsafe_allow_html=True)
+        if latest is not None:
+            view_lines = [f"Analisa {run_stamp_text(latest.run_at)} oleh {html.escape(latest.run_by)}"]
+            if status["run_until"]:
+                view_lines.append(f"Memakai transaksi s.d. {format_id_date(status['run_until'])}")
+            view_lines.append("Prediksi, stok, rekomendasi, laporan, evaluasi model.")
+        else:
+            view_lines = ["Belum ada hasil."]
+        cols[2].markdown(_step_html(3, "Lihat hasil", view_lines, False), unsafe_allow_html=True)
+        b1, b2, b3 = st.columns(3, gap="medium")
+        if may_upload and where != "input" and b1.button("Upload data", key=f"jr-upload-{where}", type="primary" if action == journey.ACTION_UPLOAD else "secondary", use_container_width=True):
+            _go(PAGE_INPUT)
+        if may_run and b2.button("Jalankan analisa", key=f"jr-run-{where}", type="primary" if action == journey.ACTION_RUN else "secondary", use_container_width=True, disabled=not status["keys"]):
+            run_daily_analysis(status)
             st.rerun()
-        if may_run:
-            nxt = last_run_settings()
-            explain(
-                [
-                    ("Periode", PERIOD_LABELS.get(nxt["period"], nxt["period"])),
-                    ("Parameter", "QTY terjual" if nxt["metric"] == "qty" else "Sales value"),
-                    ("Safety stock", f"{nxt['service']}%"),
-                    ("Kecualikan batal & retur", "Ya" if nxt["exclude"] else "Tidak"),
-                    ("Data latih", f"{len(nxt['keys'])} bulan"),
-                ],
-                title="Jalankan analisa memakai (ubah lewat Ubah data latih):",
-            )
-        if may_run and train_col.button("Ubah data latih", use_container_width=True, key="home-train"):
-            st.session_state["active-feature"] = FEATURE_ID
-            st.session_state["editing-input"] = True
-            st.rerun()
-        show_duplicate_offer("home")
-    st.markdown("<div class='home-section'>2. Riwayat analisa</div>", unsafe_allow_html=True)
-    show_run_history()
+        if latest is not None and b3.button("Lihat hasil analisa", key=f"jr-view-{where}", type="primary" if action == journey.ACTION_VIEW else "secondary", use_container_width=True):
+            view_latest_result(status)
+        show_duplicate_offer(where)
+
+
+def _parse_day(text: str) -> date | None:
+    try:
+        return datetime.strptime(str(text)[:10], "%d/%m/%Y").date()
+    except ValueError:
+        return None
+
+
+def show_data_status(status: dict) -> None:
+    """Kapan tiap data terakhir diunggah dan apakah perlu diunggah lagi."""
+    statuses = _source_status_map(DATA_STORE)
+    updated = status["updated"]
+    today = status["today"]
+    labels = {spec.key: spec.label for spec in source_menu()}
+    targets = monthly_targets(get_features())
+    rows = []
+    for group, keys in UPLOAD_GROUPS:
+        for key in keys:
+            if key == TARGET_UPLOAD:
+                has_month = f"{today:%Y-%m}" in targets
+                rows.append({"Kelompok": group, "Data": "Target sales bulanan", "Terakhir diunggah": f"{len(targets)} bulan tersimpan" if targets else "–", "Jadwal unggah": "Awal bulan", "Keterangan": "Target bulan ini ada" if has_month else "⚠️ Target bulan ini belum ada"})
+                continue
+            if key not in labels:
+                continue
+            when = updated.get(key, "")
+            filled = statuses.get(key) == "Siap"
+            due = journey.upload_due(key, _parse_day(when), today)
+            note = "⚠️ Belum diunggah hari ini" if due else ("✓ Tersimpan" if filled else "Kosong")
+            if key == "transactions" and status["data_until"]:
+                note += f" · pesanan s.d. {fmt_date_short(status['data_until'])}"
+            rows.append({"Kelompok": group, "Data": labels[key], "Terakhir diunggah": when or "–", "Jadwal unggah": journey.upload_rhythm(key), "Keterangan": note})
+    show_table(pd.DataFrame(rows))
+    st.caption("Transaksi bisa diunggah kapan saja dan setiap hari. Data lain tetap dipakai sampai diunggah ulang; unggah ulang hanya bila ada perubahan.")
 
 
 @st.cache_resource(show_spinner=False)
@@ -2281,18 +2461,23 @@ def save_training_exclude(value: bool) -> None:
 
 
 def last_run_settings() -> dict:
-    """Landasan analisa terakhir; bila belum ada, semua bulan tersimpan dengan parameter bawaan."""
-    # Sesi baru (mis. setelah reboot) mengikuti analisa terakhir, bukan nilai bawaan, agar hasilnya tidak bergeser.
-    latest = _latest_ready_run() if "saved-period" not in st.session_state else None
-    period = str(st.session_state.get("saved-period", latest.periode if latest else "bulan"))
-    keys = tuple(st.session_state.get("active-library-keys") or ()) or tuple(item["key"] for item in list_months())
-    default_service = int(latest.safety_stock) if latest else recommended_service_level(period, current_params()).pct
+    """Setelan analisa sukses terakhir (bukan analisa lama yang sedang dibuka); bila belum ada, nilai bawaan."""
+    latest = _latest_ready_run()
+    if latest is None:
+        period = "bulan"
+        return {
+            "period": period,
+            "metric": "qty",
+            "service": recommended_service_level(period, current_params()).pct,
+            "keys": daily_run_keys(None),
+            "exclude": training_exclude(),
+        }
     return {
-        "period": period,
-        "metric": str(st.session_state.get("saved-metric", latest.parameter if latest else "qty")),
-        "service": int(st.session_state.get("saved-service", default_service)),
-        "keys": keys,
-        "exclude": training_exclude(),
+        "period": str(latest.periode),
+        "metric": str(latest.parameter),
+        "service": int(latest.safety_stock),
+        "keys": daily_run_keys(latest),
+        "exclude": bool(latest.exclude_batal_retur),
     }
 
 
@@ -2381,6 +2566,7 @@ def open_saved_run(run_id: int, *, navigate: bool = True) -> bool:
     st.session_state["movement-asof"] = dict(movement_cache) if isinstance(movement_cache, dict) else {}
     st.session_state["active-run"] = (record.id, tuple(st.session_state["movement-asof"]))
     keys = tuple(result.get("library_keys") or ())
+    _run_keys_map()[record.id] = keys
     result["exclude_return_cancel"] = bool(result.get("exclude_return_cancel", record.exclude_batal_retur))
     st.session_state["analysis"] = result
     st.session_state["saved-period"] = str(result.get("period", record.periode))
@@ -2417,6 +2603,7 @@ def save_analysis_run(analysis: dict, *, duration: float, window_start: date, wi
         st.session_state["run-error"] = f"Analisa selesai, tetapi belum tersimpan ke riwayat: {exc}"
         return
     sync_file_vault()
+    _run_keys_map()[record.id] = keys
     st.session_state["_run-save-katalog"] = record.id
     st.session_state["active-run"] = (record.id, tuple())
     st.session_state.pop("run-origin", None)
@@ -2693,9 +2880,9 @@ def _mobile_header(logo: str, title: str, analysis: bool, training: bool, settin
             st.markdown(f"👤 **{html.escape(AUTH_USER.username)}** · {role_label(AUTH_USER.role)}")
             if st.button("Beranda", key="m-beranda", use_container_width=True):
                 _go(PAGE_HOME)
-            if analysis and st.button("Analisa prediksi", key="m-analisa", use_container_width=True):
+            if analysis and st.button("Hasil analisa", key="m-analisa", use_container_width=True):
                 _go(PAGE_RESULT)
-            if training and st.button("Ubah data latih", key="m-latih", use_container_width=True):
+            if training and st.button("Upload data", key="m-latih", use_container_width=True):
                 _go(PAGE_INPUT)
             if setting and st.button("Setting", key="m-setting", use_container_width=True):
                 _go(PAGE_SETTING)
@@ -2721,7 +2908,7 @@ def render_header() -> None:
     show_training_button = page not in (PAGE_INPUT, PAGE_HOME) and not on_setting and can(AUTH_USER.role, "ubah_data_latih")
     show_setting_button = not on_setting and bool(setting_tabs(AUTH_USER.role))
     mitra, shopee = _logo_uri("mitra10.png"), _logo_uri("shopee.svg")
-    title = "Setting" if on_setting else "Prediksi item terlaris"
+    title = "Setting" if on_setting else {PAGE_HOME: "Beranda", PAGE_INPUT: "Upload data & setelan analisa", PAGE_USERS: "Kelola user", PAGE_PASSWORD: "Ubah password"}.get(page, "Hasil analisa")
     _mobile_header(mitra, title, show_analysis_button, show_training_button, show_setting_button)
     columns = st.columns([4.3, 1.75, 1.85, 1.1, 1.2, 1.45], vertical_alignment="center")
     columns[0].markdown(
@@ -2737,9 +2924,9 @@ def render_header() -> None:
         """,
         unsafe_allow_html=True,
     )
-    if show_analysis_button and columns[1].button("Analisa prediksi", key="hdr-analisa", use_container_width=True):
+    if show_analysis_button and columns[1].button("Hasil analisa", key="hdr-analisa", use_container_width=True):
         _go(PAGE_RESULT)
-    if show_training_button and columns[2].button("Ubah data latih", key="hdr-latih", use_container_width=True):
+    if show_training_button and columns[2].button("Upload data", key="hdr-latih", use_container_width=True):
         _go(PAGE_INPUT)
     if show_setting_button and columns[3].button("Setting", key="hdr-setting", use_container_width=True):
         _go(PAGE_SETTING)
@@ -2859,28 +3046,31 @@ def show_prediction_inputs() -> None:
         notice = st.session_state.pop("input-error", None)
         if notice:
             st.error(notice)
-        if "analysis" in st.session_state:
-            st.caption("Hasil analisa sebelumnya tetap ada sampai analisa dijalankan lagi.")
+        status = analysis_status()
+        show_status_banner(status)
+    last = last_run_settings()
 
     upload_box = st.container(border=True)
-    summary_box = st.container(border=True)
     period_box = st.container(border=True)
     with upload_box:
         imported_keys, load_error = show_training_uploads()
-    with summary_box:
+        st.markdown("<div class='side-section'>Cek kualitas data tersimpan</div>", unsafe_allow_html=True)
         show_training_summary()
     orders_raw = pd.DataFrame()
     source_raw = pd.DataFrame()
     source_key = "empty"
     saved_months = list_months()
+    selected_library: list[str] = []
     with period_box:
         st.markdown(
             """
-            <div class="home-section">PERIODE ANALISA DATA LATIH</div>
-            <div class="feature-copy">Checklist periode mana yang akan digunakan sebagai data latih untuk analisa trend dan prediksi</div>
+            <div class="home-section">LANGKAH 2 · SETELAN ANALISA</div>
+            <div class="feature-copy">Sudah terisi sama dengan analisa terakhir, ditambah bulan data terbaru. Untuk pemakaian
+            harian tidak perlu diubah; ubah hanya bila ingin membandingkan (mis. untuk tesis).</div>
             """,
             unsafe_allow_html=True,
         )
+        st.markdown("<div class='side-section'>Rentang data latih</div>", unsafe_allow_html=True)
         if saved_months:
             years = []
             for item in saved_months:
@@ -2904,10 +3094,12 @@ def show_prediction_inputs() -> None:
             if dated_keys:
                 lib_lo = pd.Period(dated_keys[0], freq="M").start_time.date()
                 lib_hi = min(pd.Period(dated_keys[-1], freq="M").end_time.date(), max(date.today(), lib_lo))
+                last_dated = [k for k in last["keys"] if k[:4].isdigit()]
+                default_lo = max(pd.Period(last_dated[0], freq="M").start_time.date(), lib_lo) if last_dated else lib_lo
                 if imported_keys:
-                    # Data baru diunggah: pakai semua bulan.
-                    st.session_state["_keep::library-cal-range"] = (lib_lo, lib_hi)
-                lib_start, lib_end = date_range_picker(key="library-cal", lo=lib_lo, hi=lib_hi, default=(lib_lo, lib_hi), label="Rentang data latih")
+                    # Data baru diunggah: rentang analisa terakhir diperpanjang sampai bulan terbaru.
+                    st.session_state["_keep::library-cal-range"] = (default_lo, lib_hi)
+                lib_start, lib_end = date_range_picker(key="library-cal", lo=lib_lo, hi=lib_hi, default=(default_lo, lib_hi), label="Rentang data latih")
                 touched = set(pd.period_range(lib_start, lib_end, freq="M").astype(str))
                 selected_library = [k for k in dated_keys if k in touched] + undated_keys
                 st.caption("Bulan yang tersentuh rentang tanggal dipakai utuh sebagai data latih: " + ", ".join(_library_label(k) for k in selected_library) + ".")
@@ -2918,15 +3110,18 @@ def show_prediction_inputs() -> None:
                 st.caption(f"{_library_label(current_key)}: bulan berjalan, data s.d. hari ini.")
             if selected_library:
                 orders_raw, source_raw, source_key = _orders_from_library(selected_library)
-                st.session_state["active-library-keys"] = tuple(selected_library)
             else:
-                orders_raw = pd.DataFrame()
-                source_raw = pd.DataFrame()
                 source_key = "library:none"
-                st.session_state["active-library-keys"] = tuple()
                 st.warning("Pilih rentang tanggal yang memuat data tersimpan.")
         else:
-            st.caption("Belum ada data tersimpan. Unggah laporan di atas.")
+            st.caption("Belum ada data tersimpan. Unggah laporan di langkah 1.")
+        if "train-exclude" not in st.session_state:
+            st.session_state["train-exclude"] = bool(last["exclude"])
+        st.checkbox(
+            "Kecualikan pesanan batal & unit retur",
+            key="train-exclude",
+            help="Aktif: model belajar dari permintaan bersih (batal & retur tidak dihitung). Berlaku untuk analisa yang dijalankan dari sini dan analisa harian berikutnya.",
+        )
     if (
         isinstance(source_raw, pd.DataFrame)
         and not source_raw.empty
@@ -2937,12 +3132,14 @@ def show_prediction_inputs() -> None:
             orders_raw = rebuilt
 
     params = current_params()
-    training_months = len(st.session_state.get("active-library-keys", tuple()))
-    with st.container(border=True):
+    training_months = len(selected_library)
+    with period_box:
         st.markdown("<div class='side-section'>Periode prediksi</div>", unsafe_allow_html=True)
         period_choices = list(PERIOD_OPTIONS)
         if "forecast-period" not in st.session_state or st.session_state["forecast-period"] not in period_choices:
-            st.session_state["forecast-period"] = "bulan"
+            st.session_state["forecast-period"] = last["period"] if last["period"] in period_choices else "bulan"
+        if st.session_state.get("rank-metric") not in ("qty", "sales"):
+            st.session_state["rank-metric"] = last["metric"] if last["metric"] in ("qty", "sales") else "qty"
         if hasattr(st, "segmented_control"):
             picked_period = st.segmented_control(
                 "Periode prediksi",
@@ -2996,7 +3193,7 @@ def show_prediction_inputs() -> None:
                 "Safety stock (%)",
                 min_value=0,
                 max_value=500,
-                value=rec.pct,
+                value=int(last["service"]) if period == last["period"] else rec.pct,
                 step=1,
                 key=f"safety-stock-{period}",
             )
@@ -3018,24 +3215,32 @@ def show_prediction_inputs() -> None:
             )
         st.markdown(safety_recommendation_html(rec, service, impact, period), unsafe_allow_html=True)
 
+    exclude = bool(st.session_state.get("train-exclude", last["exclude"]))
+    chosen = (period, sidebar_metric, int(service), tuple(selected_library), exclude)
+    same_as_last = chosen == (last["period"], last["metric"], int(last["service"]), tuple(last["keys"]), bool(last["exclude"]))
+    with st.container(border=True):
+        st.markdown("<div class='home-section'>LANGKAH 3 · JALANKAN ANALISA</div>", unsafe_allow_html=True)
         summary_col, run_col = st.columns([3, 1.1], vertical_alignment="center")
         summary_col.markdown(
             "<div class='field-hint'>"
             f"<b>Data latih</b> {training_months} bulan · <b>Periode</b> {PERIOD_LABELS[period]} · "
-            f"<b>Safety stock</b> {service}% · <b>Parameter</b> {'QTY terjual' if sidebar_metric == 'qty' else 'Sales value'}"
-            "</div>",
+            f"<b>Parameter</b> {SETTING_LABELS.get(sidebar_metric, sidebar_metric)} · <b>Safety stock</b> {service}% · "
+            f"<b>Batal & retur</b> {'dikecualikan' if exclude else 'ikut dihitung'}<br>"
+            + ("Setelan sama dengan analisa harian." if same_as_last else "<b style='color:#1d4ed8'>Setelan berbeda dari analisa terakhir</b>; analisa harian berikutnya akan mengikuti setelan ini.")
+            + " Selesai dianalisa, hasilnya langsung dibuka dan menjadi analisa terakhir.</div>",
             unsafe_allow_html=True,
         )
         if run_col.button("Jalankan analisa", type="primary", use_container_width=True):
             if not isinstance(orders_raw, pd.DataFrame) or orders_raw.empty:
-                st.session_state["input-error"] = "Pilih tahun dan bulan, atau unggah laporan, sebelum menjalankan analisa."
+                st.session_state["input-error"] = "Pilih rentang data latih, atau unggah laporan, sebelum menjalankan analisa."
                 st.rerun()
+            save_training_exclude(exclude)
             request_analysis_run(
                 period=period,
                 metric=sidebar_metric,
                 service=int(service),
-                keys=st.session_state.get("active-library-keys", tuple()),
-                exclude=bool(st.session_state.get("train-exclude", training_exclude())),
+                keys=tuple(selected_library),
+                exclude=exclude,
                 training_months=training_months,
                 service_recommended=rec.pct,
             )
@@ -3043,6 +3248,61 @@ def show_prediction_inputs() -> None:
             st.rerun()
         show_duplicate_offer("input")
     st.stop()
+
+
+def show_result_status(status: dict) -> None:
+    """Baris status di atas hasil: analisa mana yang dibuka dan apakah sudah memakai data terbaru."""
+    latest = status["latest"]
+    opened = status["opened"]
+    record = None
+    if opened is not None:
+        try:
+            record = latest if latest is not None and latest.id == opened else run_repository().get(opened)
+        except Exception:
+            record = None
+    if record is None:
+        return
+    stamp = run_stamp_text(record.run_at)
+    until = run_data_until(record.id)
+    line = f"Hasil analisa <b>{stamp}</b> oleh {html.escape(record.run_by)}" + (f" · transaksi s.d. {format_id_date(until)}" if until else "")
+    older = latest is not None and record.id != latest.id
+    if older:
+        text_col, btn_col = st.columns([4, 1.2], vertical_alignment="center")
+        text_col.markdown(
+            f"<div style='border-left:4px solid #92400e;background:#fef3c7;padding:8px 12px;border-radius:8px'>"
+            f"<b style='color:#92400e'>Anda membuka analisa lama</b> · {line}. Analisa terakhir {run_stamp_text(latest.run_at)}.</div>",
+            unsafe_allow_html=True,
+        )
+        if btn_col.button("Buka analisa terakhir", key="rs-latest", type="primary", use_container_width=True):
+            view_latest_result(status)
+        return
+    if status["state"] == journey.STATE_NEW_DATA:
+        text_col, btn_col = st.columns([4, 1.2], vertical_alignment="center")
+        text_col.markdown(
+            f"<div style='border-left:4px solid #1d4ed8;background:#dbeafe;padding:8px 12px;border-radius:8px'>"
+            f"<b style='color:#1d4ed8'>Ada data baru sejak analisa ini</b> · {line}. Jalankan analisa agar angka di bawah memakai unggahan terbaru.</div>",
+            unsafe_allow_html=True,
+        )
+        if can(AUTH_USER.role, "jalankan_analisa") and btn_col.button("Jalankan analisa", key="rs-run", type="primary", use_container_width=True):
+            run_daily_analysis(status)
+            st.rerun()
+        show_duplicate_offer("result")
+        return
+    badge_text = "terbaru" if status["state"] == journey.STATE_CURRENT else "terakhir · belum ada transaksi baru"
+    st.markdown(
+        f"<div class='field-hint' style='margin:2px 0 8px'>{line} · <span style='color:#166534;font-weight:700'>{badge_text}</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def show_status_banner(status: dict, *, compact: bool = False) -> None:
+    title, body = _state_copy(status)
+    tone, bg = STATE_TONE[status["state"]]
+    st.markdown(
+        f"<div style='border-left:4px solid {tone};background:{bg};padding:{'8px 12px' if compact else '10px 14px'};border-radius:8px;margin:4px 0 10px'>"
+        f"<b style='color:{tone}'>{html.escape(title)}</b><br><span style='color:#0f172a;font-size:var(--fs-sm)'>{html.escape(body)}</span></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def safety_recommendation_html(rec, service: int, impact: dict | None, period: str) -> str:
@@ -5017,7 +5277,7 @@ def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None
         available = ads_report_span(frames.ads)
         st.info(
             "Belum ada laporan iklan untuk periode ini."
-            + (f" Laporan iklan tersimpan mencakup {available}." if available else " Unggah laporan iklan di Ubah data latih › Iklan."),
+            + (f" Laporan iklan tersimpan mencakup {available}." if available else " Unggah laporan iklan di Upload data › Iklan."),
             icon=":material/info:",
         )
     if len(monthly) > 1:
@@ -5074,7 +5334,7 @@ def show_folder_menu() -> None:
     explain(
         [
             "Data yang sudah diimpor tersimpan di sini.",
-            ("Data latih", "bulan yang dipakai dipilih di Ubah data latih › Periode analisa data latih"),
+            ("Data latih", "bulan yang dipakai dipilih di Upload data › Setelan analisa"),
             ("Unggah ulang transaksi", "file baru yang memuat bulan yang sama menggantikan isi bulan itu"),
         ]
     )
@@ -7839,9 +8099,8 @@ with PAGE_ROOT.container(key="page-root"):
     run_notice = st.session_state.pop("run-error", None)
     if run_notice:
         st.warning(run_notice)
-    origin = st.session_state.get("run-origin")
-    if isinstance(origin, dict) and "analysis" in st.session_state:
-        st.info(f"Menampilkan hasil analisa {run_stamp_text(origin['run_at'])} oleh {origin['run_by']}.")
+    if "analysis" in st.session_state and not st.session_state.get("pending-run"):
+        show_result_status(analysis_status())
 
     orders_raw, source_raw, source_key, period, sidebar_metric, service = restore_prediction_context()
     _tick("konteks")

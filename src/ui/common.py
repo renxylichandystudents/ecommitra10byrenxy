@@ -437,7 +437,7 @@ def exclude_status_card(active: bool, *, removed_orders: int, removed_units: flo
         left, right = st.columns([3, 2], vertical_alignment="center")
         with left:
             st.markdown("**Kecualikan batal & retur**")
-            st.caption("Setelan analisa ini. Ubah di Ubah data latih, lalu jalankan analisa.")
+            st.caption("Setelan analisa ini. Ubah di Upload data › Setelan analisa, lalu jalankan analisa.")
         with right:
             if active:
                 st.markdown(badge("AKTIF · nilai bersih", "on"), unsafe_allow_html=True)
