@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, centered_download, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -5937,7 +5937,10 @@ def _ss_params(params: dict, service: int) -> dict:
     return {"service": int(service), "lead_days": days, "import_mode": impor}
 
 
-_TOP50_TABLE = components.declare_component("top50_table", path=str(ROOT / "components" / "top50_table"))
+from src.ui.decision_view import COMPONENT_VERSION as _TABLE_VERSION  # noqa: E402
+
+# Nama memuat sidik index.html agar browser tidak memakai komponen lama dari cache.
+_TOP50_TABLE = components.declare_component(f"top50_table_{_TABLE_VERSION}", path=str(ROOT / "components" / "top50_table"))
 
 
 def _move_cell(now: float | None, then: float | None, *, money: bool) -> tuple[str, str]:
@@ -6135,7 +6138,7 @@ def offer_excel(frame: pd.DataFrame, filename: str) -> None:
         return
     safe = filename if str(filename).endswith(".xlsx") else f"{filename}.xlsx"
     st.download_button(
-        "Unduh Excel",
+        f"Unduh Excel · {len(frame):,} baris".replace(",", "."),
         data=excel_bytes(frame),
         file_name=safe,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -7223,7 +7226,7 @@ def show_analysis_movement(
             unsafe_allow_html=True,
         )
     else:
-        offer_excel(export, "pergerakan_top50.xlsx")
+        centered_download("movement-xlbar", lambda: offer_excel(export, "pergerakan_top50.xlsx"))
     return detail
 
 

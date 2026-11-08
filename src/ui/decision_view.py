@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -22,6 +24,7 @@ from src.ui.common import (
     STATUS_CLASS,
     UP_COLOR,
     card,
+    centered_download,
     download_excel,
     fmt_date,
     fmt_idr,
@@ -33,7 +36,10 @@ from src.ui.common import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-_TABLE = components.declare_component("decision_table", path=str(ROOT / "components" / "top50_table"))
+# Nama komponen memuat sidik isi index.html: browser tidak memakai versi lama dari cache setelah komponen diubah.
+_COMPONENT_DIR = ROOT / "components" / "top50_table"
+COMPONENT_VERSION = hashlib.md5((_COMPONENT_DIR / "index.html").read_bytes()).hexdigest()[:8]
+_TABLE = components.declare_component(f"decision_table_{COMPONENT_VERSION}", path=str(_COMPONENT_DIR))
 SS_DEFINITION_TOP = (
     "Safety stock (SS) = stok cadangan agar produk tidak kosong. "
     "SS = Z × σ permintaan harian × √lead time lokal, dibulatkan ke atas."
@@ -95,6 +101,13 @@ def table_parts(
             {"id": f"{group.prefix}_butuh", "label": "Butuh", "group": title, "kind": "num", "sort": True, "tone": tone},
             {"id": f"{group.prefix}_stok", "label": "Stok", "group": title, "kind": "num", "sort": True, "tone": "stock"},
         ]
+    dc_known = any(f"stok_{code}" in view.columns and view[f"stok_{code}"].notna().any() for code in ("10062", "10036"))
+    if dc_known:
+        columns += [
+            {"id": "dc_10062", "label": "Site 10062 · Cikupa", "group": "Stok DC", "kind": "num", "sort": True, "tone": "stock"},
+            {"id": "dc_10036", "label": "Site 10036 · Cipeucang", "group": "Stok DC", "kind": "num", "sort": True, "tone": "stock"},
+            {"id": "dc_take", "label": "Ambil dari DC", "group": "Stok DC", "width": 230, "kind": "name", "sort": True, "tone": "stock"},
+        ]
     columns += [
         {"id": "cover", "label": "Hari cukup", "group": "Kesehatan stok", "kind": "num", "sort": True, "tone": "stock"},
         {"id": "empty", "label": "Lama kosong", "group": "Kesehatan stok", "kind": "num", "sort": True, "tone": "stock"},
@@ -151,6 +164,24 @@ def table_parts(
             export[f"{label} - Stok Site 10037"] = float(row["stok"]) if bool(row.get("ada_data_stok", False)) else None
             export[f"{label} - Selisih"] = float(row[f"{p}_selisih"]) if bool(row.get("ada_data_stok", False)) else None
             export[f"{label} - Status"] = status_key(row[f"{p}_status"])
+        if dc_known:
+            for code in ("10062", "10036"):
+                value = row.get(f"stok_{code}")
+                known = value is not None and pd.notna(value)
+                take = row.get(f"ambil_{code}")
+                take = float(take) if take is not None and pd.notna(take) else 0.0
+                cells[f"dc_{code}"] = {
+                    "v": float(value) if known else None,
+                    "t": fmt_qty(value) if known else "-",
+                    "s": f"ambil {fmt_qty(take)}" if take > 0 else "",
+                    "c": "st-ok" if known and float(value) > 0 else "",
+                }
+                if known:
+                    totals[f"dc_{code}"] = totals.get(f"dc_{code}", 0.0) + float(value)
+                export[f"Stok Site {code}"] = float(value) if known else None
+            plan = str(row.get("sumber_restock") or "").strip()
+            cells["dc_take"] = {"v": plan, "t": plan or "Tidak perlu"}
+            export["Ambil dari DC"] = plan
         cover = row.get("hari_cukup")
         cover_ok = cover is not None and pd.notna(cover) and np.isfinite(float(cover))
         cells["cover"] = {
@@ -211,7 +242,7 @@ def show_decision_table(
     )
     picked = str(picked or "")
     st.session_state[f"{key}-value"] = picked
-    download_excel(export, filename, key=f"xl-{key}")
+    centered_download(f"{key}-xlbar", lambda: download_excel(export, filename, key=f"xl-{key}"))
     return picked if picked in keys else ""
 
 

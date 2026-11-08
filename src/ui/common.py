@@ -505,6 +505,11 @@ def _rerun(scope: str) -> None:
     st.rerun()
 
 
+def centered_download(key: str, download) -> None:
+    """Tombol Unduh Excel di tengah, gaya sama dengan bilah tombol tabel."""
+    _action_bar(key, [], download)
+
+
 def _action_bar(key: str, actions: list, download) -> int | None:
     """Bilah tombol rapi di tengah: Muat lebih banyak · Tutup · Unduh Excel, sama tinggi, teks tidak terlipat."""
     count = len(actions) + (1 if download else 0)
