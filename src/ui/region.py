@@ -22,10 +22,8 @@ def show_region_analysis(source_raw: pd.DataFrame) -> None:
         return
     stamp = pd.to_datetime(lines["order_time"], errors="coerce")
     lo, hi = stamp.min().date(), stamp.max().date()
-    f1, f3 = st.columns([1.3, 1.3], vertical_alignment="bottom")
-    with f1:
-        start, end = date_range_picker(key="region-cal", lo=lo, hi=hi, default=(max(lo, hi.replace(day=1)), hi))
-    level = f3.segmented_control("Tampilkan per", ["Provinsi", "Kota/Kabupaten"], default="Provinsi", key="region-level") or "Provinsi"
+    start, end = date_range_picker(key="region-cal", lo=lo, hi=hi, default=(max(lo, hi.replace(day=1)), hi))
+    level = st.segmented_control("Tampilkan per", ["Provinsi", "Kota/Kabupaten"], default="Provinsi", key="region-level") or "Provinsi"
     view = lines.loc[stamp.dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))]
     period_text = "semua data" if (start, end) == (lo, hi) else range_label(start, end)
     prov = region_summary(view, "province")

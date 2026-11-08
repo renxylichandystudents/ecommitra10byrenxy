@@ -2784,9 +2784,7 @@ def show_prediction_inputs() -> None:
                 if imported_keys:
                     # Data baru diunggah: pakai semua bulan.
                     st.session_state["_keep::library-cal-range"] = (lib_lo, lib_hi)
-                pick_col, _gap = st.columns([1.3, 2])
-                with pick_col:
-                    lib_start, lib_end = date_range_picker(key="library-cal", lo=lib_lo, hi=lib_hi, default=(lib_lo, lib_hi), label="Rentang data latih")
+                lib_start, lib_end = date_range_picker(key="library-cal", lo=lib_lo, hi=lib_hi, default=(lib_lo, lib_hi), label="Rentang data latih")
                 touched = set(pd.period_range(lib_start, lib_end, freq="M").astype(str))
                 selected_library = [k for k in dated_keys if k in touched] + undated_keys
                 st.caption("Bulan yang tersentuh rentang tanggal dipakai utuh sebagai data latih: " + ", ".join(_library_label(k) for k in selected_library) + ".")

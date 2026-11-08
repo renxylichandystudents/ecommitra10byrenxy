@@ -358,8 +358,8 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
     if times.empty:
         return orders.iloc[0:0], "", []
     lo, hi = times.min().date(), times.max().date()
-    col = st.columns([1.3, 2])[0] if not compact else st.container()
-    with col:
+    # Lebar penuh: kolom tanggal tetap ramping (maks. 380px), panel kalender dua bulan tampil berdampingan.
+    with st.container():
         start, end = date_range_picker(key=f"{prefix}-cal", lo=lo, hi=hi, default=_default_range(lo, hi))
     filtered, months = _period_slice(orders, start, end)
     return filtered, range_label(start, end), months
