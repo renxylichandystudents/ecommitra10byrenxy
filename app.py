@@ -57,7 +57,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, batched_view, month_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -2755,49 +2755,33 @@ def show_prediction_inputs() -> None:
                 if year_name not in years:
                     years.append(year_name)
             years = sorted(years)
-            action_cols = st.columns([1, 1, 4])
-            if action_cols[0].button("Pilih semua", key="library-years-all"):
-                for year in years:
-                    st.session_state[f"library-year-on-{year}"] = True
-                for item in saved_months:
-                    st.session_state[f"library-month-{item['key']}"] = True
-                st.rerun()
-            if action_cols[1].button("Kosongkan", key="library-years-none"):
-                for year in years:
-                    st.session_state[f"library-year-on-{year}"] = False
-                for item in saved_months:
-                    st.session_state[f"library-month-{item['key']}"] = False
-                st.rerun()
             if imported_keys:
                 for key in imported_keys:
                     st.session_state[f"library-year-on-{year_of(key)}"] = True
                     st.session_state[f"library-month-{key}"] = True
-            year_columns = st.columns(max(len(years), 1))
-            checked_years = []
-            for index, year in enumerate(years):
-                year_widget = f"library-year-on-{year}"
-                if year_widget not in st.session_state:
-                    st.session_state[year_widget] = True
-                with year_columns[index]:
-                    if st.checkbox(str(year), key=year_widget):
-                        checked_years.append(year)
-            month_keys = [item["key"] for item in saved_months if year_of(item["key"]) in checked_years]
-            selected_library = []
-            if month_keys:
-                month_columns = st.columns(4)
-                for index, key in enumerate(sorted(month_keys)):
-                    month_widget = f"library-month-{key}"
-                    if month_widget not in st.session_state:
-                        st.session_state[month_widget] = True
-                    label = month_label(key)
-                    month_start = pd.Period(key, freq="M").to_timestamp() if key != "tanpa-bulan" else None
-                    if month_start is not None:
-                        today_ts = pd.Timestamp(date.today())
-                        if month_start.year == today_ts.year and month_start.month == today_ts.month:
-                            label = f"{label} (s.d. {today_ts.day} {ID_MONTHS[today_ts.month - 1]})"
-                    with month_columns[index % 4]:
-                        if st.checkbox(label, key=month_widget):
-                            selected_library.append(key)
+            today_ts = pd.Timestamp(date.today())
+
+            def _library_label(key: str) -> str:
+                label = month_label(key)
+                if key != "tanpa-bulan":
+                    start = pd.Period(key, freq="M").to_timestamp()
+                    if start.year == today_ts.year and start.month == today_ts.month:
+                        label = f"{label} (s.d. {today_ts.day} {ID_MONTHS[today_ts.month - 1]})"
+                return label
+
+            library_keys = sorted(item["key"] for item in saved_months)
+            pick_col, _gap = st.columns([1.5, 2])
+            with pick_col:
+                selected_library = month_picker(
+                    library_keys,
+                    key="library",
+                    year_key=lambda year: f"library-year-on-{year}",
+                    month_key=lambda key: f"library-month-{key}",
+                    default=lambda key: True,
+                )
+            current_key = f"{today_ts.year:04d}-{today_ts.month:02d}"
+            if current_key in selected_library:
+                st.caption(f"{_library_label(current_key)}: bulan berjalan, data s.d. hari ini.")
             if selected_library:
                 orders_raw, source_raw, source_key = _orders_from_library(selected_library)
                 st.session_state["active-library-keys"] = tuple(selected_library)

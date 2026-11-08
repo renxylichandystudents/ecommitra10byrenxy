@@ -216,8 +216,87 @@ def _keep(key: str, value) -> None:
     st.session_state[f"_keep::{key}"] = value
 
 
+SHORT_MONTHS = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
+
+
+def month_picker(
+    months: list[str],
+    *,
+    key: str,
+    year_key,
+    month_key,
+    default,
+    label_fn=None,
+    persist: bool = False,
+) -> list[str]:
+    """Pemilih bulan ringkas: satu tombol (popover) berisi pilihan cepat dan checkbox tahun & bulan.
+
+    months: kunci "YYYY-MM" (kunci lain, mis. "tanpa-bulan", masuk kelompok Lainnya). Tahun terbaru di atas;
+    bila datanya lebih dari dua tahun, tahun lama dilipat. Mengembalikan bulan yang tercentang
+    (bulan dihitung hanya bila tahunnya juga tercentang)."""
+    def year_of(item: str) -> str:
+        return item[:4] if item[:4].isdigit() else "Lainnya"
+
+    years = sorted({year_of(m) for m in months}, key=lambda y: (y == "Lainnya", y))
+    dated = [m for m in months if year_of(m) != "Lainnya"]
+    for year in years:
+        if year_key(year) not in st.session_state:
+            st.session_state[year_key(year)] = (st.session_state.get(f"_keep::{year_key(year)}") if persist else None)
+            if st.session_state[year_key(year)] is None:
+                st.session_state[year_key(year)] = any(default(m) for m in months if year_of(m) == year)
+    for item in months:
+        if month_key(item) not in st.session_state:
+            st.session_state[month_key(item)] = (st.session_state.get(f"_keep::{month_key(item)}") if persist else None)
+            if st.session_state[month_key(item)] is None:
+                st.session_state[month_key(item)] = bool(default(item))
+
+    def _set(keys: list[str]) -> None:
+        chosen = set(keys)
+        for year in years:
+            st.session_state[year_key(year)] = any(year_of(k) == year for k in chosen)
+        for item in months:
+            st.session_state[month_key(item)] = item in chosen
+
+    def _label(item: str) -> str:
+        return label_fn(item) if label_fn else month_label(item)
+
+    current = [m for m in months if st.session_state.get(month_key(m)) and st.session_state.get(year_key(year_of(m)))]
+    if not current:
+        summary = "Pilih bulan"
+    elif len(current) == len(months) and len(months) > 1:
+        summary = f"Semua bulan ({len(months)})"
+    elif len(current) <= 2:
+        summary = ", ".join(_label(m) for m in current)
+    else:
+        first, last = current[0], current[-1]
+        summary = f"{len(current)} bulan · {_label(first)} – {_label(last)}"
+    with st.popover(f"📅 {summary}", use_container_width=True):
+        st.markdown("<div class='field-hint'>Centang bulan yang ingin dipakai. Tahun yang tidak dicentang diabaikan.</div>", unsafe_allow_html=True)
+        q = st.columns(4)
+        q[0].button("Bulan terakhir", key=f"{key}-q1", on_click=_set, args=(dated[-1:] or months[-1:],), use_container_width=True)
+        q[1].button("3 bulan", key=f"{key}-q3", on_click=_set, args=(dated[-3:] or months[-3:],), use_container_width=True)
+        q[2].button("Semua", key=f"{key}-qa", on_click=_set, args=(list(months),), use_container_width=True)
+        q[3].button("Kosongkan", key=f"{key}-q0", on_click=_set, args=([],), use_container_width=True)
+        ordered = [y for y in reversed(years) if y != "Lainnya"] + [y for y in years if y == "Lainnya"]
+        for position, year in enumerate(ordered):
+            year_months = [m for m in months if year_of(m) == year]
+            box = st.container() if position == 0 or len(ordered) <= 2 else st.expander(f"Tahun {year}", expanded=False)
+            with box:
+                on_year = st.checkbox(f"**{year}**", key=year_key(year))
+                if persist:
+                    _keep(year_key(year), bool(on_year))
+                grid = st.columns(6)
+                for index, item in enumerate(year_months):
+                    text = SHORT_MONTHS[int(item[5:7]) - 1] if year != "Lainnya" and not label_fn else _label(item)
+                    on = grid[index % 6].checkbox(text, key=month_key(item), disabled=not on_year)
+                    if persist:
+                        _keep(month_key(item), bool(on))
+    return [m for m in months if st.session_state.get(month_key(m)) and st.session_state.get(year_key(year_of(m)))]
+
+
 def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -> tuple[pd.DataFrame, str, list[str]]:
-    """Filter periode penjualan bersama: checkbox tahun, grid bulan 4 kolom, tanggal mulai/selesai terkunci.
+    """Filter periode penjualan bersama, ringkas dalam satu baris: tombol pilih bulan (popover berisi checkbox
+    tahun & bulan + pilihan cepat), lalu tanggal mulai/selesai.
 
     Hanya memotong angka aktual; prediksi tetap dari input awal.
     """
@@ -227,28 +306,19 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
     work = orders.loc[times.notna()].copy()
     work["_month"] = times.loc[times.notna()].dt.to_period("M").astype(str)
     months = sorted(work["_month"].unique())
-    years = sorted({key[:4] for key in months})
     if not months:
         return work.iloc[0:0], "", []
-    year_cols = st.columns(max(len(years), 1) + (0 if compact else 2))
-    checked_years = []
-    for index, year in enumerate(years):
-        widget = f"{prefix}-y-{year}"
-        _restore(widget, year == years[-1])
-        on = year_cols[index].checkbox(year, key=widget)
-        _keep(widget, bool(on))
-        if on:
-            checked_years.append(year)
-    year_months = [key for key in months if key[:4] in checked_years]
-    selected: list[str] = []
-    grid = st.columns(4 if not compact else 6)
-    for index, key in enumerate(year_months):
-        widget = f"{prefix}-m-{key}"
-        _restore(widget, key == year_months[-1])
-        on = grid[index % len(grid)].checkbox(month_label(key), key=widget)
-        _keep(widget, bool(on))
-        if on:
-            selected.append(key)
+    pick_col, start_col, end_col = st.columns([1.5, 1, 1], vertical_alignment="bottom")
+    with pick_col:
+        month_picker(
+            months,
+            key=prefix,
+            year_key=lambda year: f"{prefix}-y-{year}",
+            month_key=lambda key: f"{prefix}-m-{key}",
+            default=lambda key: key == months[-1],
+            persist=True,
+        )
+    selected = [k for k in months if _kept(f"{prefix}-m-{k}") and _kept(f"{prefix}-y-{k[:4]}")]
     if not selected:
         st.warning("Centang minimal satu tahun dan satu bulan penjualan.")
         return work.iloc[0:0].drop(columns="_month"), "tidak ada bulan dipilih", []
@@ -268,9 +338,8 @@ def period_filter(orders: pd.DataFrame, *, prefix: str, compact: bool = False) -
             value = st.session_state.get(widget)
             if not isinstance(value, date) or value < lo or value > hi:
                 st.session_state[widget] = fallback
-    c1, c2 = st.columns(2)
-    start = c1.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key, format="DD/MM/YYYY")
-    end = c2.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key, format="DD/MM/YYYY")
+    start = start_col.date_input("Tanggal mulai", min_value=lo, max_value=hi, key=start_key, format="DD/MM/YYYY")
+    end = end_col.date_input("Tanggal selesai", min_value=lo, max_value=hi, key=end_key, format="DD/MM/YYYY")
     _keep(start_key, start)
     _keep(end_key, end)
     if start > end:
