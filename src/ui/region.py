@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct, month_label
+from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct, month_label, month_picker
 from src.utils.format import show_table
 
 
@@ -22,19 +22,18 @@ def show_region_analysis(source_raw: pd.DataFrame) -> None:
         return
     months = sorted(lines["month"].unique())
     labels = {m: month_label(m) for m in months}
-    f1, f2, f3 = st.columns([2.6, 1.1, 1.3], vertical_alignment="bottom")
-    all_months = f2.toggle("Semua bulan", value=False, key="region-all")
-    chosen = f1.multiselect(
-        "Periode (pilih satu atau beberapa bulan)",
-        options=months,
-        default=[months[-1]],
-        format_func=labels.get,
-        key="region-months",
-        disabled=all_months,
-        placeholder="Pilih bulan",
-    )
+    f1, f3 = st.columns([2, 1.3], vertical_alignment="bottom")
+    with f1:
+        picked = month_picker(
+            months,
+            key="region",
+            year_key=lambda year: f"region-y-{year}",
+            month_key=lambda key: f"region-m-{key}",
+            default=lambda key: key == months[-1],
+            persist=True,
+        ) or [months[-1]]
     level = f3.segmented_control("Tampilkan per", ["Provinsi", "Kota/Kabupaten"], default="Provinsi", key="region-level") or "Provinsi"
-    picked = months if all_months else (chosen or [months[-1]])
+    all_months = len(picked) == len(months) and len(months) > 1
     view = lines.loc[lines["month"].isin(picked)]
     period_text = "semua bulan" if all_months else ", ".join(labels[m] for m in sorted(picked))
     prov = region_summary(view, "province")
