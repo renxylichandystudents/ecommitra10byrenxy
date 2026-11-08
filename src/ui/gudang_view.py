@@ -356,7 +356,7 @@ def show_parameters(features, user_root, *, may_edit: bool) -> None:
     rows = [
         {"Parameter": "Lead time lokal", "Nilai": f"{fmt_num(local)} hari",
          "Sumber": "diisi tim (tidak ada di file unggahan) · ubah di bawah",
-         "Dipakai untuk": "Safety stock = Z × σ permintaan harian × √lead time; titik pesan ulang (ROP) = prediksi harian × lead time + SS; simulasi stok di Laporan"},
+         "Dipakai untuk": "Safety stock = Z × σ permintaan harian × √(lead time + periode tinjau); titik pesan ulang (ROP) = prediksi harian × lead time + SS; simulasi stok di Laporan"},
         {"Parameter": "Variasi lead time lokal (σ)", "Nilai": f"{fmt_num(sigma)} hari", "Sumber": "nilai tetap",
          "Dipakai untuk": "0 = lead time dianggap stabil; bila > 0 safety stock memakai rumus umum (variasi permintaan + variasi lead time)"},
         {"Parameter": "Lead time impor",

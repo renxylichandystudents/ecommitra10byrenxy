@@ -41,7 +41,7 @@ COMPONENT_VERSION = hashlib.md5((_COMPONENT_DIR / "index.html").read_bytes()).he
 _TABLE = components.declare_component(f"decision_table_{COMPONENT_VERSION}", path=str(_COMPONENT_DIR))
 SS_DEFINITION_TOP = (
     "Safety stock (SS) = stok cadangan agar produk tidak kosong. "
-    "SS = Z × σ permintaan harian × √lead time lokal, dibulatkan ke atas."
+    "SS = Z × σ permintaan harian × √(lead time + periode tinjau), dibulatkan ke atas."
 )
 
 
@@ -281,6 +281,7 @@ def safety_stock_box(
     service: int | None = None,
     lead_days: float | None = None,
     import_mode: bool = False,
+    review_days: float = 0.0,
 ) -> None:
     """Analisa safety stock: parameter + angka yang tidak tergantung periode sekali saja, lalu satu tabel per periode."""
     del definition
@@ -297,15 +298,18 @@ def safety_stock_box(
             from src.core.inventory import service_level_to_z
 
             z = service_level_to_z(float(service))
+        exposure = (lead_days or 0) + (review_days or 0)
         if import_mode:
-            formula = f"(lead time maks − rata-rata) × permintaan harian; lead time rata-rata {fmt_num(lead_days or 0)} hari"
+            formula = (f"Z × √((L + R) × σ² + permintaan² × σ_L²), σ_L = (lead time maks − rata-rata) ÷ 1,645; "
+                       f"L = {fmt_num(lead_days or 0)} hari, R = {fmt_num(review_days or 0)} hari")
         else:
             formula = (
-                f"Z × σ permintaan harian × √lead time = {fmt_num(z, 2) if z is not None else 'Z'} × σ × √{fmt_num(lead_days or 0)} hari, dibulatkan ke atas per SKU"
+                f"Z × σ permintaan harian × √(lead time + periode tinjau) = {fmt_num(z, 2) if z is not None else 'Z'} × σ × √({fmt_num(lead_days or 0)} + "
+                f"{fmt_num(review_days or 0)}) = √{fmt_num(exposure)} hari, dibulatkan ke atas per SKU"
             )
         cols = st.columns(4)
         card(cols[0], "Service level", f"{fmt_num(service or 0)}%", hint=f"Z = {fmt_num(z, 2)}" if z is not None else "")
-        card(cols[1], "Lead time", f"{fmt_num(lead_days or 0)} hari", hint="lead time impor dari Setting › Kedatangan impor" if import_mode else ("asumsi lead time lokal (bawaan)" if used_default else "lead time lokal tersimpan"))
+        card(cols[1], "Lead time + tinjau", f"{fmt_num(lead_days or 0)} + {fmt_num(review_days or 0)} hari", hint="lead time impor dari Setting › Kedatangan impor" if import_mode else ("asumsi lead time lokal (bawaan)" if used_default else "lead time lokal tersimpan"))
         card(cols[2], "Total SS", f"{fmt_qty(ss.sum())} unit", hint=f"rata-rata {fmt_qty(ss.mean() if len(ss) else 0)} unit per SKU · sama di setiap periode")
         card(
             cols[3],

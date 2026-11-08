@@ -179,7 +179,7 @@ digraph G {
   models [label="Model kandidat\\nLevel terkini · MA28 · ES\\nGradient Boosting · Prophet", fillcolor="#fef3c7"];
   wf [label="Walk-forward CV\\n≤ 6 lipatan bulanan\\n4 horizon", fillcolor="#fee2e2"];
   ens [label="Ensemble 1/WAPE\\n+ koreksi bias\\n+ model per segmen", fillcolor="#ffedd5"];
-  ss [label="Safety stock & ROP\\nZ·σ·√L · Monte Carlo\\nMILP restock"];
+  ss [label="Safety stock & ROP\\nZ·σ·√(L+R) · Monte Carlo\\nMILP restock"];
   rules [label="Sistem pakar\\nJIKA–MAKA"];
   out [label="Keputusan harian\\nstok · iklan · flash sale\\nexposure · laporan", fillcolor="#dcfce7"];
   data -> prep -> seg -> models -> wf -> ens -> ss -> out; ens -> rules -> out; wf -> models [style=dashed, label="skor", fontsize=9];
@@ -232,7 +232,8 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
         f"- **Target**: QTY terjual per SKU per hari, dijumlah ke horizon periode prediksi ({PERIOD_LABELS.get(period, period)}); sales = prediksi QTY × harga bersih 4 minggu.\n"
         "- **Data**: " + ", ".join(UPLOAD_MENUS).lower() + "; duplikat dibuang, snapshot stok per tanggal unggah.\n"
         "- **Hari stok kosong**: dikeluarkan dari latih & uji (permintaan tersensor), bukan dianggap permintaan nol.\n"
-        "- **Safety stock**: SS = Z × σ permintaan × √lead time; ROP = permintaan harian × lead time + SS.\n"
+        "- **Safety stock**: SS = Z × σ permintaan × √(lead time + periode tinjau); impor memakai variasi lead time dari lead time maks. "
+        "ROP = permintaan harian × lead time + SS.\n"
         "- **Tidak ada kebocoran data pada fitur**: fitur hanya dari data sebelum titik potong.\n"
         "- **Keterbatasan**: bobot ensemble, faktor koreksi bias, dan pilihan model per segmen ditentukan dari lipatan yang sama dengan penilaiannya "
         "(in-sample), sehingga skor Ensemble dan Ensemble per segmen sedikit optimis dibanding model tunggal."

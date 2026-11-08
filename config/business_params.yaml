@@ -4,6 +4,7 @@
 lead_time:
   lokal_hari: 7            # Gudang Cipeucang / DC Cikupa ke pembeli
   lokal_sigma_hari: 0      # 0 = lead time lokal dianggap stabil
+  review_hari: 7           # periode tinjau stok (evaluasi mingguan): SS = Z × σ × √(L + R)
   impor_aktif: false
   impor_rata_hari: 60
   impor_maks_hari: 90

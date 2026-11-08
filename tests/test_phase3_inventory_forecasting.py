@@ -28,10 +28,14 @@ class InventoryFormulaTests(unittest.TestCase):
         self.assertAlmostEqual(z, 1.64485, places=3)
         local = safety_stock_local(z=z, sigma_d=4, lead_time_days=7)
         general = safety_stock_general(z=z, d_avg=10, sigma_d=4, l_avg=7, sigma_l=1)
-        imported = safety_stock_import(l_max=90, l_avg=60, d_avg=3)
+        imported = safety_stock_import(z=z, sigma_d=2, l_max=90, l_avg=60, d_avg=3)
         self.assertGreater(local, 0)
         self.assertGreater(general, local)
-        self.assertEqual(imported, 90)
+        self.assertAlmostEqual(local, z * 4 * 7 ** 0.5)
+        self.assertAlmostEqual(safety_stock_local(z=z, sigma_d=4, lead_time_days=7, review_days=7), z * 4 * 14 ** 0.5)
+        sigma_l = 30 / 1.645
+        self.assertAlmostEqual(imported, z * (60 * 4 + 9 * sigma_l ** 2) ** 0.5)
+        self.assertLess(safety_stock_import(z=service_level_to_z(80), sigma_d=2, l_max=90, l_avg=60, d_avg=3), imported)
 
     def test_inventory_decision_outputs_need_status_and_days_cover(self) -> None:
         result = inventory_decision(

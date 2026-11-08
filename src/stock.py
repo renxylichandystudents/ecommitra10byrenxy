@@ -18,11 +18,11 @@ def recommend_stock(
     lead_time_sigma: float = 0.0,
     source_type: str = "local",
     lead_time_max: float | None = None,
+    review_days: float = 0.0,
 ) -> pd.DataFrame:
     """Stok = prediksi permintaan + safety stock berbasis lead time.
 
-    Rumus lama memakai akar jumlah hari periode prediksi. Fase 3 menggantinya
-    dengan lead time lokal: SS = Z x sigma_D x sqrt(L_lokal).
+    SS = Z x sigma_D x sqrt(L + R), R = periode tinjau stok (lihat src.core.inventory).
     """
     rows = []
     if history is None or history.empty or "item_key" not in history.columns:
@@ -49,6 +49,7 @@ def recommend_stock(
             sigma_l=lead_time_sigma,
             source_type=source_type,
             l_max=lead_time_max,
+            review_days=review_days,
         )
         safety = decision.safety_stock
         suggested = max(np.ceil(decision.kebutuhan), 0)

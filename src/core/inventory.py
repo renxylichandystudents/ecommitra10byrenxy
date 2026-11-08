@@ -31,6 +31,9 @@ def service_level_to_z(percent: float) -> float:
     return NormalDist().inv_cdf(level / 100.0)
 
 
+LMAX_PERCENTILE_Z = 1.645  # lead time maks. impor dianggap persentil 95
+
+
 def safety_stock_general(
     *,
     z: float,
@@ -38,17 +41,24 @@ def safety_stock_general(
     sigma_d: float,
     l_avg: float,
     sigma_l: float,
+    review_days: float = 0.0,
 ) -> float:
-    value = float(z) * np.sqrt(max(float(l_avg), 0.0) * float(sigma_d) ** 2 + float(d_avg) ** 2 * float(sigma_l) ** 2)
+    """SS = Z × √((L + R) × σ_D² + D² × σ_L²); R = periode tinjau stok (hari)."""
+    exposure = max(float(l_avg), 0.0) + max(float(review_days), 0.0)
+    value = float(z) * np.sqrt(exposure * float(sigma_d) ** 2 + float(d_avg) ** 2 * float(sigma_l) ** 2)
     return float(max(value, 0.0))
 
 
-def safety_stock_local(*, z: float, sigma_d: float, lead_time_days: float) -> float:
-    return float(max(float(z) * float(sigma_d) * np.sqrt(max(float(lead_time_days), 0.0)), 0.0))
+def safety_stock_local(*, z: float, sigma_d: float, lead_time_days: float, review_days: float = 0.0) -> float:
+    """SS = Z × σ_D × √(L + R)."""
+    exposure = max(float(lead_time_days), 0.0) + max(float(review_days), 0.0)
+    return float(max(float(z) * float(sigma_d) * np.sqrt(exposure), 0.0))
 
 
-def safety_stock_import(*, l_max: float, l_avg: float, d_avg: float) -> float:
-    return float(max((float(l_max) - float(l_avg)) * float(d_avg), 0.0))
+def safety_stock_import(*, z: float, sigma_d: float, l_max: float, l_avg: float, d_avg: float, review_days: float = 0.0) -> float:
+    """Impor: variasi lead time dari L maks. (persentil 95): σ_L = (L_maks − L_rata) ÷ 1,645, lalu rumus umum dengan Z."""
+    sigma_l = max(float(l_max) - float(l_avg), 0.0) / LMAX_PERCENTILE_Z
+    return safety_stock_general(z=z, d_avg=d_avg, sigma_d=sigma_d, l_avg=l_avg, sigma_l=sigma_l, review_days=review_days)
 
 
 def reorder_point(*, d_avg: float, l_avg: float, safety_stock: float) -> float:
@@ -87,17 +97,18 @@ def inventory_decision(
     sigma_l: float = 0.0,
     source_type: str = "local",
     l_max: float | None = None,
+    review_days: float = 0.0,
 ) -> InventoryResult:
     horizon = max(int(horizon_days), 1)
     forecast = max(float(forecast_qty), 0.0)
     d_avg = forecast / horizon
     z = service_level_to_z(service_level_pct)
     if source_type == "import":
-        ss = safety_stock_import(l_max=float(l_max or lead_time_days), l_avg=lead_time_days, d_avg=d_avg)
+        ss = safety_stock_import(z=z, sigma_d=sigma_d, l_max=float(l_max or lead_time_days), l_avg=lead_time_days, d_avg=d_avg, review_days=review_days)
     elif sigma_l > 0:
-        ss = safety_stock_general(z=z, d_avg=d_avg, sigma_d=sigma_d, l_avg=lead_time_days, sigma_l=sigma_l)
+        ss = safety_stock_general(z=z, d_avg=d_avg, sigma_d=sigma_d, l_avg=lead_time_days, sigma_l=sigma_l, review_days=review_days)
     else:
-        ss = safety_stock_local(z=z, sigma_d=sigma_d, lead_time_days=lead_time_days)
+        ss = safety_stock_local(z=z, sigma_d=sigma_d, lead_time_days=lead_time_days, review_days=review_days)
     need = forecast + ss
     stock = max(float(current_stock), 0.0)
     gap = stock - need

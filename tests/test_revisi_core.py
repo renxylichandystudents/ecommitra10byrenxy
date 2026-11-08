@@ -143,7 +143,7 @@ class StockStressTests(unittest.TestCase):
     def test_import_delay_simulation_zero_stockout(self) -> None:
         # Target 4.9 no. 2: stok = ROP dengan SS impor → 0% stockout pada simulasi delay s.d. L_max.
         d_avg, l_avg, l_max = 12.0, 60.0, 90.0
-        ss = safety_stock_import(l_max=l_max, l_avg=l_avg, d_avg=d_avg)
+        ss = safety_stock_import(z=1.645, sigma_d=3.0, l_max=l_max, l_avg=l_avg, d_avg=d_avg)
         rop = d_avg * l_avg + ss
         rng = np.random.default_rng(1)
         delays = rng.uniform(l_avg, l_max, 5000)

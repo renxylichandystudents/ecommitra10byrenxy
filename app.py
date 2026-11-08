@@ -6605,7 +6605,7 @@ def _ss_params(params: dict, service: int) -> dict:
     lead = params.get("lead_time", {}) if isinstance(params, dict) else {}
     impor = bool(lead.get("impor_aktif", False))
     days = float(lead.get("impor_rata_hari", 60) if impor else lead.get("lokal_hari", 7))
-    return {"service": int(service), "lead_days": days, "import_mode": impor}
+    return {"service": int(service), "lead_days": days, "import_mode": impor, "review_days": float(lead.get("review_hari", 7) or 0)}
 
 
 from src.ui.decision_view import COMPONENT_VERSION as _TABLE_VERSION  # noqa: E402
@@ -7237,6 +7237,7 @@ def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, pe
         lead_time_sigma=float(lead.get("lokal_sigma_hari", 0) or 0),
         source_type="import" if impor else "local",
         lead_time_max=float(lead.get("impor_maks_hari", 90)) if impor else None,
+        review_days=float(lead.get("review_hari", 7) or 0),
     )
 
 
