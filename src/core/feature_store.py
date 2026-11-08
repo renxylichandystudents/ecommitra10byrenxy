@@ -140,6 +140,16 @@ warehouse_replenishment = Table(
     Column("uploaded_at", DateTime, nullable=False),
 )
 
+# Pengaturan bebas berbentuk JSON (mis. parameter biaya Shopee Mall, tabel biaya kategori, komisi affiliate).
+kv_setting = Table(
+    "kv_setting",
+    metadata,
+    Column("key", String(80), primary_key=True),
+    Column("content", Text, nullable=False),
+    Column("updated_by", String(80), nullable=False, default=""),
+    Column("updated_at", DateTime, nullable=False),
+)
+
 warehouse_denah = Table(
     "warehouse_denah",
     metadata,
@@ -380,6 +390,22 @@ class FeatureStore:
         with self.engine.begin() as conn:
             count = conn.execute(delete(table).where(table.c[column] < dates[keep - 1])).rowcount or 0
         return int(count)
+
+    def get_json(self, key: str, default=None):
+        frame = self.read("kv_setting", {"key": key})
+        if frame.empty:
+            return default
+        try:
+            return json.loads(frame.iloc[0]["content"])
+        except Exception:
+            return default
+
+    def set_json(self, key: str, value, *, username: str = "") -> None:
+        self.replace(
+            "kv_setting",
+            [{"key": key, "content": json.dumps(value, ensure_ascii=False, default=str), "updated_by": username, "updated_at": _now()}],
+            keys=["key"], username=username, action=f"simpan:{key}",
+        )
 
     def save_prediction_snapshot(self, run_id: int, frame: pd.DataFrame, *, username: str = "") -> int:
         """frame: target_date, sku, varian, pred_qty, pred_sales (satu baris per SKU × tanggal window)."""

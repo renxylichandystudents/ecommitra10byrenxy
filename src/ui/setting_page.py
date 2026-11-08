@@ -16,11 +16,11 @@ from src.core.access import allowed, setting_tabs
 from src.core.feature_store import IMPORT_STATUSES
 from src.core.fmt import fmt_date_short
 from src.core.periods import last_full_month
-from src.core.promo import exclusion_suggestions, product_label
-from src.ui.common import ID_MONTHS, button_tabs, card, download_excel, fmt_idr, fmt_num, fmt_pct
+from src.core.promo import exclusion_suggestions
+from src.ui.common import ID_MONTHS, button_tabs, card, download_excel, fmt_idr, fmt_num
 from src.ui.confirm import confirm_action
 from src.ui.feature_data import FeatureData, bump, product_frame
-from src.utils.format import input_rupiah, show_table
+from src.utils.format import show_table
 
 
 def _read_upload(upload) -> pd.DataFrame:
@@ -194,53 +194,20 @@ def _excluded_tab(features, table: pd.DataFrame, username: str, orders: pd.DataF
 
 
 def _calculator_tab(features, table: pd.DataFrame, data: FeatureData, username: str, today: date, *, user_root: Path | None = None) -> None:
-    st.markdown("**Kalkulator biaya** · simulasi tidak menyimpan")
-    st.caption("Harga jual = harga data produk terkini. Margin = harga × (1 − komisi − layanan − transaksi) − HPP − packing − iklan per unit − voucher − ongkir penjual.")
+    from src.ui.kalkulator import show_calculator
+
+    may_edit = True
+    try:
+        from auth.ui import current_user
+
+        user = current_user()
+        may_edit = allowed(getattr(user, "role", ""), "setting_kalkulator_biaya", "edit") if user else True
+    except Exception:
+        pass
+    show_calculator(features, table, data, username=username, today=today, user_root=user_root, may_edit=may_edit, require=_require)
     products = product_frame(table)
-    if products.empty:
-        st.info("Jalankan analisa dulu agar daftar SKU dan harga data produk tersedia.")
-        return
-    labels = {sku: product_label(sku, name, var) for sku, name, var in zip(products["sku"], products["product_name"], products["variation"])}
-    sku = st.selectbox("SKU", list(labels), format_func=lambda s: labels[s], key="calc-sku")
-    price = float(products.loc[products["sku"] == sku, "price"].iloc[0])
-    comp = margin_core.effective_components(data.components, sku, on=today)
-    if comp is None:
-        st.caption("Komponen biaya SKU ini belum diunggah; isi kolom di bawah untuk simulasi.")
-        comp = margin_core.Components()
-    ad_default = data.ad_per_unit.get(sku, 0.0)
-    c = st.columns(4)
-    c[0].markdown(f"<div class='stat-card'><div class='readable-metric-label'>Harga jual (data produk)</div><div class='readable-metric-value'>{fmt_idr(price)}</div></div>", unsafe_allow_html=True)
-    with c[1]:
-        hpp = float(input_rupiah("HPP", int(comp.hpp), key=f"calc-hpp-{sku}"))
-    komisi = float(c[2].number_input("Komisi (%)", 0.0, 50.0, float(comp.komisi_pct), 0.1, key=f"calc-kom-{sku}"))
-    layanan = float(c[3].number_input("Biaya layanan (%)", 0.0, 50.0, float(comp.layanan_pct), 0.1, key=f"calc-lay-{sku}"))
-    c = st.columns(4)
-    transaksi = float(c[0].number_input("Biaya transaksi (%)", 0.0, 20.0, float(comp.transaksi_pct), 0.1, key=f"calc-trx-{sku}"))
-    with c[1]:
-        packing = float(input_rupiah("Packing", int(comp.packing), key=f"calc-pack-{sku}"))
-    with c[2]:
-        iklan = float(input_rupiah("Iklan per unit", int(round(ad_default)), key=f"calc-ad-{sku}", help="Default = biaya iklan SKU periode ÷ QTY bersih SKU periode."))
-    with c[3]:
-        voucher = float(input_rupiah("Voucher", int(comp.voucher), key=f"calc-vou-{sku}"))
-    ongkir = float(input_rupiah("Ongkir penjual", int(comp.ongkir_penjual), key=f"calc-ong-{sku}"))
-    sim = margin_core.Components(hpp=hpp, komisi_pct=komisi, layanan_pct=layanan, transaksi_pct=transaksi, packing=packing, voucher=voucher, ongkir_penjual=ongkir)
-    value, pct = margin_core.unit_margin(price, sim, iklan)
-    from src.core.config import load_params
-
-    margin_min = float(load_params(user_root).get("margin", {}).get("margin_min_pct", 8) or 8)
-    cols = st.columns(3)
-    if hpp <= 0:
-        # Tanpa HPP, "margin" hanya harga dikurangi biaya platform: menyesatkan bila ditampilkan sebagai margin.
-        card(cols[0], "Margin per unit", "HPP belum diisi", hint="Isi HPP untuk menghitung margin")
-        card(cols[1], f"Harga minimal margin {fmt_num(margin_min, 0)}%", "–", hint="Butuh HPP")
-        card(cols[2], "Harga minimal margin 0%", "–", hint="Butuh HPP")
-    else:
-        card(cols[0], "Margin per unit", fmt_idr(value), hint=fmt_pct(pct, 1))
-        card(cols[1], f"Harga minimal margin {fmt_num(margin_min, 0)}%", fmt_idr(margin_core.harga_minimal(sim, iklan, margin_min)), hint="Margin minimum dari Pengaturan bisnis")
-        card(cols[2], "Harga minimal margin 0%", fmt_idr(margin_core.harga_minimal(sim, iklan, 0.0)))
-    show_table(margin_core.breakdown(price, sim, iklan), kinds={"Rp per unit": "money", "% harga": "pct"})
-
-    st.markdown("**Unggah komponen biaya** (berperiode: baris baru menutup periode baris lama)")
+    st.markdown("<div class='section-title'>HPP, packing, dan komponen biaya per SKU</div>", unsafe_allow_html=True)
+    st.markdown("**Unggah komponen biaya** (HPP, packing, voucher, ongkir penjual · berperiode: baris baru menutup periode baris lama)")
     template = pd.DataFrame(columns=list(margin_core.TEMPLATE_COLUMNS))
     u1, u2 = st.columns([3, 1])
     upload = u1.file_uploader("File komponen biaya", type=["xlsx", "csv"], key="cost-upload")

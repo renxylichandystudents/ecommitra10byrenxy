@@ -2731,6 +2731,47 @@ def _setting_fallback_table() -> pd.DataFrame:
     return stock.assign(product_name=stock["sku"].map(names).fillna(""), ada_data_stok=True)
 
 
+def _sku_product_codes() -> dict[str, str]:
+    """SKU → Kode Produk Shopee dari data stok terakhir (untuk mencocokkan file komisi affiliate)."""
+    try:
+        frame = store_frames().stock
+    except Exception:
+        return {}
+    if frame is None or frame.empty or not {"sku", "product_code"} <= set(frame.columns):
+        return {}
+    sku = frame["sku"].fillna("").astype(str).str.strip().str.replace(r"^(\d+)\.0+$", r"\1", regex=True)
+    code = frame["product_code"].fillna("").astype(str).str.strip()
+    return {s: c for s, c in zip(sku, code) if s and c}
+
+
+def _with_ads(table: pd.DataFrame, orders: pd.DataFrame | None) -> pd.DataFrame:
+    """Tambahkan biaya iklan, omzet iklan, dan QTY 30 hari terakhir per SKU dari data iklan yang diunggah."""
+    try:
+        from src.core.ads import attribute_ads
+
+        frames = store_frames()
+        if not frames.has_ads or orders is None or orders.empty:
+            return table
+        end = pd.to_datetime(orders["order_time"], errors="coerce").max().normalize()
+        start = end - pd.Timedelta(days=29)
+        per_sku = attribute_ads(frames.ads, frames.stock, orders=orders, start=start, end=end).per_sku
+        stamp = pd.to_datetime(orders["order_time"], errors="coerce")
+        recent = orders.loc[stamp >= start]
+        if "status" in recent.columns:
+            recent = recent.loc[~cancelled_status_mask(recent["status"])]
+        qty = recent.assign(sku=recent["sku"].astype(str)).groupby("sku")["qty"].sum()
+    except Exception:
+        return table
+    out = table.copy()
+    keys = out["sku"].astype(str)
+    if not per_sku.empty:
+        ads = per_sku.assign(sku=per_sku["sku"].astype(str)).groupby("sku")[["biaya_iklan", "omzet_iklan"]].sum()
+        out["biaya_iklan"] = keys.map(ads["biaya_iklan"]).fillna(0.0).to_numpy()
+        out["omzet_iklan"] = keys.map(ads["omzet_iklan"]).fillna(0.0).to_numpy()
+    out["qty_total"] = keys.map(qty).fillna(0.0).to_numpy()
+    return out
+
+
 def _orders_from_library(keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     if not keys:
         return pd.DataFrame(), pd.DataFrame(), "empty"
@@ -7643,6 +7684,15 @@ with PAGE_ROOT.container(key="page-root"):
                 setting_orders = _orders_from_library(_checked_library_keys())[0]
             except Exception:
                 setting_orders = None
+        if isinstance(setting_table, pd.DataFrame) and not setting_table.empty and "biaya_iklan" not in setting_table.columns:
+            ads_key = (len(setting_table), 0 if setting_orders is None else len(setting_orders))
+            cached_ads = st.session_state.get("_setting-ads")
+            if isinstance(cached_ads, tuple) and cached_ads[0] == ads_key:
+                setting_table = cached_ads[1]
+            else:
+                setting_table = _with_ads(setting_table, setting_orders)
+                st.session_state["_setting-ads"] = (ads_key, setting_table)
+        st.session_state["_sku_product_code"] = _sku_product_codes()
         setting_data = cached_feature_data(st.session_state, get_features(), setting_table, date.today(), periode="", stamp="setting")
         shown_tab = show_setting(
             str(st.session_state.get("setting-slug", "") or ""),
