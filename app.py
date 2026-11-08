@@ -206,13 +206,14 @@ def show_vault_status() -> None:
         if deploy_mode() == "server":
             st.warning(
                 "Data latih tersimpan di disk server sementara dan akan hilang saat server tidur, restart, atau redeploy. "
-                "Isi `DATABASE_URL` (Postgres Neon) di Secrets agar data latih dan hasil analisa tetap ada."
+                "Isi `DATABASE_URL` (Postgres Supabase) di Secrets agar data latih dan hasil analisa tetap ada."
             )
         return
-    files, size = vault.summary()
+    files, size, stored = vault.summary()
     st.caption(
         f"Data latih dan hasil analisa tersimpan permanen di database: {format_number(files)} file · "
-        f"{format_number(size / 1024 / 1024, 1)} MB. Tetap terbaca walau server restart atau redeploy."
+        f"{format_number(size / 1024 / 1024, 1)} MB (terpakai {format_number(stored / 1024 / 1024, 1)} MB setelah dikompres, "
+        "kuota Supabase gratis 500 MB). Tetap terbaca walau server restart atau redeploy."
     )
 
 

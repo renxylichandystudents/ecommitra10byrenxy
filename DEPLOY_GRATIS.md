@@ -63,21 +63,29 @@ Repository GitHub: `renxylichandystudents/ecommitra10byrenxy`, branch `main`.
 
    Super user pertama dibuat otomatis saat tabel user masih kosong. User lain ditambahkan dari **Kelola user** (tidak ada pendaftaran mandiri). Saat lokal, simpan file yang sama sebagai `.streamlit/secrets.toml` (sudah di `.gitignore`).
 
-### Database permanen (Neon, gratis) — agar login tidak hilang saat redeploy
+### Database permanen (Supabase, gratis) — agar login & data tidak hilang saat redeploy
 
-1. Daftar di [neon.tech](https://neon.tech) (bisa login dengan GitHub) → **Create project**. Region: **AWS Asia Pacific (Singapore)**, versi Postgres bawaan.
-2. Di dashboard project klik **Connect** → pilih **Pooled connection** → salin *connection string*, bentuknya:
-   `postgresql://neondb_owner:xxxx@ep-xxxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require`
-3. Streamlit Cloud → app → **Settings** → **Secrets**, tambahkan satu baris (dalam tanda kutip):
+1. Daftar di [supabase.com](https://supabase.com) (bisa login dengan GitHub) → **New project**. Region: **Southeast Asia (Singapore)**. Buat *database password* tanpa karakter `@ : / ? # %` agar tidak perlu di-encode, simpan baik-baik.
+2. Setelah project siap, klik **Connect** (atas) → tab **Connection string** → **Session pooler** → salin URI, bentuknya:
+   `postgresql://postgres.xxxx:[YOUR-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres`
+   Ganti `[YOUR-PASSWORD]` dengan password tadi. Jangan pakai *Direct connection* (hanya IPv6, Streamlit Cloud tidak bisa).
+3. Cek dari laptop: `.venv/bin/python scripts/cek_database.py`, tempel URI.
+4. **Pindahkan data laptop** (user, riwayat analisa, setting, target, gudang, margin, data latih): `.venv/bin/python scripts/pindah_ke_supabase.py`, tempel URI yang sama. Sekali jalan ±1–3 menit.
+5. Streamlit Cloud → app → **Settings** → **Secrets**, ganti baris `DATABASE_URL` lama (Neon):
 
    ```toml
-   DATABASE_URL = "postgresql://neondb_owner:xxxx@ep-xxxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+   DATABASE_URL = "postgresql://postgres.xxxx:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
    ```
 
-4. **Save** → app restart sendiri. Tabel dibuat otomatis saat app pertama dibuka; super user dibuat dari `INITIAL_SUPERUSER_*`.
-5. Login sebagai super user, buka **Kelola user**: peringatan "SQLite di disk server sementara" harus sudah hilang. Buat ulang user lain (user di SQLite lama tidak bisa dipindahkan karena disk server sudah terhapus).
+6. **Save** → **Reboot app**. Halaman Data latih menampilkan jumlah file dan MB terpakai di brankas.
 
-Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL-encoded (mis. `@` → `%40`). Pakai Supabase? Gunakan URI **Session pooler** (port 5432), bukan *direct connection* (hanya IPv6). Neon gratis menidurkan database setelah ±5 menit tanpa akses; klik pertama sesudahnya ±1 detik lebih lambat, data tetap aman.
+Hemat kuota gratis (500 MB database, 5 GB transfer/bulan):
+- Isi file di brankas dikompres zlib (data laptop 136 MB → ±54 MB). Hanya file yang berubah yang dikirim ulang; file dipulihkan hanya saat server baru menyala.
+- Hasil analisa > 90 hari dihapus otomatis; folder hasil yang tidak tercatat di database tidak ikut dipindah.
+- Pool koneksi kecil (2 + 3 cadangan), cukup untuk satu app Streamlit.
+- Project gratis **dijeda setelah 7 hari tanpa akses**. Data aman; buka dashboard Supabase → **Restore project**, lalu Reboot app. Dipakai harian tidak akan dijeda.
+
+Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL-encoded (mis. `@` → `%40`).
 
 ### Login dan role
 
@@ -90,7 +98,7 @@ Catatan: bila password mengandung karakter `@ : / ? # %`, tulis dalam bentuk URL
 ### Perilaku data di server
 
 - Semua user yang login memakai satu folder data tim yang sama (unggahan, Pengaturan bisnis, riwayat analisa).
-- Default database: SQLite `data/app.db`. **Di Streamlit Community Cloud file ini hilang saat reboot/redeploy**, jadi user (selain super user dari Secrets) dan daftar riwayat ikut hilang. Isi `DATABASE_URL` Postgres gratis (Neon/Supabase) di Secrets agar user dan daftar riwayat tetap ada.
+- Default database: SQLite `data/app.db`. **Di Streamlit Community Cloud file ini hilang saat reboot/redeploy**, jadi user (selain super user dari Secrets) dan daftar riwayat ikut hilang. Isi `DATABASE_URL` Postgres gratis (Supabase) di Secrets agar user dan daftar riwayat tetap ada.
 - Data latih yang diunggah (folder bulan dan 11 menu) serta file hasil analisa (`data/runs/<id>/`) disalin otomatis ke tabel `file_vault` di Postgres. Saat server baru menyala (setelah tidur, reboot, atau redeploy), file dipulihkan ke disk sebelum halaman tampil, jadi data kemarin tetap terbaca tanpa unggah ulang. Status tampil di halaman Data latih. Tanpa `DATABASE_URL`, file tetap hanya di disk sementara.
 - Cek connection string dari laptop: `.venv/bin/python scripts/cek_database.py` (pesan error tidak disensor seperti di Streamlit Cloud).
 - Riwayat analisa lebih dari 90 hari dihapus otomatis.

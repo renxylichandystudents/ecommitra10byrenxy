@@ -98,13 +98,13 @@ def _database_down(exc: BaseException) -> None:
     hint = "Periksa `DATABASE_URL` di Secrets: satu baris, diapit tanda kutip, tanpa spasi."
     lower = text.lower()
     if "password authentication failed" in lower:
-        hint = "Password di `DATABASE_URL` tidak cocok dengan password Neon. Salin ulang connection string terbaru dari Neon (Connect) ke Secrets."
+        hint = "Password di `DATABASE_URL` tidak cocok dengan password database. Salin ulang connection string terbaru dari Supabase (Connect › Session pooler) ke Secrets."
     elif "could not translate host name" in lower or "name or service not known" in lower:
-        hint = "Nama host di `DATABASE_URL` salah ketik atau terpotong. Salin ulang connection string dari Neon (Connect)."
+        hint = "Nama host di `DATABASE_URL` salah ketik atau terpotong. Pakai URI Session pooler dari Supabase (Connect), bukan Direct connection."
     elif "does not exist" in lower:
-        hint = "Nama database atau user di `DATABASE_URL` tidak ada di Neon. Salin ulang connection string dari Neon (Connect)."
+        hint = "Nama database atau user di `DATABASE_URL` tidak ada. Salin ulang connection string dari Supabase (Connect › Session pooler)."
     elif "timeout" in lower or "timed out" in lower:
-        hint = "Database tidak menjawab. Cek project Neon masih aktif, lalu Reboot app."
+        hint = "Database tidak menjawab. Cek project Supabase masih aktif (project gratis dijeda setelah 7 hari tanpa akses; klik Restore di dashboard), lalu Reboot app."
     st.error(f"Aplikasi belum bisa tersambung ke database.\n\n{hint}\n\nPesan dari database: `{text}`")
     st.stop()
 
@@ -352,7 +352,7 @@ def users_panel(repo: UserRepository, user: User) -> None:
         st.warning(
             "Database user dan sesi login memakai SQLite di disk server sementara. Setiap kali server restart "
             "atau redeploy (misalnya setelah git push), user tambahan dan sesi login hilang sehingga semua orang "
-            "harus login ulang. Isi `DATABASE_URL` (Postgres, mis. Neon/Supabase) di Secrets agar tersimpan permanen."
+            "harus login ulang. Isi `DATABASE_URL` (Postgres Supabase) di Secrets agar tersimpan permanen."
         )
     flash = st.session_state.pop(FLASH_KEY, None)
     if flash:

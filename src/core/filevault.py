@@ -3,7 +3,8 @@
 Disk Streamlit Community Cloud bersifat sementara (hilang saat app tidur, restart, atau redeploy).
 Folder data tetap dipakai seperti biasa; brankas ini menyalin setiap file yang berubah ke tabel
 `file_vault` dan menulis ulang file yang hilang saat proses server baru mulai. Aktif hanya bila
-database bukan SQLite (mis. Postgres Neon lewat DATABASE_URL).
+database bukan SQLite (mis. Postgres Supabase lewat DATABASE_URL). Isi file dikompres zlib bila
+lebih kecil, agar muat di kuota database gratis; kolom size & sha1 tetap untuk isi asli.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from sqlalchemy.engine import Engine
 
 MAX_FILE_BYTES = 200 * 1024 * 1024
 SKIP_SUFFIXES = (".tmp", ".lock", ".pyc")
+PACKED = b"\x00ZL1"
 
 _meta = MetaData()
 VAULT = Table(
@@ -34,6 +37,15 @@ VAULT = Table(
 
 def _sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
+
+
+def pack(data: bytes) -> bytes:
+    packed = PACKED + zlib.compress(data, 6)
+    return packed if len(packed) < len(data) * 0.95 else data
+
+
+def unpack(data: bytes) -> bytes:
+    return zlib.decompress(data[len(PACKED):]) if data.startswith(PACKED) else data
 
 
 def vault_enabled(engine: Engine) -> bool:
@@ -91,7 +103,7 @@ class FileVault:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 partial = target.with_name(target.name + ".tmp")
-                partial.write_bytes(bytes(data))
+                partial.write_bytes(unpack(bytes(data)))
                 partial.replace(target)
                 restored += 1
         return restored
@@ -115,7 +127,7 @@ class FileVault:
                     self._seen[key] = stamp
                     if self._hashes.get(key) == digest:
                         continue
-                    values = {"size": len(data), "sha1": digest, "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "data": data}
+                    values = {"size": len(data), "sha1": digest, "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "data": pack(data)}
                     done = conn.execute(update(VAULT).where(VAULT.c.path == key).values(**values)).rowcount
                     if not done:
                         conn.execute(insert(VAULT).values(path=key, **values))
@@ -128,10 +140,12 @@ class FileVault:
                     changes += 1
         return changes
 
-    def summary(self) -> tuple[int, int]:
-        """(jumlah file, total byte) yang tersimpan di brankas."""
+    def summary(self) -> tuple[int, int, int]:
+        """(jumlah file, total byte asli, total byte terpakai di database setelah kompresi)."""
         from sqlalchemy import func
 
         with self.engine.connect() as conn:
-            count, total = conn.execute(select(func.count(), func.coalesce(func.sum(VAULT.c.size), 0))).one()
-        return int(count or 0), int(total or 0)
+            count, total, stored = conn.execute(select(
+                func.count(), func.coalesce(func.sum(VAULT.c.size), 0), func.coalesce(func.sum(func.length(VAULT.c.data)), 0)
+            )).one()
+        return int(count or 0), int(total or 0), int(stored or 0)

@@ -677,8 +677,7 @@ def show_evaluation(
     if repo is not None:
         try:
             for rec in repo.list_runs(500):
-                if rec.result_path:
-                    db_runs[str(Path(rec.result_path).resolve())] = {"id": rec.id, "run_by": rec.run_by}
+                db_runs[str(repo.folder_of(rec).resolve())] = {"id": rec.id, "run_by": rec.run_by}
             current = repo.get(int(run_id)) if run_id else None
             run_folder = repo.folder_of(current) if current is not None and repo.available(current) else None
         except Exception:

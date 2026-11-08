@@ -52,7 +52,7 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml   # isi INITIAL_SUPER
 streamlit run app.py
 ```
 
-Di Mac cukup double-click `Buka Thesis Localhost.command`. Panduan deploy permanen (Streamlit Community Cloud + database Neon) ada di [`DEPLOY_GRATIS.md`](DEPLOY_GRATIS.md).
+Di Mac cukup double-click `Buka Thesis Localhost.command`. Panduan deploy permanen (Streamlit Community Cloud + database Supabase) ada di [`DEPLOY_GRATIS.md`](DEPLOY_GRATIS.md).
 
 ## Tes
 

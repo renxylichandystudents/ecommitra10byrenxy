@@ -241,3 +241,11 @@ Keputusan pengguna (sudah diterapkan):
 - **Perlu dijalankan ulang**: analisa (Jalankan analisa) lalu buka Evaluasi model agar SS, ROP, bobot ensemble, dan kurva memakai rumus baru.
 
 Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya ambigu ("10.138" vs "167.21").
+
+## Pindah database ke Supabase (9 Nov 2026)
+
+- Neon habis masa gratis; app tetap memakai `DATABASE_URL` Postgres, sekarang diarahkan ke Supabase (URI **Session pooler**, port 5432).
+- Hemat kuota: isi `file_vault` dikompres zlib (penanda `\x00ZL1`, baris lama tanpa kompresi tetap terbaca); data laptop 136 MB → 54 MB. Pool koneksi 2 + 3. Halaman Data latih menampilkan MB terpakai vs kuota 500 MB.
+- `scripts/pindah_ke_supabase.py` (+ `src/core/migrate.py`): buat tabel lewat kode app, salin 24 tabel SQLite lokal, unggah data latih (`team/…`) dan hasil analisa yang tercatat (`runs/<id>/…`) ke brankas dengan kunci yang dipakai server. Folder run yatim (7–11) tidak ikut.
+- Evaluasi mencocokkan riwayat run lewat `folder_of`, jadi path laptop di `result_path` tidak mengganggu di server.
+- Langkah pengguna: buat project Supabase (Singapore) → `scripts/cek_database.py` → `scripts/pindah_ke_supabase.py` → ganti `DATABASE_URL` di Secrets Streamlit → Reboot. Panduan di `DEPLOY_GRATIS.md`.

@@ -37,7 +37,8 @@ def database_url(secrets: object | None = None) -> str:
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
         return create_engine(url, connect_args={"check_same_thread": False}, future=True)
-    return create_engine(url, pool_pre_ping=True, future=True)
+    # Pool kecil: Streamlit Cloud cukup 1–2 koneksi, hemat slot pooler Supabase gratis.
+    return create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=3, pool_recycle=300, future=True)
 
 
 def is_sqlite(engine: Engine) -> bool:
