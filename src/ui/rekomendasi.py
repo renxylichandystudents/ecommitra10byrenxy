@@ -519,7 +519,7 @@ def show_recommendations(
         if picked == "nama-deskripsi":
             _names_tab(table, frames, params, features)
         elif picked == "iklan":
-            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit)
+            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit, frames=frames)
             with st.expander("Rencana iklan per periode (perhitungan sebelumnya)"):
                 _ads_tab(table, orders, params, today)
         elif picked == "flash-sale":
