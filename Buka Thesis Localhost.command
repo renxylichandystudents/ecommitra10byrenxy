@@ -26,6 +26,15 @@ if missing:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
 PY
 
+# Aplikasi lama yang masih jalan di port 8501 memakai kode lama (modul sudah termuat di memori),
+# jadi dihentikan dulu agar kode terbaru yang dipakai.
+OLD_PIDS=$(lsof -ti tcp:8501 2>/dev/null || true)
+if [ -n "$OLD_PIDS" ]; then
+  echo "Menghentikan aplikasi lama di port 8501..."
+  kill $OLD_PIDS 2>/dev/null || true
+  sleep 2
+fi
+
 echo ""
 echo "Membuka aplikasi Thesis Mitra10 di http://localhost:8501"
 echo "Biarkan jendela Terminal ini terbuka selama aplikasi dipakai."
