@@ -135,6 +135,21 @@ Uji: 184 tes lolos di Python 3.12; semua menu dan sub-menu diuji dengan Streamli
 - Batas permintaan `DEMAND_LIFT = 0.5`: tambahan omzet sebuah iklan maks. +50% prediksi omzet produk anggotanya. Langkah 4 menampilkan prediksi omzet produk dan omzet iklan usulan; di bawah kartu ada baris "Cek angka" (omzet iklan sekarang → rencana = budget × ROAS → selisih × sisa hari = tambahan pada proyeksi).
 - Tes: `UnifiedPlanTest` di `tests/test_ads_target.py`.
 
+## Flash sale toko dirombak (8 Nov 2026)
+
+- Logika di `src/core/flash_sale.py` (tes `tests/test_flash_sale.py`); tampilan `rekomendasi_plus.show_flash_sale`. Rencana lama (`_flash_tab`) dihapus dari tampilan; template Shopee kini dari jadwal baru.
+- Flash sale selalu terisi: sumber kuota per SKU = stok toko (di atas SS + kebutuhan 7 hari) → transfer DC 10062/10036 (kirim H-3, SKU DC tidak dijadwalkan 3 hari pertama) → kuota kecil dari stok di atas SS. Stok 0 & DC kosong → tidak dijadwalkan (alasan ditampilkan).
+- Dua tujuan: Pendorong omzet (laris, diskon 10/7/5%, kuota 3 × prediksi harian) dan Habiskan stok lebih (stok ≥ 90 hari, diskon 20/15/10/5%, kuota ≤ penjualan 30 hari). Harga flash tidak di bawah impas.
+- Batas batal relatif: maks(15%, 1,5 × rata-rata batal toko tertimbang omzet) — data 8 Nov: 44%. Produk andalan bulky (kloset, water heater) batal 28–36%, jadi batas tetap 15% membuang semuanya; SKU batal > 15% diberi batas beli 1/pembeli.
+- Jadwal harian (+3 SKU di tanggal kembar/gajian/Harbolnas), SKU sama berjarak ≥ 7 hari (≥ 3 bila kandidat kurang), daftar transfer DC, unduhan template Shopee, simpan rencana (`kv_setting` kunci `flash_plan:<tanggal>`).
+
+## Exposure Shopee Video & media sosial dirombak (8 Nov 2026)
+
+- Logika di `src/core/exposure.py` (tes `tests/test_exposure.py`).
+- Produk dipilih bila terjual 90 hari dan stok toko + DC ≥ 14 hari. Segmen: Produk andalan (top 30 prediksi omzet), Sedang naik (tren 14 hari ≥ +30%), Stok lebih (≥ 90 hari), Banyak dilihat jarang dibeli (klik ≥ 50, konversi < 1%).
+- Jadwal mingguan: hari & jam tayang = waktu pesanan terbanyak per kategori dari riwayat pesanan; maks. 2 konten/hari; produk tidak diulang 14 hari.
+- Brief per konten: format per kategori bahan bangunan (mis. before–after kamar mandi, uji rekat), hook masalah, poin jual dari nama (garansi, packing kayu, material, ukuran) + deskripsi, ajakan harga, hashtag, naskah 30 detik. Unduh Excel brief; simpan ke `exposure_schedule`.
+
 ## Hasil pemeriksaan
 
 - Lint (`ruff`, aturan F dan E9): bersih, tidak ada nama tak terdefinisi.

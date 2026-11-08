@@ -7,15 +7,14 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
 from src.core.nlp_competitor import build_name_recommendations, clean_text
-from src.core.recommendations import flash_sale_plan, flash_sale_template
-from src.ui.common import batched_view, button_tabs, card, download_excel, fmt_date, fmt_num, reset_batches
+from src.ui.common import batched_view, button_tabs, card, download_excel, fmt_num, reset_batches
 from src.utils.format import show_table
 
 STATUS_TONES = {"Poor": "#fee2e2", "Standard": "#fef9c3", "Excellence": "#dcfce7"}
@@ -344,73 +343,6 @@ def _name_detail(item: pd.Series, history: pd.DataFrame | None = None) -> None:
         st.code(item["Rekomendasi deskripsi"], language=None, wrap_lines=True)
 
 
-def _stock_date_text(table: pd.DataFrame) -> str:
-    if not {"stock_snapshot_at", "ada_data_stok"} <= set(table.columns):
-        return ""
-    known = table["ada_data_stok"].fillna(False).astype(bool)
-    stamps = pd.to_datetime(table.loc[known, "stock_snapshot_at"], errors="coerce").dropna()
-    return fmt_date(stamps.max()) if not stamps.empty else ""
-
-
-def _flash_margin(features) -> tuple[dict[str, float] | None, float]:
-    """Margin kotor per SKU dari File margin + potongan Shopee bawaan (admin 11,70% + program yang diikuti)."""
-    try:
-        from src.core import shopee_fee as fee
-        from src.ui.kalkulator import _programs
-        from src.ui.margin_data import load_margin
-
-        md = load_margin(features)
-        if not md.ready:
-            return None, 0.0
-        programs, order_fee, _ = _programs(features)
-        inp = fee.Inputs(harga=100_000.0, programs=programs, order_fee=order_fee)
-        return md.kotor_map(), fee.shopee_fees(inp) / inp.harga_akhir * 100
-    except Exception:
-        return None, 0.0
-
-
-def _flash_tab(table: pd.DataFrame, params: dict, today: date, user_root: Path, features=None) -> pd.DataFrame:
-    start = st.date_input("Mulai rencana flash sale (1 bulan)", value=today + timedelta(days=1), key="flash-start", format="DD/MM/YYYY")
-    has_stock = bool(table.get("ada_data_stok", pd.Series(dtype=bool)).fillna(False).any())
-    if not has_stock:
-        st.info("Data stok belum pernah diunggah (menu Data stok Site 10037), jadi kuota flash sale belum bisa dihitung tanpa mengganggu kebutuhan prediksi + SS.")
-        return pd.DataFrame()
-    stamp = _stock_date_text(table)
-    kotor, potongan = _flash_margin(features)
-    plan = flash_sale_plan(table, start=start, params=params, margin_kotor=kotor, potongan_pct=potongan)
-    if plan.empty:
-        st.info("Belum ada SKU yang laku dengan stok tersisa dan margin aman untuk flash sale.")
-        return plan
-    limited = plan["Alasan"].astype(str).str.startswith("Stok terbatas").all()
-    days = sorted(plan["Tanggal"].unique())
-    note = f"Stok per {stamp} (unggahan terakhir). " if stamp else ""
-    if limited:
-        st.warning(f"{note}Stok terbatas: tidak ada SKU dengan stok lebih setelah kebutuhan + SS. Daftar berisi SKU laku dengan sisa stok terbesar dan kuota kecil.")
-    else:
-        st.caption(f"{note}{fmt_num(len(plan))} slot pada {len(days)} hari · {plan['SKU'].nunique()} SKU berbeda. Kuota tidak mengganggu kebutuhan prediksi + SS.")
-    weeks = [days[i : i + 7] for i in range(0, len(days), 7)]
-    for week in weeks:
-        cols = st.columns(7)
-        for column, day in zip(cols, week):
-            part = plan.loc[plan["Tanggal"] == day]
-            items = "".join(f"<div style='font-size:var(--fs-xs);line-height:1.3;margin-top:3px'>• {html.escape(str(name)[:38])}</div>" for name in part["Produk"])
-            column.markdown(
-                f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:120px'><b>{fmt_date(day, short=True)}</b>{items}</div>",
-                unsafe_allow_html=True,
-            )
-    show_table(plan, kinds={"Harga saat ini": "money", "Harga flash sale": "money", "Diskon (%)": "pct", "Stok saat ini": "count", "Saran stok flash sale": "count"})
-    left, right = st.columns(2)
-    if left.button("Simpan rencana flash sale", type="primary", key="flash-submit"):
-        folder = Path(user_root) / "flash_sale"
-        folder.mkdir(parents=True, exist_ok=True)
-        plan.to_csv(folder / f"rencana_{start.isoformat()}.csv", index=False)
-        st.session_state["flash-submitted"] = start.isoformat()
-        st.success(f"Rencana flash sale mulai {fmt_date(start)} disimpan.")
-    with right:
-        download_excel(flash_sale_template(plan, params), f"template_flash_sale_{start.isoformat()}.xlsx", key="xl-flash", label="Unduh template Shopee")
-    return plan
-
-
 SUB_TABS = (
     ("nama-deskripsi", "Nama & deskripsi"),
     ("iklan", "Iklan"),
@@ -458,9 +390,7 @@ def show_recommendations(
         elif picked == "iklan":
             plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit, frames=frames, orders=orders)
         elif picked == "flash-sale":
-            plus.show_flash_sale(table, data=data, today=today)
-            with st.expander("Rencana flash sale harian & template Shopee (perhitungan sebelumnya)"):
-                _flash_tab(table, params, today, user_root, features)
+            plus.show_flash_sale(table, data=data, today=today, orders=orders, features=features, username=username, can_edit=can_edit)
         elif picked == "exposure":
             plus.show_exposure(table, features=features, data=data, orders=orders, frames=frames, today=today, username=username, can_edit=can_edit)
         elif picked == "ranking-kategori":
