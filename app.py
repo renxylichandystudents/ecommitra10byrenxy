@@ -4661,22 +4661,59 @@ def sku_issue_view(sku_sheet: pd.DataFrame, issue_kind: str, reasons: tuple[str,
 
 
 @st.fragment
+def reason_picker(options: list[str], *, key: str) -> list[str]:
+    """Filter alasan ringkas: satu tombol (popover) berisi Semua/Kosongkan dan checkbox per alasan,
+    dikelompokkan menurut sumber (Pembeli, Sistem Shopee, Penjual, ...) dengan teks lengkap."""
+    for option in options:
+        widget = f"{key}::{option}"
+        if widget not in st.session_state:
+            st.session_state[widget] = True
+
+    def _set(value: bool) -> None:
+        for option in options:
+            st.session_state[f"{key}::{option}"] = value
+
+    chosen = [o for o in options if st.session_state.get(f"{key}::{o}")]
+    if len(chosen) == len(options):
+        summary = f"Semua alasan ({len(options)})"
+    elif not chosen:
+        summary = "Pilih alasan"
+    elif len(chosen) == 1:
+        summary = chosen[0] if len(chosen[0]) <= 40 else chosen[0][:38] + "…"
+    else:
+        summary = f"{len(chosen)} dari {len(options)} alasan"
+    with st.popover(f"🏷️ Alasan · {summary}", use_container_width=True):
+        q1, q2, _gap = st.columns([1, 1, 2])
+        q1.button("Semua", key=f"{key}-all", on_click=_set, args=(True,), use_container_width=True)
+        q2.button("Kosongkan", key=f"{key}-none", on_click=_set, args=(False,), use_container_width=True)
+        groups: dict[str, list[str]] = {}
+        for option in options:
+            head = option.split(" · ", 1)[0] if " · " in option else "Lainnya"
+            groups.setdefault(head, []).append(option)
+        for head, items in groups.items():
+            st.markdown(f"<div class='field-hint' style='margin-top:6px'><b>{html.escape(head)}</b></div>", unsafe_allow_html=True)
+            cols = st.columns(2)
+            for index, option in enumerate(items):
+                text = option.split(" · ", 1)[1] if " · " in option else option
+                cols[index % 2].checkbox(text, key=f"{key}::{option}")
+    return [o for o in options if st.session_state.get(f"{key}::{o}")]
+
+
 def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None:
     """Filter hanya menjalankan ulang bagian ini (bukan seluruh tab Data)."""
     st.subheader("SKU dengan retur dan batal")
     issue_labels = {"All": "Semua", "Retur": "Retur", "Batal": "Batal"}
-    issue_kind = st.selectbox("Tampilkan", options=["All", "Retur", "Batal"], index=0, format_func=issue_labels.get, key="data-issue-kind")
+    kind_col, reason_col = st.columns([1, 2], vertical_alignment="bottom")
+    issue_kind = kind_col.segmented_control(
+        "Tampilkan", options=["All", "Retur", "Batal"], default="All", format_func=issue_labels.get, key="data-issue-kind"
+    ) or "All"
     reason_names = sku_issue_reasons(sku_sheet, issue_kind)
     selected_reasons: list[str] = []
     if not reason_names:
-        st.caption("Tidak ada alasan pada tampilan ini.")
+        reason_col.caption("Tidak ada alasan pada tampilan ini.")
     else:
-        key = f"data-reasons-{issue_kind}-{selected_label}"
-        if key in st.session_state:
-            st.session_state[key] = [r for r in st.session_state[key] if r in reason_names]
-        else:
-            st.session_state[key] = list(reason_names)
-        selected_reasons = st.multiselect("Alasan", options=reason_names, key=key, placeholder="Cari alasan...")
+        with reason_col:
+            selected_reasons = reason_picker(reason_names, key=f"data-reasons-{issue_kind}-{selected_label}")
         if not selected_reasons:
             st.warning("Pilih minimal satu alasan.")
     shown_sheet, sheet_count = sku_issue_view(sku_sheet, issue_kind, tuple(selected_reasons), tuple(reason_names))
@@ -4693,13 +4730,25 @@ def show_sku_issue_section(sku_sheet: pd.DataFrame, selected_label: str) -> None
         "Alasan retur": "Dari kolom Status Pembatalan/Pengembalian",
         "Alasan batal": "Dari kolom Alasan Pembatalan",
     }
-    show_table(
-        shown_sheet,
-        kinds={"Nominal retur": "money", "Nominal batal": "money"},
-        bold_label="Total",
-        column_config=help_columns(tips, shown_sheet, {"Qty retur": "Unit retur", "Qty batal": "Unit batal"}),
+    # Baris Total dipindah ke atas; data tampil 5 SKU lalu Muat lebih banyak (+10).
+    is_total = shown_sheet["SKU"].astype(str).eq("Total")
+    total_part, body = shown_sheet.loc[is_total], shown_sheet.loc[~is_total].reset_index(drop=True)
+    export = pd.concat([total_part, body], ignore_index=True)
+    config = help_columns(tips, shown_sheet, {"Qty retur": "Unit retur", "Qty batal": "Unit batal"})
+    batched_view(
+        len(body),
+        key=f"sku-issue-{issue_kind}",
+        render=lambda lo, hi: show_table(
+            pd.concat([total_part, body.iloc[lo:hi]], ignore_index=True),
+            kinds={"Nominal retur": "money", "Nominal batal": "money"},
+            bold_label="Total",
+            column_config=config,
+        ),
+        noun="SKU",
+        fragment=False,
+        rerun_scope="fragment",
+        download=lambda: offer_excel(export, "sku_retur_batal.xlsx"),
     )
-    offer_excel(shown_sheet, "sku_retur_batal.xlsx")
 
 
 def show_store_overview(range_text: str, period_view: pd.DataFrame | None = None) -> None:
