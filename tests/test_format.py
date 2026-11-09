@@ -74,7 +74,8 @@ class FormatTest(unittest.TestCase):
         self.assertIn("Rp 1.500.000", html)
         self.assertIn("8,12", html)
         self.assertIn(EMPTY, html)
-        self.assertIn("font-weight: 700", html)
+        self.assertIn("background-color: #e0e7ff", html)
+        self.assertNotIn("font-weight", html)
         self.assertEqual(frame["Sales"].dtype.kind, "f")
 
     def test_excel_numeric(self):
@@ -117,3 +118,18 @@ def test_wrap_layout_widens_medium_text_instead_of_tall_rows():
     assert config["Alasan pembatalan"]["width"] > 400
     long_text = pd.DataFrame({"Catatan": ["x" * 200]})
     assert wrap_layout(long_text)[0] > ROW_PX
+
+
+def test_wrap_layout_rare_long_text_stays_one_line():
+    from src.utils.format import ROW_PX, wrap_layout
+
+    saran = pd.DataFrame({"Saran": ["y" * 65] * 18 + ["y" * 133] * 2})
+    row_px, config = wrap_layout(saran)
+    assert row_px == ROW_PX
+    assert config["Saran"]["width"] >= 133 * 7.2
+    paragraphs = pd.DataFrame({"Saran": ["z" * 300] * 10})
+    assert wrap_layout(paragraphs)[0] > ROW_PX
+    status = pd.DataFrame({"Status stok": ["🔴 Kritis · ambil DC", "🟢 Aman"]})
+    row_px, config = wrap_layout(status, {"Status stok": {"width": "small"}})
+    assert row_px == ROW_PX
+    assert config["Status stok"]["width"] > 75

@@ -82,7 +82,7 @@ from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, sou
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
 from src.utils.format import excel_bytes as numeric_excel_bytes
-from src.utils.format import drop_blank_rows, show_table, style_frame, table_height, wrap_layout
+from src.utils.format import TOTAL_ROW_CSS, drop_blank_rows, show_table, style_frame, table_height, wrap_layout
 from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
@@ -5034,7 +5034,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             shade = pd.concat([pd.Series([False]), (part["_rank"] % 2 == 1).reset_index(drop=True)], ignore_index=True)
             styled = style_frame(view, kinds={"QTY": "count", "Sales value": "money"}).apply(
                 lambda row: [
-                    "font-weight:700;background-color:#f1f5f9" if str(row["Nama akun pembeli"]).startswith("Total") else ("background-color:#f8fafc" if shade.iloc[row.name] else "")
+                    TOTAL_ROW_CSS if str(row["Nama akun pembeli"]).startswith("Total") else ("background-color:#f8fafc" if shade.iloc[row.name] else "")
                 ]
                 * len(row),
                 axis=1,

@@ -477,12 +477,13 @@ def _item_action(row) -> str:
     notes = []
     if row.status in ("Kosong", "Hampir habis"):
         need = max(max_stock - stock - incoming, 0)
-        notes.append(f"Isi ulang ±{need:,.0f} unit (sampai batas Max {max_stock:,.0f}; {incoming:,.0f} unit sudah dalam perjalanan)".replace(",", ".")
-                     if need > 0 else "Tunggu barang yang sedang dalam perjalanan")
+        on_way = f", {incoming:,.0f} di jalan" if incoming > 0 else ""
+        notes.append(f"Isi ulang ±{need:,.0f} unit (s.d. Max {max_stock:,.0f}{on_way})".replace(",", ".")
+                     if need > 0 else "Tunggu barang di jalan")
     elif row.status == "Stok berlebih":
-        notes.append(f"Kelebihan {stock - max_stock:,.0f} unit memakan ruang — tahan pengisian / dorong promo".replace(",", "."))
+        notes.append(f"Lebih {stock - max_stock:,.0f} unit: tahan isi / promo".replace(",", "."))
     if str(row.spesifikasi).lower() != "besar" and not row.pick_location:
-        notes.append("Barang kecil belum punya lokasi ambil — tetapkan lokasi di gondola")
+        notes.append("Barang kecil belum punya lokasi ambil di gondola")
     elif row.pick_location and not row.lokasi_valid:
         notes.append(f"Lokasi {row.pick_location} tidak ada di denah")
     elif row.pick_location and row.kategori_lokasi and row.kategori and row.kategori_lokasi != row.kategori:
@@ -490,9 +491,9 @@ def _item_action(row) -> str:
     pred = float(row.pred_30) if row.pred_30 == row.pred_30 else np.nan
     if np.isfinite(pred) and max_stock > 0:
         if pred > max_stock * 1.2:
-            notes.append(f"Prediksi 30 hari {pred:,.0f} > Max {max_stock:,.0f}: naikkan Max agar tidak kosong".replace(",", "."))
+            notes.append(f"Prediksi 30 hr {pred:,.0f} > Max: naikkan Max".replace(",", "."))
         elif pred * 3 < max_stock and max_stock >= 6:
-            notes.append(f"Max {max_stock:,.0f} ≫ prediksi 30 hari {pred:,.0f}: Max bisa diturunkan untuk hemat ruang".replace(",", "."))
+            notes.append(f"Prediksi 30 hr {pred:,.0f} ≪ Max: turunkan Max".replace(",", "."))
     return "; ".join(notes) or "—"
 
 

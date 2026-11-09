@@ -126,16 +126,25 @@ LINE_PX = 20
 MAX_LINES = 6
 
 
-def _text_columns(frame: pd.DataFrame) -> dict[str, int]:
-    """Kolom teks → panjang teks terpanjang (sampel 300 baris)."""
-    out: dict[str, int] = {}
+TEXT_WRAP_PX = 520  # lebar kolom paragraf yang dibungkus
+TEXT_LINE_PX = 1000  # teks terpanjang sampai lebar ini tetap satu baris bila sebagian besar teks pendek
+
+
+def _text_stats(frame: pd.DataFrame) -> dict[str, tuple[int, int]]:
+    """Kolom teks → (panjang terpanjang, persentil-90 panjang) dari sampel 300 baris."""
+    out: dict[str, tuple[int, int]] = {}
     for column in frame.columns:
         series = frame[column]
         if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
             continue
-        sample = series.head(300).astype(str)
-        out[str(column)] = int(sample.str.len().max() or 0)
+        lengths = series.head(300).astype(str).str.len()
+        out[str(column)] = (int(lengths.max() or 0), int(lengths.quantile(0.9) or 0))
     return out
+
+
+def _text_columns(frame: pd.DataFrame) -> dict[str, int]:
+    """Kolom teks → panjang teks terpanjang (sampel 300 baris)."""
+    return {column: longest for column, (longest, _) in _text_stats(frame).items()}
 
 
 def wrap_layout(frame: pd.DataFrame, column_config: dict | None = None) -> tuple[int, dict]:
@@ -149,22 +158,25 @@ def wrap_layout(frame: pd.DataFrame, column_config: dict | None = None) -> tuple
     import streamlit as st
 
     lines_needed = 1
-    for column, longest in _text_columns(frame).items():
+    for column, (longest, typical) in _text_stats(frame).items():
         own = config.get(column)
         own_width = own.get("width") if isinstance(own, dict) else None
-        if isinstance(own_width, str):
-            width = NAMED_WIDTH_PX.get(own_width, 200)
-        elif isinstance(own_width, (int, float)) and not isinstance(own_width, bool):
+        natural = longest * CHAR_PX + CELL_PAD_PX
+        # Satu sel yang dibungkus membuat semua baris ≥65 px, jadi kolom dilebarkan dulu.
+        one_line = natural <= TEXT_WIDE_PX or (
+            natural <= TEXT_LINE_PX and typical * CHAR_PX + CELL_PAD_PX <= TEXT_WIDE_PX)
+        if isinstance(own_width, (int, float)) and not isinstance(own_width, bool):
             width = int(own_width)
+        elif isinstance(own_width, str) and natural <= NAMED_WIDTH_PX.get(own_width, 200):
+            continue
         else:
-            natural = longest * CHAR_PX + CELL_PAD_PX
-            if natural <= TEXT_MAX_PX:
+            if own_width is None and natural <= TEXT_MAX_PX:
                 continue  # muat satu baris dengan lebar otomatis
-            if natural <= TEXT_WIDE_PX:
+            if one_line:
                 width = int(natural) + 1
                 config[column] = {**own, "width": width} if isinstance(own, dict) else st.column_config.Column(width=width)
                 continue
-            width = TEXT_MAX_PX
+            width = TEXT_WRAP_PX
             config[column] = {**own, "width": width} if isinstance(own, dict) else st.column_config.Column(width=width)
         per_line = max(int((width - CELL_PAD_PX) / CHAR_PX), 8)
         lines_needed = max(lines_needed, -(-longest // per_line))
@@ -201,6 +213,11 @@ def drop_blank_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.iloc[~candidate.to_numpy()]
 
 
+# Baris Total ditandai warna latar, bukan font-weight: st.dataframe menggambar sel bertebal
+# dengan ukuran huruf lebih besar dari lebar kolom yang dihitung, sehingga angka terpotong.
+TOTAL_ROW_CSS = "background-color:#e0e7ff;color:#0f172a"
+
+
 def style_frame(
     frame: pd.DataFrame,
     *,
@@ -232,7 +249,7 @@ def style_frame(
         first = frame.columns[0]
         label_column = next((c for c in frame.columns if frame[c].astype(str).eq(bold_label).any()), first)
         mask = frame[label_column].astype(str).eq(bold_label)
-        styler = styler.apply(lambda row: ["font-weight:700" if mask.loc[row.name] else "" for _ in row], axis=1)
+        styler = styler.apply(lambda row: [TOTAL_ROW_CSS if mask.loc[row.name] else "" for _ in row], axis=1)
     return styler
 
 
