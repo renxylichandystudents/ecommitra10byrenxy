@@ -277,6 +277,12 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 
 ## Kapasitas gudang 0% setelah upload replenishment 09/11 (9 Nov 2026)
 
-- Penyebab: ekspor "Replenishment Calculation by Date" 10037 tanggal 09/11/2026 tidak berisi kolom **Spesifikasi Barang** dan **Pick Locatoin** (snapshot 23/09 berisi keduanya: 291 SKU ber-lokasi gondola, 465 SKU Besar). Tanpa kolom itu gondola terisi = 0 dan SKU Besar berstok = 0, sehingga kartu kapasitas 0,0%.
-- Perbaikan: bila snapshot terbaru kosong di kolom itu untuk semua SKU, nilainya diambil per SKU dari snapshot lama terdekat yang berisi (`gudang.blank_master_columns`, `gudang.fill_master`, dipakai di `load_replenishment`). Snapshot yang sudah tersimpan ikut pulih tanpa upload ulang. Kotak upload memberi keterangan bila kolom tidak ada. SKU baru tetap kosong.
-- Data 09/11 + master 23/09: 60,7% (534 dari 880 lokasi · gondola 225/300 · rak ±309/580). Data 23/09 saja: 64,1%.
+- Penyebab: **Spesifikasi Barang** (Besar/Kecil) dan **Pick Location** adalah definisi tim, bukan kolom ekspor sistem. File 09/11 adalah ekspor mentah, jadi gondola terisi = 0 dan SKU Besar berstok = 0 → kartu kapasitas 0,0%.
+- Sekarang definisi itu disimpan per SKU di tabel `warehouse_item_master` (tidak ikut terhapus saat snapshot replenishment dipangkas ke 60). Isi awal otomatis dari snapshot terbaru yang masih membawa kolom itu (23/09: 756 SKU). Isian master dipakai untuk semua replenishment berikutnya (`gudang.apply_master`); file yang masih membawa kolom itu ikut memperbarui master.
+- Setting › Kapasitas gudang: peringatan jumlah SKU belum lengkap (Spesifikasi kosong, atau barang Kecil tanpa Pick Location) + bagian **Lengkapi data barang** dengan dua cara: *Edit per item* (tabel, saring belum lengkap/semua, cari SKU) dan *Unggah Excel* (template SKU belum lengkap / semua SKU). Validasi: Spesifikasi harus Besar/Kecil, Pick Location harus ada di denah. Hak ubah = hak unggah replenishment (Team DC, Team IC/MD, Super user).
+- Data 09/11: 41 SKU baru belum lengkap; kapasitas 60,7% (534 dari 880 lokasi · gondola 225/300 · rak ±309/580).
+- `FeatureStore.replace` dengan satu kunci kini menghapus massal (IN) agar simpan ratusan SKU ke Supabase cepat.
+
+## Ringkasan: teks "Prediksi" terpotong jadi "diksi" (9 Nov 2026)
+
+- Batang kartu Top 50 ("▼ Prediksi Rp … · x% di bawah terjual") rata kanan, satu baris, di dalam kotak `overflow: hidden`; bila tidak muat, awal kalimat yang terpotong. CSS `.qty-track`/`.qty-fill` di `app.py` kini membungkus ke baris kedua.

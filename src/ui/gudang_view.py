@@ -63,17 +63,32 @@ def load_replenishment(features) -> tuple[pd.DataFrame, object, list]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
     for column in ("nama", "kategori", "spesifikasi", "pick_location", "abc", "stock_out"):
         frame[column] = frame[column].fillna("").astype(str)
-    missing = gudang.blank_master_columns(frame)
-    for older in dates[1:]:
-        if not missing:
-            break
-        previous = features.read("warehouse_replenishment", {"snapshot_date": older})
-        found = [c for c in missing if c not in gudang.blank_master_columns(previous)]
-        if found:
-            frame = gudang.fill_master(frame, previous, found)
-            frame.attrs.setdefault("master_from", {}).update({c: older for c in found})
-            missing = [c for c in missing if c not in found]
+    frame = gudang.apply_master(frame, load_master(features, dates))
     return frame, dates[0], dates
+
+
+def load_master(features, dates: list | None = None) -> pd.DataFrame:
+    """Spesifikasi & Pick Location per SKU (definisi tim). Kosong → diisi sekali dari snapshot terbaru yang masih membawanya."""
+    try:
+        master = features.read("warehouse_item_master")
+    except Exception:
+        return pd.DataFrame(columns=["sku", "spesifikasi", "pick_location"])
+    if not master.empty:
+        return master
+    for snap in dates or []:
+        seed = gudang.master_from_repl(features.read("warehouse_replenishment", {"snapshot_date": snap}))
+        if not seed.empty:
+            try:
+                save_master(features, seed, username="sistem", action="isi_awal:master_barang_gudang")
+            except Exception:
+                pass
+            return seed
+    return master
+
+
+def save_master(features, rows: pd.DataFrame, *, username: str, action: str) -> int:
+    keep = rows[["sku", "spesifikasi", "pick_location"]].assign(updated_by=username, updated_at=datetime.now())
+    return features.replace("warehouse_item_master", keep, keys=["sku"], username=username, action=action)
 
 
 def _table_maps(table: pd.DataFrame | None) -> tuple[dict, dict, dict, dict]:
@@ -295,6 +310,8 @@ def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: 
         return
     if not view.get("has_repl"):
         st.info("Denah sudah ada. Unggah **data stok harian (replenishment)** di kotak kanan agar isi rak dan status stok terlihat.")
+    if view.get("has_repl"):
+        _master_section(features, view, may_edit=may_upload_repl, username=username, require=require)
     gondolas = loc.loc[loc["area"] == "Gondola"]
     st.caption(
         "Stok diambil dari data stok Site 10037 yang diunggah di aplikasi."
@@ -519,12 +536,12 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
         return
     snap_new = found["snapshot"] or datetime.now().date()
     st.markdown(f"Terbaca **{fmt_num(len(repl))} SKU** untuk tanggal **{snap_new:%d/%m/%Y}**.")
-    missing = gudang.blank_master_columns(repl)
-    if missing:
-        label = {"spesifikasi": "Spesifikasi Barang (Besar/Kecil)", "pick_location": "Pick Location"}
+    master = load_master(features, features.snapshot_dates("warehouse_replenishment"))
+    new_skus = int((~repl["sku"].isin(set(master["sku"].map(gudang.norm_sku)))).sum()) if not master.empty else len(repl)
+    if new_skus:
         st.info(
-            f"File ini tidak berisi kolom {' dan '.join(label[c] for c in missing)}. Kolom itu diambil dari data replenishment "
-            "sebelumnya per SKU agar kapasitas rak dan gondola tetap terhitung; SKU baru tetap kosong sampai file berisi kolom tersebut."
+            f"{fmt_num(new_skus)} SKU belum punya Spesifikasi Barang / Pick Location di data barang. Setelah disimpan, "
+            "lengkapi lewat **Lengkapi data barang** di bawah agar SKU itu ikut terhitung di kapasitas."
         )
     if st.button("Simpan data", type="primary", key=f"gudang-repl-save-{round_no}"):
         require("upload_replenishment", "upload")
@@ -534,6 +551,9 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
                 features.remove("warehouse_replenishment", {"snapshot_date": snap_new}, username=username, action="ganti:replenishment")
                 features.insert("warehouse_replenishment", rows, username=username, action="unggah:replenishment")
                 features.prune_snapshots("warehouse_replenishment", keep=60)
+                carried = gudang.master_from_repl(repl)
+                if not carried.empty:
+                    save_master(features, carried, username=username, action="unggah:master_barang_gudang")
         except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
             st.session_state["repl-flash"] = ("err", f"Data replenishment gagal disimpan: {exc}")
         else:
@@ -541,6 +561,140 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
             st.session_state["repl-round"] = round_no + 1
             st.session_state.pop("_gudang_view", None)
         st.rerun()
+
+
+MASTER_LABELS = {"sku": "SKU", "nama": "Nama", "kategori": "Kategori", "spesifikasi": "Spesifikasi Barang", "pick_location": "Pick Location", "kurang": "Yang kurang"}
+
+
+def _master_section(features, view: dict, *, may_edit: bool, username: str, require) -> None:
+    """Spesifikasi Barang & Pick Location adalah definisi tim (tidak ada di ekspor replenishment): lengkapi per item atau lewat Excel."""
+    items = view["items"]
+    todo = gudang.incomplete_items(items)
+    known = set(view["locations"]["lokasi"])
+    flash = st.session_state.pop("master-flash", None)
+    if flash:
+        (st.success if flash[0] == "ok" else st.error)(flash[1])
+    if not todo.empty:
+        no_spec = int(todo["kurang"].eq("Spesifikasi Barang").sum())
+        no_pick = len(todo) - no_spec
+        parts = ([f"{fmt_num(no_spec)} SKU belum punya Spesifikasi Barang (Besar/Kecil)"] if no_spec else []) + (
+            [f"{fmt_num(no_pick)} barang Kecil belum punya Pick Location"] if no_pick else [])
+        st.warning(
+            " · ".join(parts) + ". Tanpa isian ini SKU tersebut tidak terhitung di kapasitas rak/gondola. "
+            + ("Lengkapi di bawah (edit per item atau unggah Excel)." if may_edit else "Minta Team DC atau Team IC/MD melengkapinya."),
+            icon=":material/edit_note:",
+        )
+    title = f"Lengkapi data barang · {fmt_num(len(todo))} SKU belum lengkap" if not todo.empty else "Data barang (Spesifikasi & Pick Location)"
+    with st.expander(title, expanded=False):
+        st.markdown(
+            "<div class='field-hint'>Spesifikasi Barang (Besar = disimpan di rak, Kecil = diambil dari gondola) dan Pick Location "
+            "ditentukan tim, tidak ikut di ekspor replenishment. Isian disimpan per SKU dan dipakai untuk semua data replenishment "
+            "berikutnya; cukup diisi sekali untuk SKU baru.</div>",
+            unsafe_allow_html=True,
+        )
+        if not may_edit:
+            st.caption("Hanya Team DC, Team IC/MD, atau Super user yang bisa mengubah.")
+        tab_edit, tab_upload = st.tabs(["Edit per item", "Unggah Excel"])
+        with tab_edit:
+            _master_editor(features, items, todo, known, may_edit=may_edit, username=username, require=require)
+        with tab_upload:
+            _master_upload(features, items, todo, known, may_edit=may_edit, username=username, require=require)
+
+
+def _master_editor(features, items: pd.DataFrame, todo: pd.DataFrame, known: set, *, may_edit: bool, username: str, require) -> None:
+    c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
+    options = [f"Belum lengkap ({fmt_num(len(todo))})", "Semua SKU"]
+    scope = c1.segmented_control("Tampilkan", options, default=options[0] if not todo.empty else options[1], key="master-scope") or options[0]
+    query = c2.text_input("Cari SKU / nama", key="master-search", placeholder="mis. 300002979 atau check valve").strip().lower()
+    base = todo if scope == options[0] else items.assign(kurang="")[["sku", "nama", "kategori", "spesifikasi", "pick_location", "kurang"]]
+    if query:
+        base = base.loc[base["sku"].str.lower().str.contains(query, regex=False) | base["nama"].str.lower().str.contains(query, regex=False)]
+    base = base.assign(spesifikasi=base["spesifikasi"].map(gudang.norm_spesifikasi).replace("", None)).reset_index(drop=True)
+    if base.empty:
+        st.caption("Semua SKU sudah lengkap." if scope == options[0] and not query else "Tidak ada SKU yang cocok.")
+        return
+    shown = base.head(300)
+    if len(base) > 300:
+        st.caption(f"Menampilkan 300 dari {fmt_num(len(base))} SKU. Persempit dengan pencarian atau pakai Unggah Excel.")
+    columns = ["sku", "nama", "kategori", "spesifikasi", "pick_location"] + (["kurang"] if scope == options[0] else [])
+    edited = st.data_editor(
+        shown[columns].rename(columns=MASTER_LABELS),
+        hide_index=True, use_container_width=True, key=f"master-editor-{scope}-{query}",
+        disabled=["SKU", "Nama", "Kategori", "Yang kurang"] if may_edit else True,
+        column_config={
+            "Spesifikasi Barang": st.column_config.SelectboxColumn(options=list(gudang.SPESIFIKASI), help="Besar = rak, Kecil = gondola"),
+            "Pick Location": st.column_config.TextColumn(help="Kode lokasi gondola di denah, mis. G010010401. Kosongkan untuk barang Besar.", max_chars=40),
+        },
+    )
+    if not may_edit:
+        return
+    after = pd.DataFrame({
+        "sku": shown["sku"],
+        "spesifikasi": edited["Spesifikasi Barang"].map(gudang.norm_spesifikasi),
+        "pick_location": edited["Pick Location"].map(gudang.norm_location),
+    })
+    before_spec = shown["spesifikasi"].map(gudang.norm_spesifikasi)
+    before_pick = shown["pick_location"].map(gudang.norm_location)
+    changed = after.loc[after["spesifikasi"].ne(before_spec) | after["pick_location"].ne(before_pick)]
+    if st.button(f"Simpan perubahan ({fmt_num(len(changed))} SKU)", type="primary", key="master-save", disabled=changed.empty):
+        require("upload_replenishment", "upload")
+        _save_master_rows(features, changed, known, username=username, action="edit:master_barang_gudang")
+
+
+def _master_upload(features, items: pd.DataFrame, todo: pd.DataFrame, known: set, *, may_edit: bool, username: str, require) -> None:
+    st.markdown(
+        "<div class='field-hint'>Unduh template, isi kolom <b>Spesifikasi Barang</b> (Besar/Kecil) dan <b>Pick Location</b>, lalu unggah kembali. "
+        "Baris yang dibiarkan kosong di kedua kolom tidak mengubah isian lama.</div>",
+        unsafe_allow_html=True,
+    )
+    template_cols = {"sku": "Item No", "nama": "Item Name", "kategori": "Item Category", "spesifikasi": "Spesifikasi Barang", "pick_location": "Pick Location"}
+    c1, c2 = st.columns(2)
+    with c1:
+        download_excel(todo[list(template_cols)].rename(columns=template_cols), "lengkapi_data_barang_10037.xlsx",
+                       key="master-tpl-todo", label="Template: SKU belum lengkap")
+    with c2:
+        download_excel(items[list(template_cols)].rename(columns=template_cols), "data_barang_10037.xlsx",
+                       key="master-tpl-all", label="Template: semua SKU")
+    if not may_edit:
+        return
+    round_no = int(st.session_state.get("master-round", 0))
+    upload = st.file_uploader("File isian data barang", type=["xlsx", "csv"], key=f"master-upload-{round_no}")
+    if upload is None:
+        return
+    try:
+        raw = pd.read_csv(upload, header=None, dtype=object) if upload.name.lower().endswith(".csv") else pd.read_excel(upload, header=None, dtype=object)
+        rows = gudang.parse_master_upload(raw)
+    except Exception as exc:  # noqa: BLE001 - pesan yang bisa dibaca
+        st.error(f"File tidak bisa dibaca: {exc}")
+        return
+    rows = rows.loc[rows["spesifikasi"].ne("") | rows["pick_location"].ne("") | rows["spesifikasi_asli"].ne("")]
+    unknown = int((~rows["sku"].isin(set(items["sku"]))).sum())
+    st.markdown(f"Terbaca **{fmt_num(len(rows))} SKU** berisi isian" + (f" ({fmt_num(unknown)} SKU tidak ada di replenishment terbaru, tetap disimpan)." if unknown else "."))
+    if st.button("Simpan isian", type="primary", key=f"master-upload-save-{round_no}", disabled=rows.empty):
+        require("upload_replenishment", "upload")
+        st.session_state["master-round"] = round_no + 1
+        _save_master_rows(features, rows, known, username=username, action="unggah:master_barang_gudang")
+
+
+def _save_master_rows(features, rows: pd.DataFrame, known: set, *, username: str, action: str) -> None:
+    problems = gudang.master_problems(rows, known)
+    good = rows.loc[~rows["sku"].isin(set(problems["sku"]))]
+    if not problems.empty:
+        st.error(f"{fmt_num(len(problems))} SKU tidak disimpan karena isiannya tidak valid:")
+        show_table(problems.rename(columns={"sku": "SKU", "masalah": "Masalah"}), max_height=300)
+    if good.empty:
+        return
+    try:
+        save_master(features, good, username=username, action=action)
+    except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
+        st.error(f"Data barang gagal disimpan: {exc}")
+        return
+    st.session_state.pop("_gudang_view", None)
+    message = f"✓ Data barang {fmt_num(len(good))} SKU tersimpan."
+    if problems.empty:
+        st.session_state["master-flash"] = ("ok", message)
+        st.rerun()
+    st.success(message + " Perbaiki baris di atas lalu simpan lagi; muat ulang halaman untuk melihat kapasitas terbaru.")
 
 
 OMZET_KINDS = {

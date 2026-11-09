@@ -1058,24 +1058,29 @@ _APP_CSS = """
     .qty-head-row .qty-head-mid { flex: 1; text-align: center; }
     .qty-track {
         flex: 1;
-        height: 1.85rem;
+        min-width: 0;
+        min-height: 1.85rem;
+        display: flex;
         background: #f1f5f9;
         border-radius: 8px;
         overflow: hidden;
     }
     .qty-fill {
-        height: 100%;
+        min-height: 1.85rem;
         min-width: 14.5rem;
         max-width: 100%;
         border-radius: 8px;
         display: flex;
         align-items: center;
         justify-content: flex-end;
-        padding: 0 0.7rem;
+        padding: 0.25rem 0.7rem;
         color: #ffffff;
         font-weight: 800;
         font-size: var(--fs-sm);
-        white-space: nowrap;
+        line-height: 1.25;
+        text-align: right;
+        white-space: normal;
+        overflow-wrap: anywhere;
         box-sizing: border-box;
     }
     .qty-fill.naik { background: #1d4ed8; }

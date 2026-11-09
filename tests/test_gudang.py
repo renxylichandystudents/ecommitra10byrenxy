@@ -58,14 +58,32 @@ def test_build_denah_maps_bay_cells():
     assert keys == {"R01-030", "R01-031", "G01-015"}
 
 
-def test_master_columns_carried_from_previous_snapshot():
+
+def test_master_applied_and_incomplete_listed():
     old, _ = gudang.parse_replenishment(_raw())
-    raw = _raw().drop(columns=[3, 4])
-    new, _ = gudang.parse_replenishment(raw)
-    new = pd.concat([new, pd.DataFrame([{"sku": "123", "nama": "Baru"}])], ignore_index=True).fillna("")
-    missing = gudang.blank_master_columns(new)
-    assert missing == ["spesifikasi", "pick_location"]
-    filled = gudang.fill_master(new, old, missing)
+    master = gudang.master_from_repl(old)
+    assert master["sku"].tolist() == ["300002038", "100024295", "900007910"]
+    new, _ = gudang.parse_replenishment(_raw().drop(columns=[3, 4]))
+    new = pd.concat([new, pd.DataFrame([{"sku": "123", "nama": "Baru", "kategori": "TOOLS"}])], ignore_index=True).fillna("")
+    filled = gudang.apply_master(new, master)
     assert filled["spesifikasi"].tolist() == ["Kecil", "Besar", "Kecil", ""]
     assert filled["pick_location"].tolist() == ["G010010401", "", "", ""]
-    assert gudang.blank_master_columns(old) == []
+    todo = gudang.incomplete_items(filled)
+    assert dict(zip(todo["sku"], todo["kurang"])) == {"900007910": "Pick Location", "123": "Spesifikasi Barang"}
+    edit = pd.DataFrame([{"sku": "123", "spesifikasi": "Besar", "pick_location": ""}])
+    master = pd.concat([master, edit], ignore_index=True)
+    assert gudang.incomplete_items(gudang.apply_master(new, master))["sku"].tolist() == ["900007910"]
+
+
+def test_master_upload_parsed_and_validated():
+    raw = pd.DataFrame([
+        ["Item No", "Item Name", "Spesifikasi Barang", "Pick Location"],
+        ["0300002038", "Kran", "kecil", "g010010401"],
+        ["123", "Baru", "Sedang", None],
+        ["456", "Lain", "Kecil", "Z999"],
+        ["789", "Kosong", None, None],
+    ])
+    rows = gudang.parse_master_upload(raw)
+    assert rows.loc[0, ["sku", "spesifikasi", "pick_location"]].tolist() == ["300002038", "Kecil", "G010010401"]
+    problems = gudang.master_problems(rows, {"G010010401"})
+    assert problems["sku"].tolist() == ["123", "456"]

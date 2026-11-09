@@ -226,19 +226,99 @@ def parse_replenishment(raw: pd.DataFrame) -> tuple[pd.DataFrame, date | None]:
 MASTER_COLUMNS = ("spesifikasi", "pick_location")
 
 
-def blank_master_columns(repl: pd.DataFrame) -> list[str]:
-    """Kolom master (Spesifikasi Barang, Pick Location) yang kosong untuk semua SKU (tidak ikut di ekspor)."""
-    return [c for c in MASTER_COLUMNS if c not in repl.columns or not repl[c].fillna("").astype(str).str.strip().ne("").any()]
+SPESIFIKASI = ("Besar", "Kecil")
 
 
-def fill_master(repl: pd.DataFrame, previous: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """Isi kolom master yang kosong dari snapshot lama per SKU; SKU baru tetap kosong."""
+def norm_spesifikasi(value) -> str:
+    text = str(value or "").strip().lower()
+    return {"besar": "Besar", "kecil": "Kecil", "b": "Besar", "k": "Kecil"}.get(text, "")
+
+
+def norm_location(value) -> str:
+    text = str(value or "").strip().upper()
+    return "" if text in ("NAN", "NONE", "-") else re.sub(r"\.0+$", "", text)
+
+
+def master_from_repl(repl: pd.DataFrame) -> pd.DataFrame:
+    """Baris master (sku, spesifikasi, pick_location) dari snapshot yang masih membawa kolom definisi tim."""
+    cols = ["sku", "spesifikasi", "pick_location"]
+    if repl is None or repl.empty:
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame({
+        "sku": repl["sku"].map(norm_sku),
+        "spesifikasi": repl.get("spesifikasi", pd.Series("", index=repl.index)).map(norm_spesifikasi),
+        "pick_location": repl.get("pick_location", pd.Series("", index=repl.index)).map(norm_location),
+    })
+    out = out.loc[out["spesifikasi"].ne("") | out["pick_location"].ne("")]
+    return out.drop_duplicates("sku", keep="last").reset_index(drop=True)
+
+
+def apply_master(repl: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+    """Spesifikasi dan Pick Location dari master per SKU (definisi tim); SKU di luar master memakai isi file (bila ada)."""
     out = repl.copy()
-    prev = previous.assign(sku=previous["sku"].map(norm_sku)).drop_duplicates("sku", keep="last").set_index("sku")
-    for column in columns:
-        if column in prev.columns:
-            out[column] = out["sku"].map(prev[column]).fillna("").astype(str)
+    if master is None or master.empty or out.empty:
+        return out
+    ref = master.assign(sku=master["sku"].map(norm_sku)).drop_duplicates("sku", keep="last").set_index("sku")
+    known = out["sku"].isin(ref.index)
+    for column in MASTER_COLUMNS:
+        current = out[column].fillna("").astype(str) if column in out.columns else pd.Series("", index=out.index)
+        out[column] = current.where(~known, out["sku"].map(ref[column]).fillna("").astype(str))
     return out
+
+
+def incomplete_items(repl: pd.DataFrame) -> pd.DataFrame:
+    """SKU yang perlu dilengkapi tim: Spesifikasi kosong, atau barang Kecil tanpa Pick Location."""
+    if repl is None or repl.empty:
+        return pd.DataFrame(columns=["sku", "nama", "kategori", "spesifikasi", "pick_location", "kurang"])
+    spec = repl["spesifikasi"].map(norm_spesifikasi)
+    pick = repl["pick_location"].map(norm_location)
+    kurang = np.where(spec.eq(""), "Spesifikasi Barang", np.where(spec.eq("Kecil") & pick.eq(""), "Pick Location", ""))
+    out = repl.assign(spesifikasi=spec, pick_location=pick, kurang=kurang)
+    return out.loc[out["kurang"].ne(""), ["sku", "nama", "kategori", "spesifikasi", "pick_location", "kurang"]].reset_index(drop=True)
+
+
+def parse_master_upload(raw: pd.DataFrame) -> pd.DataFrame:
+    """File isian tim (Item No, Spesifikasi Barang, Pick Location) → sku, spesifikasi, pick_location, spesifikasi_asli."""
+    aliases = {
+        "item no": "sku", "sku": "sku", "spesifikasi barang": "spesifikasi", "spesifikasi": "spesifikasi",
+        "pick location": "pick_location", "pick locatoin": "pick_location",
+    }
+    header_row = None
+    for index in range(min(len(raw), 40)):
+        values = [str(v).strip().lower() for v in raw.iloc[index].tolist()]
+        if "item no" in values or "sku" in values:
+            header_row = index
+            break
+    if header_row is None:
+        raise ValueError("Kolom 'Item No' tidak ditemukan. Pakai template dari tombol Unduh template.")
+    table = raw.iloc[header_row + 1 :].copy()
+    table.columns = [aliases.get(str(v).strip().lower(), str(v).strip()) for v in raw.iloc[header_row].tolist()]
+    table = table.loc[:, ~pd.Index(table.columns).duplicated()]
+    if not {"spesifikasi", "pick_location"} & set(table.columns):
+        raise ValueError("Kolom 'Spesifikasi Barang' atau 'Pick Location' tidak ditemukan.")
+    table = table.dropna(subset=["sku"])
+    out = pd.DataFrame({"sku": table["sku"].map(norm_sku)})
+    raw_spec = table["spesifikasi"].fillna("").astype(str).str.strip() if "spesifikasi" in table.columns else pd.Series("", index=table.index)
+    out["spesifikasi"] = raw_spec.map(norm_spesifikasi)
+    out["spesifikasi_asli"] = raw_spec.where(raw_spec.str.lower().ne("nan"), "")
+    out["pick_location"] = table["pick_location"].map(norm_location) if "pick_location" in table.columns else ""
+    out = out.loc[out["sku"].ne("") & out["sku"].str.lower().ne("nan")]
+    return out.drop_duplicates("sku", keep="last").reset_index(drop=True)
+
+
+def master_problems(master: pd.DataFrame, known_locations: set[str]) -> pd.DataFrame:
+    """Baris isian yang tidak bisa dipakai: Spesifikasi bukan Besar/Kecil, atau Pick Location tidak ada di denah."""
+    notes = []
+    for r in master.itertuples(index=False):
+        bad = []
+        original = getattr(r, "spesifikasi_asli", r.spesifikasi)
+        if original and not r.spesifikasi:
+            bad.append(f"Spesifikasi '{original}' bukan Besar/Kecil")
+        if r.pick_location and known_locations and r.pick_location not in known_locations:
+            bad.append(f"Pick Location {r.pick_location} tidak ada di denah")
+        notes.append("; ".join(bad))
+    out = master.assign(masalah=notes)
+    return out.loc[out["masalah"].ne(""), ["sku", "masalah"]].reset_index(drop=True)
 
 
 def read_layout_workbook(data) -> dict:

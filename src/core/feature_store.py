@@ -171,6 +171,17 @@ warehouse_location = Table(
     Column("kategori", String(120), nullable=False, default=""),
 )
 
+# Definisi tim per SKU yang tidak ada di ekspor replenishment: ukuran (Besar/Kecil) dan lokasi ambil gondola.
+warehouse_item_master = Table(
+    "warehouse_item_master",
+    metadata,
+    Column("sku", String(64), primary_key=True),
+    Column("spesifikasi", String(40), nullable=False, default=""),
+    Column("pick_location", String(40), nullable=False, default=""),
+    Column("updated_by", String(80), nullable=False, default=""),
+    Column("updated_at", DateTime, nullable=False),
+)
+
 margin_item = Table(
     "margin_item",
     metadata,
@@ -372,8 +383,13 @@ class FeatureStore:
             return 0
         keys = list(keys)
         with self.engine.begin() as conn:
-            for record in records:
-                conn.execute(delete(table).where(_where(table, {key: record.get(key) for key in keys})))
+            if len(keys) == 1:
+                values = list({record.get(keys[0]) for record in records})
+                for start in range(0, len(values), 500):
+                    conn.execute(delete(table).where(table.c[keys[0]].in_(values[start : start + 500])))
+            else:
+                for record in records:
+                    conn.execute(delete(table).where(_where(table, {key: record.get(key) for key in keys})))
             conn.execute(insert(table), records)
             self.audit(username, action or f"simpan:{name}", {"baris": len(records)}, conn=conn)
         return len(records)
