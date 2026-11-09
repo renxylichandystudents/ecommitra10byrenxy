@@ -26,6 +26,21 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _drop_stale_src_modules() -> None:
+    """Push ke main memperbarui file tanpa me-restart proses Cloud; modul src lama di memori
+    dibuang agar app.py baru tidak bertemu modul versi lama (ImportError) dan tidak perlu Reboot."""
+    stamp = str(max((p.stat().st_mtime for p in (ROOT / "src").rglob("*.py")), default=0.0))
+    previous = os.environ.get("MITRA10_SRC_STAMP")
+    os.environ["MITRA10_SRC_STAMP"] = stamp
+    if previous is None or previous == stamp:
+        return
+    for name in [m for m in sys.modules if m == "src" or m.startswith("src.")]:
+        del sys.modules[name]
+
+
+_drop_stale_src_modules()
+
 from src.activity import (
     activity_report,
     append_total_row,

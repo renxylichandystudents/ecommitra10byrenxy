@@ -20,6 +20,6 @@ Jangan mengubah rumus prediksi, safety stock, atau data yang sudah dikunci kecua
 
 - `main` adalah satu-satunya versi acuan. Mulai setiap sesi dengan `git pull origin main`; jangan melanjutkan branch atau PR lama.
 - Baca `docs/STATUS.md` untuk kondisi terbaru, lalu perbarui file itu setiap kali menyelesaikan perubahan berarti.
-- Push ke `main` menarik kode ke Streamlit Community Cloud; kode baru aktif setelah app di-Reboot. Jalankan `python -m pytest -q` sebelum push.
+- Push ke `main` menarik kode ke Streamlit Community Cloud; `app.py` membuang modul `src` lama dari memori saat file berubah, jadi kode baru aktif tanpa Reboot. Jalankan `python -m pytest -q` sebelum push. Reboot tidak bisa dipicu dari agent (tidak ada API, dashboard butuh login pengguna); bila setelah push masih ada galat, minta pengguna Reboot lewat Manage app.
 - Setiap perubahan yang selesai dan tesnya lolos langsung di-commit dan di-push ke `main` tanpa menunggu konfirmasi, agar app di Cloud selalu memakai versi terbaru. Jangan ikutkan file cadangan lokal (mis. `_cadangan_*.patch`).
 - Pengguna memeriksa tampilan di localhost:8501. Setelah selesai mengubah kode, restart server lokal (`streamlit run app.py --server.fileWatcherType auto`) agar halaman langsung memakai kode baru tanpa galat "tidak punya akses".
