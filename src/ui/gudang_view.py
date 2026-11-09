@@ -63,6 +63,16 @@ def load_replenishment(features) -> tuple[pd.DataFrame, object, list]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
     for column in ("nama", "kategori", "spesifikasi", "pick_location", "abc", "stock_out"):
         frame[column] = frame[column].fillna("").astype(str)
+    missing = gudang.blank_master_columns(frame)
+    for older in dates[1:]:
+        if not missing:
+            break
+        previous = features.read("warehouse_replenishment", {"snapshot_date": older})
+        found = [c for c in missing if c not in gudang.blank_master_columns(previous)]
+        if found:
+            frame = gudang.fill_master(frame, previous, found)
+            frame.attrs.setdefault("master_from", {}).update({c: older for c in found})
+            missing = [c for c in missing if c not in found]
     return frame, dates[0], dates
 
 
@@ -509,6 +519,13 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
         return
     snap_new = found["snapshot"] or datetime.now().date()
     st.markdown(f"Terbaca **{fmt_num(len(repl))} SKU** untuk tanggal **{snap_new:%d/%m/%Y}**.")
+    missing = gudang.blank_master_columns(repl)
+    if missing:
+        label = {"spesifikasi": "Spesifikasi Barang (Besar/Kecil)", "pick_location": "Pick Location"}
+        st.info(
+            f"File ini tidak berisi kolom {' dan '.join(label[c] for c in missing)}. Kolom itu diambil dari data replenishment "
+            "sebelumnya per SKU agar kapasitas rak dan gondola tetap terhitung; SKU baru tetap kosong sampai file berisi kolom tersebut."
+        )
     if st.button("Simpan data", type="primary", key=f"gudang-repl-save-{round_no}"):
         require("upload_replenishment", "upload")
         try:

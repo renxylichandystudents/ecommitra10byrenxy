@@ -56,3 +56,16 @@ def test_build_denah_maps_bay_cells():
     found = gudang.read_layout_workbook(buffer.getvalue())
     keys = {c["k"] for c in found["denah"]["cells"] if c.get("k")}
     assert keys == {"R01-030", "R01-031", "G01-015"}
+
+
+def test_master_columns_carried_from_previous_snapshot():
+    old, _ = gudang.parse_replenishment(_raw())
+    raw = _raw().drop(columns=[3, 4])
+    new, _ = gudang.parse_replenishment(raw)
+    new = pd.concat([new, pd.DataFrame([{"sku": "123", "nama": "Baru"}])], ignore_index=True).fillna("")
+    missing = gudang.blank_master_columns(new)
+    assert missing == ["spesifikasi", "pick_location"]
+    filled = gudang.fill_master(new, old, missing)
+    assert filled["spesifikasi"].tolist() == ["Kecil", "Besar", "Kecil", ""]
+    assert filled["pick_location"].tolist() == ["G010010401", "", "", ""]
+    assert gudang.blank_master_columns(old) == []

@@ -274,3 +274,9 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 - Satu analisa ±9 MB (file hasil ±5,8 MB terkompres + snapshot prediksi ±2,9 MB). Tanpa batas, 90 hari analisa harian ±780 MB.
 - `src/core/storage_guard.py` + `config/business_params.yaml` › `penyimpanan`: simpan 12 analisa terbaru, snapshot prediksi 30 analisa, log aktivitas 180 hari, hapus file brankas milik analisa yang sudah dihapus; > 400 MB → VACUUM FULL lalu hapus analisa tertua (min. 3 tersisa). Dijalankan saat server mulai dan setiap analisa disimpan. Perkiraan stabil ±200 MB.
 - Data latih menampilkan "Database terpakai X dari 500 MB" dan peringatan bila > 400 MB.
+
+## Kapasitas gudang 0% setelah upload replenishment 09/11 (9 Nov 2026)
+
+- Penyebab: ekspor "Replenishment Calculation by Date" 10037 tanggal 09/11/2026 tidak berisi kolom **Spesifikasi Barang** dan **Pick Locatoin** (snapshot 23/09 berisi keduanya: 291 SKU ber-lokasi gondola, 465 SKU Besar). Tanpa kolom itu gondola terisi = 0 dan SKU Besar berstok = 0, sehingga kartu kapasitas 0,0%.
+- Perbaikan: bila snapshot terbaru kosong di kolom itu untuk semua SKU, nilainya diambil per SKU dari snapshot lama terdekat yang berisi (`gudang.blank_master_columns`, `gudang.fill_master`, dipakai di `load_replenishment`). Snapshot yang sudah tersimpan ikut pulih tanpa upload ulang. Kotak upload memberi keterangan bila kolom tidak ada. SKU baru tetap kosong.
+- Data 09/11 + master 23/09: 60,7% (534 dari 880 lokasi · gondola 225/300 · rak ±309/580). Data 23/09 saja: 64,1%.

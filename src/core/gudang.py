@@ -223,6 +223,24 @@ def parse_replenishment(raw: pd.DataFrame) -> tuple[pd.DataFrame, date | None]:
     return table, snapshot
 
 
+MASTER_COLUMNS = ("spesifikasi", "pick_location")
+
+
+def blank_master_columns(repl: pd.DataFrame) -> list[str]:
+    """Kolom master (Spesifikasi Barang, Pick Location) yang kosong untuk semua SKU (tidak ikut di ekspor)."""
+    return [c for c in MASTER_COLUMNS if c not in repl.columns or not repl[c].fillna("").astype(str).str.strip().ne("").any()]
+
+
+def fill_master(repl: pd.DataFrame, previous: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Isi kolom master yang kosong dari snapshot lama per SKU; SKU baru tetap kosong."""
+    out = repl.copy()
+    prev = previous.assign(sku=previous["sku"].map(norm_sku)).drop_duplicates("sku", keep="last").set_index("sku")
+    for column in columns:
+        if column in prev.columns:
+            out[column] = out["sku"].map(prev[column]).fillna("").astype(str)
+    return out
+
+
 def read_layout_workbook(data) -> dict:
     """File LAYOUT_ECOM atau laporan replenishment (xlsx) → {"denah", "locations", "repl", "snapshot"} (yang ditemukan saja)."""
     from io import BytesIO
