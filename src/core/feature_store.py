@@ -350,11 +350,18 @@ class FeatureStore:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         metadata.create_all(engine, checkfirst=True)
+        self._ready: set[str] = set(TABLES)
 
     def _table(self, name: str) -> Table:
         if name not in TABLES:
             raise KeyError(f"Tabel fitur tidak dikenal: {name}")
-        return TABLES[name]
+        table = TABLES[name]
+        ready = self.__dict__.setdefault("_ready", set())
+        if name not in ready:
+            # Tabel yang ditambahkan sesudah store dibuat (proses server lama) dibuat saat pertama dipakai.
+            table.create(self.engine, checkfirst=True)
+            ready.add(name)
+        return table
 
     def audit(self, username: str, action: str, detail: Mapping | None = None, *, conn=None) -> None:
         row = {"at": _now(), "username": username or "-", "action": action, "detail_json": json.dumps(dict(detail or {}), ensure_ascii=False, default=str)}

@@ -87,3 +87,25 @@ def test_master_upload_parsed_and_validated():
     assert rows.loc[0, ["sku", "spesifikasi", "pick_location"]].tolist() == ["300002038", "Kecil", "G010010401"]
     problems = gudang.master_problems(rows, {"G010010401"})
     assert problems["sku"].tolist() == ["123", "456"]
+
+
+def test_missing_master_table_created_on_use_and_seeded_from_older_snapshot():
+    from datetime import date as _date
+
+    from sqlalchemy import create_engine, inspect, text
+
+    from src.core.feature_store import FeatureStore
+    from src.ui import gudang_view
+
+    engine = create_engine("sqlite://")
+    store = FeatureStore(engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE warehouse_item_master"))
+    store._ready.discard("warehouse_item_master")
+    old = pd.DataFrame({"snapshot_date": [_date(2026, 9, 23)] * 2, "sku": ["111", "222"], "spesifikasi": ["Besar", "Kecil"], "pick_location": ["", "G-01"]})
+    new = pd.DataFrame({"snapshot_date": [_date(2026, 11, 9)] * 2, "sku": ["111", "222"], "spesifikasi": ["", ""], "pick_location": ["", ""]})
+    store.insert("warehouse_replenishment", pd.concat([old, new]).assign(uploaded_by="t", uploaded_at=pd.Timestamp("2026-11-09 10:00")))
+    master = gudang_view.load_master(store, store.snapshot_dates("warehouse_replenishment"))
+    assert "warehouse_item_master" in inspect(engine).get_table_names()
+    assert sorted(master["sku"]) == ["111", "222"]
+    assert len(store.read("warehouse_item_master")) == 2

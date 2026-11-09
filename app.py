@@ -30,12 +30,14 @@ if str(ROOT) not in sys.path:
 def _drop_stale_src_modules() -> None:
     """Push ke main memperbarui file tanpa me-restart proses Cloud; modul src lama di memori
     dibuang agar app.py baru tidak bertemu modul versi lama (ImportError) dan tidak perlu Reboot."""
-    stamp = str(max((p.stat().st_mtime for p in (ROOT / "src").rglob("*.py")), default=0.0))
+    files = [*(ROOT / "src").rglob("*.py"), ROOT / "auth" / "ui.py"]
+    stamp = str(max((p.stat().st_mtime for p in files if p.exists()), default=0.0))
     previous = os.environ.get("MITRA10_SRC_STAMP")
     os.environ["MITRA10_SRC_STAMP"] = stamp
     if previous == stamp:
         return
-    for name in [m for m in sys.modules if m == "src" or m.startswith("src.")]:
+    # auth.ui ikut dimuat ulang (cache FeatureStore); auth.repository tidak, agar objek User di sesi tetap dikenali.
+    for name in [m for m in sys.modules if m == "src" or m.startswith("src.") or m == "auth.ui"]:
         del sys.modules[name]
 
 

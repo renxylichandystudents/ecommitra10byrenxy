@@ -71,7 +71,8 @@ def load_master(features, dates: list | None = None) -> pd.DataFrame:
     """Spesifikasi & Pick Location per SKU (definisi tim). Kosong → diisi sekali dari snapshot terbaru yang masih membawanya."""
     try:
         master = features.read("warehouse_item_master")
-    except Exception:
+    except Exception as exc:
+        st.warning(f"Data barang (Spesifikasi & Pick Location) belum bisa dibaca: {exc}")
         return pd.DataFrame(columns=["sku", "spesifikasi", "pick_location"])
     if not master.empty:
         return master

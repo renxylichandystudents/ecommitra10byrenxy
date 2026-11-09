@@ -54,13 +54,15 @@ def get_engine():
 
 
 @st.cache_resource(show_spinner=False)
-def _features(url: str) -> FeatureStore:
+def _features(url: str, code_version: str = "") -> FeatureStore:
     return FeatureStore(_engine(url))
 
 
 def get_features() -> FeatureStore:
-    """Tabel fitur baru (terpisah dari 9 sumber data latih) + audit_log."""
-    return _features(database_url(_secrets_obj()))
+    """Tabel fitur baru (terpisah dari 9 sumber data latih) + audit_log.
+
+    code_version (diisi app.py tiap kode berubah) membuat store baru sesudah push, sehingga tabel baru ikut dibuat."""
+    return _features(database_url(_secrets_obj()), os.environ.get("MITRA10_SRC_STAMP", ""))
 
 
 def audit(action: str, detail: str = "") -> None:
