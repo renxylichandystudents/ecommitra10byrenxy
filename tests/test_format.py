@@ -106,3 +106,14 @@ class DescriptionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_wrap_layout_widens_medium_text_instead_of_tall_rows():
+    from src.utils.format import ROW_PX, wrap_layout
+
+    reasons = pd.DataFrame({"Alasan pembatalan": ["Sistem Shopee · Belum dibayar", "Sistem Shopee · Penjual gagal mengirimkan pesanan tepat waktu"], "Invoice": [186, 1]})
+    row_px, config = wrap_layout(reasons)
+    assert row_px == ROW_PX
+    assert config["Alasan pembatalan"]["width"] > 400
+    long_text = pd.DataFrame({"Catatan": ["x" * 200]})
+    assert wrap_layout(long_text)[0] > ROW_PX

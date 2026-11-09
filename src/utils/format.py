@@ -120,6 +120,7 @@ def table_height(rows: int, max_height: int = 600, row_px: int = ROW_PX) -> int:
 CHAR_PX = 7.2  # lebar rata-rata satu huruf di tabel (px)
 CELL_PAD_PX = 18
 TEXT_MAX_PX = 400
+TEXT_WIDE_PX = 660  # ±90 huruf: sampai lebar ini kolom dilebarkan agar tetap satu baris
 NAMED_WIDTH_PX = {"small": 75, "medium": 200, "large": 400}
 LINE_PX = 20
 MAX_LINES = 6
@@ -159,6 +160,10 @@ def wrap_layout(frame: pd.DataFrame, column_config: dict | None = None) -> tuple
             natural = longest * CHAR_PX + CELL_PAD_PX
             if natural <= TEXT_MAX_PX:
                 continue  # muat satu baris dengan lebar otomatis
+            if natural <= TEXT_WIDE_PX:
+                width = int(natural) + 1
+                config[column] = {**own, "width": width} if isinstance(own, dict) else st.column_config.Column(width=width)
+                continue
             width = TEXT_MAX_PX
             config[column] = {**own, "width": width} if isinstance(own, dict) else st.column_config.Column(width=width)
         per_line = max(int((width - CELL_PAD_PX) / CHAR_PX), 8)

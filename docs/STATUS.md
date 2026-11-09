@@ -286,3 +286,8 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 ## Ringkasan: teks "Prediksi" terpotong jadi "diksi" (9 Nov 2026)
 
 - Batang kartu Top 50 ("▼ Prediksi Rp … · x% di bawah terjual") rata kanan, satu baris, di dalam kotak `overflow: hidden`; bila tidak muat, awal kalimat yang terpotong. CSS `.qty-track`/`.qty-fill` di `app.py` kini membungkus ke baris kedua.
+
+## Tinggi baris tabel teks sedang (10 Nov 2026)
+
+- Tabel Kontribusi invoice batal: satu alasan 61 huruf ("Sistem Shopee · Penjual gagal mengirimkan pesanan tepat waktu") melewati batas kolom 400 px, sehingga semua baris dibuat 65 px (tinggi minimum bungkus) padahal teks muat satu baris.
+- `wrap_layout` (`src/utils/format.py`): kolom teks s.d. ±90 huruf (660 px) kini dilebarkan sesuai isi dan tetap satu baris (35 px); baris hanya ditinggikan bila teks lebih panjang. Berlaku untuk semua tabel `show_table`.
