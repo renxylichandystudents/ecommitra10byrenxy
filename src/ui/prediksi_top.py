@@ -239,14 +239,38 @@ def _snapshot_runs(features) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["id", "run_at"])
 
 
-def _comparison_for(features, runs: pd.DataFrame, lines: pd.DataFrame, day: date, stock: dict[str, float], table: pd.DataFrame | None = None) -> pd.DataFrame:
+def _day_shape(frame: pd.DataFrame, cutoff: date):
+    """Pola harian (Senin–Minggu, gajian, tanggal kembar) yang sama dengan Pantauan harian; hasil: tanggal → pengali."""
+    from src.core import month_track as M
+    from src.ui.month_track_view import _daily_series
+
+    net, _product, _stamp = _daily_series(frame)
+    history = net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)] if len(net) else net
+    profile = M.seasonal_profile(history)
+    months: dict[date, dict[date, float]] = {}
+
+    def factor(day: date) -> float:
+        first = day.replace(day=1)
+        if first not in months:
+            months[first] = M.month_shape(profile, first)
+        return float(months[first].get(day, 1.0))
+
+    return factor
+
+
+def _comparison_for(features, runs: pd.DataFrame, lines: pd.DataFrame, day: date, stock: dict[str, float], table: pd.DataFrame | None = None, shape=None) -> pd.DataFrame:
     """Prediksi vs aktual untuk tanggal D. Pakai snapshot analisa yang dibuat sebelum D; bila belum ada,
-    pakai uji mundur (model harian yang sama, hanya data s.d. D−1). Kolom 'sumber' menandai asalnya."""
+    pakai uji mundur (model harian yang sama, hanya data s.d. D−1). Kolom 'sumber' menandai asalnya.
+    Snapshot berisi laju datar; `shape(D)` menyebarnya menurut pola hari seperti di Pantauan harian."""
     eligible = runs.loc[pd.to_datetime(runs["run_at"]) < pd.Timestamp(day)] if runs is not None and not runs.empty else pd.DataFrame()
     if not eligible.empty:
         run_id = int(eligible.loc[pd.to_datetime(eligible["run_at"]).idxmax(), "id"])
         snap = features.read("prediction_snapshot", {"run_id": run_id, "target_date": day}).rename(columns={"target_date": "tanggal"})
         if not snap.empty:
+            if shape is not None:
+                scale = shape(day)
+                snap = snap.assign(pred_qty=pd.to_numeric(snap["pred_qty"], errors="coerce") * scale,
+                                   pred_sales=pd.to_numeric(snap["pred_sales"], errors="coerce") * scale)
             return daily_comparison(snap, lines, day, stock_by_sku=stock).assign(sumber="tersimpan")
     snap = _backtest_cached(lines, table, day)
     if snap.empty:
@@ -337,9 +361,10 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         partial_note = (f" Data {fmt_date(last_stamp.date())} baru sampai pukul {last_stamp:%H:%M} (belum satu hari penuh), "
                         f"jadi yang dinilai {fmt_date(last)}.")
     unpaid = unpaid_by_day(orders_all if orders_all is not None else orders)
+    shape = _day_shape(orders_all if orders_all is not None else orders, last)
     stock = {str(s): float(v) for s, v, k in zip(table["sku"], table["stok"], table["ada_data_stok"]) if k} if table is not None and not table.empty else {}
     with st.spinner("Menyiapkan prediksi vs aktual..."):
-        rows = _comparison_for(features, runs, lines, last, stock, table)
+        rows = _comparison_for(features, runs, lines, last, stock, table, shape=shape)
     if rows.empty:
         st.info(f"Belum cukup riwayat penjualan untuk membandingkan prediksi dengan aktual {fmt_date(last)}.")
         return
@@ -368,7 +393,7 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     if partial_note:
         st.caption(partial_note.strip())
     with st.spinner("Menyiapkan breakdown per tanggal bulan ini..."):
-        month = _month_breakdown(features, runs, lines, last, last_stamp, table, unpaid)
+        month = _month_breakdown(features, runs, lines, last, last_stamp, table, unpaid, shape)
     _month_chart(month, last)
     _month_table(month, last)
     # Diagnosa penyebab per SKU (harga, stok, batal, pola jual, kondisi toko) + saran aksi.
@@ -447,7 +472,7 @@ def _future_predictions(features, runs: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(snap["pred_sales"], errors="coerce").fillna(0.0).groupby(days).sum()
 
 
-def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpaid: pd.DataFrame) -> pd.DataFrame:
+def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpaid: pd.DataFrame, shape) -> pd.DataFrame:
     """Satu baris per tanggal dari tgl 1 s.d. akhir bulan (bulan hari penuh terakhir), basis SKU berprediksi.
 
     Selesai: prediksi H-1 (snapshot sebelum tanggal itu / uji mundur) vs aktual bersih + Belum Bayar.
@@ -460,9 +485,10 @@ def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpai
     out = []
     for offset in range((end - start).days + 1):
         day = start + timedelta(days=offset)
-        row = {"tanggal": day, "prediksi": np.nan, "aktual": np.nan, "belum_bayar": np.nan, "status": "Akan datang", "sumber": "analisa terbaru"}
+        row = {"tanggal": day, "prediksi": np.nan, "aktual": np.nan, "belum_bayar": np.nan, "status": "Akan datang",
+               "sumber": "analisa terbaru", "pola": shape(day)}
         if day <= data_day:
-            part = _comparison_for(features, runs, lines, day, {}, table)
+            part = _comparison_for(features, runs, lines, day, {}, table, shape=shape)
             row["status"] = "Selesai" if day <= last else "Berjalan"
             if not part.empty:
                 skus = set(part["sku"].astype(str))
@@ -473,7 +499,7 @@ def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpai
                     sumber="analisa H-1" if str(part["sumber"].iloc[0]) == "tersimpan" else "uji mundur",
                 )
         else:
-            row["prediksi"] = float(future.get(day, flat))
+            row["prediksi"] = float(future.get(day, flat)) * shape(day)
         out.append(row)
     frame = pd.DataFrame(out)
     frame["pct"] = np.where(frame["prediksi"] > 0, frame["aktual"] / frame["prediksi"] * 100, np.nan)
@@ -508,14 +534,20 @@ def _month_chart(month: pd.DataFrame, last: date) -> None:
     st.caption(
         f"Tanggal 1 s.d. akhir bulan, basis SKU yang diprediksi. Angka % di atas batang = aktual ÷ prediksi (hanya hari penuh). "
         f"Garis putus-putus = hari penuh terakhir ({fmt_date(last)}); sesudahnya prediksi dari analisa terbaru. "
+        "Laju harian analisa disebar dengan pola hari yang sama dengan Pantauan harian (Senin–Minggu, gajian, tanggal kembar), "
+        "total sebulan tetap. Pantauan harian memakai sales bersih seluruh toko, jadi angkanya berbeda sebesar faktor sales bersih ÷ sales produk. "
         "Kuning = pesanan masih Belum Bayar (belum dihitung terjual; sebagian dibayar 1–3 hari kemudian, sisanya batal).")
 
 
 def _month_table(month: pd.DataFrame, last: date) -> None:
     if month.empty:
         return
+    from src.core.month_track import day_label
+
     view = pd.DataFrame({
         "Tanggal": [f"{HARI[d.weekday()]} {fmt_date(d)}" for d in month["tanggal"]],
+        "Jenis hari": [day_label(d) for d in month["tanggal"]],
+        "Pola hari": [f"×{p:.2f}".replace(".", ",") if s != "uji mundur" else "pola model" for p, s in zip(month["pola"], month["sumber"])],
         "Status": month["status"],
         "Prediksi omzet": month["prediksi"],
         "Aktual bersih": month["aktual"],
@@ -529,7 +561,7 @@ def _month_table(month: pd.DataFrame, last: date) -> None:
     pred, act, pend = (float(month.loc[done, c].fillna(0).sum()) for c in ("prediksi", "aktual", "belum_bayar"))
     label = f"Total s.d. {fmt_date(last)}"
     total = {
-        "Tanggal": label, "Status": f"{int(done.sum())} hari penuh", "Prediksi omzet": pred, "Aktual bersih": act, "Belum Bayar": pend,
+        "Tanggal": label, "Jenis hari": "", "Pola hari": "", "Status": f"{int(done.sum())} hari penuh", "Prediksi omzet": pred, "Aktual bersih": act, "Belum Bayar": pend,
         "Selisih": act - pred, "% capaian": act / pred * 100 if pred else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred * 100 if pred else np.nan, "Sumber prediksi": "",
     }

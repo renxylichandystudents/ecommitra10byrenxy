@@ -159,6 +159,15 @@ def as_of_predictions(runs: pd.DataFrame, days: list[date]) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def month_shape(profile: Profile, month_first: date) -> dict[date, float]:
+    """Pola harian bulan itu dinormalkan ke rata-rata 1: laju datar × pola, total sebulan tetap = laju × jumlah hari."""
+    month_days = calendar.monthrange(month_first.year, month_first.month)[1]
+    days = [month_first.replace(day=1) + timedelta(days=i) for i in range(month_days)]
+    shape = np.array([profile.factor(d) for d in days])
+    shape = shape / shape.mean() if shape.mean() > 0 else np.ones(month_days)
+    return dict(zip(days, shape.tolist()))
+
+
 def month_table(
     *,
     month_first: date,
@@ -174,8 +183,7 @@ def month_table(
     sementara hari sesudah cutoff (hari ini, bila datanya sudah ada)."""
     month_days = calendar.monthrange(month_first.year, month_first.month)[1]
     days = [month_first + timedelta(days=i) for i in range(month_days)]
-    shape = np.array([profile.factor(d) for d in days])
-    shape = shape / shape.mean() if shape.mean() > 0 else np.ones(month_days)
+    shape = np.array(list(month_shape(profile, month_first).values()))
     pred = predictions.set_index("tanggal").reindex(days)
     actual_map = {pd.Timestamp(k).date(): float(v) for k, v in actual.items()}
     rows = []

@@ -126,3 +126,12 @@ def test_pred_actual_complete_day_and_unpaid():
     })
     unpaid = unpaid_by_day(lines)
     assert unpaid[["sku", "belum_bayar"]].values.tolist() == [["A", 50_000.0]]
+
+
+def test_month_shape_keeps_month_total_and_lifts_twin_date():
+    profile = M.Profile(days=200)
+    profile.uplift["Tanggal kembar"] = 2.9
+    shape = M.month_shape(profile, date(2026, 11, 1))
+    assert len(shape) == 30
+    assert abs(sum(shape.values()) / 30 - 1) < 1e-9
+    assert shape[date(2026, 11, 11)] > 2 * shape[date(2026, 11, 12)]
