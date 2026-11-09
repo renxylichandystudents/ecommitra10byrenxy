@@ -109,3 +109,20 @@ def test_listing_priority_only_when_sku_drops_below_its_own_pace():
     assert top["SKU"].tolist() == ["D"]
     assert top.iloc[0]["Jenis"] == "Harga & listing"
     assert abs(top.iloc[0]["Potensi omzet"] - (4.0 - 1.0) * 100_000 * 20) < 1
+
+
+def test_pred_actual_complete_day_and_unpaid():
+    from src.core.pred_actual import complete_through, unpaid_by_day
+
+    today = date(2026, 11, 10)
+    assert complete_through(datetime(2026, 11, 9, 23, 40), today) == date(2026, 11, 9)
+    assert complete_through(datetime(2026, 11, 9, 20, 15), today) == date(2026, 11, 8)
+    assert complete_through(datetime(2026, 11, 10, 0, 30), today) == date(2026, 11, 9)
+    lines = pd.DataFrame({
+        "order_time": ["2026-11-09 10:00", "2026-11-09 11:00", "2026-11-09 12:00"],
+        "sku": ["A", "A", "B"],
+        "status": ["Belum Bayar", "Selesai", "Batal"],
+        "sales": [50_000.0, 70_000.0, 30_000.0],
+    })
+    unpaid = unpaid_by_day(lines)
+    assert unpaid[["sku", "belum_bayar"]].values.tolist() == [["A", 50_000.0]]

@@ -102,6 +102,33 @@ def daily_comparison(
     return merged[columns]
 
 
+COMPLETE_HOUR = 23
+
+
+def complete_through(last_stamp, today: date) -> date:
+    """Tanggal penuh terakhir: hari data terakhir dihitung penuh bila sudah lewat hari ini atau data sampai ≥ 23:00."""
+    stamp = pd.Timestamp(last_stamp)
+    day = stamp.date()
+    if day >= today or stamp.hour < COMPLETE_HOUR:
+        return day - timedelta(days=1)
+    return day
+
+
+def unpaid_by_day(lines_all: pd.DataFrame | None) -> pd.DataFrame:
+    """Omzet pesanan yang masih Belum Bayar per (tanggal, sku). Belum dihitung terjual, sebagian dibayar 1–3 hari kemudian."""
+    columns = ["tanggal", "sku", "belum_bayar"]
+    if lines_all is None or lines_all.empty or "status" not in lines_all.columns:
+        return pd.DataFrame(columns=columns)
+    from src.ingest import open_unpaid_mask
+
+    part = lines_all.loc[open_unpaid_mask(lines_all["status"])]
+    if part.empty:
+        return pd.DataFrame(columns=columns)
+    sales = pd.to_numeric(part.get("gross_sales", part["sales"]), errors="coerce").fillna(0.0)
+    frame = pd.DataFrame({"tanggal": pd.to_datetime(part["order_time"], errors="coerce").dt.date, "sku": part["sku"].astype(str), "belum_bayar": sales})
+    return frame.groupby(["tanggal", "sku"], as_index=False)["belum_bayar"].sum()
+
+
 def lost_sales_from_stock(rows: pd.DataFrame) -> float:
     """Potensi omzet hilang = Σ max(0, pred_sales − aktual_sales) untuk SKU stok kosong."""
     if rows is None or rows.empty:

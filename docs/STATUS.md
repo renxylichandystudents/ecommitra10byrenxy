@@ -314,3 +314,10 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## Deploy tanpa Reboot (10 Nov 2026)
 
 - Setelah push, Cloud menjalankan `app.py` baru tetapi modul `src` lama masih di memori, sehingga impor nama baru gagal (`ImportError: TOTAL_ROW_CSS`) sampai app di-Reboot. `app.py` kini mencatat waktu ubah terbaru file `src/**/*.py`; bila berubah sejak rerun sebelumnya, modul `src.*` dibuang lalu diimpor ulang. Push ke `main` langsung aktif tanpa Reboot.
+
+## Prediksi vs aktual harian: breakdown sebulan & hari belum penuh (10 Nov 2026)
+
+- Grafik 7 hari diganti **breakdown tgl 1 s.d. akhir bulan** (`_month_breakdown`, `_month_chart`, `_month_table` di `src/ui/prediksi_top.py`): batang Prediksi vs Aktual bersih + Belum Bayar (kuning) per tanggal, % capaian di atas batang hari penuh, tabel per tanggal dengan baris Total s.d. hari penuh terakhir. Tanggal mendatang = prediksi analisa terbaru. Basis tetap SKU berprediksi (sama dengan kartu).
+- **Hari penuh** (`complete_through`, `src/core/pred_actual.py`): hari data terakhir hanya dinilai bila sudah lewat hari ini atau data sampai ≥ 23:00 (sebelumnya cukup "bukan hari ini", jadi hari yang diekspor sore ikut dinilai dan tampak anjlok).
+- **Belum Bayar** (`unpaid_by_day`): omzet pesanan yang masih Belum Bayar ditampilkan terpisah + "% bila Belum Bayar dibayar". Di data lokal hari penuh terakhir (7 Nov) masih 6,2% Belum Bayar saat ekspor; hari lama 0% (sudah dibayar/batal), jadi hari terbaru selalu tampak lebih rendah.
+- Catatan pemeriksaan 9 Nov (79,7%): prediksi 9 Nov memakai snapshot analisa terbaru (laju datar Rp 122,9 jt/hari, 786 SKU), sedangkan 1–7 Nov uji mundur (±Rp 92–136 jt, SKU aktif) — lompatan basis prediksi. Laju 122,9 jt wajar (rata-rata 7/14 hari Rp 115/120 jt), jadi selisih 9 Nov = penjualan Senin memang lebih rendah + Belum Bayar belum masuk (+ kemungkinan data belum penuh).

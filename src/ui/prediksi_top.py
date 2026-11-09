@@ -12,7 +12,15 @@ import streamlit as st
 
 from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date, fmt_date_short
-from src.core.pred_actual import cause_group, daily_comparison, diagnose, lost_sales_from_stock, store_support
+from src.core.pred_actual import (
+    cause_group,
+    complete_through,
+    daily_comparison,
+    diagnose,
+    lost_sales_from_stock,
+    store_support,
+    unpaid_by_day,
+)
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
 from src.ui.common import batched_view, card, page_navigator, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
@@ -321,12 +329,14 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         st.info(f"Snapshot prediksi belum bisa dibaca: {exc}")
         return
     lines = orders.assign(sku=orders["sku"].astype(str))
-    last = pd.to_datetime(lines["order_time"]).max().date()
-    # Hari ini masih berjalan: bandingkan hari penuh terakhir agar % pencapaian tidak terlihat anjlok.
+    last_stamp = pd.to_datetime(lines["order_time"]).max()
+    # Hari yang belum penuh (hari ini, atau data belum sampai 23:00) tidak dinilai agar % tidak terlihat anjlok.
+    last = complete_through(last_stamp, date.today())
     partial_note = ""
-    if last >= date.today():
-        partial_note = f" Data {fmt_date(last)} belum satu hari penuh, jadi yang dibandingkan {fmt_date(last - timedelta(days=1))}."
-        last = last - timedelta(days=1)
+    if last < last_stamp.date():
+        partial_note = (f" Data {fmt_date(last_stamp.date())} baru sampai pukul {last_stamp:%H:%M} (belum satu hari penuh), "
+                        f"jadi yang dinilai {fmt_date(last)}.")
+    unpaid = unpaid_by_day(orders_all if orders_all is not None else orders)
     stock = {str(s): float(v) for s, v, k in zip(table["sku"], table["stok"], table["ada_data_stok"]) if k} if table is not None and not table.empty else {}
     with st.spinner("Menyiapkan prediksi vs aktual..."):
         rows = _comparison_for(features, runs, lines, last, stock, table)
@@ -349,27 +359,18 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     reach = achievement_line(day_total, last, last, features)
     card(cols[1], "Aktual omzet bersih", fmt_idr(actual_sales),
          hint=f"SKU berprediksi · seluruh toko {fmt_idr(day_total)}" + (f"<br>{reach}" if reach else ""))
-    card(cols[2], "% pencapaian prediksi", fmt_pct(actual_sales / pred_sales * 100 if pred_sales > 0 else float("nan"), 1))
+    pending = float(unpaid.loc[(unpaid["tanggal"] == last) & unpaid["sku"].isin(set(rows["sku"].astype(str))), "belum_bayar"].sum())
+    pct_hint = (
+        f"Masih Belum Bayar {fmt_idr(pending)}; bila dibayar semua → {fmt_pct((actual_sales + pending) / pred_sales * 100, 1)}"
+        if pending > 0 and pred_sales > 0 else "")
+    card(cols[2], "% pencapaian prediksi", fmt_pct(actual_sales / pred_sales * 100 if pred_sales > 0 else float("nan"), 1), hint=pct_hint)
     card(cols[3], "SKU tercapai + melebihi", f"{fmt_num(hit)} / {fmt_num(len(rows))}", hint="SKU yang punya prediksi pada hari itu")
     if partial_note:
         st.caption(partial_note.strip())
-    trend = []
-    with st.spinner("Menghitung tren pencapaian 7 hari..."):
-        for back in range(6, -1, -1):
-            day = last - timedelta(days=back)
-            part = _comparison_for(features, runs, lines, day, {}, table)
-            if not part.empty and part["pred_sales"].sum() > 0:
-                trend.append((day, part["aktual_sales"].sum() / part["pred_sales"].sum() * 100))
-    if trend:
-        fig = go.Figure(go.Scatter(x=[d for d, _ in trend], y=[v for _, v in trend], mode="lines+markers+text", text=[f"{v:.0f}%" for _, v in trend], textposition="top center", line=dict(color="#1b3da6")))
-        fig.add_hline(y=100, line_dash="dot", line_color="#94a3b8")
-        fig.update_layout(
-            height=280,
-            margin=dict(l=30, r=20, t=20, b=30),
-            yaxis_title="% pencapaian omzet",
-            xaxis=dict(type="date", tickformat="%d/%m", dtick=86_400_000),  # satu label per hari
-        )
-        st.plotly_chart(fig, use_container_width=True, key="pva-trend")
+    with st.spinner("Menyiapkan breakdown per tanggal bulan ini..."):
+        month = _month_breakdown(features, runs, lines, last, last_stamp, table, unpaid)
+    _month_chart(month, last)
+    _month_table(month, last)
     # Diagnosa penyebab per SKU (harga, stok, batal, pola jual, kondisi toko) + saran aksi.
     dc = {}
     if table is not None and not table.empty:
@@ -429,6 +430,117 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         kinds={"Prediksi omzet": "money", "Aktual omzet": "money", "Selisih omzet": "money", "% capaian": "pct"},
         max_height=10_000,
     )
+
+
+HARI = ("Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min")
+
+
+def _future_predictions(features, runs: pd.DataFrame) -> pd.Series:
+    """Prediksi omzet per tanggal dari analisa terbaru (untuk tanggal yang belum terjadi)."""
+    if runs is None or runs.empty:
+        return pd.Series(dtype=float)
+    run_id = int(runs.loc[pd.to_datetime(runs["run_at"]).idxmax(), "id"])
+    snap = features.read("prediction_snapshot", {"run_id": run_id})
+    if snap.empty:
+        return pd.Series(dtype=float)
+    days = pd.to_datetime(snap["target_date"], errors="coerce").dt.date
+    return pd.to_numeric(snap["pred_sales"], errors="coerce").fillna(0.0).groupby(days).sum()
+
+
+def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpaid: pd.DataFrame) -> pd.DataFrame:
+    """Satu baris per tanggal dari tgl 1 s.d. akhir bulan (bulan hari penuh terakhir), basis SKU berprediksi.
+
+    Selesai: prediksi H-1 (snapshot sebelum tanggal itu / uji mundur) vs aktual bersih + Belum Bayar.
+    Berjalan: hari yang datanya belum penuh. Akan datang: prediksi analisa terbaru."""
+    start = last.replace(day=1)
+    end = (pd.Timestamp(start) + pd.offsets.MonthEnd(0)).date()
+    data_day = pd.Timestamp(last_stamp).date()
+    future = _future_predictions(features, runs)
+    flat = float(future.mean()) if len(future) else np.nan
+    out = []
+    for offset in range((end - start).days + 1):
+        day = start + timedelta(days=offset)
+        row = {"tanggal": day, "prediksi": np.nan, "aktual": np.nan, "belum_bayar": np.nan, "status": "Akan datang", "sumber": "analisa terbaru"}
+        if day <= data_day:
+            part = _comparison_for(features, runs, lines, day, {}, table)
+            row["status"] = "Selesai" if day <= last else "Berjalan"
+            if not part.empty:
+                skus = set(part["sku"].astype(str))
+                row.update(
+                    prediksi=float(part["pred_sales"].sum()),
+                    aktual=float(part["aktual_sales"].sum()),
+                    belum_bayar=float(unpaid.loc[(unpaid["tanggal"] == day) & unpaid["sku"].isin(skus), "belum_bayar"].sum()),
+                    sumber="analisa H-1" if str(part["sumber"].iloc[0]) == "tersimpan" else "uji mundur",
+                )
+        else:
+            row["prediksi"] = float(future.get(day, flat))
+        out.append(row)
+    frame = pd.DataFrame(out)
+    frame["pct"] = np.where(frame["prediksi"] > 0, frame["aktual"] / frame["prediksi"] * 100, np.nan)
+    frame["pct_bayar"] = np.where(frame["prediksi"] > 0, (frame["aktual"] + frame["belum_bayar"].fillna(0)) / frame["prediksi"] * 100, np.nan)
+    return frame
+
+
+def _month_chart(month: pd.DataFrame, last: date) -> None:
+    if month.empty or month["prediksi"].isna().all():
+        return
+    x = pd.to_datetime(month["tanggal"])
+    done = month["status"].eq("Selesai")
+    fig = go.Figure()
+    fig.add_bar(x=x, y=month["prediksi"], name="Prediksi", offsetgroup="p", marker_color=np.where(done, "#a5b4fc", "#e0e7ff").tolist(),
+                hovertemplate="%{x|%d/%m} · Prediksi Rp %{y:,.0f}<extra></extra>")
+    fig.add_bar(x=x, y=month["aktual"], name="Aktual bersih", offsetgroup="a", marker_color="#1b3da6",
+                text=[f"{v:.0f}%" if np.isfinite(v) and s == "Selesai" else "" for v, s in zip(month["pct"], month["status"])],
+                textposition="outside", cliponaxis=False, hovertemplate="%{x|%d/%m} · Aktual Rp %{y:,.0f}<extra></extra>")
+    if month["belum_bayar"].fillna(0).sum() > 0:
+        fig.add_bar(x=x, y=month["belum_bayar"], base=month["aktual"].fillna(0), name="Belum Bayar", offsetgroup="a", marker_color="#fbbf24",
+                    hovertemplate="%{x|%d/%m} · Belum Bayar Rp %{y:,.0f}<extra></extra>")
+    fig.add_vline(x=pd.Timestamp(last) + pd.Timedelta(hours=12), line_dash="dot", line_color="#94a3b8")
+    fig.update_layout(
+        height=340, barmode="group", bargap=0.25, bargroupgap=0.05,
+        margin=dict(l=30, r=20, t=30, b=30),
+        legend=dict(orientation="h", y=1.12, x=0),
+        yaxis=dict(title="Omzet (Rp)", tickformat=",.0f"),
+        xaxis=dict(type="date", tickformat="%d", dtick=86_400_000),
+        separators=",.",
+    )
+    st.plotly_chart(fig, use_container_width=True, key="pva-month")
+    st.caption(
+        f"Tanggal 1 s.d. akhir bulan, basis SKU yang diprediksi. Angka % di atas batang = aktual ÷ prediksi (hanya hari penuh). "
+        f"Garis putus-putus = hari penuh terakhir ({fmt_date(last)}); sesudahnya prediksi dari analisa terbaru. "
+        "Kuning = pesanan masih Belum Bayar (belum dihitung terjual; sebagian dibayar 1–3 hari kemudian, sisanya batal).")
+
+
+def _month_table(month: pd.DataFrame, last: date) -> None:
+    if month.empty:
+        return
+    view = pd.DataFrame({
+        "Tanggal": [f"{HARI[d.weekday()]} {fmt_date(d)}" for d in month["tanggal"]],
+        "Status": month["status"],
+        "Prediksi omzet": month["prediksi"],
+        "Aktual bersih": month["aktual"],
+        "Belum Bayar": month["belum_bayar"],
+        "Selisih": month["aktual"] - month["prediksi"],
+        "% capaian": month["pct"],
+        "% bila Belum Bayar dibayar": month["pct_bayar"],
+        "Sumber prediksi": month["sumber"],
+    })
+    done = month["status"].eq("Selesai")
+    pred, act, pend = (float(month.loc[done, c].fillna(0).sum()) for c in ("prediksi", "aktual", "belum_bayar"))
+    label = f"Total s.d. {fmt_date(last)}"
+    total = {
+        "Tanggal": label, "Status": f"{int(done.sum())} hari penuh", "Prediksi omzet": pred, "Aktual bersih": act, "Belum Bayar": pend,
+        "Selisih": act - pred, "% capaian": act / pred * 100 if pred else np.nan,
+        "% bila Belum Bayar dibayar": (act + pend) / pred * 100 if pred else np.nan, "Sumber prediksi": "",
+    }
+    with st.expander("Breakdown per tanggal (tgl 1 s.d. akhir bulan)", expanded=True):
+        show_table(
+            pd.concat([pd.DataFrame([total]), view], ignore_index=True),
+            bold_label=label,
+            kinds={"Prediksi omzet": "money", "Aktual bersih": "money", "Belum Bayar": "money", "Selisih": "money",
+                   "% capaian": "pct", "% bila Belum Bayar dibayar": "pct"},
+            max_height=10_000,
+        )
 
 
 def _cause_summary(rows: pd.DataFrame, day: date, support: tuple[float, float] = (np.nan, np.nan)) -> None:
