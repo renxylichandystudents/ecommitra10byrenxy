@@ -33,7 +33,7 @@ def _drop_stale_src_modules() -> None:
     stamp = str(max((p.stat().st_mtime for p in (ROOT / "src").rglob("*.py")), default=0.0))
     previous = os.environ.get("MITRA10_SRC_STAMP")
     os.environ["MITRA10_SRC_STAMP"] = stamp
-    if previous is None or previous == stamp:
+    if previous == stamp:
         return
     for name in [m for m in sys.modules if m == "src" or m.startswith("src.")]:
         del sys.modules[name]
