@@ -223,7 +223,7 @@ def style_frame(
     *,
     kinds: dict[str, str] | None = None,
     skip: Iterable[str] = (),
-    bold_label: str | None = None,
+    bold_label: str | tuple[str, ...] | None = None,
 ):
     """Styler format tampilan saja; nilai sel tetap numerik agar sort benar."""
     kinds = dict(kinds or {})
@@ -246,9 +246,10 @@ def style_frame(
         painter = getattr(styler, "map", None) or styler.applymap
         styler = painter(_neg, subset=numeric)
     if bold_label is not None and len(frame.columns):
+        labels = [bold_label] if isinstance(bold_label, str) else [str(x) for x in bold_label]
         first = frame.columns[0]
-        label_column = next((c for c in frame.columns if frame[c].astype(str).eq(bold_label).any()), first)
-        mask = frame[label_column].astype(str).eq(bold_label)
+        label_column = next((c for c in frame.columns if frame[c].astype(str).isin(labels).any()), first)
+        mask = frame[label_column].astype(str).isin(labels)
         styler = styler.apply(lambda row: [TOTAL_ROW_CSS if mask.loc[row.name] else "" for _ in row], axis=1)
     return styler
 
@@ -293,7 +294,7 @@ def show_table(
     max_height: int = 600,
     *,
     kinds: dict[str, str] | None = None,
-    bold_label: str | None = None,
+    bold_label: str | tuple[str, ...] | None = None,
     column_config: dict | None = None,
     styled: bool = True,
     **kwargs,

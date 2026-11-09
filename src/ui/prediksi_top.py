@@ -458,6 +458,7 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
 
 
 HARI = ("Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min")
+ID_MONTHS = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
 
 
 def _future_predictions(features, runs: pd.DataFrame) -> pd.Series:
@@ -565,10 +566,26 @@ def _month_table(month: pd.DataFrame, last: date) -> None:
         "Selisih": act - pred, "% capaian": act / pred * 100 if pred else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred * 100 if pred else np.nan, "Sumber prediksi": "",
     }
+    first = month["tanggal"].iloc[0]
+    month_label = f"Total {ID_MONTHS[first.month - 1]} {first.year} ({len(month)} hari)"
+    pred_month = float(month["prediksi"].fillna(0).sum())
+    projection = act + float(month.loc[~done, "prediksi"].fillna(0).sum())
+    full = {
+        "Tanggal": month_label, "Jenis hari": "", "Pola hari": "",
+        "Status": f"Proyeksi {fmt_idr(projection)}",
+        "Prediksi omzet": pred_month, "Aktual bersih": act, "Belum Bayar": pend,
+        "Selisih": projection - pred_month, "% capaian": act / pred_month * 100 if pred_month else np.nan,
+        "% bila Belum Bayar dibayar": (act + pend) / pred_month * 100 if pred_month else np.nan,
+        "Sumber prediksi": "aktual s.d. kemarin + prediksi sisa",
+    }
     with st.expander("Breakdown per tanggal (tgl 1 s.d. akhir bulan)", expanded=True):
+        st.caption(
+            f"Baris **{month_label}**: Prediksi = jumlah prediksi semua tanggal; Aktual = terkumpul s.d. {fmt_date(last)}; "
+            "% capaian = progres terhadap prediksi sebulan; Status = proyeksi akhir bulan (aktual + prediksi hari tersisa), "
+            "Selisih = proyeksi − prediksi sebulan.")
         show_table(
-            pd.concat([pd.DataFrame([total]), view], ignore_index=True),
-            bold_label=label,
+            pd.concat([pd.DataFrame([full, total]), view], ignore_index=True),
+            bold_label=(month_label, label),
             kinds={"Prediksi omzet": "money", "Aktual bersih": "money", "Belum Bayar": "money", "Selisih": "money",
                    "% capaian": "pct", "% bila Belum Bayar dibayar": "pct"},
             max_height=10_000,

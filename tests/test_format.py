@@ -76,6 +76,10 @@ class FormatTest(unittest.TestCase):
         self.assertIn(EMPTY, html)
         self.assertIn("background-color: #e0e7ff", html)
         self.assertNotIn("font-weight", html)
+        two = pd.DataFrame({"Tanggal": ["Total Nov", "Total s.d. 7", "1 Nov"], "Sales": [3.0, 2.0, 1.0]})
+        ctx = style_frame(two, bold_label=("Total Nov", "Total s.d. 7"))._compute().ctx
+        shaded = {row for (row, _col), props in ctx.items() if any("#e0e7ff" in str(v) for _k, v in props)}
+        self.assertEqual(shaded, {0, 1})
         self.assertEqual(frame["Sales"].dtype.kind, "f")
 
     def test_excel_numeric(self):
