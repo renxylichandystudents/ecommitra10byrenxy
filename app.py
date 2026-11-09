@@ -8628,6 +8628,12 @@ with PAGE_ROOT.container(key="page-root"):
         # Ringkasan penjualan periode & status Kecualikan batal & retur langsung di atas (tidak dilipat).
         show_exclude_and_cards()
         show_pred_vs_actual(FEATURES, orders=orders, table=enriched, orders_all=orders_all)
+        try:
+            from src.ui.month_track_view import show_month_tracking
+
+            show_month_tracking(FEATURES, orders_all=orders_all, table=enriched, today=today, data=FEATURE_DATA, params=params)
+        except Exception as exc:  # noqa: BLE001 - pantauan tidak boleh menghentikan halaman Prediksi
+            st.info(f"Pantauan harian belum bisa ditampilkan: {exc}")
         st.subheader("Prediksi semua produk")
         if enriched is None or enriched.empty:
             st.write("Tidak ada item untuk ditampilkan.")

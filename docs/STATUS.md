@@ -291,3 +291,16 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 
 - Tabel Kontribusi invoice batal: satu alasan 61 huruf ("Sistem Shopee · Penjual gagal mengirimkan pesanan tepat waktu") melewati batas kolom 400 px, sehingga semua baris dibuat 65 px (tinggi minimum bungkus) padahal teks muat satu baris.
 - `wrap_layout` (`src/utils/format.py`): kolom teks s.d. ±90 huruf (660 px) kini dilebarkan sesuai isi dan tetap satu baris (35 px); baris hanya ditinggikan bila teks lebih panjang. Berlaku untuk semua tabel `show_table`.
+
+## Prediksi › Pantauan harian bulan berjalan (10 Nov 2026)
+
+Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_track.py` (logika) + `src/ui/month_track_view.py` (tampilan); tes `tests/test_month_track.py`. Rumus prediksi dan safety stock tidak diubah.
+
+- **Per tanggal tgl 1 s.d. akhir bulan**: target harian, prediksi, aktual, selisih, % capaian, status, analisa sumber prediksi, kumulatif aktual/target/proyeksi; grafik Harian/Kumulatif (hari gajian & tanggal kembar diwarnai); Excel. Pilihan 3 bulan terakhir.
+- **Prediksi H-1**: tiap tanggal memakai snapshot dari analisa terakhir yang dibuat sebelum tanggal itu (prediction_snapshot), jadi akurasi kemarin tetap bisa diaudit walau data latih berubah di analisa berikutnya. Tanggal mendatang memakai analisa terbaru.
+- **Basis** sales bersih (sama dengan target); prediksi × faktor (sales bersih ÷ sales produk bulan ini), sama dengan `month_outlook`. `daily_net_sales` = `order_metrics` per hari (diuji).
+- **Pola musiman**: indeks hari Senin–Minggu + kenaikan hari gajian (25–3) dan tanggal kembar dari ≤ 365 hari riwayat (median vs garis dasar 15 hari, disusutkan bila contoh sedikit). Laju datar model disebar dengan pola ini dan dinormalkan (total sebulan tetap = prediksi model). Target harian dibagi dengan pola yang sama.
+- Hari dianggap penuh bila data sampai ≥ 23:00; hari yang belum penuh tampil "Berjalan". Peringatan bila data pesanan terlambat.
+- **Kartu**: hari penuh terakhir (prediksi vs aktual + status), hari ini, besok (prediksi + target hari itu + jenis hari), proyeksi akhir bulan vs target (kurang/lebih).
+- **Peringatan target** (kurang Rp, perlu Rp/hari vs prediksi Rp/hari) + **Top 5 tindakan** urut potensi omzet bersih s.d. akhir bulan: Stok (kebutuhan sisa bulan − stok; ambil Site 10062/10036 lalu PO), Iklan (riwayat iklan, stok cukup, tambah budget sampai titik impas 100 ÷ margin, maks. 5×, tambahan ≤ penjualan harian SKU), Harga & listing (7 hari < 60% prediksi dan < 60% laju 28 hari sebelumnya), Kejar bayar (30% nominal Belum Bayar 3 hari). Keterangan bila data stok/iklan belum ada di analisa.
+- Data lokal (data s.d. 08/11 08:29, target Nov Rp 4,98 M): proyeksi Rp 3,28 M (66%), kurang Rp 1,70 M; 11.11 pola ×2,93.
