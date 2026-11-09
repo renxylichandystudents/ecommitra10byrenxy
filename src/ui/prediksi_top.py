@@ -510,12 +510,13 @@ def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpai
 
 
 def _with_target(features, month: pd.DataFrame, frame_all: pd.DataFrame, last: date) -> tuple[pd.DataFrame, dict | None]:
-    """Target harian setara basis grafik. Target ditetapkan dalam sales bersih seluruh toko; dibagi per tanggal
-    dengan pola hari (sama dengan Pantauan harian) lalu dikali rasio aktual grafik ÷ sales bersih toko s.d. kemarin."""
+    """Target harian = target bulan (sales bersih seluruh toko) dibagi per tanggal dengan pola hari (sama dengan
+    Pantauan harian), totalnya tetap target bulan. Dibandingkan dengan sales bersih toko (basis yang sama), bukan
+    dengan batang SKU. ratio = aktual SKU ÷ sales bersih toko s.d. kemarin, untuk mengubah prediksi sisa ke sales bersih."""
     from src.ui.month_track_view import _daily_series
     from src.ui.targets_view import monthly_targets
 
-    month = month.assign(target=np.nan)
+    month = month.assign(target=np.nan, bersih=np.nan)
     if month.empty or features is None:
         return month, None
     first = month["tanggal"].iloc[0]
@@ -523,13 +524,22 @@ def _with_target(features, month: pd.DataFrame, frame_all: pd.DataFrame, last: d
     if not target:
         return month, None
     done = month["status"].eq("Selesai")
-    net, _product, _stamp = _daily_series(frame_all)
-    net_done = float(net.loc[pd.Timestamp(first):pd.Timestamp(last)].sum()) if done.any() else 0.0
+    net, product, _stamp = _daily_series(frame_all)
+    by_day = {pd.Timestamp(k).date(): float(v) for k, v in net.items()}
+    month.loc[done, "bersih"] = [by_day.get(d, 0.0) for d in month.loc[done, "tanggal"]]
+    net_done = float(month.loc[done, "bersih"].sum())
     chart_done = float(month.loc[done, "aktual"].fillna(0).sum())
     ratio = chart_done / net_done if net_done > 0 and chart_done > 0 else 1.0
+    # Faktor sales bersih ÷ sales produk seluruh toko, sama dengan Pantauan harian, agar proyeksi keduanya sama.
+    lo, hi = pd.Timestamp(first), pd.Timestamp(last)
+    net_m, prod_m = float(net.loc[lo:hi].sum()), float(product.loc[lo:hi].sum())
+    if prod_m <= 0:
+        lo = pd.Timestamp(last - timedelta(days=29))
+        net_m, prod_m = float(net.loc[lo:hi].sum()), float(product.loc[lo:hi].sum())
+    factor = float(min(max(net_m / prod_m, 0.5), 1.2)) if prod_m > 0 and net_m > 0 else 1.0
     pola = month["pola"].astype(float)
-    month["target"] = target * pola / pola.sum() * ratio
-    return month, {"target": float(target), "ratio": ratio}
+    month["target"] = target * pola / pola.sum()
+    return month, {"target": float(target), "ratio": ratio, "factor": factor}
 
 
 def _month_chart(month: pd.DataFrame, last: date, target: dict | None = None) -> None:
@@ -540,7 +550,7 @@ def _month_chart(month: pd.DataFrame, last: date, target: dict | None = None) ->
     fig = go.Figure()
     fig.add_bar(x=x, y=month["prediksi"], name="Prediksi", offsetgroup="p", marker_color=np.where(done, "#a5b4fc", "#e0e7ff").tolist(),
                 hovertemplate="%{x|%d/%m} · Prediksi Rp %{y:,.0f}<extra></extra>")
-    fig.add_bar(x=x, y=month["aktual"], name="Aktual bersih", offsetgroup="a", marker_color="#1b3da6",
+    fig.add_bar(x=x, y=month["aktual"], name="Aktual SKU", offsetgroup="a", marker_color="#1b3da6",
                 text=[f"{v:.0f}%" if np.isfinite(v) and s == "Selesai" else "" for v, s in zip(month["pct"], month["status"])],
                 textposition="outside", cliponaxis=False, hovertemplate="%{x|%d/%m} · Aktual Rp %{y:,.0f}<extra></extra>")
     if month["belum_bayar"].fillna(0).sum() > 0:
@@ -561,10 +571,11 @@ def _month_chart(month: pd.DataFrame, last: date, target: dict | None = None) ->
     st.plotly_chart(fig, use_container_width=True, key="pva-month")
     target_text = " Target bulan ini belum diisi (menu Target sales)."
     if target:
-        ratio = f"{target['ratio']:.2f}".replace(".", ",")
+        gap = (target["ratio"] - 1) * 100
         target_text = (
-            f" Garis merah = target harian: target bulan ini {fmt_idr(target['target'])} (sales bersih toko) dibagi dengan pola hari, "
-            f"lalu dikali {ratio} (aktual grafik ÷ sales bersih toko s.d. {fmt_date(last)}) agar setara dengan batang.")
+            f" Garis merah = target harian: target bulan ini {fmt_idr(target['target'])} dibagi per tanggal dengan pola hari. "
+            f"Target memakai sales bersih seluruh toko; batang memakai sales produk SKU berprediksi, yang bulan ini "
+            f"{abs(gap):.0f}% {'di atas' if gap >= 0 else 'di bawah'} sales bersih. Pencapaian target dihitung di tabel dengan sales bersih toko.")
     st.caption(
         f"Tanggal 1 s.d. akhir bulan, basis SKU yang diprediksi. Angka % di atas batang = aktual ÷ prediksi (hanya hari penuh). "
         f"Garis putus-putus = hari penuh terakhir ({fmt_date(last)}); sesudahnya prediksi dari analisa terbaru. "
@@ -587,8 +598,9 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Status": month["status"],
         "Target harian": month["target"],
         "Prediksi omzet": month["prediksi"],
-        "Aktual bersih": month["aktual"],
-        "% target": np.where(done_days & (month["target"] > 0), month["aktual"] / month["target"] * 100, np.nan),
+        "Aktual SKU": month["aktual"],
+        "Sales bersih toko": month["bersih"],
+        "% target": np.where(done_days & (month["target"] > 0), month["bersih"] / month["target"] * 100, np.nan),
         "Belum Bayar": month["belum_bayar"],
         "Selisih": month["aktual"] - month["prediksi"],
         "% capaian": month["pct"],
@@ -596,17 +608,18 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Sumber prediksi": month["sumber"],
     })
     if not target:
-        view = view.drop(columns=["Target harian", "% target"])
+        view = view.drop(columns=["Target harian", "Sales bersih toko", "% target"])
     done = month["status"].eq("Selesai")
     pred, act, pend = (float(month.loc[done, c].fillna(0).sum()) for c in ("prediksi", "aktual", "belum_bayar"))
     label = f"Total s.d. {fmt_date(last)}"
     total = {
-        "Tanggal": label, "Jenis hari": "", "Pola hari": "", "Status": f"{int(done.sum())} hari penuh", "Prediksi omzet": pred, "Aktual bersih": act, "Belum Bayar": pend,
+        "Tanggal": label, "Jenis hari": "", "Pola hari": "", "Status": f"{int(done.sum())} hari penuh", "Prediksi omzet": pred, "Aktual SKU": act, "Belum Bayar": pend,
         "Selisih": act - pred, "% capaian": act / pred * 100 if pred else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred * 100 if pred else np.nan, "Sumber prediksi": "",
     }
     goal_done = float(month.loc[done, "target"].fillna(0).sum())
-    total.update({"Target harian": goal_done, "% target": act / goal_done * 100 if goal_done else np.nan})
+    net_done = float(month.loc[done, "bersih"].fillna(0).sum())
+    total.update({"Target harian": goal_done, "Sales bersih toko": net_done, "% target": net_done / goal_done * 100 if goal_done else np.nan})
     first = month["tanggal"].iloc[0]
     month_label = f"Total {ID_MONTHS[first.month - 1]} {first.year} ({len(month)} hari)"
     pred_month = float(month["prediksi"].fillna(0).sum())
@@ -614,18 +627,24 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
     full = {
         "Tanggal": month_label, "Jenis hari": "", "Pola hari": "",
         "Status": f"Proyeksi {fmt_idr(projection)}",
-        "Prediksi omzet": pred_month, "Aktual bersih": act, "Belum Bayar": pend,
+        "Prediksi omzet": pred_month, "Aktual SKU": act, "Belum Bayar": pend,
         "Selisih": projection - pred_month, "% capaian": act / pred_month * 100 if pred_month else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred_month * 100 if pred_month else np.nan,
         "Sumber prediksi": "aktual s.d. kemarin + prediksi sisa",
     }
     goal_month = float(month["target"].fillna(0).sum())
-    full.update({"Target harian": goal_month, "% target": projection / goal_month * 100 if goal_month else np.nan})
+    factor = float(target["factor"]) if target else 1.0
+    net_projection = net_done + float(month.loc[~done, "prediksi"].fillna(0).sum()) * factor
+    full.update({"Target harian": goal_month, "Sales bersih toko": net_done,
+                 "% target": net_projection / goal_month * 100 if goal_month else np.nan})
+    if target:
+        full["Status"] = f"Proyeksi bersih {fmt_idr(net_projection)}"
     rows = pd.DataFrame([full, total])[[c for c in view.columns]]
     with st.expander("Breakdown per tanggal (tgl 1 s.d. akhir bulan)", expanded=True):
         target_note = (
-            f" Kolom Target = target bulan ini dibagi per tanggal (setara basis tabel). % target per tanggal = aktual ÷ target; "
-            f"baris Total s.d. = aktual terkumpul ÷ target s.d. {fmt_date(last)}; baris Total bulan = proyeksi akhir bulan ÷ target sebulan."
+            f" Target harian = target bulan ini ({fmt_idr(target['target'])}) dibagi per tanggal; totalnya sama dengan target. "
+            "% target = Sales bersih toko ÷ target (basis sama dengan target). Baris Total bulan: % target = proyeksi sales bersih akhir bulan "
+            f"(sales bersih s.d. kemarin + prediksi sisa × faktor {target['factor']:.2f} sales bersih ÷ sales produk, sama dengan Pantauan harian) ÷ target."
             if target else "")
         st.caption(
             f"Baris **{month_label}**: Prediksi = jumlah prediksi semua tanggal; Aktual = terkumpul s.d. {fmt_date(last)}; "
@@ -634,7 +653,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         show_table(
             pd.concat([rows, view], ignore_index=True),
             bold_label=(month_label, label),
-            kinds={"Target harian": "money", "Prediksi omzet": "money", "Aktual bersih": "money", "Belum Bayar": "money", "Selisih": "money",
+            kinds={"Target harian": "money", "Sales bersih toko": "money", "Prediksi omzet": "money", "Aktual SKU": "money", "Belum Bayar": "money", "Selisih": "money",
                    "% target": "pct", "% capaian": "pct", "% bila Belum Bayar dibayar": "pct"},
             max_height=10_000,
         )

@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core import month_track as M
-from src.ui.common import card, download_excel, explain, fmt_idr, fmt_pct
+from src.ui.common import card, explain, fmt_idr, fmt_pct
 from src.utils.format import show_table
 
 ID_MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
@@ -153,13 +153,6 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
         )
         _top_actions(top, summary, behind, _missing_inputs(table))
 
-    _charts(month, target, month_cutoff)
-    with st.expander(f"Rincian per tanggal · {picked}", expanded=False):
-        view = _detail_view(month)
-        show_table(view, kinds={"Pola hari": "dec", "Target": "money", "Prediksi": "money", "Aktual": "money", "Selisih": "money",
-                                "% capaian": "pct", "Kumulatif aktual": "money", "Kumulatif target": "money", "Kumulatif proyeksi": "money"},
-                   max_height=1200)
-        download_excel(view, f"pantauan_harian_{first:%Y_%m}.xlsx", key="mt-xl")
     explain([
         ("Prediksi per tanggal", "prediksi dari analisa terakhir yang dijalankan sebelum tanggal itu (analisa harian = prediksi H-1). "
          "Tanggal yang belum terjadi memakai analisa terbaru. Analisa yang sudah lewat tidak dihitung ulang, jadi akurasi kemarin tetap bisa diaudit walau data latih diperbarui."),
@@ -290,49 +283,3 @@ def _top_actions(top: pd.DataFrame, summary: dict, behind: bool, missing: list[s
     st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
     show_table(top, kinds={"Prioritas": "count", "Potensi omzet": "money"}, column_config={
         "Tindakan": st.column_config.TextColumn(width="large"), "Alasan": st.column_config.TextColumn(width="large")})
-
-
-def _charts(month: pd.DataFrame, target: float | None, cutoff: date) -> None:
-    import plotly.graph_objects as go
-
-    mode = st.segmented_control("Grafik", ["Harian", "Kumulatif"], default="Harian", key="mt-chart") or "Harian"
-    x = pd.to_datetime(month["tanggal"])
-    fig = go.Figure()
-    if mode == "Harian":
-        fig.add_bar(x=x, y=month["aktual"], name="Aktual", marker_color="#1b3da6",
-                    hovertemplate="%{x|%d/%m}<br>Aktual Rp %{y:,.0f}<extra></extra>")
-        fig.add_scatter(x=x, y=month["prediksi"], name="Prediksi", mode="lines+markers", line=dict(color="#ee4d2d", dash="dot"),
-                        hovertemplate="%{x|%d/%m}<br>Prediksi Rp %{y:,.0f}<extra></extra>")
-        if target:
-            fig.add_scatter(x=x, y=month["target"], name="Target harian", mode="lines", line=dict(color="#64748b", shape="hv"),
-                            hovertemplate="%{x|%d/%m}<br>Target Rp %{y:,.0f}<extra></extra>")
-    else:
-        fig.add_scatter(x=x, y=month["kum_aktual"], name="Aktual kumulatif", mode="lines+markers", line=dict(color="#1b3da6", width=3))
-        fig.add_scatter(x=x, y=month["kum_proyeksi"].where(month["status_hari"].ne("Selesai") | month["tanggal"].eq(cutoff)),
-                        name="Proyeksi (aktual + prediksi)", mode="lines", line=dict(color="#ee4d2d", dash="dot"))
-        if target:
-            fig.add_scatter(x=x, y=month["kum_target"], name="Target kumulatif", mode="lines", line=dict(color="#64748b"))
-    for day, kind in zip(month["tanggal"], month["jenis_hari"]):
-        if kind != "Normal":
-            fig.add_vrect(x0=pd.Timestamp(day) - pd.Timedelta(hours=12), x1=pd.Timestamp(day) + pd.Timedelta(hours=12),
-                          fillcolor="#fde68a" if kind == "Gajian" else "#fca5a5", opacity=0.25, line_width=0, layer="below")
-    fig.add_vline(x=pd.Timestamp(cutoff) + pd.Timedelta(hours=12), line_dash="dash", line_color="#94a3b8")
-    fig.update_layout(height=340, margin=dict(l=30, r=20, t=10, b=30), legend=dict(orientation="h", y=1.08),
-                      xaxis=dict(type="date", tickformat="%d/%m", dtick=86_400_000 * 2), yaxis=dict(tickformat=",.0f"), hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True, key=f"mt-fig-{mode}")
-    st.caption("Kolom kuning = gajian (25–3), merah muda = tanggal kembar. Garis putus tegak = batas data aktual penuh.")
-
-
-def _detail_view(month: pd.DataFrame) -> pd.DataFrame:
-    view = month.assign(
-        Tanggal=pd.to_datetime(month["tanggal"]).dt.strftime("%d/%m/%Y"),
-        Analisa=pd.to_datetime(month["analisa"]).dt.strftime("%d/%m %H:%M").fillna("–"),
-    )
-    view = view.rename(columns={
-        "hari": "Hari", "keterangan": "Hari promo", "pola": "Pola hari", "target": "Target", "prediksi": "Prediksi", "aktual": "Aktual",
-        "selisih": "Selisih", "capaian_pct": "% capaian", "status": "Status", "status_hari": "Data", "kum_aktual": "Kumulatif aktual",
-        "kum_target": "Kumulatif target", "kum_proyeksi": "Kumulatif proyeksi",
-    })
-    cols = ["Tanggal", "Hari", "Hari promo", "Pola hari", "Target", "Prediksi", "Aktual", "Selisih", "% capaian", "Status", "Data", "Analisa",
-            "Kumulatif aktual", "Kumulatif target", "Kumulatif proyeksi"]
-    return view[cols]
