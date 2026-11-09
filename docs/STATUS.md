@@ -266,6 +266,7 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 - Huruf tidak lagi menunggu Google Fonts sebelum CSS tampilan dipakai. Font Plus Jakarta tetap dimuat tema, dengan cadangan font sistem.
 - Library model (scikit-learn, statsmodels, XGBoost) baru dimuat saat prediksi atau imputasi berjalan, bukan saat halaman login/beranda.
 - Pemeriksaan sesi login ke database dilewati selama 45 detik setelah berhasil, dan antrean cookie dipendekkan. Rumus prediksi dan safety stock tidak berubah.
+- Pemeriksaan ulang (9 Nov malam): analisa terakhir kembali dimuat otomatis di semua halaman **kecuali Beranda** (Setting, Upload data, hasil). Sebelumnya hanya di halaman hasil, sehingga Setting › Kalkulator biaya/Laporan margin/Kapasitas gudang bisa memakai transaksi tersimpan mentah (tanpa saklar batal & retur) bila dibuka sebelum Hasil analisa. Tombol Hasil analisa di header Beranda tampil lagi bila ada analisa tersimpan. Batas tunggu cookie login dikembalikan ke ±4,8 detik (24 × 0,2 dtk) agar refresh di Cloud tidak minta login ulang.
 
 ## Batas kapasitas database (9 Nov 2026)
 

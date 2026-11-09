@@ -14,7 +14,7 @@ import streamlit as st
 COOKIE_NAME = "mitra10_session"
 BOX_KEY = "auth-cookies"
 WAIT_KEY = "_auth-cookie-wait"
-WAIT_ROUNDS = 12
+WAIT_ROUNDS = 24
 WAIT_SECONDS = 0.2
 
 try:

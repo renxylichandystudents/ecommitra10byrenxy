@@ -2962,6 +2962,16 @@ def _mobile_header(logo: str, title: str, analysis: bool, training: bool, settin
                 auth_logout()
 
 
+def _has_saved_run() -> bool:
+    """Ada analisa tersimpan (untuk tombol Hasil analisa di Beranda sebelum file hasilnya dibuka). Dicek ulang tiap 60 detik."""
+    cached = st.session_state.get("_has-saved-run")
+    if isinstance(cached, tuple) and time.time() - cached[0] < 60:
+        return cached[1]
+    found = _latest_ready_run() is not None
+    st.session_state["_has-saved-run"] = (time.time(), found)
+    return found
+
+
 def render_header() -> None:
     """Header semua halaman setelah login (termasuk Kelola user & Ubah password): bar user, logo, judul, Beranda.
 
@@ -2970,7 +2980,7 @@ def render_header() -> None:
     pin_app_header()
     page = route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0]
     on_setting = page == PAGE_SETTING
-    show_analysis_button = "analysis" in st.session_state and page != PAGE_RESULT
+    show_analysis_button = page != PAGE_RESULT and ("analysis" in st.session_state or _has_saved_run())
     show_training_button = page not in (PAGE_INPUT, PAGE_HOME) and not on_setting and (
         can(AUTH_USER.role, "ubah_data_latih") or can(AUTH_USER.role, "unggah_stok")
     )
@@ -8101,9 +8111,10 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
 
 ROUTE_CHANGED = sync_route(st.session_state, st.query_params, allowed_sheets(AUTH_USER.role, APP_SHEETS))
 
-# Beranda tidak membuka file hasil analisa. File itu baru dibaca saat halaman hasil (atau refresh di halaman itu).
+# Beranda tidak membuka file hasil analisa. Halaman lain (hasil, Setting, Upload data) memuatnya seperti biasa,
+# supaya angka di Setting tetap memakai transaksi analisa terakhir, bukan bergantung urutan klik.
 if (
-    route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0] == PAGE_RESULT
+    route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0] not in (PAGE_HOME, PAGE_USERS, PAGE_PASSWORD)
     and not st.session_state.get("_autoload-done")
 ):
     # Tanda "selesai" baru dipasang setelah analisa terakhir termuat: bila rerun pertama terputus (klik / sambung ulang),
