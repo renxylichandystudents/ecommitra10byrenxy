@@ -1822,10 +1822,9 @@ def _source_status_map(store: LocalDataStore) -> dict[str, str]:
 
 
 TARGET_UPLOAD = "sales_target"
-REPL_UPLOAD = "replenishment_10037"
 MARGIN_UPLOAD = "margin_item"
-SPECIAL_UPLOADS = (TARGET_UPLOAD, REPL_UPLOAD, MARGIN_UPLOAD)
-STOCK_GROUP = ("Stok", ("stock", "stock_10062", "stock_10036", REPL_UPLOAD))
+SPECIAL_UPLOADS = (TARGET_UPLOAD, MARGIN_UPLOAD)
+STOCK_GROUP = ("Stok", ("stock", "stock_10062", "stock_10036"))
 UPLOAD_GROUPS = (
     ("Penjualan", ("transactions", "performance")),
     ("Iklan", ("ads_overall", "ads_auto", "ads_group", "ads_search")),
@@ -1951,10 +1950,6 @@ def show_training_uploads(groups=UPLOAD_GROUPS) -> tuple[list[str], str | None]:
     def menu_label(spec) -> str:
         if spec == TARGET_UPLOAD:
             return target_upload_label(get_features())
-        if spec == REPL_UPLOAD:
-            from src.ui.gudang_view import replenishment_status
-
-            return f"Replenishment Site 10037 · {replenishment_status(get_features())}"
         if spec == MARGIN_UPLOAD:
             from src.ui.margin_data import load_margin
 
@@ -2004,12 +1999,6 @@ def show_training_uploads(groups=UPLOAD_GROUPS) -> tuple[list[str], str | None]:
         if picked_key == TARGET_UPLOAD:
             st.markdown("<div class='side-section'>Target sales bulanan</div>", unsafe_allow_html=True)
             show_target_uploader(get_features(), username=AUTH_USER.username, today=date.today(), title=False)
-            return imported_keys, load_error
-        if picked_key == REPL_UPLOAD:
-            from src.ui.gudang_view import replenishment_uploader
-
-            st.markdown("<div class='side-section'>Replenishment Site 10037</div>", unsafe_allow_html=True)
-            replenishment_uploader(get_features(), username=AUTH_USER.username, may_upload=can(AUTH_USER.role, "unggah_stok"), require=require)
             return imported_keys, load_error
         if picked_key == MARGIN_UPLOAD:
             from src.ui.margin_data import upload_card

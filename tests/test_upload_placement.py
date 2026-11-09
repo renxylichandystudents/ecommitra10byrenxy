@@ -1,4 +1,4 @@
-"""Satu tempat unggah stok/margin (Upload data), format replenishment DC, dan template target dari Januari."""
+"""Satu tempat unggah: stok & margin di Upload data, replenishment di Kapasitas gudang, format replenishment DC, dan template target dari Januari."""
 
 from __future__ import annotations
 
@@ -51,6 +51,11 @@ def test_replenishment_mencatat_site_di_file():
     repl, _ = gudang.parse_replenishment(raw)
     assert repl.attrs["sites"] == ["10062"]
     assert "site" not in repl.columns
+
+
+def test_unggah_replenishment_hanya_gudang_ic_dan_super_user():
+    assert can(SUPER_USER, "unggah_replenishment") and can(TEAM_DC, "unggah_replenishment") and can(TEAM_ICMD, "unggah_replenishment")
+    assert not can(ECOMMERCE_SPECIALIST, "unggah_replenishment")
 
 
 def test_unggah_stok_untuk_team_dc_tanpa_buka_data_latih():

@@ -50,6 +50,7 @@ ACCESS: dict[str, dict[str, str | None]] = {
     "setting_kalkulator_biaya": _row("edit", "edit", None, None),
     "setting_laporan_margin": _row("view", "view", None, None),
     "setting_kapasitas_gudang": _row("edit", "view", "upload", "view"),
+    "upload_replenishment": _row("edit", None, "upload", "upload"),
     "setting_kedatangan_impor": _row("edit", "view", "view", "write_note"),
     "kelola_user": _row("edit", None, None, None),
     "ubah_password": _row("edit", "edit", "edit", "edit"),
@@ -69,6 +70,7 @@ MENU_LABELS = {
     "setting_kalkulator_biaya": "Setting › Kalkulator biaya",
     "setting_laporan_margin": "Setting › Laporan margin",
     "setting_kapasitas_gudang": "Setting › Kapasitas gudang",
+    "upload_replenishment": "Setting › Kapasitas gudang › Unggah replenishment",
     "setting_kedatangan_impor": "Setting › Kedatangan impor",
     "kelola_user": "Kelola user",
 }

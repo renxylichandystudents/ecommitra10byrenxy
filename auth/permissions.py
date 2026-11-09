@@ -26,6 +26,7 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "jalankan_analisa": ("data_latih", "edit"),
     "ubah_data_latih": ("data_latih", "edit"),
     "unggah_stok": ("upload_stok", "upload"),
+    "unggah_replenishment": ("upload_replenishment", "upload"),
     "ringkasan": ("ringkasan_prediksi", "view"),
     "prediksi": ("ringkasan_prediksi", "view"),
     "prediksi_vs_aktual": ("prediksi_vs_aktual", "view"),

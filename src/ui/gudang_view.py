@@ -274,11 +274,12 @@ def _legend(mode: str, palette: dict[str, str]) -> str:
 # --------------------------------------------------------------------------- halaman
 
 
-def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: str, require, orders: pd.DataFrame | None = None) -> None:
+def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: str, require, orders: pd.DataFrame | None = None,
+                  may_upload_repl: bool = False) -> None:
     st.markdown(f"**Kapasitas gudang · Site {gudang.SITE} {gudang.SITE_NAME}**")
     view = cached_view(features, table, orders)
     loc = view["locations"]
-    _upload_cards(features, view, may_upload=may_upload, username=username, require=require)
+    _upload_cards(features, view, may_upload=may_upload, may_upload_repl=may_upload_repl, username=username, require=require)
     if loc.empty:
         st.info("Mulai dengan mengunggah **denah gudang** di kotak kiri. Cukup sekali; unggah lagi hanya bila tata letak gudang berubah.")
         return
@@ -412,7 +413,7 @@ def _read_upload(upload) -> dict | None:
         return None
 
 
-def _upload_cards(features, view: dict, *, may_upload: bool, username: str, require) -> None:
+def _upload_cards(features, view: dict, *, may_upload: bool, may_upload_repl: bool, username: str, require) -> None:
     """Dua kotak terpisah: denah gudang (jarang berubah) dan data stok harian (replenishment)."""
     loc = view["locations"]
     left, right = st.columns(2)
@@ -470,33 +471,26 @@ def _upload_cards(features, view: dict, *, may_upload: bool, username: str, requ
             )
         else:
             st.markdown("<div class='field-hint'>Belum ada data.</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='field-hint'>{REPL_UPLOAD_HINT}</div>", unsafe_allow_html=True)
-
-
-REPL_UPLOAD_HINT = "Unggah file replenishment Site 10037 di <b>Upload data › Stok › Replenishment Site 10037</b>."
-
-
-def replenishment_status(features) -> str:
-    try:
-        dates = features.snapshot_dates("warehouse_replenishment") if features is not None else []
-    except Exception:
-        dates = []
-    return f"tersimpan {pd.Timestamp(dates[0]):%d/%m/%Y}" if dates else "Kosong"
+        with st.expander("Unggah data hari ini", expanded=not loc.empty and not snap and may_upload_repl):
+            if loc.empty:
+                st.caption("Unggah denah gudang dulu.")
+            else:
+                replenishment_uploader(features, username=username, may_upload=may_upload_repl, require=require)
 
 
 def replenishment_uploader(features, *, username: str, may_upload: bool, require) -> None:
-    """Unggah laporan Replenishment Calculation by Date Site 10037 (satu-satunya tempat unggah, di Upload data › Stok)."""
+    """Unggah laporan Replenishment Calculation by Date Site 10037 (hanya di Setting › Kapasitas gudang)."""
     st.markdown(
-        f"<div class='field-hint'>Data terakhir: {replenishment_status(features)}. File dari sistem: <i>Replenishment Calculation by Date</i> "
-        f"Site {gudang.SITE} (Excel atau CSV), diunggah setiap hari. Isinya dipakai Kapasitas gudang dan Ringkasan "
-        "(lokasi gondola, batas Min/Max, stok, barang dalam perjalanan). Tanggal yang sama akan diganti.</div>",
+        f"<div class='field-hint'>File dari sistem: <i>Replenishment Calculation by Date</i> Site {gudang.SITE} (Excel atau CSV), "
+        "diunggah setiap hari. Isinya dipakai untuk lokasi barang kecil di gondola, batas Min/Max, dan stok. "
+        "Tanggal yang sama akan diganti.</div>",
         unsafe_allow_html=True,
     )
     flash = st.session_state.pop("repl-flash", None)
     if flash:
         (st.success if flash[0] == "ok" else st.error)(flash[1])
     if not may_upload:
-        st.caption("Hanya Super user, E-commerce specialist, atau Team DC yang bisa mengunggah.")
+        st.caption("Hanya Team DC, Team IC/MD, atau Super user yang bisa mengunggah.")
         return
     round_no = int(st.session_state.get("repl-round", 0))
     upload = st.file_uploader("File replenishment", type=["xlsx", "xls", "csv"], key=f"gudang-repl-upload-{round_no}")
@@ -510,14 +504,13 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
     other = [code for code in repl.attrs.get("sites", []) if code != gudang.SITE]
     if other:
         st.error(
-            f"File ini berisi Site {', '.join(other)}, bukan Site {gudang.SITE}. Stok DC 10062/10036 diunggah di menu "
-            "Stok DC 10062 atau Stok DC 10036."
+            f"File ini berisi Site {', '.join(other)}, bukan Site {gudang.SITE}. Replenishment di sini khusus Site {gudang.SITE}."
         )
         return
     snap_new = found["snapshot"] or datetime.now().date()
     st.markdown(f"Terbaca **{fmt_num(len(repl))} SKU** untuk tanggal **{snap_new:%d/%m/%Y}**.")
     if st.button("Simpan data", type="primary", key=f"gudang-repl-save-{round_no}"):
-        require("upload_stok", "upload")
+        require("upload_replenishment", "upload")
         try:
             with st.spinner("Menyimpan data replenishment..."):
                 rows = repl.assign(snapshot_date=snap_new, uploaded_by=username, uploaded_at=datetime.now())
