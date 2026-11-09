@@ -8,6 +8,7 @@ Pada budget terkunci, Target ROAS dipilih otomatis (`pick_roas`) dan dibandingka
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import Callable
@@ -94,6 +95,18 @@ def pick_roas(gain_at: Callable[[float], float], *, grid: tuple[float, ...] = A.
     gains = {float(r): gain_at(float(r)) for r in grid if 1.0 <= r <= A.MAX_SHOPEE_ROAS}
     top = max(gains.values())
     return max(r for r, g in gains.items() if g >= top - abs(top) * tol)
+
+
+def selection_roas(units: list[A.Unit]) -> float:
+    """ROAS acuan pemilihan produk pada budget terkunci: ROAS iklan berjalan sekarang (kelipatan 0,5, maks. 30), tetap saat ROAS dicoba."""
+    return shopee_roas(A._store_roas(units))
+
+
+def shopee_roas(roas: float) -> float:
+    """Target ROAS yang diisi di Shopee: ROAS rata-rata rencana dibulatkan ke bawah ke kelipatan 0,5, dalam batas 1–30."""
+    if not roas == roas or roas <= 0:
+        return 1.0
+    return min(max(math.floor(roas * 2) / 2, 1.0), A.MAX_SHOPEE_ROAS)
 
 
 def needed_roas(*, sales_now_daily: float, gap: float, days: int, budget: float) -> float:

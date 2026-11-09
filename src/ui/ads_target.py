@@ -145,24 +145,22 @@ def _day_shape_of(orders: pd.DataFrame | None, last: date):
         return lambda _d: 1.0
 
 
-def _fixed_plan(units, members, products, contribution, *, weeks, blocks, gap_ads: float, roas: float, budget_daily: float, lift: float, shape, key: tuple) -> dict:
+def _fixed_plan(units, members, products, contribution, *, weeks, blocks, gap_ads: float, roas: float, budget_daily: float, lift: float, shape, key: tuple,
+                select_roas: float | None = None) -> dict:
     """Rencana budget & ROAS tetap (dengan batas stok) + kalender budget harian; disimpan per sesi seperti rekomendasi."""
     cache = st.session_state.setdefault("adt-fixed-cache", {})
-    full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), round(budget_daily), lift, len(units), round(sum(u.daily_cost for u in units)),
+    full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), round(budget_daily), lift, select_roas, len(units), round(sum(u.daily_cost for u in units)),
             round(sum(u.daily_sales for u in units)), len(products))
     if full not in cache:
         if len(cache) > 8:
             cache.clear()
         run_days = max(sum(weeks), 1)
         plan_units, plan, selection = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
-                                                   budget_daily=budget_daily, lift=lift, stock_cap=True)
+                                                   budget_daily=budget_daily, lift=lift, stock_cap=True, select_roas=select_roas)
         steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas, budget_total=budget_daily * run_days, first=plan)
         calendar, timing = F.day_plan(plan_units, steps, blocks, shape)
-        open_units, open_plan, _sel = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
-                                                  budget_daily=None, lift=lift, stock_cap=True)
-        ceiling = A.ramp_effect(open_units, A.ramp(open_units, weeks=weeks, gap_total=gap_ads, target_roas=roas, budget_total=None, first=open_plan))
         cache[full] = {"units": plan_units, "plan": plan, "selection": selection, "steps": steps, "eff": A.ramp_effect(plan_units, steps),
-                       "kalender": calendar, "timing": timing, "plafon": ceiling}
+                       "kalender": calendar, "timing": timing}
     return cache[full]
 
 
@@ -185,19 +183,19 @@ def _calendar_view(calendar: pd.DataFrame) -> pd.DataFrame:
 
 
 def _option_plan(units, members, products, contribution, *, weeks, gap_ads: float, roas: float, budget_daily: float | None, lift: float, key: tuple,
-                 stock: bool = True) -> dict:
+                 stock: bool = True, select_roas: float | None = None) -> dict:
     """Hasil iklan untuk ROAS & budget harian tertentu (None = tanpa batas); stock=False: stok dianggap cukup. Disimpan per sesi.
 
     Selain angka `ramp_effect`, `kurang_stok` = daftar iklan yang tambahan penjualannya melebihi stok tersisa (nilai jual)."""
     cache = st.session_state.setdefault("adt-option-cache", {})
-    full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), -1 if budget_daily is None else round(budget_daily), lift, stock, len(units),
+    full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), -1 if budget_daily is None else round(budget_daily), lift, stock, select_roas, len(units),
             round(sum(u.daily_cost for u in units)), len(products))
     if full not in cache:
         if len(cache) > 300:
             cache.clear()
         run_days = max(sum(weeks), 1)
         plan_units, plan, _sel = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
-                                              budget_daily=budget_daily, lift=lift, stock_cap=stock)
+                                              budget_daily=budget_daily, lift=lift, stock_cap=stock, select_roas=select_roas)
         steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas,
                        budget_total=None if budget_daily is None else budget_daily * run_days, first=plan)
         result = dict(A.ramp_effect(plan_units, steps))
@@ -245,7 +243,7 @@ def _fixed_strategy(res: dict, *, rec: dict | None, target: float, projection: f
         input_rupiah(f"Budget iklan yang tersedia ({period_days} hari)", int(budget), key=key_budget,
                      help="Plafon budget iklan produk tunggal + grup untuk periode campaign. Rencana tidak akan melewati angka ini.")
     c2.radio("ROAS", ["Diatur sistem", "Saya tentukan"], key=key_mode, horizontal=True,
-             help="Diatur sistem: Target ROAS 1–30 dicoba semua dengan budget ini, dipilih yang omzet iklannya terbesar. Saya tentukan: ROAS rata-rata tidak boleh di bawah angka Anda.")
+             help="Diatur sistem: Target ROAS 1–30 dicoba semua dengan budget ini; yang diisi = ROAS rata-rata pembagian budget dengan omzet iklan terbesar. Saya tentukan: ROAS rata-rata tidak boleh di bawah angka Anda.")
     if auto:
         c3.markdown(f"<div style='font-size:var(--fs-sm);color:#64748b;margin-top:.2rem'>Target ROAS</div>"
                     f"<div style='font-weight:800;font-size:var(--fs-xl);color:#0f172a'>{r_txt}</div>", unsafe_allow_html=True)
@@ -297,7 +295,9 @@ def _fixed_strategy(res: dict, *, rec: dict | None, target: float, projection: f
             + (", dan sebagian produk iklan akan habis stok" if free_final - final > max(0.005 * target, 1.0) else "")
             + ". Strategi di bawah memberi omzet iklan terbesar dari budget ini.")
     if auto:
-        lines.append(f"<b>Target ROAS {r_txt} diatur sistem</b>: semua Target ROAS 1–30 dicoba dengan budget ini, dipilih yang omzet iklannya terbesar.")
+        lines.append(f"<b>Target ROAS {r_txt} diatur sistem</b>: semua Target ROAS 1–30 dicoba dengan budget ini; pembagian budget dengan omzet iklan terbesar "
+                     f"memberi ROAS rata-rata ±{r_txt}, jadi angka itu yang diisi di Shopee. Target ROAS lebih rendah tidak dipakai: Shopee akan "
+                     "menghabiskan budget di iklan yang hampir tidak menambah penjualan.")
     elif current_roas > 0 and roas > current_roas + 0.25 and ads_net < 0:
         lines.append(f"<b>ROAS minimal {r_txt} lebih tinggi dari ROAS iklan sekarang ({cur_txt})</b>: iklan lemah harus dikurangi dan omzet iklan turun "
                      f"{fmt_idr(-ads_net)}. Pilih <i>Diatur sistem</i> untuk hasil terbesar dengan budget ini.")
@@ -738,18 +738,21 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     auto = st.session_state[key_fix_mode] == "Diatur sistem"
     fix_budget = float(parse_rupiah(st.session_state[key_fix_budget]))
 
+    select = F.selection_roas(base_units) if auto else None
+
     def option(r: float, budget_daily: float | None = fix_budget / period_days, lf: float = lift, stock: bool = True) -> dict:
         return _option_plan(base_units, members, products, contribution, weeks=weeks, gap_ads=gap_ads, roas=r, budget_daily=budget_daily, lift=lf,
-                            key=(periode, start, end), stock=stock)
+                            key=(periode, start, end), stock=stock, select_roas=select)
 
     fixed = None
     fix_roas = float(st.session_state[key_fix_roas])
     if gap > 0:
         with st.spinner("Mencari ROAS & pembagian budget dengan omzet iklan terbesar..."):
             if auto:
-                fix_roas = F.pick_roas(lambda r: option(r)["omzet_tambahan"])
+                fix_roas = F.shopee_roas(option(F.pick_roas(lambda r: option(r)["omzet_tambahan"]))["roas_rencana"])
             fixed = _fixed_plan(base_units, members, products, contribution, weeks=weeks, blocks=blocks, gap_ads=gap_ads, roas=fix_roas,
-                                budget_daily=fix_budget / period_days, lift=lift, shape=_day_shape_of(orders, last), key=(periode, start, end))
+                                budget_daily=fix_budget / period_days, lift=lift, shape=_day_shape_of(orders, last), key=(periode, start, end),
+                                select_roas=select)
     mode = st.session_state.get(mode_key)
     fixed_used = bool(fixed) and mode is not None and abs(mode[0] - roas) < 0.01 and abs(mode[1] - budget) <= 1 \
         and abs(fix_roas - roas) < 0.01 and abs(fix_budget - budget) <= 1

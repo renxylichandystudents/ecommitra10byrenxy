@@ -61,6 +61,12 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(F.pick_roas(lambda r: gains.get(int(r), 0.0)), 16.0)
         self.assertEqual(F.pick_roas(lambda r: 50.0), A.MAX_SHOPEE_ROAS)
 
+    def test_shopee_roas_rounds_down_within_limits(self):
+        self.assertEqual(F.shopee_roas(15.6), 15.5)
+        self.assertEqual(F.shopee_roas(0.4), 1.0)
+        self.assertEqual(F.shopee_roas(44.0), A.MAX_SHOPEE_ROAS)
+        self.assertEqual(F.shopee_roas(float("nan")), 1.0)
+
     def test_needed_roas(self):
         self.assertAlmostEqual(F.needed_roas(sales_now_daily=119e6, gap=2_025e6, days=21, budget=250e6), (119e6 * 21 + 2_025e6) / 250e6)
         self.assertEqual(F.needed_roas(sales_now_daily=1, gap=1, days=1, budget=0), float("inf"))

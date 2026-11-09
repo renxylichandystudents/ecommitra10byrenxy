@@ -917,13 +917,15 @@ def _unit_of(selection: pd.DataFrame, plan_units: list[Unit]) -> list[str]:
 
 def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                gap_daily: float, target_roas: float, budget_daily: float | None, lift: float = DEMAND_LIFT,
-               stock_cap: bool = False) -> tuple[list[Unit], Plan, pd.DataFrame]:
+               stock_cap: bool = False, select_roas: float | None = None) -> tuple[list[Unit], Plan, pd.DataFrame]:
     """Satu alur: pemilihan produk → susunan iklan baru → rencana budget, sehingga langkah 3 & 4 selalu sejalan.
 
     Iklan tunggal baru / hasil pisah yang tidak mendapat budget di rencana dikembalikan (tetap di grup / masuk grup),
     lalu rencana dihitung ulang. stock_cap: tambahan omzet tiap iklan juga dibatasi ruang stok produknya.
+    select_roas: ROAS acuan pemilihan produk (bawaan = target_roas).
     Mengembalikan (unit rencana, rencana, pemilihan + kolom budget usulan)."""
-    selection = product_selection(members, units, products, contribution_by_code, target_roas=target_roas)
+    selection = product_selection(members, units, products, contribution_by_code,
+                                  target_roas=target_roas if select_roas is None else select_roas)
     plan_units, plan = [], Plan("Kejar target", {}, {})
     for _ in range(3):
         plan_units = [replace(u, lift=lift) for u in restructure(units, selection, products, contribution_by_code)]
