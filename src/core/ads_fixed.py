@@ -3,11 +3,12 @@
 Rencana iklan memakai alur yang sama dengan Kejar target (`ads_strategy.build_plan` + `ramp`), dengan dua tambahan:
 - tambahan omzet tiap iklan dibatasi juga oleh ruang stok produknya, supaya budget tidak dipakai untuk barang yang akan habis;
 - budget mingguan disebar per tanggal mengikuti pola hari (gajian, tanggal kembar, hari dalam minggu), total budget tetap.
-Kekurangan yang tersisa ditutup dari luar iklan: Belum Bayar dan dorongan produk berstok aman.
+Pada budget terkunci, ROAS dipilih otomatis (`best_roas`) dan budget yang menutup target dicari dengan `budget_needed`.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import Callable
@@ -87,53 +88,36 @@ def day_plan(units: list[A.Unit], steps: list[tuple[int, A.Plan]], blocks: list[
     return frame, {"tambahan": opt_total - flat_total, "omzet_rata": flat_total, "omzet_atur": opt_total, "biaya": cost_total, "ikut": follow}
 
 
-def _pushable(products: pd.DataFrame, contribution: dict[str, float], *, lift: float, exclude: set[str]) -> pd.DataFrame:
-    p = products.copy()
-    p["margin"] = p["product_code"].astype(str).map(contribution)
-    p["room"] = np.minimum(pd.to_numeric(p.get("stok_room"), errors="coerce"), p["omzet_harian"] * lift)
-    keep = (p["omzet_harian"] > 0) & (p["room"] > 0) & ~(p["margin"] <= 0) & ~p["product_code"].astype(str).isin(exclude)
-    return p.loc[keep]
+def best_roas(gain_at: Callable[[float], float], *, lo: float = 1.0, hi: float = A.MAX_SHOPEE_ROAS, tol: float = 0.005) -> float:
+    """ROAS minimal tertinggi (kelipatan 0,5) yang masih memberi ≥ (1 − tol) × tambahan omzet terbesar pada budget terkunci.
+
+    gain_at(roas) = tambahan omzet iklan pada budget terkunci; makin rendah ROAS minimal, tambahan tidak berkurang."""
+    top = gain_at(lo)
+    floor = top - abs(top) * tol
+    if gain_at(hi) >= floor:
+        return hi
+    a, b = lo, hi
+    while b - a > 0.25:
+        mid = (a + b) / 2
+        if gain_at(mid) >= floor:
+            a = mid
+        else:
+            b = mid
+    return max(math.floor(a * 2) / 2, lo)
 
 
-def push_candidates(products: pd.DataFrame, contribution: dict[str, float], *, need_daily: float, lift: float = A.DEMAND_LIFT,
-                    exclude: set[str] | None = None, limit: int = 30) -> pd.DataFrame:
-    """Produk untuk flash sale / voucher / exposure: stok masih longgar, margin tidak minus, belum didorong iklan di rencana.
+def budget_needed(gain_at: Callable[[float | None], tuple[float, float]], gap: float, *, step: float = 1_000_000) -> float | None:
+    """Budget (total periode) terkecil yang menutup `gap` dengan iklan; None bila iklan berapa pun tidak cukup.
 
-    `need_daily` (nilai produk/hari) dibagi ke produk teratas sebanding prediksi omzetnya. Tambahan tiap produk maks.
-    min(ruang stok, `lift` × prediksi omzet) — asumsi daya dorong yang sama dengan iklan."""
-    cols = ["Produk", "Kode produk", "Prediksi omzet/hari", "Ruang stok/hari", "Margin kontribusi", "Tambahan dikejar/hari", "Naik dari prediksi"]
-    if products is None or products.empty or need_daily <= 0:
-        return pd.DataFrame(columns=cols)
-    p = _pushable(products, contribution, lift=lift, exclude=exclude or set()).sort_values("omzet_harian", ascending=False).head(limit)
-    if p.empty:
-        return pd.DataFrame(columns=cols)
-    left, share = need_daily, {}
-    pool = list(p.index)
-    while left > 1 and pool:
-        weight = p.loc[pool, "omzet_harian"].sum()
-        full = []
-        for i in pool:
-            want = left * p.at[i, "omzet_harian"] / weight
-            give = min(want, p.at[i, "room"] - share.get(i, 0.0))
-            share[i] = share.get(i, 0.0) + give
-            if share[i] >= p.at[i, "room"] - 1e-6:
-                full.append(i)
-        left = need_daily - sum(share.values())
-        if not full:
-            break
-        pool = [i for i in pool if i not in full]
-    out = pd.DataFrame({
-        "Produk": p["nama"], "Kode produk": p["product_code"].astype(str), "Prediksi omzet/hari": p["omzet_harian"],
-        "Ruang stok/hari": pd.to_numeric(p["stok_room"], errors="coerce"),
-        "Margin kontribusi": p["margin"] * 100, "Tambahan dikejar/hari": [share.get(i, 0.0) for i in p.index],
-    })
-    out["Naik dari prediksi"] = out["Tambahan dikejar/hari"] / out["Prediksi omzet/hari"] * 100
-    out = out.loc[out["Tambahan dikejar/hari"] >= 1].sort_values("Tambahan dikejar/hari", ascending=False).head(limit)
-    return out[cols].reset_index(drop=True)
-
-
-def push_capacity(products: pd.DataFrame, contribution: dict[str, float], *, lift: float = A.DEMAND_LIFT, exclude: set[str] | None = None) -> float:
-    """Batas atas dorongan non-iklan (nilai produk/hari): Σ min(ruang stok, `lift` × prediksi) produk yang layak didorong."""
-    if products is None or products.empty:
-        return 0.0
-    return float(_pushable(products, contribution, lift=lift, exclude=exclude or set())["room"].sum())
+    gain_at(budget) = (tambahan omzet, biaya terpakai); budget None = tanpa batas."""
+    top, absorbed = gain_at(None)
+    if top < gap - 1:
+        return None
+    a, b = 0.0, max(absorbed, step)
+    while b - a > step:
+        mid = (a + b) / 2
+        if gain_at(mid)[0] >= gap - 1:
+            b = mid
+        else:
+            a = mid
+    return math.ceil(b / step) * step

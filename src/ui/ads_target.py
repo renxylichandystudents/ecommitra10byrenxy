@@ -130,7 +130,6 @@ def _recommendation(units, members, products, contribution, *, weeks: list[int],
 
 
 DAY_NAMES = ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu")
-PAY_SHARE = 0.5   # perencanaan: separuh nilai Belum Bayar terbuka dibayar setelah chat pengingat
 FIXED_CSS = """<style>
 .st-key-adt-fixed{border:2px solid #ee4d2d;border-radius:16px;background:linear-gradient(180deg,#fff4ed 0%,#ffffff 38%);
 padding:1rem 1.1rem 1.1rem;margin:1rem 0 .6rem;box-shadow:0 6px 20px rgba(238,77,45,.12)}
@@ -144,18 +143,6 @@ def _day_shape_of(orders: pd.DataFrame | None, last: date):
         return _day_shape(orders, last) if orders is not None and not orders.empty else (lambda _d: 1.0)
     except Exception:
         return lambda _d: 1.0
-
-
-def _open_unpaid(orders: pd.DataFrame | None, last: date) -> float:
-    """Nilai pesanan bulan ini yang masih Belum Bayar (belum masuk sales bersih)."""
-    if orders is None or orders.empty:
-        return 0.0
-    try:
-        from src.core.metrics import order_metrics
-
-        return float(order_metrics(orders, last.replace(day=1), last)["nominal_menunggu_bayar"])
-    except Exception:
-        return 0.0
 
 
 def _fixed_plan(units, members, products, contribution, *, weeks, blocks, gap_ads: float, roas: float, budget_daily: float, lift: float, shape, key: tuple) -> dict:
@@ -197,39 +184,71 @@ def _calendar_view(calendar: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-def _option_plan(units, members, products, contribution, *, weeks, gap_ads: float, roas: float, budget_daily: float, lift: float, key: tuple) -> dict:
-    """Hasil iklan (berbatas stok) untuk ROAS lain dengan budget yang sama; untuk tabel pilihan ROAS."""
+def _option_plan(units, members, products, contribution, *, weeks, gap_ads: float, roas: float, budget_daily: float | None, lift: float, key: tuple,
+                 stock: bool = True) -> dict:
+    """Hasil iklan untuk ROAS & budget harian tertentu (None = tanpa batas); stock=False: stok dianggap cukup. Disimpan per sesi.
+
+    Selain angka `ramp_effect`, `kurang_stok` = daftar iklan yang tambahan penjualannya melebihi stok tersisa (nilai jual)."""
     cache = st.session_state.setdefault("adt-option-cache", {})
-    full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), round(budget_daily), lift, len(units), round(sum(u.daily_cost for u in units)), len(products))
+    full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), -1 if budget_daily is None else round(budget_daily), lift, stock, len(units),
+            round(sum(u.daily_cost for u in units)), len(products))
     if full not in cache:
-        if len(cache) > 12:
+        if len(cache) > 300:
             cache.clear()
         run_days = max(sum(weeks), 1)
         plan_units, plan, _sel = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
-                                              budget_daily=budget_daily, lift=lift, stock_cap=True)
-        steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas, budget_total=budget_daily * run_days, first=plan)
-        cache[full] = A.ramp_effect(plan_units, steps)
+                                              budget_daily=budget_daily, lift=lift, stock_cap=stock)
+        steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas,
+                       budget_total=None if budget_daily is None else budget_daily * run_days, first=plan)
+        result = dict(A.ramp_effect(plan_units, steps))
+        short: dict[str, list] = {}
+        if not stock:
+            for days, step in steps:
+                for u in plan_units:
+                    if u.locked or not np.isfinite(u.stock_room):
+                        continue
+                    gap_u = A.ad_sales(u, step.cost.get(u.key, 0.0)) - A._now_sales(u) - max(u.stock_room, 0.0)
+                    if gap_u > 1:
+                        item = short.setdefault(u.key, [u.nama, 0.0, max(u.stock_room, 0.0)])
+                        item[1] += gap_u * days
+        result["kurang_stok"] = sorted(short.values(), key=lambda x: -x[1])
+        cache[full] = result
     return cache[full]
 
 
-def _fixed_strategy(res: dict, *, rec: dict | None, rec_budget: float, target: float, projection: float, factor: float, period_days: int, run_days: int,
-                    days_left: int, budget: float, roas: float, key_budget: str, key_roas: str, set_key_budget: str, set_key_roas: str, mode_key: str,
-                    applied: bool, products: pd.DataFrame, contribution: dict, unpaid_open: float, start: date, end: date, periode: str, lift: float,
-                    current_roas: float = 0.0, option=None, uncapped_extra: float | None = None) -> None:
+def _requirements(option, *, gap_ads: float, lift: float, run_days: int, period_days: int) -> list[dict]:
+    """Untuk tiap asumsi daya dorong (mulai setelan): tambahan maksimal iklan dengan stok sekarang & bila restock, budget terkecil yang
+    menutup target (stok sekarang; bila tidak bisa, dengan restock) beserta ROAS-nya dan nilai restock yang dibutuhkan."""
+    rows = []
+
+    def need_for(lf: float, stock: bool) -> float | None:
+        return F.budget_needed(lambda b: (lambda e: (e["omzet_tambahan"], e["biaya_total"]))(option(1.0, None if b is None else b / run_days, lf, stock)),
+                               gap_ads, step=5_000_000)
+
+    for lf in [x for x in LIFTS if x >= lift - 1e-9]:
+        top, top_free = option(1.0, None, lf, True), option(1.0, None, lf, False)
+        need, restock = need_for(lf, True), []
+        stock = True
+        if need is None:
+            need, stock = need_for(lf, False), False
+        roas = F.best_roas(lambda r: option(r, need / run_days, lf, stock)["omzet_tambahan"]) if need else None
+        if need and not stock:
+            restock = option(roas, need / run_days, lf, False)["kurang_stok"]
+        rows.append({"lift": lf, "maks": top["omzet_tambahan"], "maks_restock": top_free["omzet_tambahan"],
+                     "budget": need / run_days * period_days if need else None, "roas": roas, "restock": restock, "perlu_restock": bool(need) and not stock})
+        if need:
+            break
+    return rows
+
+
+def _fixed_strategy(res: dict, *, rec: dict | None, target: float, projection: float, factor: float, period_days: int, run_days: int,
+                    budget: float, roas: float, auto: bool, key_budget: str, key_roas: str, key_mode: str, set_key_budget: str, set_key_roas: str, set_key_lift: str,
+                    mode_key: str, applied: bool, start: date, periode: str, lift: float, current_roas: float, option, gap_ads: float,
+                    uncapped_extra: float | None = None) -> None:
     units, plan, eff, calendar, timing = res["units"], res["plan"], res["eff"], res["kalender"], res["timing"]
     ads_net = eff["omzet_tambahan"] * factor
     timing_net = max(timing["tambahan"], 0.0) * factor
-    after_ads = projection + ads_net + timing_net
-    unpaid_plan = unpaid_open * PAY_SHARE
-    after_unpaid = after_ads + unpaid_plan
-    remaining = max(target - after_unpaid, 0.0)
-    need_daily = remaining / factor / max(days_left, 1)
-    pushed_by_ads = {c for u in units if plan.cost.get(u.key, 0) > 0 for c in u.members}
-    capacity = F.push_capacity(products, contribution, lift=lift, exclude=pushed_by_ads)
-    push = F.push_candidates(products, contribution, need_daily=need_daily, lift=lift, exclude=pushed_by_ads) if remaining > 0 else pd.DataFrame()
-    push_daily = float(push["Tambahan dikejar/hari"].sum()) if not push.empty else 0.0
-    push_net = push_daily * days_left * factor
-    final = after_unpaid + push_net
+    final = projection + ads_net + timing_net
     budget_run = budget / period_days * run_days
     used = float(eff["biaya_total"])
     unused = max(budget_run - used, 0.0)
@@ -237,156 +256,164 @@ def _fixed_strategy(res: dict, *, rec: dict | None, rec_budget: float, target: f
     limited = [u for u in units if F.stock_limited(u) and plan.cost.get(u.key, 0) > 0]
     r_txt, cur_txt = fmt_num(roas, 1), fmt_num(current_roas, 1)
 
-    if short <= 1:
-        verdict, color = "Target tercapai dengan budget & ROAS Anda", UP
-    else:
-        verdict, color = f"Target belum tercapai: proyeksi {fmt_pct(final / target * 100, 1)}, kurang {fmt_idr(short)}", DOWN
-
     st.markdown(
         "<div style='display:flex;align-items:center;gap:.6rem;flex-wrap:wrap'>"
-        "<span style='background:#ee4d2d;color:#fff;border-radius:999px;padding:.15rem .7rem;font-size:var(--fs-xs);font-weight:800;letter-spacing:.03em'>STRATEGI BUDGET TETAP</span>"
-        "<span style='font-weight:800;font-size:var(--fs-lg);color:#0f172a'>🎯 Hasil terbaik dengan budget & ROAS yang Anda punya</span></div>"
-        "<div style='color:#475569;font-size:var(--fs-sm);margin:.3rem 0 .6rem'>Isi budget yang benar-benar tersedia dan ROAS terendah yang masih Anda terima. "
-        "Sistem tidak akan melewati keduanya.</div>",
+        "<span style='background:#ee4d2d;color:#fff;border-radius:999px;padding:.15rem .7rem;font-size:var(--fs-xs);font-weight:800;letter-spacing:.03em'>FITUR KHUSUS</span>"
+        "<span style='font-weight:800;font-size:var(--fs-lg);color:#0f172a'>🎯 Kejar target hanya dengan iklan · budget dikunci</span></div>"
+        "<div style='color:#475569;font-size:var(--fs-sm);margin:.3rem 0 .6rem'>Isi budget iklan yang tersedia. Sistem memilih ROAS dan membagi budget ke iklan "
+        "supaya omzet iklan sebesar mungkin, tanpa melewati budget. Hanya iklan produk tunggal & grup; flash sale, voucher, dan sumber lain tidak dihitung.</div>",
         unsafe_allow_html=True,
     )
-    c1, c2, c3 = st.columns([1.3, 0.8, 1.1])
+    c1, c2, c3, c4 = st.columns([1.25, 0.95, 0.7, 1.0])
     with c1:
-        input_rupiah(f"Budget maksimal yang tersedia ({period_days} hari)", int(budget), key=key_budget,
+        input_rupiah(f"Budget iklan yang tersedia ({period_days} hari)", int(budget), key=key_budget,
                      help="Plafon budget iklan produk tunggal + grup untuk periode campaign. Rencana tidak akan melewati angka ini.")
-    c2.number_input("ROAS minimal", min_value=1.0, max_value=A.MAX_SHOPEE_ROAS, step=0.5, key=key_roas,
-                    help="ROAS rata-rata seluruh iklan tidak boleh di bawah angka ini (total omzet iklan ÷ total biaya iklan).")
-    with c3:
+    c2.radio("ROAS", ["Diatur sistem", "Saya tentukan"], key=key_mode, horizontal=True,
+             help="Diatur sistem: ROAS tertinggi yang masih memberi omzet iklan terbesar dengan budget ini. Saya tentukan: ROAS rata-rata tidak boleh di bawah angka Anda.")
+    if auto:
+        c3.markdown(f"<div style='font-size:var(--fs-sm);color:#64748b;margin-top:.2rem'>ROAS dipilih</div>"
+                    f"<div style='font-weight:800;font-size:var(--fs-xl);color:#0f172a'>{r_txt}</div>", unsafe_allow_html=True)
+    else:
+        c3.number_input("ROAS minimal", min_value=1.0, max_value=A.MAX_SHOPEE_ROAS, step=0.5, key=key_roas)
+    with c4:
         st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
-        st.button("✓ Strategi ini dipakai di langkah 3–4" if applied else "Jadikan setelan campaign", key="adt-fix-apply", type="primary",
+        st.button("✓ Dipakai di langkah 3–4" if applied else "Jadikan setelan campaign", key="adt-fix-apply", type="primary",
                   disabled=applied, use_container_width=True, on_click=_apply_fixed, args=(set_key_roas, roas, set_key_budget, budget, mode_key))
 
+    if short <= 1:
+        verdict, color = f"Target tercapai dengan iklan saja · proyeksi {fmt_pct(final / target * 100, 1)}", UP
+    else:
+        verdict, color = f"Dengan budget ini, iklan membawa proyeksi ke {fmt_pct(final / target * 100, 1)} target · kurang {fmt_idr(short)}", DOWN
     st.markdown(f"<div style='border-radius:12px;background:{color};color:#fff;padding:.65rem 1rem;margin:.5rem 0 .7rem;font-weight:700'>{html.escape(verdict)}</div>",
                 unsafe_allow_html=True)
     k = st.columns(3)
     card(k[0], "Proyeksi akhir bulan", fmt_idr(final), hint=f"<b style='color:{_tone(final >= target)}'>{fmt_pct(final / target * 100, 1)}</b> dari target {fmt_idr(target)}"
-                                                           f" · tanpa strategi {fmt_pct(projection / target * 100, 1)}")
-    card(k[1], "Budget terpakai", fmt_idr(used), hint=f"dari {fmt_idr(budget_run)} tersedia"
-                                                      + (f" · <b style='color:{DOWN}'>{fmt_idr(unused)} tidak bisa dipakai</b>" if unused > max(0.01 * budget_run, 1.0) else " · terpakai penuh"))
-    card(k[2], "Kekurangan", fmt_idr(short) if short > 1 else "Tidak ada", hint="setelah iklan, chat Belum Bayar, dan flash sale/voucher")
+                                                           f" · tanpa perubahan iklan {fmt_pct(projection / target * 100, 1)}")
+    card(k[1], "Omzet tambahan dari iklan", _signed(ads_net + timing_net), hint=f"ROAS rata-rata {fmt_num(eff['roas_rencana'], 1)} (minimal per iklan {fmt_num(roas, 1)}) · ROAS iklan sekarang {cur_txt}")
+    card(k[2], "Budget terpakai", fmt_idr(used), hint=f"dari {fmt_idr(budget_run)} tersedia"
+                                                      + (f" · <b style='color:{DOWN}'>{fmt_idr(unused)} tidak terpakai</b>" if unused > max(0.01 * budget_run, 1.0) else " · terpakai penuh"))
 
-    # Kenapa hasilnya begini
+    # Penjelasan singkat
     why = []
-    if current_roas > 0 and roas > current_roas + 0.25:
-        if ads_net < 0:
-            why.append(f"<b>ROAS minimal {r_txt} lebih tinggi dari ROAS iklan Anda sekarang ({cur_txt}).</b> Supaya rata-ratanya naik ke {r_txt}, iklan dengan ROAS "
-                       f"rendah harus dikurangi atau dijeda. Akibatnya omzet iklan <b>turun {fmt_idr(-ads_net)}</b> dibanding iklan dibiarkan seperti sekarang.")
-        else:
-            why.append(f"<b>ROAS minimal {r_txt} lebih tinggi dari ROAS iklan sekarang ({cur_txt}).</b> Iklan lemah dikurangi dan budget dipusatkan ke iklan terbaik; "
-                       f"omzet iklan masih naik {fmt_idr(ads_net)}.")
-    elif ads_net > 0:
-        why.append(f"<b>Iklan menambah omzet {fmt_idr(ads_net + timing_net)}</b>: budget dipindah dari iklan lemah ke iklan yang paling menghasilkan, "
-                   "dan sedikit dinaikkan di tanggal ramai.")
+    if auto:
+        why.append(f"<b>ROAS {r_txt} dipilih sistem</b>: ini ROAS tertinggi yang masih memberi omzet iklan terbesar dengan budget {fmt_idr(budget)}. "
+                   "ROAS lebih rendah tidak menambah omzet, ROAS lebih tinggi memaksa iklan dikurangi.")
+    elif current_roas > 0 and roas > current_roas + 0.25 and ads_net < 0:
+        why.append(f"<b>ROAS minimal {r_txt} lebih tinggi dari ROAS iklan sekarang ({cur_txt})</b>, jadi iklan lemah harus dikurangi dan omzet iklan turun "
+                   f"{fmt_idr(-ads_net)}. Pilih <i>Diatur sistem</i> untuk hasil terbesar dengan budget ini.")
     if unused > max(0.01 * budget_run, 1.0):
-        why.append(f"<b>Hanya {fmt_idr(used)} dari {fmt_idr(budget_run)} budget yang bisa dipakai.</b> Kalau sisanya ({fmt_idr(unused)}) ikut dipakai, ROAS rata-rata "
-                   f"turun di bawah {r_txt}. Jadi selama ROAS minimal {r_txt}, menambah budget tidak menambah hasil.")
+        why.append(f"<b>{fmt_idr(unused)} budget tidak terpakai</b>: iklan sudah mentok di batas permintaan produk (maks. +{lift * 100:.0f}% dari prediksi) "
+                   + ("atau di ROAS minimal Anda" if not auto else "dan stok") + "; menambah budget tidak menambah omzet.")
     else:
-        ceiling = res.get("plafon") or {}
-        more = float(ceiling.get("biaya_total", 0)) / run_days * period_days
-        extra_txt = (f" Pada ROAS {r_txt}, budget masih berguna sampai sekitar {fmt_idr(more)}." if more > budget * 1.01 else "")
-        why.append(f"<b>Budget {fmt_idr(budget_run)} terpakai penuh.</b> Budget yang lebih besar masih bisa menambah omzet.{extra_txt}")
+        why.append(f"<b>Budget terpakai penuh</b> dan dibagi ke iklan dengan tambahan omzet per rupiah tertinggi.")
     if limited:
-        why.append(f"<b>{fmt_num(len(limited))} iklan tidak bisa dinaikkan karena stoknya tidak cukup</b> sampai akhir bulan (lihat langkah PO di bawah).")
-    if short > 1:
-        why.append(f"Setelah iklan, chat Belum Bayar ({fmt_idr(unpaid_plan)}), dan flash sale/voucher ({fmt_idr(push_net)}), "
-                   f"masih kurang <b>{fmt_idr(short)}</b>.")
-    _box("🔎 Kenapa hasilnya begini", "<br>".join(f"• {w}" for w in why), color)
+        why.append(f"<b>{fmt_num(len(limited))} iklan tertahan stok</b>: budgetnya tidak dinaikkan melewati stok tersisa.")
+    _box("🔎 Artinya", "<br>".join(f"• {w}" for w in why), color)
 
-    # Pilihan ROAS dengan budget yang sama
-    better = None
-    if option is not None and short > 1:
-        picks = [roas]
-        for r in (math.floor(current_roas * 2) / 2 if current_roas > 0 else 0, rec["roas"] if rec else 0):
-            if 1 <= r < roas - 0.01 and all(abs(r - p) > 0.01 for p in picks):
-                picks.append(float(r))
-        if len(picks) > 1:
-            rows = []
-            for r in sorted(picks, reverse=True):
-                e = eff if abs(r - roas) < 0.01 else option(r)
-                gain = e["omzet_tambahan"] * factor + (timing_net if abs(r - roas) < 0.01 else 0.0)
-                note = ("setelan Anda" if abs(r - roas) < 0.01 else
-                        "sama dengan ROAS iklan sekarang" if abs(r - math.floor(current_roas * 2) / 2) < 0.01 else "rekomendasi ideal")
-                rows.append({"ROAS minimal": fmt_num(r, 1), "Keterangan": note, "Budget terpakai": float(e["biaya_total"]) / run_days * period_days,
-                             "Perubahan omzet dari iklan": gain, "Proyeksi (iklan saja)": projection + gain,
-                             "% target": (projection + gain) / target * 100})
-            st.markdown(f"**Pilihan ROAS dengan budget {fmt_idr(budget)}** · makin rendah ROAS minimal, makin banyak budget yang bisa dipakai")
-            show_table(pd.DataFrame(rows), kinds={"Budget terpakai": "money", "Perubahan omzet dari iklan": "money", "Proyeksi (iklan saja)": "money", "% target": "pct"})
-            st.caption("Pilih ROAS terendah yang masih bisa Anda terima, lalu isi di kotak ROAS minimal di atas. Proyeksi di tabel ini belum termasuk chat Belum Bayar "
-                       "dan flash sale/voucher.")
-            mine = next(x for x in rows if x["Keterangan"] == "setelan Anda")
-            others = [x for x in rows if x is not mine and x["Proyeksi (iklan saja)"] > mine["Proyeksi (iklan saja)"] + max(0.01 * target, 1.0)]
-            if others:
-                better = others[0]
-                st.button(f"Pakai ROAS minimal {better['ROAS minimal']}", key="adt-fix-better", on_click=st.session_state.__setitem__,
-                          args=(key_roas, float(better["ROAS minimal"].replace(",", "."))))
+    # Syarat agar target tercapai dengan iklan
+    need_rows: list[dict] = []
+    if short > 1:
+        with st.spinner("Menghitung budget yang dibutuhkan untuk capai target dengan iklan..."):
+            need_rows = _requirements(option, gap_ads=gap_ads, lift=lift, run_days=run_days, period_days=period_days)
+        table_rows = []
+        for r in need_rows:
+            best, best_free = projection + r["maks"] * factor, projection + r["maks_restock"] * factor
+            if r["budget"] and not r["perlu_restock"]:
+                result = "target tercapai dengan stok sekarang"
+            elif r["budget"]:
+                result = "target tercapai bila produk iklan direstock"
+            else:
+                result = "tidak tercapai walau budget & stok ditambah"
+            table_rows.append({
+                "Daya dorong iklan": LIFT_LABELS.get(r["lift"], f"+{r['lift'] * 100:.0f}%") + (" (setelan)" if abs(r["lift"] - lift) < 1e-9 else ""),
+                "Maks. dengan stok sekarang": best / target * 100, "Maks. bila restock": best_free / target * 100,
+                "Budget yang dibutuhkan": r["budget"] if r["budget"] else np.nan, "ROAS": fmt_num(r["roas"], 1) if r["roas"] else "–",
+                "Restock (nilai jual)": sum(x[1] for x in r["restock"]) if r["perlu_restock"] else 0.0, "Hasil": result,
+            })
+        first_ok = next((r for r in need_rows if r["budget"]), None)
+        same_lift = bool(first_ok) and abs(first_ok["lift"] - lift) < 1e-9
+        restock_total = sum(x[1] for x in first_ok["restock"]) if first_ok and first_ok["perlu_restock"] else 0.0
+        if first_ok and same_lift and not first_ok["perlu_restock"]:
+            head = (f"Untuk capai target hanya dengan iklan, budget perlu <b>{fmt_idr(first_ok['budget'])}</b> ({_signed(first_ok['budget'] - budget)} dari budget Anda) "
+                    f"dengan ROAS sekitar <b>{fmt_num(first_ok['roas'], 1)}</b>. Stok sekarang cukup.")
+        elif first_ok:
+            parts = [f"Dengan stok sekarang, iklan paling tinggi membawa ke <b>{fmt_pct(table_rows[0]['Maks. dengan stok sekarang'], 1)}</b> target berapa pun budgetnya: "
+                     "banyak produk iklan akan habis sebelum akhir bulan."]
+            if first_ok["perlu_restock"]:
+                parts.append(f"<b>Penghambat utamanya stok.</b> Restock produk iklan senilai ±<b>{fmt_idr(restock_total)}</b> (nilai jual) sampai akhir bulan, "
+                             f"lalu pakai budget <b>{fmt_idr(first_ok['budget'])}</b> dengan ROAS sekitar <b>{fmt_num(first_ok['roas'], 1)}</b>")
+                parts[-1] += "." if same_lift else f", dengan asumsi iklan bisa menaikkan penjualan sampai +{first_ok['lift'] * 100:.0f}% dari prediksi."
+            else:
+                parts.append(f"Target terkejar bila iklan bisa menaikkan penjualan sampai +{first_ok['lift'] * 100:.0f}% dari prediksi, dengan budget "
+                             f"<b>{fmt_idr(first_ok['budget'])}</b> dan ROAS sekitar <b>{fmt_num(first_ok['roas'], 1)}</b>.")
+            head = " ".join(parts)
+        else:
+            head = (f"<b>Iklan saja tidak cukup</b>, walau budget dan stok ditambah dan asumsi paling agresif (+{LIFTS[-1] * 100:.0f}%): paling tinggi "
+                    f"{fmt_pct(table_rows[-1]['Maks. bila restock'], 1)} target. Penghambatnya permintaan produk yang diiklankan.")
+        _box("📌 Agar target tercapai dengan iklan", head, "#b45309")
+        show_table(pd.DataFrame(table_rows), kinds={"Maks. dengan stok sekarang": "pct", "Maks. bila restock": "pct", "Budget yang dibutuhkan": "money",
+                                                    "Restock (nilai jual)": "money"},
+                   column_config={"Hasil": st.column_config.TextColumn(width="medium")})
+        if first_ok and first_ok["perlu_restock"] and first_ok["restock"]:
+            with st.expander(f"Produk iklan yang perlu restock · {fmt_num(len(first_ok['restock']))} iklan"):
+                st.caption("Kurang stok = tambahan penjualan dari iklan pada rencana target yang melebihi stok tersisa (setelah penjualan biasa) sampai akhir bulan, "
+                           "dalam nilai jual. Ajukan PO sebesar ini (dibagi harga jual) agar iklan bisa dinaikkan.")
+                show_table(pd.DataFrame([{"Iklan": n, "Kurang stok (nilai jual)": v, "Ruang stok sekarang/hari": room} for n, v, room in first_ok["restock"]]),
+                           kinds={"Kurang stok (nilai jual)": "money", "Ruang stok sekarang/hari": "money"},
+                           column_config={"Iklan": st.column_config.TextColumn(width="large")})
+        if first_ok:
+            args = (set_key_roas, first_ok["roas"], set_key_budget, first_ok["budget"], mode_key)
+            label = (f"Pakai budget {fmt_idr(first_ok['budget'])}" if same_lift
+                     else f"Pakai daya dorong +{first_ok['lift'] * 100:.0f}% & budget {fmt_idr(first_ok['budget'])}")
+            st.button(label + (" (setelah restock)" if first_ok["perlu_restock"] else ""), key="adt-fix-need", on_click=_apply_need,
+                      args=(*args, key_budget, set_key_lift, first_ok["lift"]))
+        st.caption("Daya dorong = seberapa besar iklan dianggap bisa menaikkan penjualan produk di atas prediksinya (asumsi model, bukan janji). Bawaan +50% "
+                   "(konservatif). Naikkan hanya bila evaluasi campaign menunjukkan iklan memang mendorong lebih dari itu. Budget yang dibutuhkan sudah memperhitungkan stok.")
 
     # Yang dikerjakan
     acts = A.target_actions(units, plan, target_roas=roas)
     todo = []
-    if better is not None:
-        todo.append(f"<b>Putuskan ROAS dulu.</b> Dengan budget yang sama, ROAS minimal {better['ROAS minimal']} ({better['Keterangan']}) memberi proyeksi "
-                    f"{fmt_pct(better['% target'], 1)} target, sedangkan ROAS {r_txt} hanya {fmt_pct(mine['% target'], 1)} (iklan saja). Bila bisa menerima, tekan "
-                    f"<i>Pakai ROAS minimal {better['ROAS minimal']}</i>; langkah di bawah otomatis menyesuaikan.")
     if not acts.empty:
         up = acts.loc[acts["Tindakan"].isin(["Naikkan budget", "Buat iklan baru", "Pisahkan jadi iklan tunggal", "Aktifkan kembali"])]
         down = acts.loc[acts["Tindakan"].isin(["Turunkan budget", "Jeda"])]
-        daily = float(acts["Budget harian usulan"].sum())
-        todo.append(f"<b>Mulai {fmt_date(start)}: ubah budget iklan di Shopee.</b> {fmt_num(len(up))} iklan dinaikkan/dibuat, {fmt_num(len(down))} iklan diturunkan/dijeda, "
-                    f"total {fmt_idr(daily)}/hari di minggu pertama. Daftar per iklan: <i>Budget per iklan</i> di bawah.")
+        todo.append(f"<b>Mulai {fmt_date(start)}: ubah budget iklan di Shopee</b> — {fmt_num(len(up))} iklan dinaikkan/dibuat, {fmt_num(len(down))} diturunkan/dijeda, "
+                    f"total {fmt_idr(float(acts['Budget harian usulan'].sum()))}/hari di minggu pertama; isi Target ROAS tiap iklan sesuai tabel <i>Budget per iklan</i>.")
+    if len(res["steps"]) > 1:
+        todo.append("<b>Tiap Senin naikkan budget bertahap</b> sesuai jadwal (maks. 2× per minggu agar perlindungan ROAS Shopee tetap aktif).")
     peaks = calendar.loc[calendar["Pengali budget"] >= 1.04].sort_values("Pola hari", ascending=False) if not calendar.empty else calendar
-    if not peaks.empty:
+    if not peaks.empty and timing_net > 0:
         days = ", ".join(fmt_date(d) for d in peaks["Tanggal"].head(4))
-        todo.append(f"<b>Tanggal ramai ({days}{'…' if len(peaks) > 4 else ''}): naikkan sedikit budget</b> iklan bertanda <i>Ikut kalender</i>, dan turunkan sedikit di hari sepi. "
-                    f"Total budget sama, omzet {_signed(timing_net)}. Angka per tanggal: <i>Kalender budget harian</i>.")
-    if unpaid_open > 0:
-        todo.append(f"<b>Hari ini: chat pembeli yang Belum Bayar</b> ({fmt_idr(unpaid_open)} di bulan ini). Kalau separuhnya bayar: +{fmt_idr(unpaid_plan)}.")
-    if not push.empty:
-        todo.append(f"<b>Buat flash sale / voucher untuk {fmt_num(len(push))} produk</b> yang stoknya masih longgar dan belum diiklankan "
-                    f"(target +{fmt_idr(push_daily)}/hari, total +{fmt_idr(push_net)}). Daftar: <i>Produk untuk flash sale / voucher</i>.")
+        todo.append(f"<b>Tanggal ramai ({days}{'…' if len(peaks) > 4 else ''})</b>: naikkan sedikit budget iklan bertanda <i>Ikut kalender</i>, turunkan sedikit di hari sepi "
+                    f"(total sama, omzet {_signed(timing_net)}). Angka per tanggal: <i>Kalender budget harian</i>.")
     if limited:
         names = ", ".join(html.escape(u.nama[:32]) for u in sorted(limited, key=lambda u: -plan.cost.get(u.key, 0))[:3])
-        todo.append(f"<b>Ajukan PO/restock</b> untuk produk di {fmt_num(len(limited))} iklan yang tertahan stok ({names}{'…' if len(limited) > 3 else ''}). "
-                    "Setelah stok masuk, buka menu ini lagi agar budgetnya bisa dinaikkan.")
-    todo.append(f"<b>Tiap hari cek ROAS</b>; bila 3 hari berturut-turut di bawah {fmt_num(roas * 0.9, 1)}, turunkan iklan dengan ROAS terendah. "
-                "<b>Tiap Senin</b> unggah laporan iklan dan buka menu ini lagi.")
+        todo.append(f"<b>Ajukan PO/restock</b> untuk produk di {fmt_num(len(limited))} iklan yang tertahan stok ({names}{'…' if len(limited) > 3 else ''}); "
+                    "setelah stok masuk, buka menu ini lagi agar budgetnya bisa naik.")
+    todo.append(f"<b>Pantau ROAS harian</b>: bila 3 hari berturut-turut di bawah {fmt_num(max(eff['roas_rencana'], 1) * 0.9, 1)}, turunkan iklan dengan ROAS terendah. "
+                "Tiap Senin unggah laporan iklan dan buka menu ini lagi.")
     _box("✅ Yang dikerjakan", "<ol style='margin:0 0 0 1.1rem;padding:0'>" + "".join(f"<li style='margin-bottom:.35rem'>{t}</li>" for t in todo) + "</ol>", "#ee4d2d")
 
     # Rincian (tertutup)
     rows_cmp = []
     if rec is not None:
         rec_final = projection + rec["tambahan"] * factor
-        rows_cmp = [
-            ("ROAS", fmt_num(rec["roas"], 1), f"min. {r_txt} (hasil {fmt_num(eff['roas_rencana'], 1)})"),
-            (f"Budget ({period_days} hari)", fmt_idr(rec_budget), f"{fmt_idr(budget)} (terpakai {fmt_idr(used)})"),
-            ("Perubahan omzet dari iklan", _signed(rec["tambahan"] * factor), _signed(ads_net + timing_net)),
-            ("Chat Belum Bayar", "–", fmt_idr(unpaid_plan)),
-            ("Flash sale / voucher", "–", fmt_idr(push_net)),
-            ("Proyeksi akhir bulan", fmt_idr(rec_final), fmt_idr(final)),
-            ("% target", fmt_pct(rec_final / target * 100, 1), fmt_pct(final / target * 100, 1)),
-        ]
-    ladder, level = [{"Langkah": "Tanpa strategi (aktual + prediksi)", "Tambahan sales bersih": 0.0, "Proyeksi": projection,
-                      "% target": projection / target * 100}], projection
-    for name, value in (("Iklan dengan budget & ROAS Anda", ads_net), ("Atur budget per tanggal", timing_net),
-                        ("Chat Belum Bayar (separuh dibayar)", unpaid_plan), ("Flash sale / voucher produk berstok aman", push_net)):
-        level += value
-        ladder.append({"Langkah": name, "Tambahan sales bersih": value, "Proyeksi": level, "% target": level / target * 100})
-    with st.expander("Rincian angka: dari mana proyeksi berasal & perbandingan dengan rekomendasi ideal"):
-        show_table(pd.DataFrame(ladder), kinds={"Tambahan sales bersih": "money", "Proyeksi": "money", "% target": "pct"},
-                   column_config={"Langkah": st.column_config.TextColumn(width="medium")})
+        rows_cmp = [("ROAS", fmt_num(rec["roas"], 1), f"{r_txt} (hasil {fmt_num(eff['roas_rencana'], 1)})"),
+                    (f"Budget ({period_days} hari)", fmt_idr(rec["budget"] / run_days * period_days), f"{fmt_idr(budget)} (terpakai {fmt_idr(used)})"),
+                    ("Omzet tambahan dari iklan", _signed(rec["tambahan"] * factor), _signed(ads_net + timing_net)),
+                    ("Proyeksi akhir bulan", fmt_idr(rec_final), fmt_idr(final)),
+                    ("% target", fmt_pct(rec_final / target * 100, 1), fmt_pct(final / target * 100, 1))]
+    with st.expander("Rincian angka & perbandingan dengan rekomendasi ideal"):
+        show_table(pd.DataFrame([
+            {"Langkah": "Tanpa perubahan iklan (aktual + prediksi)", "Tambahan sales bersih": 0.0, "Proyeksi": projection},
+            {"Langkah": "Budget dibagi ulang ke iklan terbaik", "Tambahan sales bersih": ads_net, "Proyeksi": projection + ads_net},
+            {"Langkah": "Budget digeser ke tanggal ramai", "Tambahan sales bersih": timing_net, "Proyeksi": final},
+        ]).assign(**{"% target": lambda f: f["Proyeksi"] / target * 100}), kinds={"Tambahan sales bersih": "money", "Proyeksi": "money", "% target": "pct"})
         if rows_cmp:
-            show_table(pd.DataFrame(rows_cmp, columns=["Ukuran", "Rekomendasi ideal", "Strategi Anda"]))
+            show_table(pd.DataFrame(rows_cmp, columns=["Ukuran", "Rekomendasi ideal (tanpa batas stok)", "Budget dikunci"]))
         if uncapped_extra is not None and uncapped_extra - ads_net > max(0.01 * abs(uncapped_extra), 1.0):
-            st.caption(f"Tanpa memperhatikan stok, setelan yang sama akan menghitung {_signed(uncapped_extra)}; {fmt_idr(uncapped_extra - ads_net)} di antaranya "
-                       "melebihi stok tersisa, jadi tidak dihitung di sini.")
-        if remaining > 0 and need_daily > capacity:
-            st.caption(f"Ruang stok semua produk yang layak flash sale hanya {fmt_idr(capacity)}/hari, jadi sebagian kekurangan baru bisa dikejar setelah restock.")
-        st.caption(f"Asumsi: separuh Belum Bayar dibayar setelah chat; flash sale/voucher menaikkan penjualan produk maks. +{lift * 100:.0f}% dari prediksi dan "
-                   "tidak melebihi stok; kalender harian memakai pola sales bersih 12 bulan (gajian, tanggal kembar, hari dalam minggu).")
+            st.caption(f"Tanpa memperhatikan stok, setelan yang sama menghitung {_signed(uncapped_extra)}; {fmt_idr(uncapped_extra - ads_net)} di antaranya melebihi stok.")
+        st.caption(f"Tambahan omzet tiap iklan dibatasi daya dorong +{lift * 100:.0f}% dari prediksi produknya dan stok tersisa; sales bersih = nilai produk × "
+                   f"{fmt_num(factor * 100, 1)}% (setelah voucher Shopee). Kalender harian memakai pola sales bersih 12 bulan.")
 
     cols = ["Tindakan", "Iklan", "Jenis", "Budget harian sekarang", "Budget harian usulan", "Perubahan/hari", "Target ROAS Shopee", "Omzet iklan usulan/hari",
             "Tambahan omzet/hari", "Catatan"]
@@ -401,17 +428,18 @@ def _fixed_strategy(res: dict, *, rec: dict | None, rec_budget: float, target: f
     if not cal_view.empty:
         with st.expander(f"Kalender budget harian · {fmt_date(calendar['Tanggal'].min())} – {fmt_date(calendar['Tanggal'].max())}"):
             st.caption(f"Pengali hanya untuk {fmt_num(len(timing.get('ikut', ())))} iklan bertanda 'Ikut kalender' (masih bisa tumbuh); iklan lain tetap di budget mingguannya. "
-                       "Budget/hari = total semua iklan pada tanggal itu. Pengali 0,7–1,4 menjaga perubahan antarhari maks. 2× sehingga perlindungan ROAS Shopee tetap aktif.")
+                       "Pengali 0,7–1,4 menjaga perubahan antarhari maks. 2× sehingga perlindungan ROAS Shopee tetap aktif.")
             show_table(cal_view, kinds={"Budget/hari": "money", "Omzet iklan/hari": "money", "ROAS hari": "dec", "Pola hari": "dec", "Pengali budget": "dec", "Minggu": "count"})
-    if not push.empty:
-        with st.expander(f"Produk untuk flash sale / voucher · {fmt_num(len(push))} produk"):
-            st.caption("Stok masih longgar setelah penjualan biasa sampai akhir bulan, margin tidak minus, dan belum didorong iklan. "
-                       "Tambahan dikejar = target tambahan penjualan per hari (nilai produk).")
-            show_table(push, kinds={"Prediksi omzet/hari": "money", "Ruang stok/hari": "money", "Margin kontribusi": "pct", "Tambahan dikejar/hari": "money",
-                                    "Naik dari prediksi": "pct"}, column_config={"Produk": st.column_config.TextColumn(width="large")})
-    sheets = {"Jalur proyeksi": pd.DataFrame(ladder), "Perbandingan": pd.DataFrame(rows_cmp, columns=["Ukuran", "Rekomendasi ideal", "Strategi Anda"]),
-              "Budget per iklan": acts[cols] if not acts.empty else pd.DataFrame(), "Kalender harian": cal_view, "Produk flash sale": push}
-    download_excel(sheets, f"strategi_budget_tetap_{periode}.xlsx", key="xl-adt-fixed", label="Unduh strategi budget tetap")
+    sheets = {"Perbandingan": pd.DataFrame(rows_cmp, columns=["Ukuran", "Rekomendasi ideal", "Budget dikunci"]),
+              "Budget per iklan": acts[cols] if not acts.empty else pd.DataFrame(), "Kalender harian": cal_view}
+    download_excel(sheets, f"strategi_iklan_budget_dikunci_{periode}.xlsx", key="xl-adt-fixed", label="Unduh strategi")
+
+
+def _apply_need(set_key_roas: str, roas: float, set_key_budget: str, budget: float, mode_key: str, key_budget: str, set_key_lift: str, lift: float) -> None:
+    st.session_state[key_budget] = angka(round(budget))
+    if abs(float(st.session_state.get(set_key_lift, lift)) - lift) > 1e-9:
+        st.session_state[set_key_lift] = lift
+    _apply_fixed(set_key_roas, roas, set_key_budget, budget, mode_key)
 
 
 def _apply_fixed(set_key_roas: str, roas: float, set_key_budget: str, budget: float, mode_key: str) -> None:
@@ -766,11 +794,22 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         st.session_state[key_fix_roas] = roas
     if key_fix_budget not in st.session_state:
         st.session_state[key_fix_budget] = angka(round(budget))
+    key_fix_mode = f"adt-fix-mode-{periode}"
+    if st.session_state.get(key_fix_mode) not in ("Diatur sistem", "Saya tentukan"):
+        st.session_state[key_fix_mode] = "Diatur sistem"
+    auto = st.session_state[key_fix_mode] == "Diatur sistem"
     fix_budget = float(parse_rupiah(st.session_state[key_fix_budget]))
-    fix_roas = float(st.session_state[key_fix_roas])
+
+    def option(r: float, budget_daily: float | None = fix_budget / period_days, lf: float = lift, stock: bool = True) -> dict:
+        return _option_plan(base_units, members, products, contribution, weeks=weeks, gap_ads=gap_ads, roas=r, budget_daily=budget_daily, lift=lf,
+                            key=(periode, start, end), stock=stock)
+
     fixed = None
+    fix_roas = float(st.session_state[key_fix_roas])
     if gap > 0:
-        with st.spinner("Menyusun strategi dengan budget & ROAS Anda..."):
+        with st.spinner("Mencari ROAS & pembagian budget dengan omzet iklan terbesar..."):
+            if auto:
+                fix_roas = F.best_roas(lambda r: option(r)["omzet_tambahan"])
             fixed = _fixed_plan(base_units, members, products, contribution, weeks=weeks, blocks=blocks, gap_ads=gap_ads, roas=fix_roas,
                                 budget_daily=fix_budget / period_days, lift=lift, shape=_day_shape_of(orders, last), key=(periode, start, end))
     mode = st.session_state.get(mode_key)
@@ -826,14 +865,12 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     if fixed is not None:
         st.markdown(FIXED_CSS, unsafe_allow_html=True)
         with st.container(key="adt-fixed"):
-            _fixed_strategy(fixed, rec=rec, rec_budget=rec_budget, target=target, projection=projection, factor=factor, period_days=period_days, run_days=run_days,
-                            days_left=days_left, budget=fix_budget, roas=fix_roas, key_budget=key_fix_budget, key_roas=key_fix_roas, set_key_budget=key_budget,
-                            set_key_roas=key_roas, mode_key=mode_key, applied=fixed_used, products=products, contribution=contribution,
-                            unpaid_open=_open_unpaid(orders, last), start=start, end=end, periode=periode, lift=lift,
-                            uncapped_extra=eff["omzet_tambahan"] * factor if not fixed_used and abs(fix_roas - roas) < 0.01 and abs(fix_budget - budget) <= 1 else None,
-                            current_roas=sales_now / cost_now if cost_now > 0 else 0.0,
-                            option=lambda r: _option_plan(base_units, members, products, contribution, weeks=weeks, gap_ads=gap_ads, roas=r,
-                                                          budget_daily=fix_budget / period_days, lift=lift, key=(periode, start, end)))
+            _fixed_strategy(fixed, rec=rec, target=target, projection=projection, factor=factor, period_days=period_days, run_days=run_days,
+                            budget=fix_budget, roas=fix_roas, auto=auto, key_budget=key_fix_budget, key_roas=key_fix_roas, key_mode=key_fix_mode,
+                            set_key_budget=key_budget, set_key_roas=key_roas, set_key_lift=key_lift, mode_key=mode_key, applied=fixed_used,
+                            start=start, periode=periode, lift=lift, current_roas=sales_now / cost_now if cost_now > 0 else 0.0,
+                            option=option, gap_ads=gap_ads,
+                            uncapped_extra=eff["omzet_tambahan"] * factor if not fixed_used and abs(fix_roas - roas) < 0.01 and abs(fix_budget - budget) <= 1 else None)
 
     # ---------------- 2. Posisi target
     _step(2, "Posisi target & kesimpulan", f"· aktual 1–{last.day} {month_label(periode)} + prediksi sisa bulan + rencana iklan")

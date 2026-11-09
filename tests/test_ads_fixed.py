@@ -2,7 +2,6 @@ import math
 import unittest
 from datetime import date
 
-import pandas as pd
 
 from src.core import ads_fixed as F
 from src.core import ads_strategy as A
@@ -56,21 +55,16 @@ class DayPlanTest(unittest.TestCase):
         self.assertAlmostEqual(summary["tambahan"], 0, delta=1)
 
 
-class PushCandidatesTest(unittest.TestCase):
-    def test_respects_stock_room_and_skips_negative_margin(self):
-        products = pd.DataFrame({
-            "product_code": ["1", "2", "3"], "nama": ["Semen", "Cat", "Keramik"], "omzet_harian": [1_000_000, 800_000, 500_000],
-            "stok": [10, 10, 10], "stok_room": [100_000, 1_000_000, 1_000_000],
-        })
-        margin = {"1": 0.1, "2": -0.05, "3": 0.2}
-        out = F.push_candidates(products, margin, need_daily=300_000, lift=0.5)
-        self.assertNotIn("2", set(out["Kode produk"]))
-        semen = out.loc[out["Kode produk"] == "1", "Tambahan dikejar/hari"].iloc[0]
-        self.assertLessEqual(semen, 100_000 + 1)
-        self.assertAlmostEqual(out["Tambahan dikejar/hari"].sum(), 300_000, delta=1)
-        # Keramik: min(ruang stok 1 jt, 50% × 500 rb) = 250 rb; Semen: ruang stok 100 rb
-        self.assertAlmostEqual(F.push_capacity(products, margin, lift=0.5), 350_000)
-        self.assertAlmostEqual(F.push_capacity(products, margin, lift=0.5, exclude={"3"}), 100_000)
+class SearchTest(unittest.TestCase):
+    def test_best_roas_is_highest_that_keeps_max_gain(self):
+        gain = lambda r: 100.0 if r <= 12.3 else 100.0 - (r - 12.3) * 10  # noqa: E731
+        self.assertEqual(F.best_roas(gain), 12.0)
+        self.assertEqual(F.best_roas(lambda r: 50.0), A.MAX_SHOPEE_ROAS)
+
+    def test_budget_needed_or_none(self):
+        curve = lambda b: (min(b if b is not None else 1e12, 400e6) * 2, min(b if b is not None else 1e12, 400e6))  # noqa: E731
+        self.assertEqual(F.budget_needed(curve, 300e6), 150e6)
+        self.assertIsNone(F.budget_needed(curve, 900e6))
 
 
 if __name__ == "__main__":
