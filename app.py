@@ -27,18 +27,48 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def _drop_stale_src_modules() -> None:
-    """Push ke main memperbarui file tanpa me-restart proses Cloud; modul src lama di memori
-    dibuang agar app.py baru tidak bertemu modul versi lama (ImportError) dan tidak perlu Reboot."""
-    files = [*(ROOT / "src").rglob("*.py"), ROOT / "auth" / "ui.py"]
-    stamp = str(max((p.stat().st_mtime for p in files if p.exists()), default=0.0))
-    previous = os.environ.get("MITRA10_SRC_STAMP")
-    os.environ["MITRA10_SRC_STAMP"] = stamp
-    if previous == stamp:
-        return
+def _reloadable(name: str) -> bool:
     # auth.ui ikut dimuat ulang (cache FeatureStore); auth.repository tidak, agar objek User di sesi tetap dikenali.
-    for name in [m for m in sys.modules if m == "src" or m.startswith("src.") or m == "auth.ui"]:
+    return name == "src" or name.startswith("src.") or name == "auth.ui"
+
+
+class _ImportClock:
+    """Mencatat waktu impor modul src/auth.ui (sekali per proses) untuk dibandingkan dengan waktu ubah file."""
+
+    def __init__(self, loaded: dict) -> None:
+        self.loaded = loaded
+
+    def find_spec(self, name, path=None, target=None):
+        if _reloadable(name):
+            self.loaded[name] = time.time()
+        return None
+
+
+def _drop_stale_src_modules() -> None:
+    """Push ke main memperbarui file tanpa me-restart proses Cloud. Bila ada modul src/auth.ui yang filenya
+    lebih baru dari saat diimpor (atau diimpor sebelum pencatat ada), semua modul itu dibuang agar diimpor
+    ulang dari file terbaru — tanpa ImportError, tanpa FeatureStore lama, tanpa Reboot."""
+    loaded = sys.__dict__.setdefault("_mitra10_loaded_at", {})
+    if not any(isinstance(finder, _ImportClock) or type(finder).__name__ == "_ImportClock" for finder in sys.meta_path):
+        sys.meta_path.insert(0, _ImportClock(loaded))
+    files = [*(ROOT / "src").rglob("*.py"), ROOT / "auth" / "ui.py"]
+    os.environ["MITRA10_SRC_STAMP"] = str(max((p.stat().st_mtime for p in files if p.exists()), default=0.0))
+    stale = False
+    for name, module in list(sys.modules.items()):
+        path = getattr(module, "__file__", None) if _reloadable(name) else None
+        if not path:
+            continue
+        try:
+            stale = os.path.getmtime(path) >= loaded.get(name, 0.0)
+        except OSError:
+            stale = True
+        if stale:
+            break
+    if not stale:
+        return
+    for name in [m for m in sys.modules if _reloadable(m)]:
         del sys.modules[name]
+        loaded.pop(name, None)
 
 
 _drop_stale_src_modules()
