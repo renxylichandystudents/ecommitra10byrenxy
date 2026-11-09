@@ -916,15 +916,21 @@ def _unit_of(selection: pd.DataFrame, plan_units: list[Unit]) -> list[str]:
 
 
 def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
-               gap_daily: float, target_roas: float, budget_daily: float | None, lift: float = DEMAND_LIFT) -> tuple[list[Unit], Plan, pd.DataFrame]:
+               gap_daily: float, target_roas: float, budget_daily: float | None, lift: float = DEMAND_LIFT,
+               stock_cap: bool = False) -> tuple[list[Unit], Plan, pd.DataFrame]:
     """Satu alur: pemilihan produk → susunan iklan baru → rencana budget, sehingga langkah 3 & 4 selalu sejalan.
 
     Iklan tunggal baru / hasil pisah yang tidak mendapat budget di rencana dikembalikan (tetap di grup / masuk grup),
-    lalu rencana dihitung ulang. Mengembalikan (unit rencana, rencana, pemilihan + kolom budget usulan)."""
+    lalu rencana dihitung ulang. stock_cap: tambahan omzet tiap iklan juga dibatasi ruang stok produknya.
+    Mengembalikan (unit rencana, rencana, pemilihan + kolom budget usulan)."""
     selection = product_selection(members, units, products, contribution_by_code, target_roas=target_roas)
     plan_units, plan = [], Plan("Kejar target", {}, {})
     for _ in range(3):
         plan_units = [replace(u, lift=lift) for u in restructure(units, selection, products, contribution_by_code)]
+        if stock_cap:
+            from src.core.ads_fixed import stock_capped
+
+            plan_units = stock_capped(plan_units)
         plan = allocate_target(plan_units, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily)
         idle = {u.members[0] for u in plan_units if u.jenis in NEW_KINDS and u.members and plan.cost.get(u.key, 0.0) <= 0}
         if selection.empty or not idle:
