@@ -154,7 +154,11 @@ def show_target_uploader(features, *, username: str, today: date, title: bool = 
         st.info("Belum ada target bulanan. Unduh template, isi target per bulan, lalu unggah.")
     left, right = st.columns([1, 2])
     with left:
-        download_excel(T.template_frame(today), "template_target_bulanan.xlsx", key="tgt-template", label="Unduh template")
+        download_excel(T.template_frame(today, saved), "template_target_bulanan.xlsx", key="tgt-template", label="Unduh template")
+        st.caption("Template berisi Januari tahun ini s.d. Desember tahun depan; target tersimpan sudah terisi. Isi bulan yang perlu, kosongkan yang tidak berubah.")
+    flash = st.session_state.pop("tgt-flash", None)
+    if flash:
+        st.success(flash)
     round_no = int(st.session_state.get("tgt-upload-round", 0))
     upload = right.file_uploader("Unggah target bulanan (xlsx/csv)", type=["xlsx", "xls", "csv"], key=f"tgt-upload-{round_no}")
     if upload is None:
@@ -191,5 +195,7 @@ def show_target_uploader(features, *, username: str, today: date, title: bool = 
 
         bump(st.session_state)
         st.session_state["tgt-upload-round"] = round_no + 1
-        st.toast(f"{len(rows)} target bulanan tersimpan.")
+        st.session_state["tgt-flash"] = (
+            f"✓ {len(rows)} target bulanan tersimpan: " + ", ".join(T.month_label(r["periode"]) for r in rows[:12]) + ("…" if len(rows) > 12 else "") + "."
+        )
         st.rerun()

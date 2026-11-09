@@ -56,6 +56,7 @@ REPL_COLUMNS = {
     "Stock Out": "stock_out",
     "Vendor Name": "vendor",
     "Date": "tanggal",
+    "Site No": "site",
 }
 NUMERIC = ("avg_sales", "min_stock", "max_stock", "rop", "soh", "out_po", "out_tr", "over_stock_qty")
 
@@ -216,7 +217,9 @@ def parse_replenishment(raw: pd.DataFrame) -> tuple[pd.DataFrame, date | None]:
         found = re.search(r"Replenishment Date:\s*(\d{1,2} \w{3} \d{4})", title)
         if found:
             snapshot = pd.to_datetime(found.group(1), errors="coerce").date()
-    table = table.drop(columns=["tanggal"], errors="ignore").drop_duplicates("sku", keep="last").reset_index(drop=True)
+    sites = sorted({norm_sku(v) for v in table["site"].dropna()} - {"", "nan"}) if "site" in table.columns else []
+    table = table.drop(columns=["tanggal", "site"], errors="ignore").drop_duplicates("sku", keep="last").reset_index(drop=True)
+    table.attrs["sites"] = sites
     return table, snapshot
 
 

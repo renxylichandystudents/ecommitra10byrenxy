@@ -43,7 +43,7 @@ def capacity_summary(features, table: pd.DataFrame) -> tuple[str, str]:
     except Exception:
         return "–", "Data replenishment belum diunggah"
     if not view or not view.get("has_repl"):
-        return "–", "Unggah replenishment Site 10037 (Setting › Kapasitas gudang)"
+        return "–", "Unggah replenishment Site 10037 (Upload data › Stok)"
     return gudang.capacity_card(view)
 
 

@@ -1822,12 +1822,16 @@ def _source_status_map(store: LocalDataStore) -> dict[str, str]:
 
 
 TARGET_UPLOAD = "sales_target"
+REPL_UPLOAD = "replenishment_10037"
+MARGIN_UPLOAD = "margin_item"
+SPECIAL_UPLOADS = (TARGET_UPLOAD, REPL_UPLOAD, MARGIN_UPLOAD)
+STOCK_GROUP = ("Stok", ("stock", "stock_10062", "stock_10036", REPL_UPLOAD))
 UPLOAD_GROUPS = (
     ("Penjualan", ("transactions", "performance")),
     ("Iklan", ("ads_overall", "ads_auto", "ads_group", "ads_search")),
-    ("Stok", ("stock", "stock_10062", "stock_10036")),
+    STOCK_GROUP,
     ("Produk", ("product_descriptions", "competitors")),
-    ("Target", (TARGET_UPLOAD,)),
+    ("Target & margin", (TARGET_UPLOAD, MARGIN_UPLOAD)),
 )
 
 
@@ -1898,6 +1902,14 @@ def _process_upload(store, spec, files) -> dict:
                     "Pilih menu upload yang sesuai dengan kode site pada file."
                 )
                 return outcome
+            qty_column = find_columns(parsed.columns, spec).get("qty")
+            if qty_column is not None and not pd.to_numeric(parsed[qty_column], errors="coerce").fillna(0).abs().gt(0).any():
+                status.update(label="File belum disimpan", state="error")
+                outcome["message"] = (
+                    f"Semua stok di kolom '{qty_column}' bernilai 0, jadi file tidak disimpan agar stok DC tidak terbaca kosong. "
+                    "Pakai laporan stok (kolom Quantity) atau Replenishment Calculation by Date (kolom Stock On Hand)."
+                )
+                return outcome
         bar.progress(1.0, text=f"{total} dari {total} file terbaca · menyimpan data latih...")
         try:
             result, keys = _submit_upload(store, spec, files, parsed, orders)
@@ -1912,7 +1924,7 @@ def _process_upload(store, spec, files) -> dict:
     return outcome
 
 
-def show_training_uploads() -> tuple[list[str], str | None]:
+def show_training_uploads(groups=UPLOAD_GROUPS) -> tuple[list[str], str | None]:
     """Upload menu data latih. Data transaksi juga disalin ke library lama agar analisis lama tetap jalan."""
     store = DATA_STORE
     imported_keys: list[str] = []
@@ -1932,12 +1944,22 @@ def show_training_uploads() -> tuple[list[str], str | None]:
     statuses = _source_status_map(store)
     updated = _source_updated_map(store)
     done = set(st.session_state.get("upload-done", set()))
-    specs = source_menu()
+    group_keys = {key for _group, keys in groups for key in keys}
+    specs = [spec for spec in source_menu() if spec.key in group_keys]
     by_key = {spec.key: spec for spec in specs}
 
     def menu_label(spec) -> str:
         if spec == TARGET_UPLOAD:
             return target_upload_label(get_features())
+        if spec == REPL_UPLOAD:
+            from src.ui.gudang_view import replenishment_status
+
+            return f"Replenishment Site 10037 · {replenishment_status(get_features())}"
+        if spec == MARGIN_UPLOAD:
+            from src.ui.margin_data import load_margin
+
+            md = load_margin(get_features())
+            return f"File margin · periode {md.periode}" if md.ready else "File margin · Kosong"
         status = statuses.get(spec.key, "Kosong")
         if status == "Siap" and spec.key in done:
             return f"{spec.label} · ✓ Siap (baru disimpan)"
@@ -1948,22 +1970,22 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         return f"{spec.label} · {status}"
 
     selected_key = st.session_state.get("upload-source", specs[0].key)
-    if selected_key not in by_key and selected_key != TARGET_UPLOAD:
+    if selected_key not in by_key and selected_key not in (set(SPECIAL_UPLOADS) & group_keys):
         selected_key = specs[0].key
 
     def pick(group: str) -> None:
         choice = st.session_state.get(f"upload-group-{group}")
         if choice:
             st.session_state["upload-source"] = choice
-            for other, _keys in UPLOAD_GROUPS:
+            for other, _keys in groups:
                 if other != group:
                     st.session_state[f"upload-group-{other}"] = None
 
     left, right = st.columns([1.35, 3.1], gap="large")
     with left:
         st.markdown("<div class='side-section'>Menu upload</div>", unsafe_allow_html=True)
-        for group, keys in UPLOAD_GROUPS:
-            keys = [key for key in keys if key in by_key or key == TARGET_UPLOAD]
+        for group, keys in groups:
+            keys = [key for key in keys if key in by_key or key in SPECIAL_UPLOADS]
             if not keys:
                 continue
             widget = f"upload-group-{group}"
@@ -1971,6 +1993,8 @@ def show_training_uploads() -> tuple[list[str], str | None]:
                 st.session_state[widget] = selected_key if selected_key in keys else None
             st.radio(group, options=keys, format_func=lambda key: menu_label(by_key.get(key, key)), key=widget, on_change=pick, args=(group,))
         picked_key = st.session_state.get("upload-source", selected_key)
+        if picked_key not in by_key and picked_key not in group_keys:
+            picked_key = selected_key
         filled = sum(1 for status in statuses.values() if status == "Siap")
         st.caption(
             f"{filled} dari {len(specs)} menu berisi data. ✓ Siap = baru disimpan di sesi ini; "
@@ -1980,6 +2004,18 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         if picked_key == TARGET_UPLOAD:
             st.markdown("<div class='side-section'>Target sales bulanan</div>", unsafe_allow_html=True)
             show_target_uploader(get_features(), username=AUTH_USER.username, today=date.today(), title=False)
+            return imported_keys, load_error
+        if picked_key == REPL_UPLOAD:
+            from src.ui.gudang_view import replenishment_uploader
+
+            st.markdown("<div class='side-section'>Replenishment Site 10037</div>", unsafe_allow_html=True)
+            replenishment_uploader(get_features(), username=AUTH_USER.username, may_upload=can(AUTH_USER.role, "unggah_stok"), require=require)
+            return imported_keys, load_error
+        if picked_key == MARGIN_UPLOAD:
+            from src.ui.margin_data import upload_card
+
+            st.markdown("<div class='side-section'>File margin</div>", unsafe_allow_html=True)
+            upload_card(get_features(), username=AUTH_USER.username, may_edit=can(AUTH_USER.role, "ubah_data_latih"), require=require, key="upload-margin")
             return imported_keys, load_error
         selected_spec = by_key[picked_key]
         st.markdown(f"<div class='side-section'>{html.escape(selected_spec.label)}</div>", unsafe_allow_html=True)
@@ -2023,7 +2059,8 @@ def show_training_uploads() -> tuple[list[str], str | None]:
         if isinstance(saved, dict):
             if saved.get("level") == "success":
                 st.success(saved.get("message", ""))
-                st.info("Data tersimpan. Lanjut ke **Langkah 3 · Jalankan analisa** di bawah agar hasil memakai data ini.")
+                if can(AUTH_USER.role, "jalankan_analisa"):
+                    st.info("Data tersimpan. Lanjut ke **Langkah 3 · Jalankan analisa** di bawah agar hasil memakai data ini.")
             elif saved.get("message"):
                 st.error(saved["message"])
             if saved.get("warning"):
@@ -2945,7 +2982,9 @@ def render_header() -> None:
     page = route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0]
     on_setting = page == PAGE_SETTING
     show_analysis_button = "analysis" in st.session_state and page != PAGE_RESULT
-    show_training_button = page not in (PAGE_INPUT, PAGE_HOME) and not on_setting and can(AUTH_USER.role, "ubah_data_latih")
+    show_training_button = page not in (PAGE_INPUT, PAGE_HOME) and not on_setting and (
+        can(AUTH_USER.role, "ubah_data_latih") or can(AUTH_USER.role, "unggah_stok")
+    )
     show_setting_button = not on_setting and bool(setting_tabs(AUTH_USER.role))
     mitra, shopee = _logo_uri("mitra10.png"), _logo_uri("shopee.svg")
     title = "Setting" if on_setting else {PAGE_HOME: "Beranda", PAGE_INPUT: "Upload data & setelan analisa", PAGE_USERS: "Kelola user", PAGE_PASSWORD: "Ubah password"}.get(page, "Hasil analisa")
@@ -3075,6 +3114,13 @@ def _orders_from_library(keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, s
         if not rebuilt.empty:
             orders = rebuilt
     return orders, source, "library:" + ",".join(keys)
+
+
+def show_stock_uploads() -> None:
+    """Upload data khusus menu Stok untuk role yang hanya boleh mengunggah stok (Team DC)."""
+    require("upload_stok", "upload")
+    with st.container(border=True):
+        show_training_uploads(groups=(STOCK_GROUP,))
 
 
 def show_prediction_inputs() -> None:
@@ -8152,6 +8198,9 @@ with PAGE_ROOT.container(key="page-root"):
         show_homepage()
         st.stop()
 
+    if editing_input and not can(AUTH_USER.role, "ubah_data_latih") and can(AUTH_USER.role, "unggah_stok"):
+        show_stock_uploads()
+        st.stop()
     if editing_input:
         show_prediction_inputs()
 

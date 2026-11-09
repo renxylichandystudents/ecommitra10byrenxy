@@ -108,7 +108,7 @@ def parse_target_file(frame: pd.DataFrame) -> pd.DataFrame:
     rows = []
     bad = []
     for index, (raw_month, raw_target) in enumerate(zip(frame[month_col], frame[target_col]), start=2):
-        if (raw_month is None or str(raw_month).strip() in ("", "nan")) and (raw_target is None or str(raw_target).strip() in ("", "nan")):
+        if raw_target is None or str(raw_target).strip() in ("", "nan", "None"):
             continue
         key, amount = parse_month(raw_month), parse_amount(raw_target)
         if key is None or amount is None or amount < 0:
@@ -123,9 +123,16 @@ def parse_target_file(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def template_frame(start: date, months: int = 12) -> pd.DataFrame:
-    first = pd.Period(month_key(start), freq="M")
-    return pd.DataFrame({"Bulan": [str(first + i) for i in range(months)], "Target (Rp)": [0] * months})
+def template_frame(today: date, saved: dict[str, float] | None = None) -> pd.DataFrame:
+    """Januari tahun berjalan s.d. Desember tahun depan (plus bulan lama yang sudah bertarget).
+
+    Target tersimpan sudah terisi; bulan tanpa target dibiarkan kosong dan dilewati saat diunggah.
+    """
+    saved = saved or {}
+    first = pd.Period(f"{today.year}-01", freq="M")
+    keys = [str(first + i) for i in range(24)]
+    keys = sorted(set(keys) | set(saved))
+    return pd.DataFrame({"Bulan": keys, "Target (Rp)": [saved.get(key) for key in keys]})
 
 
 @dataclass(frozen=True)

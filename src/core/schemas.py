@@ -142,15 +142,17 @@ STOCK_ALIASES = {
     "stock_dc_cikupa": _alias("Stok: DC Cikupa", "Stok DC Cikupa", "DC Cikupa"),
 }
 
-# Laporan "Stock Qty and Value" ERP Mitra10 per site (DC fisik). Item No = SKU Shopee tanpa nol di depan.
+# Laporan "Stock Qty and Value" atau "Replenishment Calculation by Date" ERP Mitra10 per site (DC fisik).
+# Item No = SKU Shopee tanpa nol di depan. Di laporan replenishment stok fisik ada di kolom Stock On Hand;
+# kolom Quantity PO di laporan itu bukan stok, jadi alias exact Stock On Hand harus menang sebelum pencocokan longgar.
 DC_STOCK_ALIASES = {
     "sku": _alias("Item No", "Item Number", "Item No.", "Kode Item"),
     "product_name": _alias("Item Name", "Nama Item"),
-    "qty": _alias("Quantity", "Qty", "Jumlah Stok"),
+    "qty": _alias("Quantity", "Qty", "Jumlah Stok", "Stock On Hand", "SOH"),
     "blocked": _alias("Blocked"),
     "uom": _alias("UoM", "Satuan"),
-    "store_code": _alias("Store Code", "Site", "Kode Site"),
-    "store_name": _alias("Store Name", "Nama Site"),
+    "store_code": _alias("Store Code", "Site", "Kode Site", "Site No"),
+    "store_name": _alias("Store Name", "Nama Site", "Site Name"),
 }
 
 DESCRIPTION_ALIASES = {
@@ -244,7 +246,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         aliases=DC_STOCK_ALIASES,
         dedup_keys=("sku",),
         sku_fields=("sku",),
-        utility="Stok DC Cikupa (laporan Stock Qty and Value): sumber pengisian Site 10037.",
+        utility="Stok DC Cikupa (laporan Stock Qty and Value atau Replenishment Calculation by Date Site 10062): sumber pengisian Site 10037.",
         site_code="10062",
     ),
     "stock_10036": SourceSpec(
@@ -254,7 +256,7 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         aliases=DC_STOCK_ALIASES,
         dedup_keys=("sku",),
         sku_fields=("sku",),
-        utility="Stok DC Cipeucang (laporan Stock Qty and Value): sumber pengisian Site 10037.",
+        utility="Stok DC Cipeucang (laporan Stock Qty and Value atau Replenishment Calculation by Date Site 10036): sumber pengisian Site 10037.",
         site_code="10036",
     ),
     "product_descriptions": SourceSpec(

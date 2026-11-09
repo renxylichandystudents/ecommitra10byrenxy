@@ -135,7 +135,7 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
     )
     md = load_margin(features)
     if not md.ready:
-        st.info("File margin belum diunggah. Unggah di **Kalkulator biaya › ⚙️ Parameter biaya › File margin**.")
+        st.info("File margin belum diunggah. Unggah di **Upload data › Target & margin › File margin**.")
         return
     if orders is None or orders.empty:
         st.info("Data transaksi belum termuat: laporan per periode membutuhkan transaksi Shopee.")
@@ -148,7 +148,7 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
     active, active_at = st.session_state.get("_active_skus") or (set(), "")
     st.markdown(
         f"<div class='field-hint'>{status_line(md)} · tarif margin per SKU; volume dari transaksi periode terpilih. "
-        f"Perbarui di Kalkulator biaya › Parameter biaya.</div>",
+        f"Perbarui di Upload data › Target & margin › File margin.</div>",
         unsafe_allow_html=True,
     )
     sales = margin_report.sales_by_sku(orders, start, end)

@@ -67,12 +67,12 @@ def _read_any(upload) -> pd.DataFrame:
 
 
 def _parameter_panel(features, *, may_edit: bool, username: str, require) -> None:
-    from src.ui.margin_data import upload_card
+    from src.ui.margin_data import UPLOAD_HINT, load_margin, status_line
 
     with st.container():
         t0, t1, t2, t3 = st.tabs(["File margin", "Biaya program Shopee Mall", "Biaya administrasi kategori", "Komisi affiliate"])
         with t0:
-            upload_card(features, username=username, may_edit=may_edit, require=require, key="calc-margin")
+            st.markdown(f"<div class='field-hint'>{status_line(load_margin(features))}.<br>{UPLOAD_HINT}</div>", unsafe_allow_html=True)
             st.markdown(
                 "<div class='field-hint'>Margin kotor per SKU = Gross Margin Value ÷ Sales Include Tax (dasar harga jual di Shopee, karena potongan Shopee "
                 "dihitung dari harga itu). Urutan sumber: sheet <b>Shopee</b> → bila SKU tidak ada atau marginnya tidak wajar, sheet <b>Nasional</b> → "

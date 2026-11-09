@@ -42,7 +42,12 @@ def latest_site_stock(frame: pd.DataFrame | None) -> pd.DataFrame:
         work = work.loc[work["_submitted_at"].astype(str).eq(stamp)]
     work["sku"] = _clean_sku(work["sku"])
     work = work.loc[work["sku"].ne("")]
-    qty = pd.to_numeric(work["qty"], errors="coerce").fillna(0.0).clip(lower=0)
+    qty = pd.to_numeric(work["qty"], errors="coerce")
+    if "Stock On Hand" in work.columns:
+        # Unggahan laporan replenishment lama: qty sempat terbaca dari kolom Quantity PO.
+        soh = pd.to_numeric(work["Stock On Hand"], errors="coerce")
+        qty = soh.where(soh.notna(), qty)
+    qty = qty.fillna(0.0).clip(lower=0)
     if "blocked" in work.columns:
         blocked = work["blocked"].fillna("").astype(str).str.strip().str.lower().isin({"yes", "ya", "y", "true", "1"})
         qty = qty.where(~blocked, 0.0)

@@ -109,38 +109,54 @@ def status_line(md: MarginData) -> str:
             f"Nasional {fmt_num(len(md.nasional))} item · margin kotor toko {fmt_pct(md.store_kotor_pct, 1)}")
 
 
+UPLOAD_HINT = "Unggah file margin di <b>Upload data › Target & margin › File margin</b>."
+
+
 def upload_card(features, *, username: str, may_edit: bool, require, key: str) -> None:
     """Unggah file margin (sheet Margin Shopee & Margin Nasional). Periode yang sama akan diganti."""
     md = load_margin(features)
-    with st.container(border=True):
-        st.markdown(
-            "<div style='font-weight:700'>File margin</div>"
-            f"<div class='field-hint'>{status_line(md)}. Unggah ulang setiap ada data baru; periode yang sama akan diganti, periode lain tetap tersimpan untuk perbandingan.</div>",
-            unsafe_allow_html=True,
-        )
-        if not may_edit:
-            return
-        with st.expander("Unggah / perbarui file margin", expanded=not md.ready):
-            upload = st.file_uploader("File margin (.xlsx) berisi sheet Margin Shopee dan/atau Margin Nasional", type=["xlsx", "xls"], key=f"{key}-file")
-            if upload is None:
-                return
-            try:
-                parsed = mf.read_margin_workbook(upload.getvalue())
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"File tidak bisa dibaca: {exc}")
-                return
-            lines = []
-            for source, sheet in parsed["sheets"].items():
-                items = mf.with_pct(sheet["items"])
-                total = sheet["total"]
-                pct = total["gm_value"] / total["sales_excl"] * 100 if total["sales_excl"] else float("nan")
-                lines.append(f"- **{mf.SOURCES[source]}** (sheet {sheet['sheet']}): {fmt_num(len(items))} item terjual, penjualan {fmt_idr(total['sales_incl'])} "
-                             f"(termasuk pajak), margin kotor {fmt_idr(total['gm_value'])} = {fmt_pct(pct, 1)}; {fmt_num(int((~items['wajar']).sum()))} item marginnya tidak wajar")
-            st.markdown("\n".join(lines))
-            periode = st.text_input("Periode data", value=parsed["periode"] or datetime.now().strftime("%m/%Y"), key=f"{key}-periode",
-                                    help="Diisi otomatis dari file; ubah bila kurang tepat (mis. Oktober 2026).").strip()
-            if st.button("Simpan file margin", type="primary", key=f"{key}-save", disabled=not periode):
-                require("setting_kalkulator_biaya", "edit")
+    st.markdown(
+        f"<div class='field-hint'>{status_line(md)}. Unggah ulang setiap ada data baru; periode yang sama akan diganti, "
+        "periode lain tetap tersimpan untuk perbandingan.</div>",
+        unsafe_allow_html=True,
+    )
+    flash = st.session_state.pop(f"{key}-flash", None)
+    if flash:
+        (st.success if flash[0] == "ok" else st.error)(flash[1])
+    if not may_edit:
+        st.caption("Hanya Super user atau E-commerce specialist yang bisa mengunggah file margin.")
+        return
+    round_no = int(st.session_state.get(f"{key}-round", 0))
+    upload = st.file_uploader("File margin (.xlsx) berisi sheet Margin Shopee dan/atau Margin Nasional", type=["xlsx", "xls"], key=f"{key}-file-{round_no}")
+    if upload is None:
+        return
+    try:
+        parsed = mf.read_margin_workbook(upload.getvalue())
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"File tidak bisa dibaca: {exc}")
+        return
+    lines = []
+    for source, sheet in parsed["sheets"].items():
+        items = mf.with_pct(sheet["items"])
+        total = sheet["total"]
+        pct = total["gm_value"] / total["sales_excl"] * 100 if total["sales_excl"] else float("nan")
+        lines.append(f"- **{mf.SOURCES[source]}** (sheet {sheet['sheet']}): {fmt_num(len(items))} item terjual, penjualan {fmt_idr(total['sales_incl'])} "
+                     f"(termasuk pajak), margin kotor {fmt_idr(total['gm_value'])} = {fmt_pct(pct, 1)}; {fmt_num(int((~items['wajar']).sum()))} item marginnya tidak wajar")
+    st.markdown("\n".join(lines))
+    periode = st.text_input("Periode data", value=parsed["periode"] or datetime.now().strftime("%m/%Y"), key=f"{key}-periode-{round_no}",
+                            help="Diisi otomatis dari file; ubah bila kurang tepat (mis. Oktober 2026).").strip()
+    if st.button("Simpan file margin", type="primary", key=f"{key}-save-{round_no}", disabled=not periode):
+        require("setting_kalkulator_biaya", "edit")
+        try:
+            with st.spinner("Menyimpan file margin..."):
                 count = save_upload(features, parsed, periode, username)
-                st.toast(f"File margin {periode} tersimpan ({fmt_num(count)} baris).")
-                st.rerun()
+        except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
+            st.session_state[f"{key}-flash"] = ("err", f"File margin gagal disimpan: {exc}")
+        else:
+            st.session_state[f"{key}-flash"] = (
+                "ok",
+                f"✓ File margin periode {periode} berhasil disimpan: {fmt_num(count)} baris "
+                f"({datetime.now():%d/%m/%Y %H:%M}). Kalkulator biaya dan Laporan margin sudah memakai data ini.",
+            )
+            st.session_state[f"{key}-round"] = round_no + 1
+        st.rerun()

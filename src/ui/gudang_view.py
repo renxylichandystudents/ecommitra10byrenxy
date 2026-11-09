@@ -465,37 +465,72 @@ def _upload_cards(features, view: dict, *, may_upload: bool, username: str, requ
             mark = "✓" if age <= 1 else f"<span style='color:#dc2626'>⚠️ {age} hari lalu</span> ·"
             st.markdown(
                 f"<div class='field-hint'>{mark} Data terakhir: <b>{snap:%d/%m/%Y}</b> · {fmt_num(len(view['items']))} SKU"
-                f"<br>Unggah file baru setiap hari dari sistem replenishment.</div>",
+                "</div>",
                 unsafe_allow_html=True,
             )
         else:
-            st.markdown("<div class='field-hint'>Belum ada data. Unggah laporan replenishment Site 10037 dari sistem.</div>", unsafe_allow_html=True)
-        with st.expander("Unggah data hari ini", expanded=not loc.empty and not snap and may_upload):
-            if not may_upload or loc.empty:
-                st.caption("Unggah denah gudang dulu." if loc.empty else "Hanya Team DC atau Super user yang bisa mengunggah.")
-            st.markdown(
-                "<div class='field-hint'>File dari sistem: <i>Replenishment Calculation by Date</i> Site 10037 (Excel atau CSV). "
-                "Isinya dipakai untuk lokasi barang kecil di gondola, batas Min/Max, dan stok.</div>",
-                unsafe_allow_html=True,
-            )
-            upload = st.file_uploader("File replenishment", type=["xlsx", "xls", "csv"], key="gudang-repl-upload") if may_upload and not loc.empty else None
-            found = _read_upload(upload) if upload is not None else None
-            if found is not None:
-                repl = found["repl"]
-                if repl is None:
-                    st.error("Tabel replenishment tidak ditemukan. Pastikan file berasal dari laporan Replenishment Calculation by Date.")
-                else:
-                    snap_new = found["snapshot"] or datetime.now().date()
-                    st.markdown(f"Terbaca **{fmt_num(len(repl))} SKU** untuk tanggal **{snap_new:%d/%m/%Y}**.")
-                    if st.button("Simpan data", type="primary", key="gudang-repl-save", use_container_width=True):
-                        require("setting_kapasitas_gudang", "upload")
-                        rows = repl.assign(snapshot_date=snap_new, uploaded_by=username, uploaded_at=datetime.now())
-                        features.remove("warehouse_replenishment", {"snapshot_date": snap_new}, username=username, action="ganti:replenishment")
-                        features.insert("warehouse_replenishment", rows, username=username, action="unggah:replenishment")
-                        features.prune_snapshots("warehouse_replenishment", keep=60)
-                        st.session_state.pop("_gudang_view", None)
-                        st.toast("Data stok harian tersimpan.")
-                        st.rerun()
+            st.markdown("<div class='field-hint'>Belum ada data.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='field-hint'>{REPL_UPLOAD_HINT}</div>", unsafe_allow_html=True)
+
+
+REPL_UPLOAD_HINT = "Unggah file replenishment Site 10037 di <b>Upload data › Stok › Replenishment Site 10037</b>."
+
+
+def replenishment_status(features) -> str:
+    try:
+        dates = features.snapshot_dates("warehouse_replenishment") if features is not None else []
+    except Exception:
+        dates = []
+    return f"tersimpan {pd.Timestamp(dates[0]):%d/%m/%Y}" if dates else "Kosong"
+
+
+def replenishment_uploader(features, *, username: str, may_upload: bool, require) -> None:
+    """Unggah laporan Replenishment Calculation by Date Site 10037 (satu-satunya tempat unggah, di Upload data › Stok)."""
+    st.markdown(
+        f"<div class='field-hint'>Data terakhir: {replenishment_status(features)}. File dari sistem: <i>Replenishment Calculation by Date</i> "
+        f"Site {gudang.SITE} (Excel atau CSV), diunggah setiap hari. Isinya dipakai Kapasitas gudang dan Ringkasan "
+        "(lokasi gondola, batas Min/Max, stok, barang dalam perjalanan). Tanggal yang sama akan diganti.</div>",
+        unsafe_allow_html=True,
+    )
+    flash = st.session_state.pop("repl-flash", None)
+    if flash:
+        (st.success if flash[0] == "ok" else st.error)(flash[1])
+    if not may_upload:
+        st.caption("Hanya Super user, E-commerce specialist, atau Team DC yang bisa mengunggah.")
+        return
+    round_no = int(st.session_state.get("repl-round", 0))
+    upload = st.file_uploader("File replenishment", type=["xlsx", "xls", "csv"], key=f"gudang-repl-upload-{round_no}")
+    found = _read_upload(upload) if upload is not None else None
+    if found is None:
+        return
+    repl = found["repl"]
+    if repl is None:
+        st.error("Tabel replenishment tidak ditemukan. Pastikan file berasal dari laporan Replenishment Calculation by Date.")
+        return
+    other = [code for code in repl.attrs.get("sites", []) if code != gudang.SITE]
+    if other:
+        st.error(
+            f"File ini berisi Site {', '.join(other)}, bukan Site {gudang.SITE}. Stok DC 10062/10036 diunggah di menu "
+            "Stok DC 10062 atau Stok DC 10036."
+        )
+        return
+    snap_new = found["snapshot"] or datetime.now().date()
+    st.markdown(f"Terbaca **{fmt_num(len(repl))} SKU** untuk tanggal **{snap_new:%d/%m/%Y}**.")
+    if st.button("Simpan data", type="primary", key=f"gudang-repl-save-{round_no}"):
+        require("upload_stok", "upload")
+        try:
+            with st.spinner("Menyimpan data replenishment..."):
+                rows = repl.assign(snapshot_date=snap_new, uploaded_by=username, uploaded_at=datetime.now())
+                features.remove("warehouse_replenishment", {"snapshot_date": snap_new}, username=username, action="ganti:replenishment")
+                features.insert("warehouse_replenishment", rows, username=username, action="unggah:replenishment")
+                features.prune_snapshots("warehouse_replenishment", keep=60)
+        except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
+            st.session_state["repl-flash"] = ("err", f"Data replenishment gagal disimpan: {exc}")
+        else:
+            st.session_state["repl-flash"] = ("ok", f"✓ Replenishment Site {gudang.SITE} tanggal {snap_new:%d/%m/%Y} tersimpan ({fmt_num(len(repl))} SKU).")
+            st.session_state["repl-round"] = round_no + 1
+            st.session_state.pop("_gudang_view", None)
+        st.rerun()
 
 
 OMZET_KINDS = {

@@ -250,6 +250,14 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 - Evaluasi mencocokkan riwayat run lewat `folder_of`, jadi path laptop di `result_path` tidak mengganggu di server.
 - Langkah pengguna: buat project Supabase (Singapore) → `scripts/cek_database.py` → `scripts/pindah_ke_supabase.py` → ganti `DATABASE_URL` di Secrets Streamlit → Reboot. Panduan di `DEPLOY_GRATIS.md`.
 
+## Satu tempat unggah: stok, replenishment, margin, target (9 Nov 2026)
+
+- Semua file stok diunggah di **Upload data › Stok**: Stok Site 10037 (Shopee), Stok DC 10062, Stok DC 10036, dan **Replenishment Site 10037** (dipindah dari Setting › Kapasitas gudang; di sana kini hanya denah, status, dan analisa). Team DC mendapat izin baru `upload_stok` (level "upload") dan membuka Upload data khusus menu Stok.
+- Stok DC 10062/10036 kini menerima laporan *Replenishment Calculation by Date* (stok = kolom **Stock On Hand**, site = **Site No**). Sebelumnya stok terbaca dari kolom Quantity PO (0) sehingga Ringkasan menganggap DC kosong; unggahan lama dipulihkan otomatis dari kolom Stock On Hand yang ikut tersimpan. File stok yang semua kuantitasnya 0 ditolak. Replenishment Site 10037 menolak file site lain.
+- **File margin** dipindah ke Upload data › Target & margin › File margin; Setting › Kalkulator biaya hanya menampilkan status. Simpan kini memberi pesan tetap (berhasil + jumlah baris, atau galat) dan mengosongkan kotak unggah.
+- Template target bulanan mulai **Januari tahun berjalan s.d. Desember tahun depan** dan sudah berisi target tersimpan; baris target kosong dilewati (tidak menimpa). Simpan target memberi pesan tetap berisi bulan yang tersimpan.
+- Rumus prediksi, safety stock, dan data terkunci tidak diubah.
+
 ## Masuk aplikasi lebih ringan (9 Nov 2026)
 
 - Beranda tidak lagi membuka file hasil analisa (±8 MB). File itu dibaca saat halaman hasil dibuka.
