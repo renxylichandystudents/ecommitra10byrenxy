@@ -1,12 +1,19 @@
 # Status terbaru aplikasi
 
-Diperbarui: 7 November 2026.
+Diperbarui: 10 November 2026.
+
+## Serah terima terakhir (10 Nov 2026, 02:30)
+
+- Semua kode sudah di `main` (commit `86df002`) dan aktif di Streamlit Community Cloud; data Cloud ada di Supabase, jadi analisa & upload data bisa dilakukan dari komputer mana pun lewat app publik tanpa laptop ini.
+- Pekerjaan terakhir: fitur khusus Iklan "Kejar target hanya dengan iklan · budget dikunci" (Target ROAS = ROAS rata-rata rencana terbaik, kotak Hitungan target: ROAS dibutuhkan vs realistis). Rincian di bagian akhir file ini.
+- Setelah upload data baru di Cloud, cek angka panel Iklan (Target ROAS, ROAS dibutuhkan) dengan data terbaru; masukan pengguna berikutnya dikerjakan dari `main`.
+- File lokal `_cadangan_perubahan_lokal_5nov.patch` dan `stash@{0}` hanya cadangan di laptop; tidak dipakai.
 
 ## Titik awal
 
 - **`main` adalah satu-satunya versi acuan.** Semua pekerjaan baru (di Cursor atau di Claude) dimulai dari `main` terbaru: jalankan `git pull origin main` dulu sebelum mengubah apa pun.
 - PR #1 (`perbaikan-audit-nov2026`, 2 Nov 2026) sudah **ditutup tanpa merge**. Isinya sudah tertinggal dari `main`. Jangan dipakai lagi.
-- Setiap push ke `main` menarik kode baru ke Streamlit Community Cloud, lalu aplikasi perlu **di-Reboot** agar kode baru dipakai (`fileWatcherType = "none"`; lihat `DEPLOY_GRATIS.md`).
+- Setiap push ke `main` menarik kode baru ke Streamlit Community Cloud; `app.py` memuat ulang modul `src` yang berubah, jadi biasanya tanpa Reboot. Bila masih ada galat setelah push, Reboot lewat Manage app (lihat `DEPLOY_GRATIS.md`).
 
 ## Isi versi ini
 
