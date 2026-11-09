@@ -250,6 +250,14 @@ Belum dipakai: kolom voucher Shopee & potongan ongkir karena format angkanya amb
 - Evaluasi mencocokkan riwayat run lewat `folder_of`, jadi path laptop di `result_path` tidak mengganggu di server.
 - Langkah pengguna: buat project Supabase (Singapore) → `scripts/cek_database.py` → `scripts/pindah_ke_supabase.py` → ganti `DATABASE_URL` di Secrets Streamlit → Reboot. Panduan di `DEPLOY_GRATIS.md`.
 
+## Masuk aplikasi lebih ringan (9 Nov 2026)
+
+- Beranda tidak lagi membuka file hasil analisa (±8 MB). File itu dibaca saat halaman hasil dibuka.
+- Tanggal pesanan terakhir diingat per file bulan, jadi beranda tidak membaca ulang data transaksi pada setiap klik.
+- Huruf tidak lagi menunggu Google Fonts sebelum CSS tampilan dipakai. Font Plus Jakarta tetap dimuat tema, dengan cadangan font sistem.
+- Library model (scikit-learn, statsmodels, XGBoost) baru dimuat saat prediksi atau imputasi berjalan, bukan saat halaman login/beranda.
+- Pemeriksaan sesi login ke database dilewati selama 45 detik setelah berhasil, dan antrean cookie dipendekkan. Rumus prediksi dan safety stock tidak berubah.
+
 ## Batas kapasitas database (9 Nov 2026)
 
 - Supabase project `mitra10-prediksi` (Singapore, gratis, Data API mati) aktif di Streamlit Cloud; data laptop sudah dipindah (94 MB dari 500 MB).

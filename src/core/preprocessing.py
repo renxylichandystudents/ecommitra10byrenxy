@@ -6,14 +6,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.impute import KNNImputer, SimpleImputer
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-
-try:  # IterativeImputer is experimental in sklearn.
-    from sklearn.experimental import enable_iterative_imputer  # noqa: F401
-    from sklearn.impute import IterativeImputer
-except Exception:  # pragma: no cover - optional sklearn surface
-    IterativeImputer = None
 
 
 STOPWORDS_ID = {
@@ -127,6 +119,13 @@ def impute_numeric_frame(
     missing = int(numeric.isna().sum().sum())
     if missing == 0:
         return out, 0, "Tidak ada missing value."
+    from sklearn.impute import KNNImputer, SimpleImputer
+
+    try:  # IterativeImputer is experimental in sklearn.
+        from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+        from sklearn.impute import IterativeImputer
+    except Exception:  # pragma: no cover - optional sklearn surface
+        IterativeImputer = None
     chosen = method.lower()
     if chosen == "auto":
         ratio = missing / max(numeric.size, 1)
@@ -209,6 +208,8 @@ def scale_features(frame: pd.DataFrame, columns: list[str], *, method: str = "st
     present = [column for column in columns if column in frame.columns]
     if not present:
         return frame.copy()
+    from sklearn.preprocessing import MinMaxScaler, StandardScaler
+
     scaler = MinMaxScaler() if method == "minmax" else StandardScaler()
     out = frame.copy()
     out[present] = scaler.fit_transform(out[present].apply(pd.to_numeric, errors="coerce").fillna(0.0))

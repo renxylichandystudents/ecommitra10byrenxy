@@ -246,7 +246,7 @@ def login_gate() -> User:
 
     Refresh / tab baru membuat sesi Streamlit baru: login dipulihkan dari cookie token selama sesi
     server belum kedaluwarsa, belum dicabut (logout, ubah/reset password, ganti role, nonaktif), dan
-    user masih aktif. Role dibaca ulang dari tabel users. Query param ?page= tidak disentuh.
+    user masih aktif. Role dibaca ulang dari tabel users, paling lama setiap 45 detik. Query param ?page= tidak disentuh.
     """
     jar = session_cookie.box()
     try:
@@ -254,6 +254,24 @@ def login_gate() -> User:
     except Exception as exc:  # noqa: BLE001
         _database_down(exc)
     user = current_user()
+    token = st.session_state.get(TOKEN_KEY)
+    checked = st.session_state.get("_auth-checked")
+    # Database jauh (Supabase) tidak ditanya ulang pada setiap klik. Paling lama 45 detik.
+    if (
+        user is not None
+        and isinstance(checked, tuple)
+        and len(checked) == 2
+        and checked[1] == token
+        and time.time() - float(checked[0]) < 45
+    ):
+        session_cookie.write(jar, token, st.session_state.get(EXPIRES_KEY))
+        st.session_state.pop(LOGGED_OUT_KEY, None)
+        st.session_state.pop(session_cookie.WAIT_KEY, None)
+        if user.must_change_password:
+            _hide_chrome()
+            _password_form(repo, user, forced=True)
+            st.stop()
+        return user
     if user is not None:
         token = st.session_state.get(TOKEN_KEY)
         try:
@@ -292,6 +310,7 @@ def login_gate() -> User:
         elif token:
             st.session_state[LOGGED_OUT_KEY] = True
     if user is not None:
+        st.session_state["_auth-checked"] = (time.time(), st.session_state.get(TOKEN_KEY))
         session_cookie.write(jar, st.session_state[TOKEN_KEY], st.session_state[EXPIRES_KEY])
     elif st.session_state.get(LOGGED_OUT_KEY):
         session_cookie.clear(jar)

@@ -5,16 +5,11 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 from src.aggregate import PERIOD_SPECS, dense_item_series, next_period_start, period_label
 
-try:
-    from xgboost import XGBRegressor
-except Exception:  # pragma: no cover - optional at runtime
-    XGBRegressor = None
+_XGB = None
+_XGB_TRIED = False
 
 
 @dataclass
@@ -65,6 +60,8 @@ def _safe_mape(actual: np.ndarray, pred: np.ndarray) -> float:
 
 
 def _metrics(actual: np.ndarray, pred: np.ndarray) -> tuple[float, float, float]:
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+
     mae = float(mean_absolute_error(actual, pred))
     rmse = float(np.sqrt(mean_squared_error(actual, pred)))
     mape = _safe_mape(actual, pred)
@@ -136,6 +133,8 @@ def _moving_average(values: np.ndarray, steps: int = 1, window: int = 3) -> Mode
 
 
 def _holt_winters(values: np.ndarray, season: int, steps: int = 1) -> ModelResult | None:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
     n = len(values)
     if n < 6:
         return None
@@ -174,6 +173,8 @@ def _holt_winters(values: np.ndarray, season: int, steps: int = 1) -> ModelResul
 
 
 def _sarima(values: np.ndarray, season: int, steps: int = 1) -> ModelResult | None:
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+
     n = len(values)
     if n < 8:
         return None
@@ -234,7 +235,23 @@ def _make_lag_frame(values: np.ndarray, lags: int) -> tuple[np.ndarray, np.ndarr
     return np.asarray(rows), np.asarray(targets)
 
 
+def _xgboost_class():
+    """Muat XGBoost sekali. Di Mac tanpa libomp impornya gagal; jangan diulang tiap SKU."""
+    global _XGB, _XGB_TRIED
+    if _XGB_TRIED:
+        return _XGB
+    _XGB_TRIED = True
+    try:
+        from xgboost import XGBRegressor
+    except Exception:
+        _XGB = None
+    else:
+        _XGB = XGBRegressor
+    return _XGB
+
+
 def _xgboost_forecast(values: np.ndarray, steps: int = 1) -> ModelResult | None:
+    XGBRegressor = _xgboost_class()
     if XGBRegressor is None or len(values) < 10:
         return None
     lags = min(6, max(3, len(values) // 4))

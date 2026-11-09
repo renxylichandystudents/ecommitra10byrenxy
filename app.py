@@ -189,9 +189,6 @@ def sync_file_vault() -> None:
         st.session_state["_vault-error"] = str(exc)
 
 
-sync_file_vault()
-
-
 def show_vault_status() -> None:
     """Keterangan apakah data latih aman dari restart/redeploy server."""
     error = st.session_state.pop("_vault-error", None)
@@ -299,10 +296,8 @@ def store_frames() -> StoreFrames:
     return frames
 
 
-st.markdown(
-    """
+_APP_CSS = """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     /* Satu skala ukuran huruf untuk seluruh aplikasi; jangan menulis font-size angka langsung. */
     :root {
         --fs-xs: 0.75rem;
@@ -1501,9 +1496,7 @@ st.markdown(
         .st-key-run-history [data-testid="stColumn"] { min-width: 0 !important; }
     }
     </style>
-    """,
-    unsafe_allow_html=True,
-)
+"""
 
 
 # Pengukur waktu per tahap (hanya super user, buka dengan ?debug=waktu) untuk mencari bagian yang lambat.
@@ -1540,6 +1533,9 @@ AUTH_USER = login_gate()
 if str(st.query_params.get("debug", "")) == "waktu":
     st.session_state["_debug-waktu"] = True
 _tick("login")
+# CSS dan sinkron file baru dikirim setelah login, supaya putaran "memeriksa sesi" tidak mengulang kerja ini.
+st.markdown(_APP_CSS, unsafe_allow_html=True)
+sync_file_vault()
 get_features()
 
 TOP_N = 50
@@ -2267,15 +2263,24 @@ def daily_run_keys(latest=None) -> tuple[str, ...]:
 
 
 def newest_order_day() -> date | None:
-    """Tanggal pesanan terakhir di data transaksi tersimpan."""
+    """Tanggal pesanan terakhir di data transaksi tersimpan. Diingat per file bulan, jadi beranda tidak membaca ulang tiap klik."""
     dated = sorted(item["key"] for item in list_months() if str(item["key"])[:4].isdigit())
     if not dated:
         return None
-    orders = _orders_from_library([dated[-1]])[0]
+    key = dated[-1]
+    path = library_store.LIBRARY_DIR / f"{key}.pkl"
+    file_stamp = path.stat().st_mtime if path.exists() else 0.0
+    cached = st.session_state.get("_newest-order-day")
+    if isinstance(cached, tuple) and cached[0] == (key, file_stamp):
+        return cached[1]
+    orders = _orders_from_library([key])[0]
     if orders.empty or "order_time" not in orders.columns:
-        return None
-    stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
-    return None if pd.isna(stamp) else stamp.date()
+        found = None
+    else:
+        stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
+        found = None if pd.isna(stamp) else stamp.date()
+    st.session_state["_newest-order-day"] = ((key, file_stamp), found)
+    return found
 
 
 def run_data_until(run_id: int | None) -> date | None:
@@ -8059,7 +8064,13 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
     scroll_table(display, max_height=520)
 
 
-if not st.session_state.get("_autoload-done"):
+ROUTE_CHANGED = sync_route(st.session_state, st.query_params, allowed_sheets(AUTH_USER.role, APP_SHEETS))
+
+# Beranda tidak membuka file hasil analisa. File itu baru dibaca saat halaman hasil (atau refresh di halaman itu).
+if (
+    route_from_state(st.session_state, allowed_sheets(AUTH_USER.role, APP_SHEETS))[0] == PAGE_RESULT
+    and not st.session_state.get("_autoload-done")
+):
     # Tanda "selesai" baru dipasang setelah analisa terakhir termuat: bila rerun pertama terputus (klik / sambung ulang),
     # rerun berikutnya mencoba lagi, bukan terjebak di halaman Upload data tanpa hasil.
     if "analysis" not in st.session_state and not st.session_state.get("pending-run"):
@@ -8070,9 +8081,6 @@ if not st.session_state.get("_autoload-done"):
         if last_ok is not None and open_saved_run(last_ok.id, navigate=False):
             st.session_state.pop("editing-input", None)
     st.session_state["_autoload-done"] = True
-
-
-ROUTE_CHANGED = sync_route(st.session_state, st.query_params, allowed_sheets(AUTH_USER.role, APP_SHEETS))
 
 if "editing-input" not in st.session_state:
     st.session_state["editing-input"] = "analysis" not in st.session_state
