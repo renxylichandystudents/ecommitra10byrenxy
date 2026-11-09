@@ -56,15 +56,14 @@ class DayPlanTest(unittest.TestCase):
 
 
 class SearchTest(unittest.TestCase):
-    def test_best_roas_is_highest_that_keeps_max_gain(self):
-        gain = lambda r: 100.0 if r <= 12.3 else 100.0 - (r - 12.3) * 10  # noqa: E731
-        self.assertEqual(F.best_roas(gain), 12.0)
-        self.assertEqual(F.best_roas(lambda r: 50.0), A.MAX_SHOPEE_ROAS)
+    def test_pick_roas_takes_max_gain_even_when_not_monotone(self):
+        gains = {1: 120.0, 6: 125.0, 12: 140.0, 16: 146.0, 20: 100.0}
+        self.assertEqual(F.pick_roas(lambda r: gains.get(int(r), 0.0)), 16.0)
+        self.assertEqual(F.pick_roas(lambda r: 50.0), A.MAX_SHOPEE_ROAS)
 
-    def test_budget_needed_or_none(self):
-        curve = lambda b: (min(b if b is not None else 1e12, 400e6) * 2, min(b if b is not None else 1e12, 400e6))  # noqa: E731
-        self.assertEqual(F.budget_needed(curve, 300e6), 150e6)
-        self.assertIsNone(F.budget_needed(curve, 900e6))
+    def test_needed_roas(self):
+        self.assertAlmostEqual(F.needed_roas(sales_now_daily=119e6, gap=2_025e6, days=21, budget=250e6), (119e6 * 21 + 2_025e6) / 250e6)
+        self.assertEqual(F.needed_roas(sales_now_daily=1, gap=1, days=1, budget=0), float("inf"))
 
 
 if __name__ == "__main__":

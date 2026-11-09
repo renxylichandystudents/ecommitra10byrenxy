@@ -3,12 +3,11 @@
 Rencana iklan memakai alur yang sama dengan Kejar target (`ads_strategy.build_plan` + `ramp`), dengan dua tambahan:
 - tambahan omzet tiap iklan dibatasi juga oleh ruang stok produknya, supaya budget tidak dipakai untuk barang yang akan habis;
 - budget mingguan disebar per tanggal mengikuti pola hari (gajian, tanggal kembar, hari dalam minggu), total budget tetap.
-Pada budget terkunci, ROAS dipilih otomatis (`best_roas`) dan budget yang menutup target dicari dengan `budget_needed`.
+Pada budget terkunci, Target ROAS dipilih otomatis (`pick_roas`) dan dibandingkan dengan ROAS yang dibutuhkan target (`needed_roas`).
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import Callable
@@ -88,36 +87,15 @@ def day_plan(units: list[A.Unit], steps: list[tuple[int, A.Plan]], blocks: list[
     return frame, {"tambahan": opt_total - flat_total, "omzet_rata": flat_total, "omzet_atur": opt_total, "biaya": cost_total, "ikut": follow}
 
 
-def best_roas(gain_at: Callable[[float], float], *, lo: float = 1.0, hi: float = A.MAX_SHOPEE_ROAS, tol: float = 0.005) -> float:
-    """ROAS minimal tertinggi (kelipatan 0,5) yang masih memberi ≥ (1 − tol) × tambahan omzet terbesar pada budget terkunci.
+def pick_roas(gain_at: Callable[[float], float], *, grid: tuple[float, ...] = A.ROAS_GRID, tol: float = 0.005) -> float:
+    """Target ROAS dengan tambahan omzet iklan terbesar pada budget terkunci; bila beberapa hampir sama (selisih ≤ tol), yang tertinggi.
 
-    gain_at(roas) = tambahan omzet iklan pada budget terkunci; makin rendah ROAS minimal, tambahan tidak berkurang."""
-    top = gain_at(lo)
-    floor = top - abs(top) * tol
-    if gain_at(hi) >= floor:
-        return hi
-    a, b = lo, hi
-    while b - a > 0.25:
-        mid = (a + b) / 2
-        if gain_at(mid) >= floor:
-            a = mid
-        else:
-            b = mid
-    return max(math.floor(a * 2) / 2, lo)
+    Semua ROAS di grid dicoba karena hasilnya tidak selalu naik saat ROAS diturunkan (pemilihan produk ikut bergantung pada ROAS)."""
+    gains = {float(r): gain_at(float(r)) for r in grid if 1.0 <= r <= A.MAX_SHOPEE_ROAS}
+    top = max(gains.values())
+    return max(r for r, g in gains.items() if g >= top - abs(top) * tol)
 
 
-def budget_needed(gain_at: Callable[[float | None], tuple[float, float]], gap: float, *, step: float = 1_000_000) -> float | None:
-    """Budget (total periode) terkecil yang menutup `gap` dengan iklan; None bila iklan berapa pun tidak cukup.
-
-    gain_at(budget) = (tambahan omzet, biaya terpakai); budget None = tanpa batas."""
-    top, absorbed = gain_at(None)
-    if top < gap - 1:
-        return None
-    a, b = 0.0, max(absorbed, step)
-    while b - a > step:
-        mid = (a + b) / 2
-        if gain_at(mid)[0] >= gap - 1:
-            b = mid
-        else:
-            a = mid
-    return math.ceil(b / step) * step
+def needed_roas(*, sales_now_daily: float, gap: float, days: int, budget: float) -> float:
+    """ROAS rata-rata seluruh budget agar target tercapai: (omzet iklan sekarang × hari + kekurangan omzet) ÷ budget."""
+    return (sales_now_daily * days + gap) / budget if budget > 0 else float("inf")
