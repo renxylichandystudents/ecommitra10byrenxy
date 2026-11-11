@@ -355,14 +355,15 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         st.info(f"Snapshot prediksi belum bisa dibaca: {exc}")
         return
     lines = orders.assign(sku=orders["sku"].astype(str))
-    last_stamp = pd.to_datetime(lines["order_time"]).max()
-    # Hari yang belum penuh (hari ini, atau data belum sampai 23:00) tidak dinilai agar % tidak terlihat anjlok.
+    every = orders_all if orders_all is not None else orders
+    # Hari penuh terakhir dari seluruh pesanan, sama dengan Pantauan harian: hari ini dan data < 23:00 belum dinilai.
+    last_stamp = pd.to_datetime(every["order_time"], errors="coerce").max()
     last = complete_through(last_stamp, date.today())
     partial_note = ""
     if last < last_stamp.date():
-        partial_note = (f" Data {fmt_date(last_stamp.date())} baru sampai pukul {last_stamp:%H:%M} (belum satu hari penuh), "
-                        f"jadi yang dinilai {fmt_date(last)}.")
-    every = orders_all if orders_all is not None else orders
+        partial_note = (f" Data {fmt_date(last_stamp.date())} sampai pukul {last_stamp:%H:%M}; "
+                        + ("hari ini masih berjalan" if last_stamp.date() >= date.today() else "belum satu hari penuh")
+                        + f", jadi yang dinilai s.d. {fmt_date(last)}.")
     unpaid = unpaid_by_day(every)
     shape = _day_shape(every, last)
     sold = sold_lines(every)
@@ -547,7 +548,16 @@ def _with_target(features, month: pd.DataFrame, frame_all: pd.DataFrame, last: d
     factor = net_factor(net, product, first, last, last)
     pola = month["pola"].astype(float)
     month["target"] = target * pola / pola.sum()
-    return month, {"target": float(target), "ratio": ratio, "factor": factor}
+    projection = None
+    try:
+        from src.ui.month_track_view import month_state
+
+        state = month_state(features, frame_all, first)
+        if state and state.get("cutoff") == last:
+            projection = float(state["summary"]["proyeksi"])
+    except Exception:
+        projection = None
+    return month, {"target": float(target), "ratio": ratio, "factor": factor, "proyeksi": projection}
 
 
 def _month_chart(month: pd.DataFrame, last: date, target: dict | None = None) -> None:
@@ -638,11 +648,13 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Prediksi omzet": pred_month, "Aktual SKU": act, "Belum Bayar": pend,
         "Selisih": projection - pred_month, "% capaian": act / pred_month * 100 if pred_month else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred_month * 100 if pred_month else np.nan,
-        "Sumber prediksi": "aktual s.d. kemarin + prediksi sisa",
+        "Sumber prediksi": f"aktual s.d. {fmt_date(last)} + prediksi sisa",
     }
     goal_month = float(month["target"].fillna(0).sum())
     factor = float(target["factor"]) if target else 1.0
     net_projection = net_done + float(month.loc[~done, "prediksi"].fillna(0).sum()) * factor
+    if target and target.get("proyeksi") is not None:
+        net_projection = float(target["proyeksi"])
     full.update({"Target harian": goal_month, "Sales bersih toko": net_done,
                  "% target": net_projection / goal_month * 100 if goal_month else np.nan})
     if target:

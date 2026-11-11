@@ -53,6 +53,13 @@ Tahap 5 (sampel layar Rekomendasi › Iklan "budget dikunci" dari pengguna). Sat
 - Kartu Kebutuhan menampilkan "= unit utuh + SS"; kotak safety stock menampilkan service level per kelas ABC dan r kalibrasi.
 - Verifikasi Iklan (data lokal, campaign 11–30 Nov): rekomendasi ROAS 11 / Rp 212 jt bila dipakai sebagai setelan memberi hasil sama (biaya Rp 211,7 jt, +Rp 345,8 jt, 72,17%); ROAS rata-rata tiap minggu ≥ target; tidak ada iklan yang menjual melebihi ruang stok. Teks diperbaiki: "ROAS dibutuhkan" memakai omzet iklan susunan baru (26,9; dulu 27,4 dari semua iklan berjalan), jumlah iklan tanpa prediksi dipisah dari yang tertahan stok (23 + 10, dulu "33 tanpa prediksi"), batas tambahan omzet ditulis sebagai 50% × prediksi.
 
+Tahap 6 (sampel pengguna 11 Nov 23:45, data s.d. 11/11 ≥ 23:00):
+- **Hari penuh terakhir satu aturan** (`month_track_view.full_day_cutoff` = `pred_actual.complete_through`): hari ini tidak pernah dihitung penuh, hari data < 23:00 juga tidak. Dulu Pantauan menghitung 11/11 penuh (data ≥ 23:00) sementara breakdown berhenti di 10/11 → aktual s.d. "kemarin" Rp 1.421 jt vs Rp 1.036 jt, target 11/11 Rp 478 jt vs Rp 486 jt, proyeksi 75,0% vs 74,7%.
+- Breakdown Prediksi vs aktual mengambil hari penuh dari seluruh pesanan (sama dengan Pantauan) dan baris Total bulan memakai proyeksi Pantauan (`month_state`), jadi angkanya identik.
+- **Label "Prediksi Nov 2026" diganti "Prediksi 30 hari (11 Nov – 10 Des 2026)"** (`format_period_label`): jendela prediksi 30 hari mulai hari ini, bukan bulan kalender; dulu mudah dikira sama dengan proyeksi akhir November.
+- Kartu Ringkasan "Prediksi sales hari ini · All SKU" = laju harian rata-rata; kini menulis pola hari ini (mis. 11.11 ×2,93 → ±Rp 360 jt sales produk), yang × faktor bersih = kartu Hari ini di Pantauan.
+- Teks "Aktual s.d. kemarin" menyebut tanggal hari penuh terakhir bila bukan kemarin.
+
 Ditemukan, belum diubah (perlu keputusan):
 - Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode) — pilihan desain; menyamakannya butuh dua kali jalan model.
 - Level terkini, fitur lag GBM, dan Prophet membaca hari stok kosong sebagai 0 (MA28, ES, target GBM, dan data uji sudah melewatinya).

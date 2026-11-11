@@ -192,6 +192,29 @@ def test_service_level_per_abc_class():
     assert out.loc["A", "target_layanan_pct"] == 99.0
 
 
+def test_full_day_cutoff_one_rule():
+    from datetime import date
+
+    from src.core.pred_actual import complete_through
+    from src.ui.month_track_view import full_day_cutoff
+
+    late = pd.Timestamp("2026-11-11 23:40")
+    assert full_day_cutoff(late, date(2026, 11, 11)) == date(2026, 11, 10)
+    assert full_day_cutoff(late, date(2026, 11, 12)) == date(2026, 11, 11)
+    assert full_day_cutoff(pd.Timestamp("2026-11-08 08:29"), date(2026, 11, 11)) == date(2026, 11, 7)
+    for stamp, today in ((late, date(2026, 11, 11)), (late, date(2026, 11, 12))):
+        assert full_day_cutoff(stamp, today) == complete_through(stamp, today)
+
+
+def test_prediction_window_label_is_not_calendar_month():
+    from datetime import date
+
+    from src.core.periods import format_period_label
+
+    assert format_period_label("prediksi", date(2026, 11, 11)) == "Prediksi 30 hari (11 Nov – 10 Des 2026)"
+    assert format_period_label("prediksi", date(2026, 12, 15)) == "Prediksi 31 hari (15 Des 2026 – 14 Jan 2027)"
+
+
 def test_range_target_follows_day_pattern():
     from datetime import date
 

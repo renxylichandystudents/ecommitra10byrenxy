@@ -32,10 +32,13 @@ def _daily_series(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, object]:
     return M.daily_net_sales(lines, lo, hi), M.daily_product_sales(lines, lo, hi), stamps.max()
 
 
-def full_day_cutoff(last_stamp) -> date:
-    """Hari penuh terakhir: hari data terakhir hanya dihitung penuh bila datanya sampai ≥ 23:00."""
-    stamp = pd.Timestamp(last_stamp)
-    return stamp.date() if stamp.hour >= 23 else stamp.date() - timedelta(days=1)
+def full_day_cutoff(last_stamp, today: date | None = None) -> date:
+    """Hari penuh terakhir: hari data terakhir dihitung penuh bila sudah lewat (sebelum hari ini) dan datanya sampai ≥ 23:00.
+
+    Satu aturan untuk semua halaman (Pantauan harian, breakdown Prediksi vs aktual, pencapaian target, Ringkasan)."""
+    from src.core.pred_actual import complete_through
+
+    return complete_through(last_stamp, today or date.today())
 
 
 def target_pattern(orders_all: pd.DataFrame | None):
@@ -43,7 +46,7 @@ def target_pattern(orders_all: pd.DataFrame | None):
     if orders_all is None or orders_all.empty:
         return None, None
     stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max()
-    key = (len(orders_all), str(stamp))
+    key = (len(orders_all), str(stamp), date.today())
     cache = st.session_state.get("_target-pattern")
     if isinstance(cache, tuple) and cache[0] == key:
         return cache[1]
@@ -80,9 +83,9 @@ def month_state(features, orders_all: pd.DataFrame, first: date | None = None, *
     if last_stamp is None:
         return {}
     data_last = last_stamp.date()
-    cutoff = full_day_cutoff(last_stamp)
-    first = first or (cutoff + timedelta(days=1)).replace(day=1)
     today = today or date.today()
+    cutoff = full_day_cutoff(last_stamp, today)
+    first = first or (cutoff + timedelta(days=1)).replace(day=1)
     month_days = calendar.monthrange(first.year, first.month)[1]
     last_day = first + timedelta(days=month_days - 1)
     current = first == (cutoff + timedelta(days=1)).replace(day=1)
@@ -162,7 +165,7 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
     if last_stamp is None:
         st.info("Belum ada data pesanan.")
         return
-    cutoff = full_day_cutoff(last_stamp)
+    cutoff = full_day_cutoff(last_stamp, today)
     months = []
     probe = (cutoff + timedelta(days=1)).replace(day=1)
     for _ in range(3):
@@ -180,7 +183,7 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
     month_cutoff, running, data_last = state["cutoff"], state["running"], state["data_last"]
 
     _cards(summary, month_cutoff, today, running, data_last, target, current)
-    _target_alert(summary, target, current)
+    _target_alert(summary, target, current, month_cutoff, today)
     if current and summary["hari_promo_sisa"]:
         bits = [f"{d:%d/%m} {lbl} (pola ×{_dec(profile.factor(d))})" for d, lbl in summary["hari_promo_sisa"][:8]]
         st.markdown(f"<div class='field-hint'>Hari promo tersisa bulan ini: {html.escape(' · '.join(bits))}. "
@@ -232,7 +235,7 @@ def _cards(summary: dict, cutoff: date, today: date, running: float | None, data
     if y:
         pred, act = y.get("prediksi"), y.get("aktual")
         hint = (f"Prediksi {fmt_idr(pred)} · capaian {fmt_pct(y.get('capaian_pct'), 0)} {_status_chip(y.get('status', ''))}"
-                if pd.notna(pred) else "Belum ada analisa sebelum tanggal ini")
+                if pd.notna(pred) else "Belum ada analisa tersimpan sebelum tanggal ini (tabel Prediksi vs aktual memakai uji mundur)")
         if y.get("keterangan"):
             hint += f"<br>{html.escape(y['keterangan'])}"
         card(cols[0], label_y, fmt_idr(act), hint=hint)
@@ -265,7 +268,8 @@ def _cards(summary: dict, cutoff: date, today: date, running: float | None, data
         card(cols[3], "Proyeksi akhir bulan" if current else "Aktual akhir bulan", fmt_idr(summary["proyeksi"]), hint="Target bulan ini belum diisi (menu Target penjualan)")
 
 
-def _target_alert(summary: dict, target: float | None, current: bool) -> None:
+def _target_alert(summary: dict, target: float | None, current: bool, cutoff: date, today: date) -> None:
+    upto = "kemarin" if cutoff == today - timedelta(days=1) else f"{cutoff:%d/%m} (hari penuh terakhir)"
     if not target:
         st.info("Target omzet bulan ini belum diisi, jadi kekurangan target belum bisa dihitung. Isi target di menu Target penjualan.")
         return
@@ -279,14 +283,14 @@ def _target_alert(summary: dict, target: float | None, current: bool) -> None:
         need, fc = summary["perlu_harian"], summary["prediksi_harian_sisa"]
         st.error(
             f"⚠️ Proyeksi akhir bulan {fmt_idr(summary['proyeksi'])} masih **kurang {fmt_idr(summary['kurang'])}** dari target {fmt_idr(target)}. "
-            f"Aktual s.d. kemarin {fmt_idr(mtd)} = {fmt_pct(pace, 0)} dari target berjalan {fmt_idr(tmtd)}. "
+            f"Aktual s.d. {upto} {fmt_idr(mtd)} = {fmt_pct(pace, 0)} dari target berjalan {fmt_idr(tmtd)}. "
             f"Sisa {summary['sisa_hari']} hari perlu rata-rata **{fmt_idr(need)}/hari**, prediksi hanya {fmt_idr(fc)}/hari "
             f"(kurang {fmt_idr(need - fc)}/hari). Jalankan Top 5 tindakan di bawah hari ini.",
             icon=":material/warning:",
         )
     else:
         st.success(f"Proyeksi akhir bulan {fmt_idr(summary['proyeksi'])} sudah di atas target {fmt_idr(target)} "
-                   f"(aktual s.d. kemarin {fmt_pct(pace, 0)} dari target berjalan). Jaga stok SKU utama menjelang hari promo.")
+                   f"(aktual s.d. {upto} {fmt_pct(pace, 0)} dari target berjalan). Jaga stok SKU utama menjelang hari promo.")
 
 
 def _recent_sku(orders_all: pd.DataFrame, start: date, end: date, prior_days: int = 28) -> pd.DataFrame:

@@ -61,7 +61,7 @@ class DecisionTableTests(unittest.TestCase):
         self.assertEqual([g.prefix for g in groups], ["d", "m", "p"])
         self.assertEqual(groups[2].label, "Sisa Kuartal IV 2026 (Okt–Des)")
         self.assertEqual(groups[2].days, (date(2026, 12, 31) - TODAY).days + 1)
-        self.assertEqual(groups[1].label, "Prediksi Okt 2026")
+        self.assertEqual(groups[1].label, "Prediksi 30 hari (31 Okt – 29 Nov 2026)")
         self.assertEqual(groups[1].days, 30)
 
     def test_month_forecast_not_below_actual_and_need_formula(self) -> None:
@@ -271,7 +271,7 @@ class PeriodLabelTests(unittest.TestCase):
         from src.core.periods import format_period_label, last_full_month, prediction_window, same_target
 
         self.assertEqual(prediction_window("bulan", date(2026, 11, 2)), (date(2026, 11, 2), date(2026, 12, 1)))
-        self.assertEqual(format_period_label("prediksi", date(2026, 11, 2)), "Prediksi Nov 2026")
+        self.assertEqual(format_period_label("prediksi", date(2026, 11, 2)), "Prediksi 30 hari (2 Nov – 1 Des 2026)")
         self.assertEqual(format_period_label("aktual_bulan", date(2026, 10, 1)), "Aktual Okt 2026")
         self.assertEqual(format_period_label("aktual_hari", date(2026, 10, 27)), "Aktual 27 Okt 2026")
         self.assertEqual(format_period_label("bulan_lalu", date(2026, 10, 2)), "Tanggal sama bulan lalu (2 Okt 2026)")

@@ -80,13 +80,15 @@ def same_day_last_month(day: date) -> date:
 def format_period_label(kind: str, day: date) -> str:
     """Label eksplisit pengganti "Bulan ini", "Kemarin", "Bulan lalu".
 
-    - "prediksi": "Prediksi Nov 2026" (awal jendela prediksi)
+    - "prediksi": "Prediksi 30 hari (11 Nov – 10 Des 2026)" (jendela prediksi bulan, bukan bulan kalender)
     - "aktual_bulan": "Aktual Okt 2026" (bulan penuh terakhir)
     - "aktual_hari": "Aktual 27 Okt 2026" (hari terakhir transaksi)
     - "bulan_lalu": "Tanggal sama bulan lalu (2 Okt 2026)"
     """
     if kind == "prediksi":
-        return f"Prediksi {month_year(day)}"
+        lo, hi = prediction_window("bulan", day)
+        head = f"{lo.day} {MONTHS_SHORT[lo.month - 1]}" + (f" {lo.year}" if lo.year != hi.year else "")
+        return f"Prediksi {(hi - lo).days + 1} hari ({head} – {short_date(hi)})"
     if kind == "aktual_bulan":
         return f"Aktual {month_year(day)}"
     if kind == "aktual_hari":

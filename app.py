@@ -7898,6 +7898,26 @@ def _group_totals(table: pd.DataFrame, period: str, day: date) -> dict[str, tupl
 SS_DEFINITION_MOVEMENT = "safety stock adalah nilai cadangan yang harus disiapkan agar tidak kehabisan stok"
 
 
+def _today_pattern_hint(orders_all: pd.DataFrame | None, today: date, flat_sales: float) -> str:
+    """Pola hari ini (sama dengan Pantauan harian) agar laju rata-rata bisa dicocokkan dengan prediksi per tanggal."""
+    if orders_all is None or orders_all.empty or flat_sales <= 0:
+        return ""
+    try:
+        from src.core.month_track import day_label
+        from src.ui.month_track_view import full_day_cutoff
+        from src.ui.prediksi_top import _day_shape
+
+        stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max()
+        mult = float(_day_shape(orders_all, full_day_cutoff(stamp, today))(today))
+    except Exception:
+        return ""
+    if not np.isfinite(mult) or abs(mult - 1.0) < 0.005:
+        return ""
+    label = day_label(today) or "pola hari"
+    return (f"<br>{html.escape(label)} ×{format_number(mult, 2)} → ±{html.escape(format_idr(flat_sales * mult))} sales produk "
+            "(Pantauan harian memakai pola ini, dalam sales bersih)")
+
+
 def show_analysis_movement(
     stock: pd.DataFrame,
     current_meta: dict,
@@ -7910,6 +7930,7 @@ def show_analysis_movement(
     service: int = 0,
     source_key: str = "",
     used_default_lead: bool = True,
+    orders_all: pd.DataFrame | None = None,
 ) -> pd.DataFrame | None:
     """R3 (kartu pergerakan per periode) dan R4 (Pergerakan Top 50)."""
     today = date.today()
@@ -7950,7 +7971,7 @@ def show_analysis_movement(
             if group.extra:
                 st.markdown(f"<div class='field-hint' style='margin-top:.4rem'><b>{html.escape(group.label)}</b></div>", unsafe_allow_html=True)
             cards = st.columns(4)
-            name = "hari ini" if group.prefix == "d" else (month_year(today) if group.prefix == "m" else group.label)
+            name = "hari ini" if group.prefix == "d" else (group.label.removeprefix("Prediksi ") if group.prefix == "m" else group.label)
             is_day = group.prefix == "d"
             main_money = metric == "sales"
             main_now = sales_now if main_money else qty_now
@@ -8005,11 +8026,15 @@ def show_analysis_movement(
             if all_sku is not None and group.prefix in {"d", "m"} and f"{group.prefix}_sales" in all_sku.columns:
                 exp_col = f"{group.prefix}_sales_exp"
                 total_sales = float(all_sku[exp_col].sum() if exp_col in all_sku.columns else all_sku[f"{group.prefix}_sales"].sum())
+                pattern_html = ""
+                if is_day:
+                    pattern_html = _today_pattern_hint(orders_all if orders_all is not None else orders, today, total_sales)
                 cards[3].markdown(
                     "<div class='stat-card'>"
                     f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
                     f"<div class='readable-metric-value'>{html.escape(format_idr(total_sales))}</div>"
-                    f"<div class='metric-hint'>{format_number(len(all_sku), 0)} SKU dianalisa</div>"
+                    f"<div class='metric-hint'>{format_number(len(all_sku), 0)} SKU dianalisa"
+                    + (" · laju harian rata-rata" if is_day else " · sales produk, mulai hari ini") + f"{pattern_html}</div>"
                     "</div>",
                     unsafe_allow_html=True,
                 )
@@ -8663,6 +8688,7 @@ with PAGE_ROOT.container(key="page-root"):
                 service=applied_service,
                 source_key=str(stored.get("source_key") or ""),
                 used_default_lead=lead_default,
+                orders_all=orders_all,
             )
 
         st.subheader("Ringkasan total Top 50")
