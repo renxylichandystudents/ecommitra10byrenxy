@@ -10,7 +10,7 @@ import pandas as pd
 
 from src.core.dc_stock import DC_SITES
 from src.core.decision_table import build_decision_table
-from src.core.inventory import stock_zero_duration
+from src.core.inventory import lead_time_days, stock_zero_duration
 from src.core.labels import ads_by_sku, product_labels
 from src.core.performance import clean_performance
 from src.core.segmentation import abc_xyz_segments, label_productivity, product_feature_table
@@ -129,7 +129,7 @@ def enrich_catalog(
     if catalog is None or catalog.empty:
         return catalog
     zero_frame, _ = zero_since_map(frames.stock, today)
-    lead = float(params.get("lead_time", {}).get("lokal_hari", 7))
+    lead = lead_time_days(params)
     table = build_decision_table(
         catalog,
         period=period,

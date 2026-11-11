@@ -310,7 +310,7 @@ def safety_stock_box(
         else:
             formula = (
                 f"Z × σ permintaan harian × √(lead time + periode tinjau) = {fmt_num(z, 2) if z is not None else 'Z'} × σ × √({fmt_num(lead_days or 0)} + "
-                f"{fmt_num(review_days or 0)}) = √{fmt_num(exposure)} hari, dibulatkan ke unit terdekat per SKU"
+                f"{fmt_num(review_days or 0)}) = √{fmt_num(exposure)} hari, dibulatkan ke atas per SKU"
             )
         cols = st.columns(4)
         card(cols[0], "Service level", f"{fmt_num(service or 0)}%", hint=f"Z = {fmt_num(z, 2)}" if z is not None else "")

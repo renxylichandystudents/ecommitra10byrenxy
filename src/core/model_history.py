@@ -154,9 +154,12 @@ def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataF
     top = best.get("top50_tepat")
     add("Mengenali produk terlaris", "≥ 35 dari 50", "–" if top is None else f"{top:.1f}".replace(".", ","), top >= 35 if top is not None else None,
         "Top 50 prediksi yang benar masuk Top 50 aktual: penting untuk prioritas restock & iklan.")
-    service = (record.get("simulasi_ss") or {}).get("tingkat_layanan_pct")
-    add("Tingkat layanan simulasi", "≥ 90%", pct(service), service >= 90 if service is not None else None,
-        "Stok = prediksi + safety stock cukup memenuhi permintaan aktual pada lipatan uji.")
+    sim = record.get("simulasi_ss") or {}
+    service = sim.get("tingkat_layanan_pct")
+    goal = float(sim.get("target_layanan_pct") or 90)
+    add("Tingkat layanan simulasi", f"≥ {goal:.0f}%".replace(".", ","), pct(service), service >= goal if service is not None else None,
+        "Stok = prediksi + safety stock (rumus SS produksi" + (f": {sim['rumus_ss']}" if sim.get("rumus_ss") else "")
+        + ") cukup memenuhi permintaan aktual pada lipatan uji; target = tingkat layanan yang dipakai SS.")
     folds = len(record.get("fold_dates") or [])
     add("Jumlah lipatan walk-forward", "≥ 3", str(folds), folds >= 3, "Lipatan lebih banyak = hasil uji lebih bisa dipercaya (tidak bergantung satu bulan).")
     if history is not None and len(history) >= 2 and history["WAPE (%)"].notna().sum() >= 2:

@@ -190,11 +190,18 @@ def build_snapshot(table, *, orders, orders_all, frames, params, today, period, 
     mc_rows = []
     if not top50.empty and "m_status" in top50.columns:
         sigma_map = stock.set_index("item_key")["sigma_qty"].to_dict() if isinstance(stock, pd.DataFrame) and "sigma_qty" in stock.columns else {}
+        from src.core.inventory import LMAX_PERCENTILE_Z, lead_time_days
+
         lead = params.get("lead_time", {})
+        lead_mean = lead_time_days(params)
+        if bool(lead.get("impor_aktif", False)):
+            lead_sigma = max(float(lead.get("impor_maks_hari", 90) or 0) - lead_mean, 0.0) / LMAX_PERCENTILE_Z
+        else:
+            lead_sigma = float(lead.get("lokal_sigma_hari", 0) or 0)
         for _, row in top50.head(10).iterrows():
             mc = monte_carlo_stock_scenarios(
                 demand_mean=float(row["pred_harian"]), demand_sigma=float(sigma_map.get(row["item_key"], row["pred_harian"] * 0.5)),
-                lead_time_mean=float(lead.get("lokal_hari", 7)), lead_time_sigma=float(lead.get("lokal_sigma_hari", 0) or 0),
+                lead_time_mean=lead_mean, lead_time_sigma=lead_sigma,
                 current_stock=float(row["stok"]) if bool(row.get("ada_data_stok", False)) else 0.0, safety_stock=float(row["ss"]),
             ).set_index("Skenario")
             mc_rows.append({"SKU": row["sku"], "Produk": row["product_name"], "Stok": row["stok"] if bool(row.get("ada_data_stok", False)) else None,

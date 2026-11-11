@@ -115,7 +115,8 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
                 contrib.setdefault(code, []).append((k / 100 - fee.shopee_fees(inp) / price, max(sales, 1.0)))
             stok = float(r.get("stok", 0) or 0) if r.get("ada_data_stok", False) else np.nan
             if stok == stok:
-                spare = max(stok - float(r.get("pred_harian", 0) or 0) * days_left, 0.0)
+                guard = float(r.get("ss", r.get("safety_stock", 0)) or 0)
+                spare = max(stok - float(r.get("pred_harian", 0) or 0) * days_left - (guard if guard == guard else 0.0), 0.0)
                 room[code] = room.get(code, 0.0) + spare * price / max(days_left, 1)
             rows.append({"product_code": code, "nama": r.get("product_name", ""), "omzet_harian": float(r.get("pred_harian", 0) or 0) * price, "stok": stok})
     contribution = {c: sum(v * w for v, w in vals) / sum(w for _v, w in vals) for c, vals in contrib.items()}

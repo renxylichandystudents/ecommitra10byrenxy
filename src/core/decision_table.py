@@ -122,7 +122,7 @@ def build_decision_table(
         out["harga_bersih"] = out["harga_bersih"].fillna(fallback)
     out["harga_bersih"] = out["harga_bersih"].fillna(0.0)
     ss = pd.to_numeric(out.get("safety_stock", 0), errors="coerce").fillna(0.0).clip(lower=0)
-    out["ss"] = np.ceil(ss)
+    out["ss"] = np.ceil(ss - 1e-9)
 
     mtd = month_to_yesterday(orders, today) if orders is not None else pd.DataFrame()
     if not mtd.empty:

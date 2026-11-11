@@ -48,7 +48,6 @@ SEGMENT_KEY = "_model_per_segmen"
 MODEL_SEGMENT = "Ensemble per segmen"
 MIN_TRAIN_DAYS = 35
 BIAS_FACTOR_LIMITS = (0.5, 1.5)
-SERVICE_Z = 1.645
 SERVICE_LEAD_DAYS = 7
 
 
@@ -228,12 +227,26 @@ def evaluate_horizon(
     return record
 
 
+def production_ss_settings() -> tuple[float, float, float, float]:
+    """(tingkat layanan %, Z, lead time, periode tinjau) yang dipakai SS produksi: tingkat layanan rekomendasi
+    periode Bulan dan lead time lokal + review dari config/business_params.yaml (SS = Z × σ × √(L + R))."""
+    from src.core.config import default_params
+    from src.core.inventory import service_level_to_z
+    from src.core.service_level import recommended_service_level
+
+    params = default_params()
+    lead = params.get("lead_time", {})
+    pct = float(recommended_service_level("bulan", params).pct)
+    return pct, service_level_to_z(pct), float(lead.get("lokal_hari", SERVICE_LEAD_DAYS) or 0), float(lead.get("review_hari", 0) or 0)
+
+
 def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], ensemble_pairs, days: int) -> dict:
-    """Tingkat layanan simulasi: stok = prediksi ensemble + SS (Z 95%, lead time 7 hari)."""
+    """Tingkat layanan simulasi: stok = prediksi ensemble + SS dengan Z dan √(L + R) yang sama dengan SS produksi."""
+    pct, z, lead_days, review_days = production_ss_settings()
     served, total, censored_caught, censored_total = 0, 0, 0, 0
     for cut, (actual, pred) in zip(cutoffs, ensemble_pairs):
         sigma = np.nanstd(matrix.values[:, max(cut - 28, 0) : cut], axis=1)
-        ss = SERVICE_Z * np.nan_to_num(sigma) * np.sqrt(SERVICE_LEAD_DAYS)
+        ss = np.ceil(z * np.nan_to_num(sigma) * np.sqrt(lead_days + review_days))
         active = (actual > 0) | (pred > 0)
         served += int(((pred + ss) >= actual)[active].sum())
         total += int(active.sum())
@@ -246,6 +259,8 @@ def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], ensemble_pairs
         "sku_lipatan": total,
         "stok_kosong_tertangkap_pct": _num(censored_caught / censored_total * 100) if censored_total else None,
         "sku_stok_kosong": censored_total,
+        "target_layanan_pct": pct,
+        "rumus_ss": f"Z {z:.2f} × σ 28 hari × √({lead_days:g} + {review_days:g})",
     }
 
 

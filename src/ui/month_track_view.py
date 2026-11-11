@@ -176,6 +176,7 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
         top = M.priority_actions(
             table, today=today, rest_days=summary["sisa_hari"], factor=factor,
             margin_pct=getattr(data, "margin_pct", {}) if data is not None else {},
+            ad_per_unit=getattr(data, "ad_per_unit", {}) if data is not None else {},
             excluded=getattr(data, "excluded", set()) if data is not None else set(),
             default_roas=float(cfg.get("roas_default", 6)), unpaid=unpaid, unpaid_orders=unpaid_orders,
             recent=_recent_sku(orders_all, cutoff - timedelta(days=6), cutoff),

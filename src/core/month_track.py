@@ -285,6 +285,7 @@ def priority_actions(
     rest_days: int,
     factor: float = 1.0,
     margin_pct: dict | None = None,
+    ad_per_unit: dict | None = None,
     excluded: set | None = None,
     default_roas: float = 6.0,
     unpaid: float = 0.0,
@@ -298,7 +299,8 @@ def priority_actions(
 
     - Stok: kebutuhan sisa bulan (prediksi harian × sisa hari) yang tidak tertutup stok Site 10037 = omzet hilang;
       ambil dari Site 10062/10036 dulu, sisanya PO.
-    - Iklan: SKU dengan riwayat iklan, stok cukup, ROAS marginal masih di atas titik impas (100 ÷ margin);
+    - Iklan: SKU dengan riwayat iklan, stok cukup, ROAS marginal masih di atas titik impas (100 ÷ margin sebelum iklan;
+      `margin_pct` sudah dipotong iklan per unit, jadi `ad_per_unit` ÷ harga ditambahkan kembali);
       tambahan budget sampai titik impas, maks. 5× budget sekarang (aturan sama dengan Rekomendasi › Iklan).
     - Harga & listing: SKU yang dalam `recent_days` hari penuh terakhir terjual < 60% prediksi DAN < 60% lajunya sendiri
       `prior_days` hari sebelumnya, padahal stok tidak habis (recent: kolom sku, qty, qty_sebelum). Potensi = kembali
@@ -311,6 +313,7 @@ def priority_actions(
 
     columns = ["Prioritas", "Jenis", "SKU", "Produk", "Tindakan", "Tenggat", "Potensi omzet", "Alasan"]
     margin_pct = margin_pct or {}
+    ad_per_unit = ad_per_unit or {}
     excluded = excluded or set()
     rest_days = max(int(rest_days), 1)
     rows = []
@@ -377,6 +380,8 @@ def priority_actions(
         if basis == "default" or cost <= 0 or roas <= 0:
             continue
         margin = margin_pct.get(sku)
+        if margin is not None and np.isfinite(margin) and price > 0:
+            margin = float(margin) + _num(ad_per_unit.get(sku)) / price * 100.0
         if margin is not None and np.isfinite(margin) and margin <= 0:
             continue
         break_even = 100.0 / margin if margin and np.isfinite(margin) and margin > 0 else max(default_roas, 1.0)

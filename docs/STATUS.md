@@ -15,14 +15,18 @@ Diperbaiki:
 - **Ringkasan**: kartu periode kalender (Kuartal/Semester/Tahun) memprorata target s.d. tanggal data terakhir, bukan s.d. hari ini. Baris Total tabel Top 50 kolom Prediksi = jumlah sebelum dibulatkan per SKU, sama dengan kartu "Prediksi QTY hari ini" dan matriks Top 50.
 - **Pantauan harian › Top 5 Stok**: jumlah restock = kebutuhan sisa bulan + SS − stok (aturan Kurang di Ringkasan); potensi omzet tetap permintaan yang tidak tertutup stok.
 - **Exposure**: "Omzet 30 hari" = laju harian × harga × 30, sama dengan Kapasitas gudang (dulu jendela bulan 28–31 hari dibulatkan ke bawah).
-- **File margin**: margin kotor di pratinjau unggah dari harga termasuk pajak (dasar semua hitungan) + angka versi file; caption SS "dibulatkan ke unit terdekat" (sesuai kode).
+- **File margin**: margin kotor di pratinjau unggah dari harga termasuk pajak (dasar semua hitungan) + angka versi file.
 
-Ditemukan, belum diubah (menyentuh rumus prediksi/SS atau perlu keputusan):
-- Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode).
+Tahap 2 (atas permintaan pengguna: logika disamakan dengan aturan README). **Jalankan analisa ulang** agar SS, ROP, dan simulasi Evaluasi dihitung ulang:
+- **SS dibulatkan ke atas** per SKU (stok pengaman tidak boleh kurang dari rumus): dulu dibulatkan ke terdekat sebelum tabel keputusan, jadi SS 2,4 → 2. Berlaku di tabel keputusan, papan Ringkasan, dan pembagian periode.
+- **Lead time satu aturan** (`inventory.lead_time_days`): SS, ROP (= d × L + SS), dan Monte Carlo Laporan memakai lead time impor bila mode impor aktif (σ_L Monte Carlo = (Lmaks − Lrata) ÷ 1,645), selain itu lead time lokal. Dulu ROP & Monte Carlo selalu lokal.
+- **Simulasi tingkat layanan Evaluasi** = rumus SS produksi: Z dari tingkat layanan rekomendasi Bulan, √(lead time lokal + review), SS dibulatkan ke atas; target cek "Tingkat layanan simulasi" = tingkat layanan itu (dulu Z 1,645 × √7 tetap, target 90%).
+- **ROAS impas Top 5 iklan** = 100 ÷ margin sebelum iklan (margin bersih + iklan per unit ÷ harga), sama dengan Rekomendasi › Iklan. Dulu memakai margin yang sudah dipotong iklan → titik impas terlalu tinggi, usulan iklan hilang.
+- **Ruang stok iklan** (Rekomendasi › Iklan): sisa stok = stok − prediksi sisa bulan − SS, sama dengan Top 5.
+
+Ditemukan, belum diubah (perlu keputusan):
+- Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode) — pilihan desain; menyamakannya butuh dua kali jalan model.
 - SKU berprediksi 0 diganti rata-rata seumur data (`app.py` ±5747), tidak ikut dievaluasi.
-- Mode impor: SS memakai lead time impor, ROP & Monte Carlo memakai lead time lokal.
-- Simulasi tingkat layanan di Evaluasi memakai SS 1,645 × σ28 × √7, bukan SS produksi (Z × σ × √(L+R)).
-- ROAS impas: Rekomendasi › Iklan = 1 ÷ (margin kotor − potongan Shopee); Top 5 iklan = 100 ÷ margin bersih (sudah dikurangi iklan).
 - Kalkulator mengurangi voucher penjual per unit, Laporan margin tidak; periode bawaan berbeda (30 hari vs bulan penuh terakhir); "margin rendah" promo tetap 8%.
 - Tab Data membaca file mentah (`ledger_from_raw`), Ringkasan/Laporan membaca frame analisa — beda bila ada baris duplikat atau tanpa Harga Setelah Diskon; matriks Top 50 sengaja ikut saklar batal & retur.
 

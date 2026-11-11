@@ -1649,7 +1649,7 @@ def slice_forecast(pred_qty: float, pred_sales: float, safety: float, horizon_da
     qty = int(whole_units(float(pred_qty) * span / horizon))
     price = float(pred_sales) / float(pred_qty) if float(pred_qty) > 0 else 0.0
     sales = int(np.rint(qty * price))
-    guard = int(np.rint(max(float(safety), 0.0))) if span else 0
+    guard = int(np.ceil(max(float(safety), 0.0) - 1e-9)) if span else 0
     return qty, sales, max(qty + guard, 0)
 
 
@@ -3999,7 +3999,7 @@ def explain_qty_gap(
     direction, pill, gap, percent = _qty_pill(month_pred, compare)
     day_read = _forecast_read(yesterday_pred, yesterday_sold)
     ago_read = _forecast_read(month_ago_pred, month_ago_sold)
-    safety = int(round(float(row["safety_stock"]))) if "safety_stock" in row and pd.notna(row["safety_stock"]) else 0
+    safety = int(np.ceil(float(row["safety_stock"]) - 1e-9)) if "safety_stock" in row and pd.notna(row["safety_stock"]) else 0
     stock_qty = int(round(float(row["stok_disarankan"]))) if "stok_disarankan" in row and pd.notna(row["stok_disarankan"]) else predicted + safety
 
     qty, sales = _daily_qty_sales(history, key)
@@ -5743,7 +5743,7 @@ def top_bestsellers(
         view[column] = view[column].fillna(default)
     view["pred_qty"] = np.rint(view["pred_qty"].astype(float)).astype(int).clip(lower=0)
     view["pred_sales"] = np.rint(view["pred_sales"].astype(float)).astype(int).clip(lower=0)
-    view["safety_stock"] = np.rint(view["safety_stock"].astype(float)).astype(int).clip(lower=0)
+    view["safety_stock"] = np.ceil(view["safety_stock"].astype(float) - 1e-9).astype(int).clip(lower=0)
     missed = (view["pred_qty"] <= 0) & (view["qty_total"] > 0)
     if missed.any():
         span_days = max(int((orders["order_time"].max() - orders["order_time"].min()).days) + 1, 1)
@@ -7349,6 +7349,8 @@ def _forecast_stock_as_of(history: pd.DataFrame | None, as_of: date, period: str
 
 def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, period: str, as_of: date, service: int, params: dict) -> pd.DataFrame:
     """Safety stock dari parameter bisnis: lead time lokal, variasi lead time, atau impor."""
+    from src.core.inventory import lead_time_days
+
     lead = params.get("lead_time", {})
     impor = bool(lead.get("impor_aktif", False))
     return recommend_stock(
@@ -7358,7 +7360,7 @@ def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, pe
         service_level_z=service_z(service),
         horizon_steps=horizon_day_count(period, as_of),
         service_level_pct=service,
-        lead_time_days=float(lead.get("impor_rata_hari", 60) if impor else lead.get("lokal_hari", 7)),
+        lead_time_days=lead_time_days(params),
         lead_time_sigma=float(lead.get("lokal_sigma_hari", 0) or 0),
         source_type="import" if impor else "local",
         lead_time_max=float(lead.get("impor_maks_hari", 90)) if impor else None,

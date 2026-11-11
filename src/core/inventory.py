@@ -61,6 +61,14 @@ def safety_stock_import(*, z: float, sigma_d: float, l_max: float, l_avg: float,
     return safety_stock_general(z=z, d_avg=d_avg, sigma_d=sigma_d, l_avg=l_avg, sigma_l=sigma_l, review_days=review_days)
 
 
+def lead_time_days(params: dict | None) -> float:
+    """Lead time rata-rata yang dipakai SS, ROP, dan Monte Carlo: impor bila mode impor aktif, selain itu lokal."""
+    lead = (params or {}).get("lead_time", {}) or {}
+    if bool(lead.get("impor_aktif", False)):
+        return float(lead.get("impor_rata_hari", 60) or 60)
+    return float(lead.get("lokal_hari", 7) or 7)
+
+
 def reorder_point(*, d_avg: float, l_avg: float, safety_stock: float) -> float:
     return float(max(float(d_avg) * float(l_avg) + float(safety_stock), 0.0))
 

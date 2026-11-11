@@ -72,6 +72,32 @@ def test_stock_action_restocks_to_need_plus_ss():
     assert row["Potensi omzet"] == 10 * 100_000
 
 
+def test_lead_time_follows_import_mode():
+    from src.core.inventory import lead_time_days
+
+    assert lead_time_days({"lead_time": {"lokal_hari": 7, "impor_aktif": False, "impor_rata_hari": 60}}) == 7
+    assert lead_time_days({"lead_time": {"lokal_hari": 7, "impor_aktif": True, "impor_rata_hari": 60}}) == 60
+
+
+def test_safety_stock_rounds_up():
+    from src.core.decision_table import build_decision_table
+
+    stock = pd.DataFrame({"item_key": ["A"], "sku": ["A"], "product_name": ["Pipa"], "variation_name": [""], "pred_qty": [30.0],
+                          "pred_sales": [3_000_000.0], "safety_stock": [2.3]})
+    table = build_decision_table(stock, period="bulan", today=date(2026, 11, 10), horizon_days=30)
+    assert float(table["ss"].iloc[0]) == 3.0
+
+
+def test_ads_break_even_uses_margin_before_ads():
+    row = {"sku": "B", "product_name": "Cat", "pred_harian": 2.0, "harga_bersih": 200_000.0, "ada_data_stok": True, "stok": 500.0, "ss": 5.0,
+           "biaya_harian": 50_000.0, "biaya_iklan": 1_500_000.0, "omzet_iklan": 30_000_000.0, "stok_10062": np.nan, "stok_10036": np.nan}
+    table = pd.DataFrame([row])
+    after_ads = M.priority_actions(table, today=date(2026, 11, 10), rest_days=20, margin_pct={"B": 5.0})
+    before_ads = M.priority_actions(table, today=date(2026, 11, 10), rest_days=20, margin_pct={"B": 5.0}, ad_per_unit={"B": 30_000.0})
+    assert after_ads.empty
+    assert "titik impas 5,0" in before_ads.iloc[0]["Alasan"]
+
+
 def test_net_factor_single_rule():
     from src.ui.month_track_view import net_factor
 
