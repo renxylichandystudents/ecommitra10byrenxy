@@ -51,6 +51,7 @@ Tahap 5 (sampel layar Rekomendasi › Iklan "budget dikunci" dari pengguna). Sat
 - **Iklan**: rencana utama, rekomendasi sistem (`recommend(..., stock_cap=True)`), dan panel budget dikunci sama-sama dibatasi ruang stok. Dulu panel 69,9% vs rencana 72,8% untuk budget sama; kini 69,8% + bonus atur budget per tanggal Rp 1,7 jt = 69,9%. "Omzet iklan sekarang" diberi label susunan baru vs semua iklan berjalan.
 - **Target ROAS Laporan = Iklan** (`target_roas_for` mengambil bulan tersimpan terdekat sebelumnya, lalu sesudahnya): dulu 25 dari file lama, kini 15,0.
 - Kartu Kebutuhan menampilkan "= unit utuh + SS"; kotak safety stock menampilkan service level per kelas ABC dan r kalibrasi.
+- Verifikasi Iklan (data lokal, campaign 11–30 Nov): rekomendasi ROAS 11 / Rp 212 jt bila dipakai sebagai setelan memberi hasil sama (biaya Rp 211,7 jt, +Rp 345,8 jt, 72,17%); ROAS rata-rata tiap minggu ≥ target; tidak ada iklan yang menjual melebihi ruang stok. Teks diperbaiki: "ROAS dibutuhkan" memakai omzet iklan susunan baru (26,9; dulu 27,4 dari semua iklan berjalan), jumlah iklan tanpa prediksi dipisah dari yang tertahan stok (23 + 10, dulu "33 tanpa prediksi"), batas tambahan omzet ditulis sebagai 50% × prediksi.
 
 Ditemukan, belum diubah (perlu keputusan):
 - Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode) — pilihan desain; menyamakannya butuh dua kali jalan model.
