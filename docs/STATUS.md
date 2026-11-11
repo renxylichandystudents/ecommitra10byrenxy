@@ -60,6 +60,12 @@ Tahap 6 (sampel pengguna 11 Nov 23:45, data s.d. 11/11 ≥ 23:00):
 - Kartu Ringkasan "Prediksi sales hari ini · All SKU" = laju harian rata-rata; kini menulis pola hari ini (mis. 11.11 ×2,93 → ±Rp 360 jt sales produk), yang × faktor bersih = kartu Hari ini di Pantauan.
 - Teks "Aktual s.d. kemarin" menyebut tanggal hari penuh terakhir bila bukan kemarin.
 
+Tahap 7 (sampel pengguna 12 Nov 00:05: "hari ini" Rp 149 jt / 126 jt / 110 jt):
+- Penyebab: Ringkasan memakai laju rata-rata (prediksi 30 hari ÷ 30 = 149 jt), breakdown memakai laju × pola hari ini ×0,84 (126 jt), Pantauan = 126 jt × faktor sales bersih (110 jt).
+- **Semua angka "hari ini" kini laju × pola hari ini** (`month_track_view.day_multiplier`, pola yang sama dengan Pantauan & breakdown): kartu Ringkasan Top 50 & All SKU, tabel Periode, Kebutuhan stok hari ini, tabel per SKU, Pergerakan, kartu SKU (`TODAY_FACTOR`, `build_decision_table(day_factor=)`, `slice_forecast(..., day_factor)`). Jendela 30 hari, SS, dan rumus model tidak berubah; tanggal lampau (`_one_day_prediction_map`) tetap rata-rata.
+- Cek data lokal: Ringkasan All SKU Rp 107.704.745 = breakdown 12 Nov; Pantauan Rp 96.606.381 = angka itu × faktor bersih 0,897.
+- Baris "Aktual terjual kemarin" menyebut pola tanggal pembanding bila beda jauh dengan hari ini (mis. 11/11 ×2,9 vs 12/11 ×0,84).
+
 Ditemukan, belum diubah (perlu keputusan):
 - Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode) — pilihan desain; menyamakannya butuh dua kali jalan model.
 - Level terkini, fitur lag GBM, dan Prophet membaca hari stok kosong sebagai 0 (MA28, ES, target GBM, dan data uji sudah melewatinya).

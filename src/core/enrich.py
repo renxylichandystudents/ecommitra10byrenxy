@@ -125,6 +125,7 @@ def enrich_catalog(
     orders_all: pd.DataFrame,
     frames: StoreFrames,
     params: dict,
+    day_factor: float = 1.0,
 ) -> pd.DataFrame:
     if catalog is None or catalog.empty:
         return catalog
@@ -140,6 +141,7 @@ def enrich_catalog(
         zero_duration=zero_frame,
         lead_time_days=lead,
         dc_frames=frames.dc_stock,
+        day_factor=day_factor,
     )
     ads = ads_by_sku(frames.ads, frames.stock, orders=orders_used) if frames.has_ads and frames.has_stock else pd.DataFrame()
     if not ads.empty:

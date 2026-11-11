@@ -41,6 +41,19 @@ def full_day_cutoff(last_stamp, today: date | None = None) -> date:
     return complete_through(last_stamp, today or date.today())
 
 
+def day_multiplier(orders_all: pd.DataFrame | None, day: date, today: date | None = None) -> float:
+    """Pengali pola hari untuk tanggal `day` (rata-rata sebulan = 1), sama dengan Pantauan harian dan breakdown per tanggal."""
+    if orders_all is None or orders_all.empty:
+        return 1.0
+    net, _product, last_stamp = _daily_series(orders_all)
+    if last_stamp is None:
+        return 1.0
+    cutoff = full_day_cutoff(last_stamp, today)
+    profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
+    value = float(M.month_shape(profile, day.replace(day=1)).get(day, 1.0))
+    return value if np.isfinite(value) and value > 0 else 1.0
+
+
 def target_pattern(orders_all: pd.DataFrame | None):
     """(pola hari untuk membagi target bulan, hari penuh terakhir data), sama dengan `month_state`; (None, None) bila tanpa data."""
     if orders_all is None or orders_all.empty:

@@ -1641,12 +1641,15 @@ def days_in_calendar_month(day: date) -> int:
     return max((nxt - first).days, 1)
 
 
-def slice_forecast(pred_qty: float, pred_sales: float, safety: float, horizon_days: int, days: int) -> tuple[int, int, int]:
+TODAY_FACTOR = [1.0]  # pola hari ini (Pantauan harian), diisi sekali per jalan halaman analisa
+
+
+def slice_forecast(pred_qty: float, pred_sales: float, safety: float, horizon_days: int, days: int, day_factor: float = 1.0) -> tuple[int, int, int]:
     """Bagian prediksi untuk sejumlah hari. QTY dibulatkan ke bawah ke unit utuh, sales = QTY × harga bersih;
-    SS berbasis lead time, sama di semua periode."""
+    SS berbasis lead time, sama di semua periode. day_factor = pola hari untuk potongan 1 hari (hari ini)."""
     horizon = max(int(horizon_days), 1)
     span = max(int(days), 0)
-    qty = int(whole_units(float(pred_qty) * span / horizon))
+    qty = int(whole_units(float(pred_qty) * span / horizon * (float(day_factor) if span == 1 else 1.0)))
     price = float(pred_sales) / float(pred_qty) if float(pred_qty) > 0 else 0.0
     sales = int(np.rint(qty * price))
     guard = int(np.ceil(max(float(safety), 0.0) - 1e-9)) if span else 0
@@ -3998,7 +4001,7 @@ def explain_qty_gap(
         today_qty = (
             int(round(float(row["pred_qty_hari"])))
             if "pred_qty_hari" in row.index and pd.notna(row["pred_qty_hari"])
-            else int(slice_forecast(predicted, 0, 0, horizon, 1)[0])
+            else int(slice_forecast(predicted, 0, 0, horizon, 1, TODAY_FACTOR[0] if today == date.today() else 1.0)[0])
         )
     today_qty = int(today_qty)
     # Prediksi 30 hari dibandingkan bulan penuh terakhir, bukan dengan saringan periode laporan yang panjangnya bisa beda.
@@ -5811,6 +5814,7 @@ def apply_horizon_slices(
         return view
     horizon = max(int(horizon_days) if horizon_days else horizon_day_count(period, day), 1)
     month_days = horizon_day_count("bulan", day)
+    factor = TODAY_FACTOR[0] if day == date.today() else 1.0
     out = view.copy()
     sales_day: list[int] = []
     sales_month: list[int] = []
@@ -5821,7 +5825,7 @@ def apply_horizon_slices(
     safety_day: list[int] = []
     safety_month: list[int] = []
     for qty, sales, safety in zip(out["pred_qty"], out["pred_sales"], out["safety_stock"]):
-        qty_one, sales_one, stock_one = slice_forecast(qty, sales, safety, horizon, 1)
+        qty_one, sales_one, stock_one = slice_forecast(qty, sales, safety, horizon, 1, factor)
         qty_rest, sales_rest, stock_rest = slice_forecast(qty, sales, safety, horizon, month_days)
         sales_day.append(sales_one)
         sales_month.append(sales_rest)
@@ -5841,6 +5845,7 @@ def apply_horizon_slices(
     out["safety_bulan"] = safety_month
     out["slice_horizon_days"] = horizon
     out["slice_month_days"] = month_days
+    out["slice_day_factor"] = factor
     return out
 
 
@@ -6836,9 +6841,10 @@ def top50_table_parts(
         }
         expected = {}
         for prefix, days in (("d", 1), ("m", month_days)):
-            qty, sales, stock = slice_forecast(qty_now, sales_now, safety_now, horizon, days)
-            expected[f"{prefix}_qty"] = qty_now * days / horizon
-            expected[f"{prefix}_sales"] = sales_now * days / horizon
+            mult = TODAY_FACTOR[0] if prefix == "d" else 1.0
+            qty, sales, stock = slice_forecast(qty_now, sales_now, safety_now, horizon, days, mult)
+            expected[f"{prefix}_qty"] = qty_now * days / horizon * mult
+            expected[f"{prefix}_sales"] = sales_now * days / horizon * mult
             values[f"{prefix}_qty"] = qty
             values[f"{prefix}_sales"] = sales
             values[f"{prefix}_safety"] = max(stock - qty, 0)
@@ -6857,9 +6863,10 @@ def top50_table_parts(
             now_pairs = {"p_qty": mv_qty_now, "p_sales": sales_mv_now, "p_safety": safety_mv_now, "p_stock": stok_mv_now}
             then_values = {"p_qty": mv_qty_then, "p_sales": sales_then, "p_safety": safety_then, "p_stock": stok_then}
             for prefix, days, then_days in (("d", 1, 1), ("m", month_days, then_month)):
-                qty, sales, stock = slice_forecast(mv_qty_now, sales_mv_now, safety_mv_now, horizon, days)
+                mult = TODAY_FACTOR[0] if prefix == "d" else 1.0
+                qty, sales, stock = slice_forecast(mv_qty_now, sales_mv_now, safety_mv_now, horizon, days, mult)
                 now_pairs.update({f"{prefix}_qty": qty, f"{prefix}_sales": sales, f"{prefix}_safety": max(stock - qty, 0), f"{prefix}_stock": stock})
-                qty, sales, stock = slice_forecast(mv_qty_then, sales_then, safety_then, then_horizon, then_days)
+                qty, sales, stock = slice_forecast(mv_qty_then, sales_then, safety_then, then_horizon, then_days, mult)
                 then_values.update({f"{prefix}_qty": qty, f"{prefix}_sales": sales, f"{prefix}_safety": max(stock - qty, 0), f"{prefix}_stock": stock})
             # Selisih dihitung pada rentang tanggal pergerakan, lalu ditempel ke angka yang sedang dikunci.
             then_values = {name: values[name] - (now_pairs[name] - then_values[name]) for name in then_values}
@@ -7326,7 +7333,8 @@ def _prediction_totals(frame: pd.DataFrame | None) -> tuple[int, int, int, int]:
     horizon = frame["slice_horizon_days"].clip(lower=1) if "slice_horizon_days" in frame.columns else None
     if horizon is not None and "pred_sales" in frame.columns:
         month = frame["slice_month_days"] if "slice_month_days" in frame.columns else 30
-        sales_day = float((frame["pred_sales"] / horizon).sum())
+        factor = frame["slice_day_factor"] if "slice_day_factor" in frame.columns else 1.0
+        sales_day = float((frame["pred_sales"] / horizon * factor).sum())
         sales_month = float((frame["pred_sales"] * month / horizon).sum())
     else:
         sales_day, sales_month = float(frame["pred_sales_hari"].sum()), float(frame["pred_sales_bulan"].sum())
@@ -7625,7 +7633,7 @@ def _row_slices(row: pd.Series | None, horizon_days: int, month_days: int) -> tu
     if row is None:
         return 0, 0, 0, 0, 0, 0
     safety = max(float(row["safety_stock"]), 0.0)
-    qty_day, sales_day, stock_day = slice_forecast(row["pred_qty"], row["pred_sales"], safety, horizon_days, 1)
+    qty_day, sales_day, stock_day = slice_forecast(row["pred_qty"], row["pred_sales"], safety, horizon_days, 1, TODAY_FACTOR[0])
     qty_month, sales_month, stock_month = slice_forecast(
         row["pred_qty"], row["pred_sales"], safety, horizon_days, month_days
     )
@@ -7872,14 +7880,15 @@ def _render_movement_board(
     return pd.DataFrame(export_rows)
 
 
-def _period_totals(frame: pd.DataFrame | None, keys: list[str], *, period: str, day: date, orders: pd.DataFrame | None) -> dict[str, tuple[float, float]] | None:
+def _period_totals(frame: pd.DataFrame | None, keys: list[str], *, period: str, day: date, orders: pd.DataFrame | None,
+                   day_factor: float = 1.0) -> dict[str, tuple[float, float]] | None:
     """Total prediksi sales dan kebutuhan stok (prediksi + SS) per kelompok periode untuk SKU `keys`."""
     if frame is None or frame.empty or "item_key" not in frame.columns:
         return None
     work = frame.loc[frame["item_key"].astype(str).isin(set(keys))]
     if work.empty:
         return None
-    table = build_decision_table(work, period=period, today=day, horizon_days=horizon_day_count(period, day), orders=orders)
+    table = build_decision_table(work, period=period, today=day, horizon_days=horizon_day_count(period, day), orders=orders, day_factor=day_factor)
     return _group_totals(table, period, day)
 
 
@@ -7898,24 +7907,26 @@ def _group_totals(table: pd.DataFrame, period: str, day: date) -> dict[str, tupl
 SS_DEFINITION_MOVEMENT = "safety stock adalah nilai cadangan yang harus disiapkan agar tidak kehabisan stok"
 
 
-def _today_pattern_hint(orders_all: pd.DataFrame | None, today: date, flat_sales: float) -> str:
-    """Pola hari ini (sama dengan Pantauan harian) agar laju rata-rata bisa dicocokkan dengan prediksi per tanggal."""
-    if orders_all is None or orders_all.empty or flat_sales <= 0:
-        return ""
+def _today_factor(orders_all: pd.DataFrame | None, today: date, day: date | None = None) -> float:
+    """Pola hari ini (rata-rata sebulan = 1), sama dengan Pantauan harian; 1 bila belum bisa dihitung."""
     try:
-        from src.core.month_track import day_label
-        from src.ui.month_track_view import full_day_cutoff
-        from src.ui.prediksi_top import _day_shape
+        from src.ui.month_track_view import day_multiplier
 
-        stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max()
-        mult = float(_day_shape(orders_all, full_day_cutoff(stamp, today))(today))
+        return day_multiplier(orders_all, day or today, today)
     except Exception:
+        return 1.0
+
+
+def _today_pattern_hint(orders_all: pd.DataFrame | None, today: date, day_sales: float) -> str:
+    """Asal angka hari ini: laju rata-rata × pola hari ini (sama dengan Pantauan harian & breakdown per tanggal)."""
+    mult = _today_factor(orders_all, today)
+    if day_sales <= 0 or abs(mult - 1.0) < 0.005:
         return ""
-    if not np.isfinite(mult) or abs(mult - 1.0) < 0.005:
-        return ""
+    from src.core.month_track import day_label
+
     label = day_label(today) or "pola hari"
-    return (f"<br>{html.escape(label)} ×{format_number(mult, 2)} → ±{html.escape(format_idr(flat_sales * mult))} sales produk "
-            "(Pantauan harian memakai pola ini, dalam sales bersih)")
+    return (f"<br>laju rata-rata {html.escape(format_idr(day_sales / mult))}/hari × {html.escape(label)} ×{format_number(mult, 2)} · "
+            "sales produk; Pantauan harian = angka ini × faktor sales bersih")
 
 
 def show_analysis_movement(
@@ -7951,7 +7962,8 @@ def show_analysis_movement(
         now_totals = _group_totals(decision, period_key, today)
     prior_frame = _movement_frame(yesterday, **frame_args)
     # Pembanding harus SKU yang sama dengan kartu (Top 50), bukan seluruh katalog.
-    prior = _period_totals(prior_frame, list(focus_keys) or keys, period=period_key, day=today, orders=orders)
+    day_factor = _today_factor(orders_all if orders_all is not None else orders, today)
+    prior = _period_totals(prior_frame, list(focus_keys) or keys, period=period_key, day=today, orders=orders, day_factor=day_factor)
     st.markdown("<div class='section-title'>Pergerakan dari analisa sebelumnya</div>", unsafe_allow_html=True)
     explain(
         [
@@ -7978,11 +7990,10 @@ def show_analysis_movement(
             main_then = None if then is None else float(then[1] if main_money else then[0])
             qty_label = "QTY terjual" if is_day else "QTY"
             day_tip = (
-                "Prediksi QTY hari ini = jumlah nilai harapan per SKU (prediksi QTY horizon ÷ jumlah hari horizon) sebelum dibulatkan, "
-                "sales = nilai harapan × harga bersih. Tabel per SKU dan Kebutuhan stok memakai unit utuh (dibulatkan ke bawah per SKU), "
-                "jadi totalnya bisa lebih kecil. "
-                "Ini laju harian rata-rata, bukan realisasi; tanggal mengikuti WIB (Asia/Jakarta). Hari ini masih berjalan, "
-                "jadi pembanding yang adil adalah aktual hari penuh terakhir (kemarin)."
+                "Prediksi QTY hari ini = jumlah nilai harapan per SKU (prediksi QTY horizon ÷ jumlah hari horizon × pola hari ini) sebelum dibulatkan, "
+                "sales = nilai harapan × harga bersih. Pola hari ini sama dengan Pantauan harian dan breakdown per tanggal (hari dalam minggu, gajian, "
+                "tanggal kembar). Tabel per SKU dan Kebutuhan stok memakai unit utuh (dibulatkan ke bawah per SKU), jadi totalnya bisa lebih kecil. "
+                "Tanggal mengikuti WIB (Asia/Jakarta). Hari ini masih berjalan, jadi pembanding yang adil adalah aktual hari penuh terakhir (kemarin)."
             ) if is_day else ""
             actual_html = ""
             if is_day:
@@ -7992,6 +8003,9 @@ def show_analysis_movement(
                     gap = (qty_now - actual_qty) / actual_qty * 100 if actual_qty > 0 else None
                     when = "kemarin" if actual_day == yesterday else format_id_date(actual_day) + " (hari penuh terakhir)"
                     gap_text = f" · selisih {'+' if gap >= 0 else '−'}{format_number(abs(gap), 1)}%" if gap is not None else ""
+                    then_mult = _today_factor(orders_all if orders_all is not None else orders, today, actual_day) if actual_day else 1.0
+                    if abs(then_mult - day_factor) >= 0.05:
+                        gap_text += f" (pola {actual_day:%d/%m} ×{format_number(then_mult, 2)}, hari ini ×{format_number(day_factor, 2)})"
                     actual_html = f"<div class='metric-move flat'>Aktual terjual {html.escape(when)}: {format_qty(actual_qty)} unit{gap_text}</div>"
             _prediction_card(
                 cards[0],
@@ -8034,7 +8048,7 @@ def show_analysis_movement(
                     f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
                     f"<div class='readable-metric-value'>{html.escape(format_idr(total_sales))}</div>"
                     f"<div class='metric-hint'>{format_number(len(all_sku), 0)} SKU dianalisa"
-                    + (" · laju harian rata-rata" if is_day else " · sales produk, mulai hari ini") + f"{pattern_html}</div>"
+                    + ("" if is_day else " · sales produk, mulai hari ini") + f"{pattern_html}</div>"
                     "</div>",
                     unsafe_allow_html=True,
                 )
@@ -8124,6 +8138,7 @@ def enriched_catalog(
     if catalog is None or catalog.empty:
         return catalog
     store_stamp = st.session_state.get("_store-frames", (None,))[0]
+    day_factor = _today_factor(orders_all, today)
     stamp = (
         run_id,
         resume_label,
@@ -8132,6 +8147,7 @@ def enriched_catalog(
         store_stamp,
         repr(sorted((k, repr(v)) for k, v in params.items())),
         today.isoformat(),
+        round(day_factor, 6),
     )
     cached = st.session_state.get("_enriched")
     if isinstance(cached, tuple) and cached[0] == stamp:
@@ -8152,10 +8168,11 @@ def enriched_catalog(
             orders_all=orders_all,
             frames=frames,
             params=params,
+            day_factor=day_factor,
         )
     except Exception as exc:  # data tambahan bermasalah: tetap tampilkan tabel keputusan dasar
         st.warning(f"Sebagian data pendukung (stok/iklan/label) belum bisa dipakai: {exc}")
-        table = build_decision_table(catalog, period=period, today=today, horizon_days=horizon_days, orders=orders)
+        table = build_decision_table(catalog, period=period, today=today, horizon_days=horizon_days, orders=orders, day_factor=day_factor)
         table["label"] = [[] for _ in range(len(table))]
         table["label_text"] = ""
     st.session_state["_enriched"] = (stamp, table)
@@ -8195,7 +8212,7 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
     explain(
         [
             ("Prediksi " + PERIOD_SPECS[period].label, f"{format_number(horizon)} hari mulai {format_id_date(day)}"),
-            ("Sales hari ini", f"prediksi sales periode ÷ {format_number(horizon)}"),
+            ("Sales hari ini", f"prediksi sales periode ÷ {format_number(horizon)} × pola hari ini (sama dengan Pantauan harian)"),
             ("Sales bulan ini", f"bagian {format_number(month_days)} hari, {format_id_date(day)} – {format_id_date(month_end)}"),
             ("Stok disarankan", "prediksi QTY + safety stock pada jumlah hari yang sama"),
             ("Warna selisih", "biru naik, merah turun, tanda – bila sama dengan analisa pembanding"),
@@ -8205,8 +8222,10 @@ def show_priority_stock(catalog: pd.DataFrame, period: str, day: date) -> None:
         st.write("Belum ada SKU pada periode penjualan ini.")
         return
     cards = st.columns(4)
-    day_sales = float((ready["pred_sales"] / ready["slice_horizon_days"].clip(lower=1)).sum()) if {"pred_sales", "slice_horizon_days"} <= set(ready.columns) else float(ready["pred_sales_hari"].sum())
-    show_metric(cards[0], "Prediksi sales hari ini", format_idr(day_sales), hint=f"1 hari dari prediksi {PERIOD_SPECS[period].label}.")
+    day_sales = (float((ready["pred_sales"] / ready["slice_horizon_days"].clip(lower=1) * ready.get("slice_day_factor", 1.0)).sum())
+                 if {"pred_sales", "slice_horizon_days"} <= set(ready.columns) else float(ready["pred_sales_hari"].sum()))
+    show_metric(cards[0], "Prediksi sales hari ini", format_idr(day_sales),
+                hint=f"1 hari dari prediksi {PERIOD_SPECS[period].label} × pola hari ini ×{format_number(TODAY_FACTOR[0], 2)}.")
     show_metric(
         cards[1],
         "Prediksi sales bulan ini",
@@ -8528,6 +8547,7 @@ with PAGE_ROOT.container(key="page-root"):
 
     stored = st.session_state["analysis"]
     orders_all = stored.get("orders_all", orders)
+    TODAY_FACTOR[0] = _today_factor(orders_all, today)
     params = current_params()
     frames = store_frames()
     outcome = stored.get("demand_outcome")

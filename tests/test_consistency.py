@@ -88,6 +88,19 @@ def test_safety_stock_rounds_up():
     assert float(table["ss"].iloc[0]) == 3.0
 
 
+def test_today_follows_day_pattern_month_window_does_not():
+    from src.core.decision_table import build_decision_table
+
+    stock = pd.DataFrame({"item_key": ["A"], "sku": ["A"], "product_name": ["Pipa"], "variation_name": [""], "pred_qty": [300.0],
+                          "pred_sales": [30_000_000.0], "safety_stock": [0.0]})
+    flat = build_decision_table(stock, period="bulan", today=date(2026, 11, 12), horizon_days=30)
+    shaped = build_decision_table(stock, period="bulan", today=date(2026, 11, 12), horizon_days=30, day_factor=0.84)
+    assert float(flat["d_qty_exp"].iloc[0]) == 10.0
+    assert abs(float(shaped["d_qty_exp"].iloc[0]) - 8.4) < 1e-9
+    assert float(shaped["d_qty"].iloc[0]) == 8.0
+    assert float(shaped["m_qty"].iloc[0]) == float(flat["m_qty"].iloc[0]) == 300.0
+
+
 def test_ads_break_even_uses_margin_before_ads():
     row = {"sku": "B", "product_name": "Cat", "pred_harian": 2.0, "harga_bersih": 200_000.0, "ada_data_stok": True, "stok": 500.0, "ss": 5.0,
            "biaya_harian": 50_000.0, "biaya_iklan": 1_500_000.0, "omzet_iklan": 30_000_000.0, "stok_10062": np.nan, "stok_10036": np.nan}

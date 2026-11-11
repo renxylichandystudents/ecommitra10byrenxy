@@ -440,7 +440,7 @@ def top50_matrix(
             ("Kontribusi aktual", "sales aktual Top 50 ÷ sales aktual seluruh toko pada tanggal aktual pembanding yang sama"),
             ("Kontribusi prediksi", "prediksi sales Top 50 ÷ prediksi sales All SKU (angka yang sama dengan kartu Prediksi sales · All SKU)"),
             ("Kenapa dasarnya berbeda", "aktual = transaksi yang sudah terjadi (kemarin / bulan lalu); prediksi = perkiraan periode berjalan. Bandingkan aktual dengan aktual, prediksi dengan prediksi"),
-            ("Prediksi hari ini", "laju harian rata-rata periode prediksi (prediksi bulan ÷ jumlah hari), termasuk hari promo seperti 11.11, jadi bisa lebih tinggi dari aktual satu hari biasa"),
+            ("Prediksi hari ini", "prediksi bulan ÷ jumlah hari × pola hari ini (hari dalam minggu, gajian, tanggal kembar seperti 11.11), sama dengan Pantauan harian dan breakdown per tanggal"),
             ("Beda dengan kartu Sales bersih", "kartu itu memakai Total Pembayaran per pesanan (setelah voucher, termasuk ongkir)"),
         ]
     )

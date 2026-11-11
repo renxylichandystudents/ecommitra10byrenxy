@@ -96,6 +96,7 @@ def build_decision_table(
     zero_duration: pd.DataFrame | None = None,
     lead_time_days: float = 7.0,
     dc_frames: dict[str, pd.DataFrame] | None = None,
+    day_factor: float = 1.0,
 ) -> pd.DataFrame:
     """Tambah kolom keputusan per periode pada tabel produk.
 
@@ -103,7 +104,7 @@ def build_decision_table(
     safety_stock. Output per prefix (d, m, p): {p}_qty, {p}_sales, {p}_ss, {p}_butuh,
     {p}_stok, {p}_selisih, {p}_pct, {p}_status.
 
-    - Hari ini = laju harian prediksi.
+    - Hari ini = laju harian prediksi × pola hari ini (`day_factor`, sama dengan Pantauan harian; 1 = laju rata-rata).
     - Prediksi bulan = laju harian × hari jendela prediksi bulan (hari ini s.d. sebulan ke depan),
       sama dengan kartu Periode prediksi dan kartu Ringkasan.
     - Butuh = prediksi permintaan pada periode itu + SS.
@@ -157,13 +158,13 @@ def build_decision_table(
         if p == "p":
             qty = whole_units(pred_qty.astype(float))
         else:
-            qty = whole_units(out["pred_harian"] * (group.days if p == "m" else 1))
+            qty = whole_units(out["pred_harian"] * (group.days if p == "m" else day_factor))
         sales = qty * out["harga_bersih"]
         out[f"{p}_qty"] = np.rint(qty)
         out[f"{p}_sales"] = np.rint(sales)
         # Nilai harapan sebelum dibulatkan per SKU: dipakai untuk TOTAL banyak SKU. Pembulatan ke bawah per SKU
         # membuat SKU yang laku < 1 unit/hari bernilai 0, sehingga total harian/bulanan toko jauh terlalu kecil.
-        days = group.days if p in {"d", "m"} else None
+        days = group.days * (day_factor if p == "d" else 1.0) if p in {"d", "m"} else None
         out[f"{p}_qty_exp"] = out["pred_harian"] * days if days else pred_qty.astype(float)
         out[f"{p}_sales_exp"] = out[f"{p}_qty_exp"] * out["harga_bersih"].fillna(0.0) if days else pred_sales.astype(float)
         out[f"{p}_ss"] = out["ss"]
