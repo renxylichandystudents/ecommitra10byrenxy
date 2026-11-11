@@ -287,6 +287,8 @@ def safety_stock_box(
     lead_days: float | None = None,
     import_mode: bool = False,
     review_days: float = 0.0,
+    class_levels: dict | None = None,
+    calibration: float = 1.0,
 ) -> None:
     """Analisa safety stock: parameter + angka yang tidak tergantung periode sekali saja, lalu satu tabel per periode."""
     del definition
@@ -304,16 +306,26 @@ def safety_stock_box(
 
             z = service_level_to_z(float(service))
         exposure = (lead_days or 0) + (review_days or 0)
+        from src.core.inventory import service_level_to_z
+
+        levels = class_levels or {}
+        z_text = " · ".join(f"{k} {fmt_num(service_level_to_z(v), 2)}" for k, v in levels.items()) if levels else (fmt_num(z, 2) if z is not None else "Z")
+        r = float(calibration or 1.0)
+        r_text = f" × r {fmt_num(r, 2)}" if abs(r - 1.0) > 1e-9 else ""
         if import_mode:
-            formula = (f"Z × √((L + R) × σ² + permintaan² × σ_L²), σ_L = (lead time maks − rata-rata) ÷ 1,645; "
-                       f"L = {fmt_num(lead_days or 0)} hari, R = {fmt_num(review_days or 0)} hari")
+            formula = (f"Z(kelas ABC){r_text} × √((L + R) × σ² + permintaan² × σ_L²), σ_L = (lead time maks − rata-rata) ÷ 1,645; "
+                       f"L = {fmt_num(lead_days or 0)} hari, R = {fmt_num(review_days or 0)} hari; Z per kelas {z_text}")
         else:
             formula = (
-                f"Z × σ permintaan harian × √(lead time + periode tinjau) = {fmt_num(z, 2) if z is not None else 'Z'} × σ × √({fmt_num(lead_days or 0)} + "
-                f"{fmt_num(review_days or 0)}) = √{fmt_num(exposure)} hari, dibulatkan ke atas per SKU"
+                f"Z(kelas ABC){r_text} × σ permintaan harian × √(lead time + periode tinjau) = Z{r_text} × σ × √({fmt_num(lead_days or 0)} + "
+                f"{fmt_num(review_days or 0)}) = √{fmt_num(exposure)} hari, dibulatkan ke atas per SKU; Z per kelas {z_text}"
             )
         cols = st.columns(4)
-        card(cols[0], "Service level", f"{fmt_num(service or 0)}%", hint=f"Z = {fmt_num(z, 2)}" if z is not None else "")
+        if levels:
+            card(cols[0], "Service level per kelas", " · ".join(f"{k} {fmt_num(v)}%" for k, v in levels.items()),
+                 hint=f"dasar {fmt_num(service or 0)}% · kelas ABC dari QTY 90 hari" + (f" · kalibrasi r {fmt_num(r, 2)}" if r_text else ""))
+        else:
+            card(cols[0], "Service level", f"{fmt_num(service or 0)}%", hint=f"Z = {fmt_num(z, 2)}" if z is not None else "")
         card(cols[1], "Lead time + tinjau", f"{fmt_num(lead_days or 0)} + {fmt_num(review_days or 0)} hari", hint="lead time impor dari Setting › Kedatangan impor" if import_mode else ("asumsi lead time lokal (bawaan)" if used_default else "lead time lokal tersimpan"))
         card(cols[2], "Total SS", f"{fmt_qty(ss.sum())} unit", hint=f"rata-rata {fmt_qty(ss.mean() if len(ss) else 0)} unit per SKU · sama di setiap periode")
         card(
@@ -357,6 +369,9 @@ def safety_stock_box(
                 ("Safety stock (SS)", "stok cadangan agar tidak kosong saat permintaan atau pengiriman meleset dari perkiraan"),
                 ("Rumus", formula),
                 ("σ permintaan harian", "simpangan penjualan harian terhadap tren model; SKU yang penjualannya naik-turun tajam mendapat SS lebih besar"),
+                ("Kelas ABC", "A = SKU penyumbang 80% QTY 90 hari, B = 15% berikutnya, C = sisanya; kelas A diberi tingkat layanan lebih tinggi"),
+                ("Kalibrasi r", "galat prediksi nyata selama lead time + tinjau di uji walk-forward ÷ σ × √(L + R), diestimasi robust (median); "
+                                "r = 1 bila analisa belum punya hasil uji ini"),
                 ("Sama di setiap periode", "SS hanya menutup risiko selama lead time, jadi tidak bertambah walau periodenya lebih panjang"),
                 ("Kebutuhan", "prediksi QTY periode + SS; SKU disebut kurang bila stok Site 10037 di bawah angka ini"),
                 ("Stok di bawah SS", "lebih mendesak dari sekadar kurang: stok bahkan tidak cukup untuk cadangan, prioritaskan transfer dari DC / PO"),

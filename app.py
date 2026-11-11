@@ -5005,7 +5005,7 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
     row_three = st.columns(4)
     net_hint = "Selalu tanpa pesanan batal, Belum Bayar & retur, apa pun centang status di atas"
     metric_card(row_three[0], "pesanan_bersih", format_number(facts["pesanan_bersih"]), hint=net_hint)
-    reach = achievement_line(facts["sales_bersih"], period_start_day, period_end_day, get_features())
+    reach = achievement_line(facts["sales_bersih"], period_start_day, period_end_day, get_features(), orders=ledger)
     metric_card(row_three[1], "sales_bersih", format_idr(facts["sales_bersih"]), hint=net_hint + (f"<br>{reach}" if reach else ""))
     metric_card(row_three[2], "belum_bayar", format_number(facts["belum_bayar"]), hint=f"{format_number(facts['belum_bayar_akun'])} akun")
     metric_card(row_three[3], "tingkat_batal", format_pct_id(facts["tingkat_batal"] * 100))
@@ -6743,10 +6743,17 @@ MOVEMENT_STEP = 5
 
 def _ss_params(params: dict, service: int) -> dict:
     """Parameter yang ditampilkan di kotak Analisa safety stock (sama dengan yang dipakai recommend_stock)."""
+    from src.core.service_level import class_service_levels
+    from src.models.evaluate import SS_CALIBRATION_KEY
+
     lead = params.get("lead_time", {}) if isinstance(params, dict) else {}
     impor = bool(lead.get("impor_aktif", False))
     days = float(lead.get("impor_rata_hari", 60) if impor else lead.get("lokal_hari", 7))
-    return {"service": int(service), "lead_days": days, "import_mode": impor, "review_days": float(lead.get("review_hari", 7) or 0)}
+    analysis = st.session_state.get("analysis")
+    weights = analysis.get("ensemble_weights") if isinstance(analysis, dict) else None
+    return {"service": int(service), "lead_days": days, "import_mode": impor, "review_days": float(lead.get("review_hari", 7) or 0),
+            "class_levels": class_service_levels(service, params),
+            "calibration": float((weights or {}).get(SS_CALIBRATION_KEY, 1.0) or 1.0)}
 
 
 from src.ui.decision_view import COMPONENT_VERSION as _TABLE_VERSION  # noqa: E402
@@ -7536,9 +7543,14 @@ def _prediction_card(column, label: str, value: str, move_html: str, *, tip: str
 
 
 def actual_on_day(orders: pd.DataFrame | None, keys: list[str], day: date) -> tuple[float, date | None]:
-    """QTY aktual Top 50 pada `day` (WIB). Bila hari itu belum ada transaksi, pakai hari penuh terakhir sebelum `day`."""
+    """QTY aktual Top 50 pada `day` (WIB). Bila hari itu belum ada transaksi atau datanya belum sampai 23:00, pakai hari penuh terakhir sebelum `day`."""
     if orders is None or orders.empty or not keys:
         return 0.0, None
+    from src.ui.month_track_view import full_day_cutoff
+
+    stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
+    if pd.notna(stamp):
+        day = min(day, full_day_cutoff(stamp))
     work = orders.loc[orders["item_key"].astype(str).isin(set(keys))]
     if work.empty:
         return 0.0, None
@@ -7945,8 +7957,9 @@ def show_analysis_movement(
             main_then = None if then is None else float(then[1] if main_money else then[0])
             qty_label = "QTY terjual" if is_day else "QTY"
             day_tip = (
-                "Prediksi QTY hari ini = jumlah per SKU dari (prediksi QTY horizon ÷ jumlah hari horizon), dibulatkan ke bawah "
-                "per SKU karena unit pecahan tidak bisa terjual; sales = QTY bulat × harga bersih. "
+                "Prediksi QTY hari ini = jumlah nilai harapan per SKU (prediksi QTY horizon ÷ jumlah hari horizon) sebelum dibulatkan, "
+                "sales = nilai harapan × harga bersih. Tabel per SKU dan Kebutuhan stok memakai unit utuh (dibulatkan ke bawah per SKU), "
+                "jadi totalnya bisa lebih kecil. "
                 "Ini laju harian rata-rata, bukan realisasi; tanggal mengikuti WIB (Asia/Jakarta). Hari ini masih berjalan, "
                 "jadi pembanding yang adil adalah aktual hari penuh terakhir (kemarin)."
             ) if is_day else ""
@@ -7956,7 +7969,7 @@ def show_analysis_movement(
                     actual_html = "<div class='metric-move flat'>Aktual terjual kemarin: belum ada transaksi</div>"
                 else:
                     gap = (qty_now - actual_qty) / actual_qty * 100 if actual_qty > 0 else None
-                    when = "kemarin" if actual_day == yesterday else format_id_date(actual_day) + " (transaksi terakhir)"
+                    when = "kemarin" if actual_day == yesterday else format_id_date(actual_day) + " (hari penuh terakhir)"
                     gap_text = f" · selisih {'+' if gap >= 0 else '−'}{format_number(abs(gap), 1)}%" if gap is not None else ""
                     actual_html = f"<div class='metric-move flat'>Aktual terjual {html.escape(when)}: {format_qty(actual_qty)} unit{gap_text}</div>"
             _prediction_card(
@@ -7979,12 +7992,15 @@ def show_analysis_movement(
                 "Kebutuhan stok = prediksi QTY (unit utuh, dibulatkan ke bawah) + safety stock, dijumlah per SKU."
                 + (f" Jendela prediksi bulan: {format_id_date(today)} – {format_id_date(prediction_window('bulan', today)[1])}." if group.prefix == "m" else "")
             )
+            whole = float(decision[f"{group.prefix}_qty"].sum()) if f"{group.prefix}_qty" in decision.columns else float("nan")
             _prediction_card(
                 cards[2],
                 f"Kebutuhan stok {name} · Top 50 SKU",
                 f"{format_number(round(float(need_now)), 0)} unit",
                 _move_line(need_now, None if then is None else then[2], money=False, fresh=fresh),
                 tip=need_tip,
+                extra_html=(f"<div class='metric-move flat'>= {format_number(round(whole), 0)} unit utuh + SS {format_number(round(need_now - whole), 0)}</div>"
+                            if whole == whole else ""),
             )
             if all_sku is not None and group.prefix in {"d", "m"} and f"{group.prefix}_sales" in all_sku.columns:
                 exp_col = f"{group.prefix}_sales_exp"
@@ -8566,7 +8582,7 @@ with PAGE_ROOT.container(key="page-root"):
         cols = st.columns(4)
         metric_card(cols[0], "pesanan_bersih", format_number(facts["pesanan_bersih"], 0), hint=f"{label} · dari {format_number(facts['pesanan_semua'], 0)} pesanan semua status", tone=tone)
         metric_card(cols[1], "sku_terjual_bersih", format_number(coverage["sku_terjual_bersih"], 0), hint=label, tone=tone)
-        reach = achievement_line(facts["sales_bersih"], start, end, FEATURES)
+        reach = achievement_line(facts["sales_bersih"], start, end, FEATURES, orders=orders_all)
         metric_card(cols[2], "sales_bersih", format_idr(facts["sales_bersih"]), hint=f"Bruto {format_idr(facts['sales_bruto'])}" + (f"<br>{reach}" if reach else ""), tone=tone)
         metric_card(cols[3], "qty_bersih", format_qty(facts["qty_bersih"]), hint=label, tone=tone)
         return facts

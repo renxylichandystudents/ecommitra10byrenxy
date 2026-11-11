@@ -45,6 +45,13 @@ Tahap 4 (keputusan pengguna: model produksi dipilih luar sampel; SS empiris "Kal
 - Hasil data lokal (bulan, 4 lipatan luar sampel): Exponential Smoothing WAPE 68,8%, MAPE agregat 12,8%, bias −12,3% (Ensemble per segmen 70,6%; in-sample 68,5% terlalu optimis). r = 1,57. Cycle service level tercapai **80,9%** (tanpa kalibrasi 76,9%) vs target rata-rata 93,5%: kelas A 86,8%/99%, B 83,2%/97%, C 78,0%/90%. Target belum tercapai karena permintaan proyek bergerombol (ekor galat tebal, q97 |z| ≈ 9) dan bias kurang prediksi; dilaporkan apa adanya di tesis.
 - Dampak SS (run lokal, horizon hari 30 langkah): 12.028 → 19.963 unit, Rp 2,61 M → Rp 4,20 M (A Rp 2,29 M, B Rp 0,69 M, C Rp 1,22 M). Kalibrasi RMS (ditolak) memberi ±47.500 unit.
 
+Tahap 5 (sampel layar Rekomendasi › Iklan "budget dikunci" dari pengguna). Satu aturan untuk semua halaman:
+- **Pencapaian target** (Data, Ringkasan, Prediksi, Kalkulator, Iklan, Laporan, Pantauan) = aktual s.d. hari penuh terakhir (data ≥ 23:00) ÷ target berjalan berpola hari (`range_target(..., weight)`, bobot `seasonal_profile(...).factor` via `month_track_view.target_pattern`). Dulu kartu memakai pembagian datar 8/30 + hari 8 Nov yang belum penuh (Rp 735 jt, 55,4%); kini semua Rp 724.192.017 → 65,4% dari Rp 1.106.882.404.
+- **Aktual hari terakhir** (Ringkasan, matriks Top 50, `period_actuals`) melewati hari belum penuh: dulu "8 Nov: 26 (+796%)", kini "7 Nov: 257 (−9,3%)".
+- **Iklan**: rencana utama, rekomendasi sistem (`recommend(..., stock_cap=True)`), dan panel budget dikunci sama-sama dibatasi ruang stok. Dulu panel 69,9% vs rencana 72,8% untuk budget sama; kini 69,8% + bonus atur budget per tanggal Rp 1,7 jt = 69,9%. "Omzet iklan sekarang" diberi label susunan baru vs semua iklan berjalan.
+- **Target ROAS Laporan = Iklan** (`target_roas_for` mengambil bulan tersimpan terdekat sebelumnya, lalu sesudahnya): dulu 25 dari file lama, kini 15,0.
+- Kartu Kebutuhan menampilkan "= unit utuh + SS"; kotak safety stock menampilkan service level per kelas ABC dan r kalibrasi.
+
 Ditemukan, belum diubah (perlu keputusan):
 - Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode) — pilihan desain; menyamakannya butuh dua kali jalan model.
 - Level terkini, fitur lag GBM, dan Prophet membaca hari stok kosong sebagai 0 (MA28, ES, target GBM, dan data uji sudah melewatinya).

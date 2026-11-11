@@ -208,7 +208,12 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
     if orders is None or orders.empty:
         return out
     ref = pd.Timestamp(today).normalize()
-    days = pd.to_datetime(orders["order_time"], errors="coerce").dt.normalize()
+    stamps = pd.to_datetime(orders["order_time"], errors="coerce")
+    days = stamps.dt.normalize()
+    last_stamp = stamps.max()
+    if pd.notna(last_stamp) and last_stamp.hour < 23:
+        # Hari data terakhir yang belum sampai 23:00 bukan hari penuh (aturan Pantauan harian).
+        ref = min(ref, last_stamp.normalize())
     full_days = days[days < ref]
     last_day = full_days.max() if full_days.notna().any() else ref - pd.Timedelta(days=1)
     in_top = orders["item_key"].astype(str).isin(set(keys))

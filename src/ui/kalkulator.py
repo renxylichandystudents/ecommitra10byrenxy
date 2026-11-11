@@ -316,7 +316,8 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
     actual_span = f"1–{last.day} {month_label}"
     from src.ui.targets_view import achievement_line
 
-    reach = achievement_line(mtd, last.replace(day=1), last, features)
+    reach = achievement_line(mtd, last.replace(day=1), last, features,
+                             orders=every if isinstance(every, pd.DataFrame) and not every.empty else orders)
     k = st.columns(4)
     card(k[0], f"Sales bersih aktual {month_label}", fmt_idr(mtd),
          hint=(f"realisasi {actual_span}" if running else "bulan sudah lewat · angka aktual")

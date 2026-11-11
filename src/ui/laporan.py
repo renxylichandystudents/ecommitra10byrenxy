@@ -137,7 +137,10 @@ def build_snapshot(table, *, orders, orders_all, frames, params, today, period, 
     sales_now = float(facts["sales_bersih"])
     sales_prev = float(prev_facts["sales_bersih"]) if prev_facts["pesanan_semua"] > 0 else float("nan")
     growth = (sales_now - sales_prev) / sales_prev * 100 if np.isfinite(sales_prev) and sales_prev > 0 else float("nan")
-    reach, _missing = T.achievement(sales_now, start, end, month_targets)
+    from src.ui.month_track_view import target_pattern
+
+    weight, _cutoff = target_pattern(orders_all if isinstance(orders_all, pd.DataFrame) else None)
+    reach, _missing = T.achievement(sales_now, start, end, month_targets, weight)
     roas_goal = (target_roas_for(features, f"{end.year:04d}-{end.month:02d}") if features is not None else None) or params.get("iklan", {}).get("target_roas", 8)
 
     daily = R.daily_orders(orders_all, start, end)
@@ -145,13 +148,13 @@ def build_snapshot(table, *, orders, orders_all, frames, params, today, period, 
     months = []
     for stamp in pd.period_range(month_lo, end, freq="M"):
         a, b = max(stamp.start_time.date(), month_lo), min(stamp.end_time.date(), end)
-        if data_until is not None and a > data_until:
+        if data_until is not None and a > (_cutoff or data_until):
             continue
-        b = min(b, data_until or b)
+        b = min(b, _cutoff or data_until or b)
         m = cached_order_metrics(orders_all, a, b, exclude)
         key = str(stamp)
         # Bulan sebagian dinilai terhadap target prorata hari yang sama (sama dengan kartu Sales bersih).
-        part, _miss = T.achievement(float(m["sales_bersih"]), a, b, month_targets)
+        part, _miss = T.achievement(float(m["sales_bersih"]), a, b, month_targets, weight)
         months.append({"Bulan": T.month_label(key), "Kunci": key, "Sales bersih": float(m["sales_bersih"]), "Target": float(month_targets.get(key, 0) or 0),
                        "Sebagian": bool(b < stamp.end_time.date()),
                        "Target s.d. data": float(part.target) if part is not None else np.nan,

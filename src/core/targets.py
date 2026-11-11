@@ -4,16 +4,18 @@ Target disimpan per bulan (tabel `sales_target`, kunci `periode` = "YYYY-MM"). T
 yang berlaku untuk semua bulan: bulan tanpa target dianggap belum punya target.
 
 Pencapaian rentang tanggal = sales aktual ÷ target rentang itu. Target rentang = jumlah target setiap bulan
-yang tersentuh, dibagi rata per hari kalender (prorata). Contoh: 1–8 Nov dengan target Nov Rp 3 M
-→ target rentang Rp 3 M × 8/30.
+yang tersentuh, dibagi per hari kalender. Dengan `weight` (pola hari Pantauan harian: Senin–Minggu, gajian,
+tanggal kembar) bagian sebuah tanggal = pola tanggal itu ÷ jumlah pola sebulan; tanpa pola dibagi rata.
+Contoh rata: 1–8 Nov dengan target Nov Rp 3 M → target rentang Rp 3 M × 8/30.
 """
 
 from __future__ import annotations
 
 import calendar
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -148,7 +150,8 @@ class Achievement:
     month_days: int
 
 
-def range_target(targets: dict[str, float], start: date, end: date) -> tuple[float | None, list[str]]:
+def range_target(targets: dict[str, float], start: date, end: date,
+                 weight: Callable[[date], float] | None = None) -> tuple[float | None, list[str]]:
     """Target prorata untuk [start, end]. Mengembalikan (target, bulan tanpa target)."""
     if start is None or end is None or end < start:
         return None, []
@@ -157,20 +160,27 @@ def range_target(targets: dict[str, float], start: date, end: date) -> tuple[flo
     for period in pd.period_range(start, end, freq="M"):
         key = str(period)
         days_in = calendar.monthrange(period.year, period.month)[1]
-        lo = max(start, period.start_time.date())
+        first = period.start_time.date()
+        lo = max(start, first)
         hi = min(end, period.end_time.date())
         value = float(targets.get(key, 0) or 0)
         if value <= 0:
             missing.append(key)
             continue
-        total += value * ((hi - lo).days + 1) / days_in
+        share = ((hi - lo).days + 1) / days_in
+        if weight is not None:
+            w = [max(float(weight(first + timedelta(days=i))), 0.0) for i in range(days_in)]
+            if sum(w) > 0:
+                share = sum(w[(lo - first).days:(hi - first).days + 1]) / sum(w)
+        total += value * share
     if missing:
         return None, missing
     return total, []
 
 
-def achievement(actual: float, start: date, end: date, targets: dict[str, float]) -> tuple[Achievement | None, list[str]]:
-    target, missing = range_target(targets, start, end)
+def achievement(actual: float, start: date, end: date, targets: dict[str, float],
+                weight: Callable[[date], float] | None = None) -> tuple[Achievement | None, list[str]]:
+    target, missing = range_target(targets, start, end, weight)
     if target is None or target <= 0:
         return None, missing
     single = month_key(start) if (start.year, start.month) == (end.year, end.month) else None

@@ -48,11 +48,15 @@ def capacity_summary(features, table: pd.DataFrame) -> tuple[str, str]:
 
 
 def last_actual(orders: pd.DataFrame | None, keys: list[str], today: date) -> tuple[float, date | None]:
-    """QTY Top 50 pada hari penuh terakhir sebelum `today`; hari ini masih berjalan sehingga tidak dipakai."""
+    """QTY Top 50 pada hari penuh terakhir sebelum `today`; hari ini dan hari data yang belum sampai 23:00 tidak dipakai."""
     if orders is None or orders.empty:
         return 0.0, None
-    days = pd.to_datetime(orders["order_time"], errors="coerce").dt.date
-    full = days[days < today]
+    from src.ui.month_track_view import full_day_cutoff
+
+    stamps = pd.to_datetime(orders["order_time"], errors="coerce")
+    days = stamps.dt.date
+    limit = min(full_day_cutoff(stamps.max()), today - timedelta(days=1)) if stamps.notna().any() else today - timedelta(days=1)
+    full = days[days <= limit]
     if full.empty:
         return 0.0, None
     last = full.max()
@@ -63,7 +67,7 @@ def last_actual(orders: pd.DataFrame | None, keys: list[str], today: date) -> tu
 def actual_hint(predicted: float, actual: float, day: date | None, today: date) -> str:
     if day is None:
         return "Belum ada transaksi hari penuh"
-    when = "kemarin" if day == today - timedelta(days=1) else "transaksi terakhir"
+    when = "kemarin" if day == today - timedelta(days=1) else "hari penuh terakhir"
     text = f"Aktual {when} ({short_date(day)}): {fmt_num(actual)}"
     if actual > 0:
         gap = (predicted - actual) / actual * 100

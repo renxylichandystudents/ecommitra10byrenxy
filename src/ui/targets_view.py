@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core import targets as T
+from src.core.fmt import fmt_date
 from src.ui.common import download_excel, fmt_idr, fmt_pct
 
 UP = "#1d4ed8"
@@ -33,21 +34,39 @@ def _tone(pct: float) -> str:
     return UP if pct >= 100 else DOWN
 
 
-def achievement_line(actual: float, start: date | None, end: date | None, features=None, *, targets: dict | None = None) -> str:
-    """Satu baris HTML: target periode, % tercapai (biru ≥ 100%, merah di bawah), dan target bulan penuh."""
+def achievement_line(actual: float, start: date | None, end: date | None, features=None, *, targets: dict | None = None,
+                     orders: pd.DataFrame | None = None) -> str:
+    """Satu baris HTML: target periode, % tercapai (biru ≥ 100%, merah di bawah), dan target bulan penuh.
+
+    Dengan `orders`, aturannya sama dengan Pantauan harian: target dibagi per tanggal menurut pola hari, dan bila
+    rentang memuat hari data yang belum penuh (< 23:00), pencapaian dinilai s.d. hari penuh terakhir."""
     if start is None or end is None:
         return ""
     targets = monthly_targets(features) if targets is None else targets
-    result, missing = T.achievement(actual, start, end, targets)
+    weight, cutoff = (None, None)
+    if orders is not None and not orders.empty:
+        from src.ui.month_track_view import target_pattern
+
+        weight, cutoff = target_pattern(orders)
+    upto = ""
+    if cutoff is not None and start <= cutoff < end:
+        from src.core.metrics import order_metrics
+
+        actual = float(order_metrics(orders, start, cutoff)["sales_bersih"])
+        end, upto = cutoff, f" s.d. {fmt_date(cutoff)} (hari penuh terakhir) {fmt_idr(actual)}"
+    elif cutoff is not None and end > cutoff:
+        return ""
+    result, missing = T.achievement(actual, start, end, targets, weight)
     if result is None:
         names = ", ".join(T.month_label(m) for m in missing[:3]) or "periode ini"
         return f"<span style='color:#94a3b8'>Target {html.escape(names)} belum diunggah (Upload data › Target)</span>"
     pct = f"<b style='color:{_tone(result.pct)}'>{fmt_pct(result.pct, 1)}</b>"
     if result.single_month and not result.full_months:
         month_pct = f"<b style='color:{_tone(result.month_pct)}'>{fmt_pct(result.month_pct, 1)}</b>"
+        basis = "target berjalan (pola hari)" if weight is not None else f"target {result.days}/{result.month_days} hari"
         return (
-            f"Pencapaian {month_pct} dari target {T.month_label(result.single_month)} {fmt_idr(result.month_target)} · "
-            f"target {result.days}/{result.month_days} hari {fmt_idr(result.target)} → {pct}"
+            f"Pencapaian{upto} {month_pct} dari target {T.month_label(result.single_month)} {fmt_idr(result.month_target)} · "
+            f"{basis} {fmt_idr(result.target)} → {pct}"
         )
     scope = f"target {T.month_label(result.single_month)}" if result.single_month else "target periode"
     gap = result.actual - result.target
@@ -140,7 +159,8 @@ def saved_plan(features, periode: str) -> dict:
 
 
 def target_roas_for(features, periode: str) -> float | None:
-    """Target ROAS bulan itu dari Rekomendasi › Iklan; bila belum disimpan, bulan terakhir yang punya target ROAS."""
+    """Target ROAS bulan itu dari Rekomendasi › Iklan; bila belum disimpan, bulan sebelumnya terdekat yang punya target ROAS,
+    lalu bulan sesudahnya terdekat (satu acuan untuk Laporan dan Iklan, bukan parameter lama)."""
     try:
         frame = features.read("sales_target")
     except Exception:
@@ -149,16 +169,19 @@ def target_roas_for(features, periode: str) -> float | None:
 
     if frame.empty:
         return None
-    for key, raw in sorted(zip(frame["periode"].astype(str), frame["budget_json"]), reverse=True):
-        if key > periode:
-            continue
+    saved = {}
+    for key, raw in zip(frame["periode"].astype(str), frame["budget_json"]):
         try:
             value = (json.loads(raw or "{}") or {}).get("target_roas")
         except (TypeError, ValueError, AttributeError):
             value = None
         if value:
-            return float(value)
-    return None
+            saved[key] = float(value)
+    before = [k for k in saved if k <= periode]
+    if before:
+        return saved[max(before)]
+    after = [k for k in saved if k > periode]
+    return saved[min(after)] if after else None
 
 
 def target_upload_label(features) -> str:

@@ -192,6 +192,44 @@ def test_service_level_per_abc_class():
     assert out.loc["A", "target_layanan_pct"] == 99.0
 
 
+def test_range_target_follows_day_pattern():
+    from datetime import date
+
+    from src.core import targets as T
+
+    goal = {"2026-11": 3_000_000.0}
+    flat, _ = T.range_target(goal, date(2026, 11, 1), date(2026, 11, 10))
+    assert abs(flat - 1_000_000.0) < 1e-6
+    peak = lambda d: 3.0 if d.day == 11 else 1.0  # noqa: E731
+    before, _ = T.range_target(goal, date(2026, 11, 1), date(2026, 11, 10), peak)
+    whole, _ = T.range_target(goal, date(2026, 11, 1), date(2026, 11, 30), peak)
+    assert abs(before - 3_000_000.0 * 10 / 32) < 1e-6
+    assert abs(whole - 3_000_000.0) < 1e-6
+
+
+def test_period_actuals_skip_partial_last_day():
+    from datetime import date
+
+    from src.core.decision_table import period_actuals
+
+    orders = pd.DataFrame({
+        "order_time": pd.to_datetime(["2026-11-07 10:00", "2026-11-07 22:00", "2026-11-08 08:00"]),
+        "item_key": ["A", "A", "A"], "qty": [3.0, 2.0, 1.0], "sales": [30.0, 20.0, 10.0],
+    })
+    out = period_actuals(orders, ["A"], period="bulan", today=date(2026, 11, 11))
+    assert out["d"]["qty"] == 5.0 and "7" in out["d"]["label"]
+
+
+def test_ads_plan_never_sells_beyond_stock():
+    from src.core import ads_strategy as A
+    from src.core.ads_fixed import stock_capped
+
+    unit = A.Unit(key="u", nama="Iklan", jenis="Produk tunggal", status="Berjalan", mode="", daily_cost=100.0, daily_sales=1000.0,
+                  a=2000.0, b=200.0, spread=0.2, members=["P1"], demand=1000.0, lift=0.5, stock_room=100.0)
+    capped = stock_capped([unit])[0]
+    assert A.ad_sales(capped, 10_000.0) - A._now_sales(capped) <= 100.0 + 1e-6
+
+
 def test_net_factor_single_rule():
     from src.ui.month_track_view import net_factor
 

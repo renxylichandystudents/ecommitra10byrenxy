@@ -1046,7 +1046,8 @@ ROAS_GRID = (30, 25, 20, 18, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2,
 
 
 def recommend(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
-              weeks: list[int], gap_total: float, grid: tuple[float, ...] = ROAS_GRID, lift: float = DEMAND_LIFT) -> dict:
+              weeks: list[int], gap_total: float, grid: tuple[float, ...] = ROAS_GRID, lift: float = DEMAND_LIFT,
+              stock_cap: bool = False) -> dict:
     """Target ROAS tertinggi + budget yang menutup kekurangan omzet dengan iklan saja (rencana bertahap per minggu).
 
     Bila tidak ada ROAS yang menutupnya, dipilih ROAS tertinggi yang memberi ≥ 99% tambahan omzet maksimal (budget di
@@ -1054,7 +1055,8 @@ def recommend(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, 
     days = max(sum(weeks), 1)
     rows, best = [], None
     for r in grid:
-        plan_units, first, _sel = build_plan(units, members, products, contribution_by_code, gap_daily=gap_total / days, target_roas=r, budget_daily=None, lift=lift)
+        plan_units, first, _sel = build_plan(units, members, products, contribution_by_code, gap_daily=gap_total / days, target_roas=r, budget_daily=None, lift=lift,
+                                             stock_cap=stock_cap)
         steps = ramp(plan_units, weeks=weeks, gap_total=gap_total, target_roas=r, budget_total=None, first=first)
         eff = ramp_effect(plan_units, steps)
         rows.append({"roas": float(r), "budget": eff["biaya_total"], "tambahan": eff["omzet_tambahan"], "roas_rencana": eff["roas_rencana"]})

@@ -38,6 +38,25 @@ def full_day_cutoff(last_stamp) -> date:
     return stamp.date() if stamp.hour >= 23 else stamp.date() - timedelta(days=1)
 
 
+def target_pattern(orders_all: pd.DataFrame | None):
+    """(pola hari untuk membagi target bulan, hari penuh terakhir data), sama dengan `month_state`; (None, None) bila tanpa data."""
+    if orders_all is None or orders_all.empty:
+        return None, None
+    stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max()
+    key = (len(orders_all), str(stamp))
+    cache = st.session_state.get("_target-pattern")
+    if isinstance(cache, tuple) and cache[0] == key:
+        return cache[1]
+    net, _product, last_stamp = _daily_series(orders_all)
+    result = (None, None)
+    if last_stamp is not None:
+        cutoff = full_day_cutoff(last_stamp)
+        profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
+        result = (profile.factor, cutoff)
+    st.session_state["_target-pattern"] = (key, result)
+    return result
+
+
 def net_factor(net: pd.Series, product: pd.Series, first: date, month_cutoff: date, data_cutoff: date | None = None) -> float:
     """Faktor sales bersih ÷ sales produk tgl 1 s.d. hari penuh terakhir bulan itu (cadangan: 30 hari s.d. hari penuh
     terakhir data), dibatasi 0,5–1,2.
