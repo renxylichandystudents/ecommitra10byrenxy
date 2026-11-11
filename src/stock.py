@@ -19,11 +19,17 @@ def recommend_stock(
     source_type: str = "local",
     lead_time_max: float | None = None,
     review_days: float = 0.0,
+    sigma_scale: float = 1.0,
+    item_service_pct: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Stok = prediksi permintaan + safety stock berbasis lead time.
 
     SS = Z x sigma_D x sqrt(L + R), R = periode tinjau stok (lihat src.core.inventory).
+    sigma_D = r x simpangan harian; r (kalibrasi walk-forward) membuat sigma_D x sqrt(L + R) = simpangan galat prediksi L + R hari.
+    item_service_pct: target tingkat layanan per item_key (per kelas ABC); item lain memakai service_level_pct.
     """
+    per_item = item_service_pct or {}
+    scale = float(sigma_scale) if sigma_scale and np.isfinite(sigma_scale) and sigma_scale > 0 else 1.0
     rows = []
     if history is None or history.empty or "item_key" not in history.columns:
         hist_map = {}
@@ -36,9 +42,11 @@ def recommend_stock(
             if hist is not None and not hist.empty:
                 dense = dense_item_series(hist, period)
                 sigma = float(np.std(dense["qty"].to_numpy(dtype=float), ddof=1)) if len(dense) > 1 else 0.0
+        sigma *= scale
         forecast_qty = float(item["pred_qty"])
         steps = max(int(horizon_steps), 1)
         pct = float(service_level_pct) if service_level_pct is not None else _z_to_service_level(float(service_level_z))
+        pct = float(per_item.get(str(item["item_key"]), pct))
         decision = inventory_decision(
             forecast_qty=forecast_qty,
             current_stock=0.0,
@@ -60,6 +68,7 @@ def recommend_stock(
                 "pred_qty": forecast_qty,
                 "pred_sales": float(item["pred_sales"]),
                 "sigma_qty": sigma,
+                "target_layanan_pct": pct,
                 "safety_stock": safety,
                 "kebutuhan": decision.kebutuhan,
                 "rop": decision.rop,

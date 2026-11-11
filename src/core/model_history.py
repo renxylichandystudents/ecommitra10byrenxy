@@ -129,7 +129,8 @@ def history_frame(runs_root: Path, db_runs: dict[str, dict] | None = None) -> tu
 def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataFrame:
     """Apakah algoritma & metode sudah sesuai: tiap uji punya target, nilai, status, dan arti untuk tesis."""
     rows = []
-    best = (record.get("models") or {}).get(record.get("best_model") or "", {})
+    chosen = record.get("model_produksi") or record.get("best_model") or ""
+    best = (record.get("models") or {}).get(chosen, {})
     base = _model(record, BASELINE_LABEL)
     level = _model(record, LEVEL_LABEL)
 
@@ -150,7 +151,7 @@ def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataF
         "Dipakai untuk rencana stok & target bulanan (kesalahan total, ditimbang volume).")
     oos = record.get("luar_sampel") or {}
     oos_models = oos.get("models") or {}
-    oos_best = oos_models.get(record.get("best_model") or "", {})
+    oos_best = oos_models.get(chosen, {})
     # Bias ensemble setelah koreksi pada lipatan yang sama selalu ≈ 0 (faktornya disetel di situ); pakai bias luar sampel.
     bias = oos_best.get("bias") if oos_best.get("bias") is not None else best.get("bias")
     basis = "luar sampel" if oos_best.get("bias") is not None else "lipatan uji"
@@ -164,8 +165,12 @@ def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataF
     service = sim.get("tingkat_layanan_pct")
     goal = float(sim.get("target_layanan_pct") or 90)
     add("Tingkat layanan simulasi", f"≥ {goal:.0f}%".replace(".", ","), pct(service), service >= goal if service is not None else None,
-        "Stok = prediksi + safety stock (rumus SS produksi" + (f": {sim['rumus_ss']}" if sim.get("rumus_ss") else "")
-        + ") cukup memenuhi permintaan aktual pada lipatan uji; target = tingkat layanan yang dipakai SS.")
+        "Cycle service level: stok = prediksi L + R hari + safety stock (rumus SS produksi" + (f": {sim['rumus_ss']}" if sim.get("rumus_ss") else "")
+        + ") cukup untuk permintaan aktual L + R hari; r dikalibrasi dari lipatan sebelumnya saja. "
+        + (f"Tanpa kalibrasi {pct(sim.get('tingkat_layanan_tanpa_kalibrasi_pct'))}. " if sim.get("tingkat_layanan_tanpa_kalibrasi_pct") is not None else "")
+        + "".join(f"Kelas {name}: {pct(info.get('tercapai_pct'))} dari target {pct(info.get('target_pct'))}. "
+                  for name, info in (sim.get("per_kelas") or {}).items() if info.get("sku_lipatan"))
+        + "Target = rata-rata target kelas ABC SKU yang dinilai.")
     folds = len(record.get("fold_dates") or [])
     add("Jumlah lipatan walk-forward", "≥ 3", str(folds), folds >= 3, "Lipatan lebih banyak = hasil uji lebih bisa dipercaya (tidak bergantung satu bulan).")
     if history is not None and len(history) >= 2 and history["WAPE (%)"].notna().sum() >= 2:

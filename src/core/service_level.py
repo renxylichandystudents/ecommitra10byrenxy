@@ -69,6 +69,34 @@ def recommended_service_level(period: str, params: dict, orders: pd.DataFrame | 
     return ServiceRecommendation(pct, ratio, cu, co, share_a, share_c, used_default)
 
 
+CLASS_OFFSETS = {"A": 2.0, "B": 0.0, "C": -7.0}
+
+
+def class_service_levels(base_pct: float, params: dict | None = None) -> dict[str, float]:
+    """Target tingkat layanan per kelas ABC: tingkat layanan pilihan (kelas B) + selisih per kelas, dibatasi MIN_PCT–MAX_PCT.
+    SKU kelas C (laku jarang, permintaan proyek) tidak dibebani target setinggi kelas A."""
+    offsets = {**CLASS_OFFSETS, **{k: float(v) for k, v in ((params or {}).get("layanan_kelas") or {}).items()}}
+    base = float(base_pct)
+    return {name: float(min(max(base + offsets.get(name, 0.0), MIN_PCT), MAX_PCT)) if base > 0 else 0.0 for name in ("A", "B", "C")}
+
+
+def abc_by_qty(history: pd.DataFrame | None, days: int = 90) -> dict[str, str]:
+    """Kelas ABC per item_key dari QTY `days` hari terakhir (A ≤ 80% kumulatif, B ≤ 95%, sisanya C), aturan yang sama dengan evaluasi."""
+    if history is None or history.empty or not {"item_key", "qty", "period_start"} <= set(history.columns):
+        return {}
+    stamp = pd.to_datetime(history["period_start"], errors="coerce")
+    recent = history.loc[stamp > stamp.max() - pd.Timedelta(days=days)]
+    volume = pd.to_numeric(recent["qty"], errors="coerce").fillna(0).groupby(recent["item_key"].astype(str)).sum().clip(lower=0)
+    volume = volume.sort_values(ascending=False)
+    total = float(volume.sum())
+    if total <= 0:
+        return {}
+    share = volume.cumsum() / total
+    labels = np.where(share <= 0.80, "A", np.where(share <= 0.95, "B", "C"))
+    labels = np.where(volume.to_numpy() <= 0, "C", labels)
+    return dict(zip(volume.index, labels))
+
+
 def safety_impact(stock: pd.DataFrame | None, *, stored_pct: float, rec_pct: float, new_pct: float, hpp_pct: float) -> dict | None:
     """SS baru = SS rekomendasi × z(baru) / z(rekomendasi). Dibaca dari SS hasil analisis terakhir."""
     if stock is None or stock.empty or "safety_stock" not in stock.columns:

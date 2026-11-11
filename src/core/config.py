@@ -15,6 +15,7 @@ _FALLBACK_PARAMS: dict[str, Any] = {
     "lead_time": {"lokal_hari": 7, "lokal_sigma_hari": 0, "impor_aktif": False, "impor_rata_hari": 60, "impor_maks_hari": 90},
     "gudang": {"kapasitas_unit": 100000, "moq_unit": 1, "biaya_simpan_pct_tahun": 20, "biaya_pesan_rp": 150000, "biaya_kehabisan_pct": 30},
     "margin": {"hpp_pct_harga": 80, "margin_min_pct": 8},
+    "layanan_kelas": {"A": 2, "B": 0, "C": -7},
     "target": {"sales_bulanan_rp": 0},
     "iklan": {"target_roas": 8, "budget_maks_rp": 5000000, "porsi_sales_iklan_default_pct": 30, "roas_default": 6},
     "label": {"terlaris_top_n": 10, "populer_top_pct": 10, "diminati_top_pct": 10, "perlu_perhatian_batal_pct": 15, "perlu_perhatian_kali_median": 2},

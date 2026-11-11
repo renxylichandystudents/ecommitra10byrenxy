@@ -143,9 +143,53 @@ def test_nested_evaluation_uses_only_earlier_folds():
     changed = {k: v[:3] + [(v[3][0], v[3][1] * 5)] for k, v in singles.items()}
     w_again, f_again, _ = E.fit_combination(changed, valid, segments, [0])
     assert w_first == w_again and f_first == f_again
-    out = E._nested_scores(singles, valid, segments, fold_classes_list=[np.array(["A"] * n, dtype=object)] * 4, fold_dates=["d0", "d1", "d2", "d3"])
+    out, preds = E._nested_scores(singles, valid, segments, fold_classes_list=[np.array(["A"] * n, dtype=object)] * 4,
+                                  fold_dates=["d0", "d1", "d2", "d3"])
     assert out["lipatan_dinilai"] == ["d1", "d2", "d3"]
     assert {"ensemble", "ensemble_segmen", "ma28", "level_terkini"} <= set(out["models"])
+    assert len(preds[E.MODEL_SEGMENT]) == 3
+
+
+def test_production_weights_follow_chosen_model():
+    from src.models import evaluate as E
+
+    weights = {E.MODEL_ES: 0.6, E.MODEL_MA: 0.4, E.BIAS_KEY: 1.1, E.SEGMENT_KEY: {"AX": E.MODEL_ES}}
+    assert E.production_weights(weights, E.MODEL_SEGMENT) == weights
+    assert E.SEGMENT_KEY not in E.production_weights(weights, E.MODEL_ENSEMBLE)
+    assert E.production_weights(weights, E.MODEL_ES) == {E.MODEL_ES: 1.0}
+
+
+def test_ss_calibration_scales_sigma_to_lead_time_error():
+    from src.models.evaluate import ss_calibration
+    from src.stock import recommend_stock
+
+    assert abs(ss_calibration(np.full(100, 2.0)) - 2.0 / 0.6745) < 1e-9
+    heavy = np.r_[np.full(95, 0.6745), np.full(5, 40.0)]
+    assert abs(ss_calibration(heavy) - 1.0) < 1e-9
+    assert ss_calibration(np.ones(5)) == 1.0
+    combined = pd.DataFrame({"item_key": ["A"], "item_label": ["A"], "pred_qty": [30.0], "pred_sales": [300.0], "error_sigma": [2.0],
+                             "rank_qty": [1], "rank_sales": [1], "rank_komposit": [1]})
+    base = recommend_stock(None, combined, "hari", service_level_pct=95, lead_time_days=7, review_days=7)
+    scaled = recommend_stock(None, combined, "hari", service_level_pct=95, lead_time_days=7, review_days=7, sigma_scale=2.0)
+    assert abs(float(scaled["safety_stock"].iloc[0]) - 2 * float(base["safety_stock"].iloc[0])) < 1e-6
+
+
+def test_service_level_per_abc_class():
+    from src.core.service_level import abc_by_qty, class_service_levels
+    from src.stock import recommend_stock
+
+    assert class_service_levels(97, {}) == {"A": 99.0, "B": 97.0, "C": 90.0}
+    assert class_service_levels(85, {"layanan_kelas": {"C": -10}})["C"] == 80.0
+    days = pd.date_range("2026-10-01", periods=30)
+    hist = pd.DataFrame({"item_key": ["A"] * 30 + ["B"] * 30 + ["C"] * 30, "period_start": list(days) * 3,
+                         "qty": [80.0] * 30 + [15.0] * 30 + [5.0] * 30})
+    assert abc_by_qty(hist) == {"A": "A", "B": "B", "C": "C"}
+    combined = pd.DataFrame({"item_key": ["A", "C"], "item_label": ["A", "C"], "pred_qty": [30.0, 30.0], "pred_sales": [300.0, 300.0],
+                             "error_sigma": [2.0, 2.0], "rank_qty": [1, 2], "rank_sales": [1, 2], "rank_komposit": [1, 2]})
+    out = recommend_stock(None, combined, "hari", service_level_pct=97, lead_time_days=7, review_days=7,
+                          item_service_pct={"A": 99.0, "C": 90.0}).set_index("item_key")
+    assert out.loc["A", "safety_stock"] > out.loc["C", "safety_stock"]
+    assert out.loc["A", "target_layanan_pct"] == 99.0
 
 
 def test_net_factor_single_rule():

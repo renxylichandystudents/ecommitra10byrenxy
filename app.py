@@ -3943,9 +3943,17 @@ def _accuracy_line(name: str, predicted: int | None, sold: int | None) -> str:
 
 
 def active_forecast_model() -> str:
-    """Nama model prediksi yang dipakai hasil analisa aktif: Ensemble bila bobotnya ada, selain itu Level terkini."""
+    """Nama model prediksi yang dipakai hasil analisa aktif (pilihan WAPE luar sampel); tanpa bobot = Level terkini."""
     analysis = st.session_state.get("analysis") or {}
-    return "Ensemble" if isinstance(analysis, dict) and analysis.get("ensemble_weights") else "Level terkini"
+    weights = analysis.get("ensemble_weights") if isinstance(analysis, dict) else None
+    if not weights:
+        return "Level terkini"
+    from src.models.evaluate import SEGMENT_KEY
+
+    members = [k for k, v in weights.items() if not str(k).startswith("_") and v]
+    if len(members) == 1 and not weights.get("_koreksi_bias") and not weights.get(SEGMENT_KEY):
+        return members[0]
+    return "Ensemble per segmen" if weights.get(SEGMENT_KEY) else "Ensemble"
 
 
 def explain_qty_gap(
@@ -5888,6 +5896,7 @@ def _stock_for(analysis: dict, percent: int) -> pd.DataFrame:
         as_of=date.today(),
         service=percent,
         params=current_params(),
+        weights=analysis.get("ensemble_weights"),
     )
 
 
@@ -7354,12 +7363,17 @@ def _forecast_stock_as_of(history: pd.DataFrame | None, as_of: date, period: str
     return frame_from_stock(priced)
 
 
-def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, period: str, as_of: date, service: int, params: dict) -> pd.DataFrame:
-    """Safety stock dari parameter bisnis: lead time lokal, variasi lead time, atau impor."""
+def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, period: str, as_of: date, service: int, params: dict,
+                       weights: dict | None = None) -> pd.DataFrame:
+    """Safety stock dari parameter bisnis: lead time lokal, variasi lead time, atau impor; σ dikali faktor kalibrasi walk-forward."""
     from src.core.inventory import lead_time_days
+    from src.core.service_level import abc_by_qty, class_service_levels
+    from src.models.evaluate import SS_CALIBRATION_KEY
 
     lead = params.get("lead_time", {})
     impor = bool(lead.get("impor_aktif", False))
+    levels = class_service_levels(service, params)
+    per_item = {key: levels[label] for key, label in abc_by_qty(base_history).items()}
     return recommend_stock(
         base_history,
         combined,
@@ -7372,6 +7386,8 @@ def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, pe
         source_type="import" if impor else "local",
         lead_time_max=float(lead.get("impor_maks_hari", 90)) if impor else None,
         review_days=float(lead.get("review_hari", 7) or 0),
+        sigma_scale=float((weights or {}).get(SS_CALIBRATION_KEY, 1.0) or 1.0),
+        item_service_pct=per_item,
     )
 
 
@@ -7423,7 +7439,8 @@ def build_forecast(
     combined = combine_forecasts(qty_fc, sales_fc)
     if isinstance(orders, pd.DataFrame) and not orders.empty:
         combined = apply_recent_price(combined, orders, today=as_of)
-    stock = stock_for_combined(base_history, combined, period=period, as_of=as_of, service=service, params=params)
+    stock = stock_for_combined(base_history, combined, period=period, as_of=as_of, service=service, params=params,
+                               weights=outcome.weights if outcome is not None else weights)
     return combined, stock, outcome
 
 

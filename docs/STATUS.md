@@ -30,16 +30,20 @@ Tahap 3 (11 Nov malam, "temukan celah galat, salah hitung, salah logika"). **Jal
 - **Batas margin promo** bawaan 0% (asal tidak rugi), sama dengan `business_targets`; dulu Ringkasan memakai 8%.
 - **Iklan per bulan** (Ringkasan) tanpa laporan all iklan memakai jumlah per produk (sama dengan kartu iklan), dulu Rp 0; kolom Sumber.
 - **Evaluasi model** (`src/models/evaluate.py`):
-  - **Uji luar sampel (nested walk-forward)** baru: lipatan k dinilai dengan bobot, faktor bias, dan model per segmen dari lipatan sebelum k saja (`fit_combination`, `_nested_scores`, record `luar_sampel`); tabel di tab Evaluasi › Hasil. Setelan produksi tidak berubah.
+  - **Uji luar sampel (nested walk-forward)** baru: lipatan k dinilai dengan bobot, faktor bias, dan model per segmen dari lipatan sebelum k saja (`fit_combination`, `_nested_scores`, record `luar_sampel`); tabel di tab Evaluasi › Hasil.
   - Kesimpulan membandingkan **MAPE agregat** dengan target 15% (dulu MAPE per SKU); uji "Tidak bias" memakai bias luar sampel (dulu ≈ 0 karena faktor disetel di lipatan yang sama).
   - Simulasi tingkat layanan = **cycle service level**: jendela L + R hari (SS melindungi lead time + tinjau), pasangan dengan hari stok kosong tidak dinilai.
   - SKU uji dipilih dari 90 hari sebelum titik potong pertama (dulu 90 hari terakhir = melihat data uji). `top_n_hits` hanya menghitung SKU yang laku.
   - Teks metodologi diperbaiki: penyebut MAPE, perlakuan hari stok kosong per model.
 - Dicek dengan data lokal: total Sales bersih harian Laporan = `order_metrics` (Rp 2.373.100.635, Okt 1–26).
 
-Hasil uji data lokal (horizon bulan, run terbaru) yang perlu keputusan pengguna:
-- Luar sampel (4 lipatan Jun–Sep): Ensemble per segmen WAPE 70,6% vs MA28 70,4% vs Exponential Smoothing 68,8% (terbaik); MAPE agregat 16,8%, bias −9,3%. In-sample 68,5% terlalu optimis.
-- Cycle service level SS produksi (Z 1,88 × σ × √14) = 71,8% vs target 97%: σ harian × √(L+R) menganggap hari saling bebas, padahal permintaan proyek bergerombol; ditambah bias kurang prediksi. Rumus SS tidak diubah tanpa keputusan.
+Tahap 4 (keputusan pengguna: model produksi dipilih luar sampel; SS empiris "Kalibrasi robust (MAD) + target layanan per kelas ABC"). **Jalankan analisa ulang** agar bobot, faktor kalibrasi, dan SS baru dipakai:
+- **Model produksi** = WAPE luar sampel terkecil per horizon (`record["model_produksi"]`, `weights_produksi`; `production_weights`). Data lokal: Exponential Smoothing untuk hari/minggu/bulan, Gradient Boosting global untuk kuartal. Tabel kandidat Evaluasi punya baris "Model produksi".
+- `apply_ensemble` tidak lagi membulatkan/memaksa minimal 1 per model (pembulatan hanya di tabel keputusan).
+- **SS = Z(kelas) × r × σ × √(L + R)**, dibulatkan ke atas. r = faktor kalibrasi dari galat prediksi jendela L+R di walk-forward, diestimasi robust: median|z| ÷ 0,6745, dibatasi 0,5–5 (`ss_calibration`, kunci `_kalibrasi_ss` di bobot). Simulasi menilai lipatan k dengan r dari lipatan sebelum k saja.
+- **Target layanan per kelas ABC** (QTY 90 hari, `abc_by_qty`): A = dasar + 2, B = dasar, C = dasar − 7, batas 80–99 (`layanan_kelas` di `business_params.yaml`). Dasar 97% → A 99%, B 97%, C 90%. Kolom `target_layanan_pct` di rekomendasi stok.
+- Hasil data lokal (bulan, 4 lipatan luar sampel): Exponential Smoothing WAPE 68,8%, MAPE agregat 12,8%, bias −12,3% (Ensemble per segmen 70,6%; in-sample 68,5% terlalu optimis). r = 1,57. Cycle service level tercapai **80,9%** (tanpa kalibrasi 76,9%) vs target rata-rata 93,5%: kelas A 86,8%/99%, B 83,2%/97%, C 78,0%/90%. Target belum tercapai karena permintaan proyek bergerombol (ekor galat tebal, q97 |z| ≈ 9) dan bias kurang prediksi; dilaporkan apa adanya di tesis.
+- Dampak SS (run lokal, horizon hari 30 langkah): 12.028 → 19.963 unit, Rp 2,61 M → Rp 4,20 M (A Rp 2,29 M, B Rp 0,69 M, C Rp 1,22 M). Kalibrasi RMS (ditolak) memberi ±47.500 unit.
 
 Ditemukan, belum diubah (perlu keputusan):
 - Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode) — pilihan desain; menyamakannya butuh dua kali jalan model.

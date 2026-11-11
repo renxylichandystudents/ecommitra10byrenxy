@@ -16,6 +16,12 @@ gudang:
   biaya_pesan_rp: 150000         # biaya sekali pesan untuk EOQ
   biaya_kehabisan_pct: 30        # persen dari harga jual per unit yang hilang
 
+# Target tingkat layanan per kelas ABC (QTY 90 hari): selisih poin dari tingkat layanan pilihan (= kelas B), batas 80–99%.
+layanan_kelas:
+  A: 2
+  B: 0
+  C: -7
+
 margin:
   hpp_pct_harga: 80              # HPP diasumsikan 80% dari harga jual bersih
   margin_min_pct: 8              # batas margin minimum flash sale / markdown

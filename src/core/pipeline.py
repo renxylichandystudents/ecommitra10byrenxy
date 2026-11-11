@@ -64,7 +64,7 @@ def run_demand_models(
     matrix = build_demand_matrix(base_history, zero_since=zero_since)
     days = matrix.values.shape[1] if matrix.values.size else 0
     censored = int(np.isnan(matrix.values).any(axis=1).sum()) if matrix.values.size else 0
-    from src.models.evaluate import HORIZONS, evaluate_all, segment_blend, walk_forward_results
+    from src.models.evaluate import HORIZONS, SS_CALIBRATION_KEY, evaluate_all, segment_blend, walk_forward_results
 
     subset = _evaluation_subset(matrix, eval_limit)
     records = evaluate_all(
@@ -72,12 +72,16 @@ def run_demand_models(
         progress=(lambda pct, label: progress(0.1 + 0.6 * pct, label)) if progress else None,
     )
     evaluations: list[WalkForwardResult] = walk_forward_results(records)
-    # Bobot ensemble (+ faktor koreksi bias) dari horizon uji yang paling dekat dengan periode prediksi.
+    # Model produksi = WAPE luar sampel terkecil pada horizon uji yang paling dekat dengan periode prediksi
+    # (Ensemble per segmen, Ensemble, atau satu model tunggal); bobotnya dari record itu.
     weights = {MODEL_LEVEL: 1.0}
     ready = {name: rec for name, rec in records.items() if rec.get("weights")}
     if ready:
         closest = min(ready, key=lambda name: abs(HORIZONS[name] - horizon))
-        weights = dict(ready[closest]["weights"])
+        weights = dict(ready[closest].get("weights_produksi") or ready[closest]["weights"])
+    factor = ((records.get("bulan") or {}).get("simulasi_ss") or {}).get("faktor_kalibrasi_ss")
+    if factor:
+        weights[SS_CALIBRATION_KEY] = float(factor)
     if progress:
         progress(0.8, "Melatih model akhir dan menyusun ensemble")
     forecasts, availability = model_forecasts(matrix, horizon)
@@ -125,10 +129,9 @@ def apply_ensemble(qty_fc: pd.DataFrame, outcome: DemandOutcome) -> pd.DataFrame
     blended = outcome.per_model.set_index("item_key")[MODEL_ENSEMBLE]
     values = out["item_key"].astype(str).map(blended)
     has = values.notna()
-    sold = out["forecast_level"] > 0
-    rounded = np.floor(values.fillna(0.0) + 0.5)
-    rounded = np.where(sold & (rounded < 1), 1, rounded)
-    out.loc[has, "forecast"] = rounded[has.to_numpy()]
+    # Nilai model apa adanya (pecahan); pembulatan ke bawah hanya di tabel keputusan, tanpa paksaan minimal 1 unit.
+    out["forecast"] = out["forecast"].astype(float)
+    out.loc[has, "forecast"] = values[has].astype(float).clip(lower=0.0)
     out.loc[has, "best_model"] = MODEL_ENSEMBLE
     return out
 

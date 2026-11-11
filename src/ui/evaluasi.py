@@ -200,7 +200,8 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
         {"Model": "Gradient Boosting global", "Peran": "machine learning", "Rumus / ide": "satu model untuk semua SKU; fitur lag, rolling, promo, stok (XGBoost/LightGBM bila tersedia)"},
         {"Model": "Prophet", "Peran": "deret waktu toko", "Rumus / ide": "tren + musiman mingguan + regresor promo pada total toko, dibagi ke SKU"},
         {"Model": "Ensemble", "Peran": "gabungan", "Rumus / ide": "bobot ∝ 1/WAPE (hanya model yang mengalahkan MA28) × faktor koreksi bias"},
-        {"Model": MODEL_SEGMENT, "Peran": "dipakai produksi", "Rumus / ide": "per segmen ABC-XYZ dipakai model dengan WAPE terkecil"},
+        {"Model": MODEL_SEGMENT, "Peran": "kandidat produksi", "Rumus / ide": "per segmen ABC-XYZ dipakai model dengan WAPE terkecil"},
+        {"Model": "Model produksi", "Peran": "dipakai prediksi", "Rumus / ide": "model (tunggal, Ensemble, atau Ensemble per segmen) dengan WAPE luar sampel terkecil pada horizon terdekat"},
     ]), column_config={"Rumus / ide": st.column_config.TextColumn(width="large")})
     st.markdown("**Metrik evaluasi**")
     c1, c2 = st.columns(2)
@@ -374,7 +375,8 @@ def _results(records: dict, period: str) -> dict:
             fig.add_hline(y=MAPE_TARGET_PCT, line_dash="dash", line_color="#a16207", annotation_text=f"Target {MAPE_TARGET_PCT:.0f}%")
         fig.update_layout(yaxis_title=metric, title=f"{metric} per model · horizon {HORIZON_LABELS[horizon].lower()}", showlegend=False)
         _plot(fig, "eval-res-bar")
-        _caption_figure("9", "Oranye = model produksi (ensemble per segmen); hijau tua = MA28 pembanding; abu-abu = metode lama.")
+        prod = (record.get("models") or {}).get(record.get("model_produksi") or "", {}).get("label", MODEL_SEGMENT)
+        _caption_figure("9", f"Oranye = Ensemble per segmen; hijau tua = MA28 pembanding; abu-abu = metode lama. Model produksi (WAPE luar sampel terkecil): {prod}.")
     with c2:
         axes = ["WAPE (%)", "MAPE agregat (%)", "MAPE (%)", "RMSE"]
         sub = frame.set_index("Model")[axes].astype(float)

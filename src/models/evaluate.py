@@ -48,6 +48,9 @@ SEGMENT_KEY = "_model_per_segmen"
 MODEL_SEGMENT = "Ensemble per segmen"
 MIN_TRAIN_DAYS = 35
 BIAS_FACTOR_LIMITS = (0.5, 1.5)
+SS_CALIBRATION_LIMITS = (0.5, 5.0)
+SS_CALIBRATION_KEY = "_kalibrasi_ss"
+MAD_TO_SIGMA = 0.6745
 SERVICE_LEAD_DAYS = 7
 
 
@@ -222,10 +225,17 @@ def evaluate_horizon(
     )
     record["best_model"] = MODEL_KEYS.get(ranked[0]["label"], ranked[0]["label"]) if ranked else None
     singles_only = {name: pairs[name] for name in pairs if name not in (MODEL_ENSEMBLE, MODEL_SEGMENT)}
-    record["luar_sampel"] = _nested_scores(singles_only, valid, segments, fold_classes_list=[classes[v] for v in valid],
-                                          fold_dates=record["fold_dates"])
+    record["luar_sampel"], oos_preds = _nested_scores(singles_only, valid, segments, fold_classes_list=[classes[v] for v in valid],
+                                                      fold_dates=record["fold_dates"])
+    prod_key = (record["luar_sampel"] or {}).get("best_model") or record["best_model"]
+    prod_label = next((info["label"] for key, info in record["models"].items() if key == prod_key), MODEL_SEGMENT)
+    record["model_produksi"] = prod_key
+    record["weights_produksi"] = production_weights(record["weights"], prod_label)
     if days == HORIZONS["bulan"]:
-        record["simulasi_ss"] = _service_simulation(matrix, usable, pairs.get(MODEL_SEGMENT, pairs[MODEL_ENSEMBLE]), days)
+        # Prediksi luar sampel model produksi (lipatan 2 dst.); tanpa uji luar sampel, prediksi lipatan uji biasa.
+        preds = {k + 1: p for k, (_a, p) in enumerate(oos_preds.get(prod_label, []))} if oos_preds.get(prod_label) else \
+            {k: p for k, (_a, p) in enumerate(pairs.get(prod_label) or pairs.get(MODEL_SEGMENT) or pairs[MODEL_ENSEMBLE])}
+        record["simulasi_ss"] = _service_simulation(matrix, usable, preds, days)
     record["kesimpulan"] = conclusion_text(record)
     return record
 
@@ -266,13 +276,26 @@ def fit_combination(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], val
     return weights, factor, choice
 
 
+def production_weights(weights: dict, label: str) -> dict:
+    """Bobot yang dipakai prediksi produksi untuk model terpilih (WAPE luar sampel terkecil).
+
+    Ensemble per segmen = semua bobot; Ensemble = tanpa pilihan segmen; model tunggal = bobot 1 tanpa koreksi bias
+    (skor luar sampelnya juga tanpa koreksi)."""
+    if label == MODEL_SEGMENT:
+        return dict(weights)
+    if label == MODEL_ENSEMBLE:
+        return {k: v for k, v in weights.items() if k != SEGMENT_KEY}
+    return {label: 1.0}
+
+
 def _nested_scores(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], valid: list[np.ndarray], segments: np.ndarray, *,
-                   fold_classes_list: list[np.ndarray], fold_dates: list[str]) -> dict:
+                   fold_classes_list: list[np.ndarray], fold_dates: list[str]) -> tuple[dict, dict]:
     """Uji luar sampel (nested walk-forward): lipatan k dinilai dengan bobot, faktor bias, dan pilihan segmen yang dihitung
-    hanya dari lipatan sebelum k. Lipatan pertama tidak dinilai. Model tunggal dinilai pada lipatan yang sama agar setara."""
+    hanya dari lipatan sebelum k. Lipatan pertama tidak dinilai. Model tunggal dinilai pada lipatan yang sama agar setara.
+    Mengembalikan (ringkasan untuk record, prediksi per model untuk lipatan 2 dst.)."""
     count = len(valid)
     if count < 2 or not singles:
-        return {}
+        return {}, {}
     combo: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {MODEL_ENSEMBLE: [], MODEL_SEGMENT: []}
     for k in range(1, count):
         weights, factor, choice = fit_combination(singles, valid, segments, list(range(k)))
@@ -285,7 +308,8 @@ def _nested_scores(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], vali
         combo[MODEL_SEGMENT].append((actual, picked))
     classes = np.concatenate(fold_classes_list[1:])
     models = {}
-    for name, items in {**{n: v[1:] for n, v in singles.items()}, **combo}.items():
+    preds = {**{n: v[1:] for n, v in singles.items()}, **combo}
+    for name, items in preds.items():
         scored = [(a[valid[k + 1]], p[valid[k + 1]]) for k, (a, p) in enumerate(items)]
         actual = np.concatenate([a for a, _ in scored])
         pred = np.concatenate([p for _, p in scored])
@@ -296,8 +320,9 @@ def _nested_scores(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], vali
         "models": models,
         "best_model": MODEL_KEYS.get(ranked[0]["label"], ranked[0]["label"]) if ranked else None,
         "catatan": "Bobot ensemble, faktor koreksi bias, dan model per segmen untuk lipatan k dihitung hanya dari lipatan sebelum k "
-                   "(tanpa melihat lipatan yang dinilai). Lipatan pertama hanya dipakai untuk menyetel.",
-    }
+                   "(tanpa melihat lipatan yang dinilai). Lipatan pertama hanya dipakai untuk menyetel. "
+                   "Model dengan WAPE luar sampel terkecil dipakai prediksi produksi.",
+    }, preds
 
 
 def production_ss_settings() -> tuple[float, float, float, float]:
@@ -313,32 +338,79 @@ def production_ss_settings() -> tuple[float, float, float, float]:
     return pct, service_level_to_z(pct), float(lead.get("lokal_hari", SERVICE_LEAD_DAYS) or 0), float(lead.get("review_hari", 0) or 0)
 
 
-def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], ensemble_pairs, days: int) -> dict:
-    """Cycle service level simulasi: SS = Z × σ × √(L + R) melindungi permintaan selama lead time + periode tinjau, jadi diuji pada
-    L + R hari pertama tiap lipatan: stok = laju harian prediksi × (L + R) + SS dibanding permintaan aktual L + R hari itu."""
-    pct, z, lead_days, review_days = production_ss_settings()
+def ss_calibration(z_scores: np.ndarray) -> float:
+    """Faktor r agar σ galat L + R hari = r × σ harian × √(L + R), ditaksir robust: median |galat terstandar| ÷ 0,6745 (MAD).
+
+    Akar rata-rata kuadrat didominasi pesanan proyek sesekali (ekor tebal) dan membesarkan SS semua SKU ±4×; MAD menaksir
+    sebaran galat yang umum, ekor ditangani target layanan per kelas ABC."""
+    z_scores = np.asarray(z_scores, dtype=float)
+    z_scores = z_scores[np.isfinite(z_scores)]
+    if z_scores.size < 30:
+        return 1.0
+    return float(np.clip(np.median(np.abs(z_scores)) / MAD_TO_SIGMA, *SS_CALIBRATION_LIMITS))
+
+
+def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], preds: dict[int, np.ndarray], days: int) -> dict:
+    """Cycle service level: SS melindungi permintaan selama lead time + periode tinjau, jadi diuji pada L + R hari pertama tiap
+    lipatan: stok = laju harian prediksi × (L + R) + SS dibanding permintaan aktual L + R hari itu.
+
+    SS = Z(kelas ABC) × σ galat L + R hari, σ galat = r × σ harian 28 hari × √(L + R). r dikalibrasi dari galat prediksi luar
+    sampel model produksi; untuk menilai lipatan k, r dihitung dari lipatan sebelum k saja. Faktor akhir (semua lipatan) dipakai
+    SS produksi. Target layanan per kelas ABC (A lebih tinggi, C lebih rendah) sama dengan produksi."""
+    from src.core.config import default_params
+    from src.core.inventory import service_level_to_z
+    from src.core.service_level import class_service_levels
+
+    pct, _z, lead_days, review_days = production_ss_settings()
+    levels = class_service_levels(pct, default_params())
+    z_of = {name: service_level_to_z(level) for name, level in levels.items()}
     span = int(min(max(round(lead_days + review_days), 1), days))
-    served, total, censored_caught, censored_total = 0, 0, 0, 0
-    for cut, (_actual, pred_full) in zip(cutoffs, ensemble_pairs):
-        sigma = np.nanstd(matrix.values[:, max(cut - 28, 0) : cut], axis=1)
-        ss = np.ceil(z * np.nan_to_num(sigma) * np.sqrt(lead_days + review_days))
+    root = np.sqrt(lead_days + review_days)
+    folds = []
+    censored_caught, censored_total = 0, 0
+    for index in sorted(preds):
+        if index >= len(cutoffs):
+            continue
+        cut = cutoffs[index]
+        sigma = np.nan_to_num(np.nanstd(matrix.values[:, max(cut - 28, 0) : cut], axis=1))
         window = matrix.values[:, cut : cut + span]
         actual = np.nan_to_num(window, nan=0.0).sum(axis=1)
-        pred = np.asarray(pred_full, dtype=float) * span / days
+        pred = np.asarray(preds[index], dtype=float) * span / days
         had_stockout = np.isnan(window).any(axis=1)
+        classes = abc_classes(matrix, cut)
         # Pasangan dengan hari stok kosong tidak dinilai: permintaan aslinya tidak terlihat, jadi "terlayani" tidak bisa dibuktikan.
         active = ((actual > 0) | (pred > 0)) & ~had_stockout
-        served += int(((pred + ss) >= actual)[active].sum())
-        total += int(active.sum())
+        scale = sigma * root
+        zs = np.where(active & (scale > 0), (actual - pred) / np.where(scale > 0, scale, 1.0), np.nan)
+        z_sku = np.array([z_of.get(c, z_of["B"]) for c in classes], dtype=float)
+        folds.append((actual[active], pred[active], scale[active], zs, z_sku[active], classes[active]))
         censored_total += int(had_stockout.sum())
         censored_caught += int((had_stockout & (pred > 0)).sum())
+
+    def served(items, factors) -> np.ndarray:
+        return np.concatenate([(p + np.ceil(zk * r * s - 1e-9)) >= a for (a, p, s, _z, zk, _c), r in zip(items, factors)]) \
+            if items else np.array([], dtype=bool)
+
+    raw = served(folds, [1.0] * len(folds))
+    nested = [ss_calibration(np.concatenate([f[3] for f in folds[:k]])) for k in range(1, len(folds))]
+    scored = folds[1:] if len(folds) > 1 else folds
+    cal = served(scored, nested if len(folds) > 1 else [1.0] * len(folds))
+    cal_classes = np.concatenate([f[5] for f in scored]) if scored else np.array([], dtype=object)
+    factor = ss_calibration(np.concatenate([f[3] for f in folds])) if folds else 1.0
+    per_class = {name: {"target_pct": levels[name], "tercapai_pct": _num(cal[cal_classes == name].mean() * 100) if (cal_classes == name).any() else None,
+                        "sku_lipatan": int((cal_classes == name).sum())} for name in ("A", "B", "C")}
+    goal = float(np.mean([levels.get(c, pct) for c in cal_classes])) if cal_classes.size else pct
     return {
-        "tingkat_layanan_pct": _num(served / total * 100) if total else None,
-        "sku_lipatan": total,
+        "tingkat_layanan_pct": _num(cal.mean() * 100) if cal.size else None,
+        "tingkat_layanan_tanpa_kalibrasi_pct": _num(raw.mean() * 100) if raw.size else None,
+        "faktor_kalibrasi_ss": round(factor, 4),
+        "per_kelas": per_class,
+        "sku_lipatan": int(cal.size),
         "stok_kosong_tertangkap_pct": _num(censored_caught / censored_total * 100) if censored_total else None,
         "sku_stok_kosong": censored_total,
-        "target_layanan_pct": pct,
-        "rumus_ss": f"Z {z:.2f} × σ 28 hari × √({lead_days:g} + {review_days:g})",
+        "target_layanan_pct": round(goal, 2),
+        "rumus_ss": (f"Z(kelas A {levels['A']:.0f}%, B {levels['B']:.0f}%, C {levels['C']:.0f}%) × r {factor:.2f} × σ 28 hari × "
+                     f"√({lead_days:g} + {review_days:g})").replace(".", ","),
         "jendela_hari": span,
     }
 
@@ -365,12 +437,14 @@ def conclusion_text(record: dict) -> str:
         parts[0] += (f" MAPE agregat toko {fmt_num_id(value)}% — {fmt_num_id(abs(gap))} poin {side} target {MAPE_TARGET_PCT:.0f}%"
                      f" (MAPE per SKU {fmt_num_id(best.get('mape'))}%).")
     oos = record.get("luar_sampel") or {}
-    prod = (oos.get("models") or {}).get(best_key)
+    prod_key = record.get("model_produksi") or best_key
+    prod = (oos.get("models") or {}).get(prod_key)
     if prod and prod.get("wape") is not None:
-        parts.append(f"Uji luar sampel ({len(oos.get('lipatan_dinilai') or [])} lipatan, setelan dari lipatan sebelumnya saja): "
-                     f"WAPE {fmt_num_id(prod['wape'])}%, MAPE agregat {fmt_num_id(prod.get('mape_agregat'))}%, bias {fmt_num_id(prod.get('bias'))}%.")
+        parts.append(f"Model produksi = WAPE luar sampel terkecil ({len(oos.get('lipatan_dinilai') or [])} lipatan, setelan dari lipatan sebelumnya saja): "
+                     f"{prod['label']}, WAPE {fmt_num_id(prod['wape'])}%, MAPE agregat {fmt_num_id(prod.get('mape_agregat'))}%, "
+                     f"bias {fmt_num_id(prod.get('bias'))}%.")
     ens = record["models"].get("ensemble")
-    if ens and best_key == "ensemble_segmen":
+    if ens and prod_key == "ensemble_segmen":
         parts.append(
             f"Ensemble murni (WAPE {fmt_num_id(ens['wape'])}%, bias setelah koreksi {fmt_num_id(ens['bias'])}%, "
             f"sebelum koreksi {fmt_num_id(record.get('bias_sebelum_koreksi'))}%) kalah di {len(record.get('model_per_segmen') or {})} segmen ABC-XYZ, "
