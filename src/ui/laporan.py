@@ -147,13 +147,16 @@ def build_snapshot(table, *, orders, orders_all, frames, params, today, period, 
         a, b = max(stamp.start_time.date(), month_lo), min(stamp.end_time.date(), end)
         if data_until is not None and a > data_until:
             continue
-        m = cached_order_metrics(orders_all, a, min(b, data_until or b), exclude)
+        b = min(b, data_until or b)
+        m = cached_order_metrics(orders_all, a, b, exclude)
         key = str(stamp)
+        # Bulan sebagian dinilai terhadap target prorata hari yang sama (sama dengan kartu Sales bersih).
+        part, _miss = T.achievement(float(m["sales_bersih"]), a, b, month_targets)
         months.append({"Bulan": T.month_label(key), "Kunci": key, "Sales bersih": float(m["sales_bersih"]), "Target": float(month_targets.get(key, 0) or 0),
-                       "Sebagian": bool(data_until is not None and data_until < stamp.end_time.date())})
+                       "Sebagian": bool(b < stamp.end_time.date()),
+                       "Target s.d. data": float(part.target) if part is not None else np.nan,
+                       "Pencapaian (%)": float(part.pct) if part is not None else np.nan})
     monthly = pd.DataFrame(months)
-    if not monthly.empty:
-        monthly["Pencapaian (%)"] = np.where(monthly["Target"] > 0, monthly["Sales bersih"] / monthly["Target"].replace(0, 1) * 100, np.nan)
 
     top = R.top_products(orders, start, end, prev)
 
@@ -316,9 +319,12 @@ def _s_trend(s: dict) -> None:
         _plot(fig, f"rp-trend-m-{id(s)}")
         view = monthly.assign(Status=np.where(monthly["Target"] <= 0, "", np.where(monthly["Sales bersih"] >= monthly["Target"], "✅ Tercapai",
                                                                                  np.where(monthly["Sebagian"], "⏳ Berjalan", "🔴 Tidak tercapai"))))
-        show_table(view[["Bulan", "Sales bersih", "Target", "Pencapaian (%)", "Status"]], kinds={"Sales bersih": "money", "Target": "money", "Pencapaian (%)": "pct"})
+        columns = ["Bulan", "Sales bersih", "Target", "Target s.d. data", "Pencapaian (%)", "Status"]
+        show_table(view[[c for c in columns if c in view.columns]],
+                   kinds={"Sales bersih": "money", "Target": "money", "Target s.d. data": "money", "Pencapaian (%)": "pct"})
     explain([("Sales bersih", "Total Pembayaran per pesanan − batal − retur (sama dengan kartu Ringkasan)"),
-             ("Target", "dari Upload data › Target sales bulanan, diprorata bila rentang tidak sebulan penuh")])
+             ("Target", "dari Upload data › Target sales bulanan, diprorata bila rentang tidak sebulan penuh"),
+             ("Pencapaian", "sales bersih ÷ target s.d. data (bulan belum penuh: target bulan × hari yang sudah ada datanya ÷ hari sebulan, sama dengan kartu Sales bersih)")])
 
 
 def _s_products(s: dict) -> None:
@@ -489,7 +495,7 @@ def _s_recs(s: dict) -> None:
     if s["recs"].empty:
         st.write("Belum ada rekomendasi (jalankan analisa).")
         return
-    st.caption("Dari analisa aktif. Restock = max(0, prediksi + SS − stok DC). PIC: restock lokal → Team DC; PO impor → Team IC/MD; harga/iklan → E-commerce.")
+    st.caption("Dari analisa aktif. Restock = max(0, prediksi + SS − stok Site 10037); kekurangan diambil dulu dari Site 10062/10036, sisanya PO. PIC: restock lokal → Team DC; PO impor → Team IC/MD; harga/iklan → E-commerce.")
     show_table(s["recs"].head(30), kinds={"Stok Site 10037": "count", "Kebutuhan": "count", "Restock": "count"}, column_config={"Alasan": st.column_config.TextColumn(width="large")})
 
 

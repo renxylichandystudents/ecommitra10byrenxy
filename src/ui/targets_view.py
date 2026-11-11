@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import html
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -56,45 +56,73 @@ def achievement_line(actual: float, start: date | None, end: date | None, featur
 
 
 def month_outlook(orders: pd.DataFrame | None, features, ref: date | None = None) -> dict:
-    """Bulan acuan: sales bersih aktual tgl 1 s.d. data terakhir + prediksi sisa hari (bulan berjalan), atau aktual penuh (bulan lewat).
+    """Bulan acuan: sales bersih aktual tgl 1 s.d. hari penuh terakhir + prediksi sisa hari (bulan berjalan), atau aktual penuh (bulan lewat).
 
-    Sales bersih = Total Pembayaran − batal − Belum Bayar − retur (sama dengan tab Data & Laporan). Prediksi harian dihitung
-    dari harga setelah diskon × QTY, jadi dikonversi dengan `faktor` = sales bersih ÷ sales produk bersih bulan itu
-    (selisihnya terutama voucher Shopee dan ongkir)."""
+    Bulan berjalan memakai perhitungan yang sama dengan Prediksi › Pantauan harian (`month_track_view.month_state`):
+    hari data yang belum penuh (< 23:00) ikut dihitung dari prediksi, prediksi per tanggal berpola hari × faktor
+    sales bersih ÷ sales produk. Sales bersih = Total Pembayaran − batal − Belum Bayar − retur (sama dengan tab Data & Laporan)."""
     import calendar
 
     from src.core.metrics import net_sku_sales, normalize_lines, order_metrics
 
-    data_last = date.today()
+    stamp = pd.NaT
     if orders is not None and not orders.empty:
         stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
-        if pd.notna(stamp):
-            data_last = stamp.date()
+    data_last = stamp.date() if pd.notna(stamp) else date.today()
     running = ref is None or (ref.year, ref.month) == (data_last.year, data_last.month)
-    last = data_last if running else (pd.Timestamp(ref) + pd.offsets.MonthEnd(0)).date()
-    first = last.replace(day=1)
+    first = data_last.replace(day=1) if running else pd.Timestamp(ref).date().replace(day=1)
+    month_days = calendar.monthrange(first.year, first.month)[1]
+    if running:
+        from src.ui.month_track_view import full_day_cutoff
+
+        cutoff = full_day_cutoff(stamp) if pd.notna(stamp) else data_last
+        done = max((cutoff - first).days + 1, 0)  # hari penuh bulan ini (0 bila data tgl 1 belum penuh)
+    else:
+        done = month_days
+    last = first + timedelta(days=max(done, 1) - 1)
     mtd, product, factor = 0.0, 0.0, 1.0
-    if orders is not None and not orders.empty:
+    if orders is not None and not orders.empty and done > 0:
         lines = normalize_lines(orders)
         mtd = float(order_metrics(lines, first, last, normalized=True)["sales_bersih"])
         product = float(net_sku_sales(lines, first, last, normalized=True)["sales"].sum())
         if product > 0 and mtd > 0:
             factor = float(min(max(mtd / product, 0.5), 1.2))
-    month_days = calendar.monthrange(last.year, last.month)[1]
-    rest = month_days - last.day if running else 0
-    pred_daily = 0.0
-    try:
-        from src.ui.gudang_view import latest_prediction
+    if not running:
+        return {"last": last, "running": False, "mtd": mtd, "mtd_produk": product, "faktor": factor, "rest": 0, "month_days": month_days,
+                "pred_daily": 0.0, "projection": mtd, "periode": T.month_key(first)}
 
-        _q, sales_daily, _at = latest_prediction(features)
-        pred_daily = float(sum(sales_daily.values())) * factor if sales_daily else 0.0
-    except Exception:
+    rest = month_days - done
+    state = {}
+    if pd.notna(stamp):
+        try:
+            from src.ui.month_track_view import month_state
+
+            state = month_state(features, orders, first)
+        except Exception:
+            state = {}
+    open_days = state["table"].loc[~state["table"]["status_hari"].eq("Selesai")] if state else pd.DataFrame()
+    if len(open_days) and open_days["prediksi"].notna().all():
+        summary = state["summary"]
+        rest, factor = int(summary["sisa_hari"]), float(state["factor"])
+        ahead = float(summary["proyeksi"]) - float(summary["mtd"])
+        projection = mtd + ahead
+        pred_daily = ahead / rest if rest else 0.0
+    else:
+        # Belum ada snapshot prediksi untuk bulan ini: laju datar analisa terakhir × faktor.
         pred_daily = 0.0
-    if pred_daily <= 0 and last.day:
-        pred_daily = mtd / last.day
+        try:
+            from src.ui.gudang_view import latest_prediction
+
+            _q, sales_daily, _at = latest_prediction(features)
+            pred_daily = float(sum(sales_daily.values())) * factor if sales_daily else 0.0
+        except Exception:
+            pred_daily = 0.0
+        if pred_daily <= 0 and done:
+            pred_daily = mtd / done
+        projection = mtd + pred_daily * rest
     return {
-        "last": last, "running": running, "mtd": mtd, "mtd_produk": product, "faktor": factor, "rest": rest, "month_days": month_days,
-        "pred_daily": pred_daily, "projection": mtd + pred_daily * rest if running else mtd, "periode": T.month_key(last),
+        "last": last, "running": True, "mtd": mtd, "mtd_produk": product, "faktor": factor, "rest": rest, "month_days": month_days,
+        "pred_daily": pred_daily, "projection": projection, "periode": T.month_key(first),
     }
 
 

@@ -12,6 +12,7 @@ import streamlit as st
 
 from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date, fmt_date_short
+from src.core.metrics import sold_lines
 from src.core.pred_actual import (
     cause_group,
     complete_through,
@@ -258,7 +259,8 @@ def _day_shape(frame: pd.DataFrame, cutoff: date):
     return factor
 
 
-def _comparison_for(features, runs: pd.DataFrame, lines: pd.DataFrame, day: date, stock: dict[str, float], table: pd.DataFrame | None = None, shape=None) -> pd.DataFrame:
+def _comparison_for(features, runs: pd.DataFrame, lines: pd.DataFrame, day: date, stock: dict[str, float], table: pd.DataFrame | None = None, shape=None,
+                    sold: pd.DataFrame | None = None) -> pd.DataFrame:
     """Prediksi vs aktual untuk tanggal D. Pakai snapshot analisa yang dibuat sebelum D; bila belum ada,
     pakai uji mundur (model harian yang sama, hanya data s.d. D−1). Kolom 'sumber' menandai asalnya.
     Snapshot berisi laju datar; `shape(D)` menyebarnya menurut pola hari seperti di Pantauan harian."""
@@ -271,11 +273,11 @@ def _comparison_for(features, runs: pd.DataFrame, lines: pd.DataFrame, day: date
                 scale = shape(day)
                 snap = snap.assign(pred_qty=pd.to_numeric(snap["pred_qty"], errors="coerce") * scale,
                                    pred_sales=pd.to_numeric(snap["pred_sales"], errors="coerce") * scale)
-            return daily_comparison(snap, lines, day, stock_by_sku=stock).assign(sumber="tersimpan")
+            return daily_comparison(snap, lines, day, stock_by_sku=stock, sold=sold).assign(sumber="tersimpan")
     snap = _backtest_cached(lines, table, day)
     if snap.empty:
         return pd.DataFrame()
-    return daily_comparison(snap, lines, day, stock_by_sku=stock).assign(sumber="uji mundur")
+    return daily_comparison(snap, lines, day, stock_by_sku=stock, sold=sold).assign(sumber="uji mundur")
 
 
 def _daily_matrix(lines: pd.DataFrame) -> pd.DataFrame:
@@ -360,11 +362,14 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     if last < last_stamp.date():
         partial_note = (f" Data {fmt_date(last_stamp.date())} baru sampai pukul {last_stamp:%H:%M} (belum satu hari penuh), "
                         f"jadi yang dinilai {fmt_date(last)}.")
-    unpaid = unpaid_by_day(orders_all if orders_all is not None else orders)
-    shape = _day_shape(orders_all if orders_all is not None else orders, last)
+    every = orders_all if orders_all is not None else orders
+    unpaid = unpaid_by_day(every)
+    shape = _day_shape(every, last)
+    sold = sold_lines(every)
+    sold = sold.assign(sku=sold["sku"].astype(str))
     stock = {str(s): float(v) for s, v, k in zip(table["sku"], table["stok"], table["ada_data_stok"]) if k} if table is not None and not table.empty else {}
     with st.spinner("Menyiapkan prediksi vs aktual..."):
-        rows = _comparison_for(features, runs, lines, last, stock, table, shape=shape)
+        rows = _comparison_for(features, runs, lines, last, stock, table, shape=shape, sold=sold)
     if rows.empty:
         st.info(f"Belum cukup riwayat penjualan untuk membandingkan prediksi dengan aktual {fmt_date(last)}.")
         return
@@ -373,17 +378,27 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
             f"Belum ada analisa tersimpan yang dibuat sebelum {fmt_date(last)}, jadi prediksi hari itu dihitung ulang (uji mundur): "
             "model harian yang sama, hanya memakai data s.d. sehari sebelumnya."
         )
+    with st.spinner("Menyiapkan breakdown per tanggal bulan ini..."):
+        month = _month_breakdown(features, runs, lines, last, last_stamp, table, unpaid, shape, sold=sold)
+    month, target = _with_target(features, month, every, last)
     pred_sales, actual_sales = float(rows["pred_sales"].sum()), float(rows["aktual_sales"].sum())
     hit = int(rows["status"].isin(["Melebihi", "Tercapai"]).sum())
     cols = st.columns(4)
     card(cols[0], f"Prediksi omzet {fmt_date(last)}", fmt_idr(pred_sales))
-    day_stamp = pd.to_datetime(lines["order_time"]).dt.date
-    day_total = float(pd.to_numeric(lines.loc[day_stamp == last, "sales"], errors="coerce").sum())
-    from src.ui.targets_view import achievement_line
+    # Seluruh toko = sales bersih toko hari itu dan target harian berpola, sama dengan baris tanggal itu di tabel breakdown.
+    from src.ui.month_track_view import _daily_series
 
-    reach = achievement_line(day_total, last, last, features)
+    net_day, _product, _stamp = _daily_series(every)
+    day_total = float(net_day.get(pd.Timestamp(last), 0.0))
+    reach = ""
+    if target:
+        goal = month.loc[month["tanggal"] == last, "target"]
+        if len(goal) and float(goal.iloc[0]) > 0:
+            pct = day_total / float(goal.iloc[0]) * 100
+            reach = (f"Target harian {fmt_idr(float(goal.iloc[0]))} → "
+                     f"<b style='color:{'#1d4ed8' if pct >= 100 else '#dc2626'}'>{fmt_pct(pct, 1)}</b>")
     card(cols[1], "Aktual omzet bersih", fmt_idr(actual_sales),
-         hint=f"SKU berprediksi · seluruh toko {fmt_idr(day_total)}" + (f"<br>{reach}" if reach else ""))
+         hint=f"SKU berprediksi · sales bersih seluruh toko {fmt_idr(day_total)}" + (f"<br>{reach}" if reach else ""))
     pending = float(unpaid.loc[(unpaid["tanggal"] == last) & unpaid["sku"].isin(set(rows["sku"].astype(str))), "belum_bayar"].sum())
     pct_hint = (
         f"Masih Belum Bayar {fmt_idr(pending)}; bila dibayar semua → {fmt_pct((actual_sales + pending) / pred_sales * 100, 1)}"
@@ -392,9 +407,6 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     card(cols[3], "SKU tercapai + melebihi", f"{fmt_num(hit)} / {fmt_num(len(rows))}", hint="SKU yang punya prediksi pada hari itu")
     if partial_note:
         st.caption(partial_note.strip())
-    with st.spinner("Menyiapkan breakdown per tanggal bulan ini..."):
-        month = _month_breakdown(features, runs, lines, last, last_stamp, table, unpaid, shape)
-    month, target = _with_target(features, month, orders_all if orders_all is not None else orders, last)
     _month_chart(month, last, target)
     _month_table(month, last, target)
     # Diagnosa penyebab per SKU (harga, stok, batal, pola jual, kondisi toko) + saran aksi.
@@ -474,7 +486,7 @@ def _future_predictions(features, runs: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(snap["pred_sales"], errors="coerce").fillna(0.0).groupby(days).sum()
 
 
-def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpaid: pd.DataFrame, shape) -> pd.DataFrame:
+def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpaid: pd.DataFrame, shape, sold: pd.DataFrame | None = None) -> pd.DataFrame:
     """Satu baris per tanggal dari tgl 1 s.d. akhir bulan (bulan hari penuh terakhir), basis SKU berprediksi.
 
     Selesai: prediksi H-1 (snapshot sebelum tanggal itu / uji mundur) vs aktual bersih + Belum Bayar.
@@ -490,7 +502,7 @@ def _month_breakdown(features, runs, lines, last: date, last_stamp, table, unpai
         row = {"tanggal": day, "prediksi": np.nan, "aktual": np.nan, "belum_bayar": np.nan, "status": "Akan datang",
                "sumber": "analisa terbaru", "pola": shape(day)}
         if day <= data_day:
-            part = _comparison_for(features, runs, lines, day, {}, table, shape=shape)
+            part = _comparison_for(features, runs, lines, day, {}, table, shape=shape, sold=sold)
             row["status"] = "Selesai" if day <= last else "Berjalan"
             if not part.empty:
                 skus = set(part["sku"].astype(str))
@@ -530,13 +542,9 @@ def _with_target(features, month: pd.DataFrame, frame_all: pd.DataFrame, last: d
     net_done = float(month.loc[done, "bersih"].sum())
     chart_done = float(month.loc[done, "aktual"].fillna(0).sum())
     ratio = chart_done / net_done if net_done > 0 and chart_done > 0 else 1.0
-    # Faktor sales bersih ÷ sales produk seluruh toko, sama dengan Pantauan harian, agar proyeksi keduanya sama.
-    lo, hi = pd.Timestamp(first), pd.Timestamp(last)
-    net_m, prod_m = float(net.loc[lo:hi].sum()), float(product.loc[lo:hi].sum())
-    if prod_m <= 0:
-        lo = pd.Timestamp(last - timedelta(days=29))
-        net_m, prod_m = float(net.loc[lo:hi].sum()), float(product.loc[lo:hi].sum())
-    factor = float(min(max(net_m / prod_m, 0.5), 1.2)) if prod_m > 0 and net_m > 0 else 1.0
+    from src.ui.month_track_view import net_factor
+
+    factor = net_factor(net, product, first, last, last)
     pola = month["pola"].astype(float)
     month["target"] = target * pola / pola.sum()
     return month, {"target": float(target), "ratio": ratio, "factor": factor}

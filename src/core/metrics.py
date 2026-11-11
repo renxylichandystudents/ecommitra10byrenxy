@@ -256,6 +256,20 @@ def net_sku_sales(frame: pd.DataFrame | None, start=None, end=None, *, normalize
     ).reset_index(drop=True)
 
 
+def sold_lines(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Baris terjual bersih dengan kolom asli: tanpa batal & Belum Bayar terbuka, `qty`/`sales` setelah retur.
+
+    Definisinya sama dengan `net_sku_sales` dan tidak ikut saklar "Kecualikan batal & retur" (saklar mati
+    mengganti `qty`/`sales` frame analisis dengan nilai kotor)."""
+    if frame is None or frame.empty:
+        return frame
+    lines = normalize_lines(frame)
+    keep = (~lines["is_cancel"] & ~lines["is_open"]).to_numpy(dtype=bool)
+    qty = (lines["gross_qty"] - np.minimum(lines["returned_qty"], lines["gross_qty"])).to_numpy(dtype=float)
+    sales = (lines["line_value"] - lines["return_value"]).to_numpy(dtype=float)
+    return frame.assign(qty=qty, sales=sales).loc[keep]
+
+
 def ads_metrics(ads_frames, stock_frame, frame: pd.DataFrame | None, start=None, end=None) -> dict[str, float]:
     """Biaya, omzet, dan ROAS iklan pada periode yang sama dengan angka pesanan."""
     from src.core.ads import attribute_ads

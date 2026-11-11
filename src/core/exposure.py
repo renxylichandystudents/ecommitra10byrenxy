@@ -205,7 +205,9 @@ def pick(items: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         reasons.append("; ".join(bits))
     work["alasan"] = reasons
     work["kategori"] = work["nama"].map(category_of)
-    work["omzet_30"] = work["_m"].where(work["_m"] > 0, num("harga").reindex(work.index) * daily.reindex(work.index) * 30)
+    # Prediksi 30 hari = laju harian × harga × 30, sama dengan "Prediksi omzet 30 hari" di Kapasitas gudang
+    # (m_sales memakai jendela bulan 28–31 hari dan QTY dibulatkan ke bawah).
+    work["omzet_30"] = num("harga").reindex(work.index) * daily.reindex(work.index) * 30
     work["hari_stok"] = work["_ready"]
     work["momentum"] = work["_mom"]
     work["poin"] = [selling_points(n, p) for n, p in zip(work["nama"], work.get("poin_deskripsi", pd.Series([[]] * len(work), index=work.index)))]

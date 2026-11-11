@@ -336,8 +336,10 @@ def priority_actions(
         stok = max(_num(r.get("stok")), 0.0)
         need = daily * rest_days
         ss = _num(r.get("ss"))
-        if known and stok < need:
-            short = float(math.ceil(need - stok))
+        lost = max(need - stok, 0.0)
+        if known and lost > 0:
+            # Jumlah restock = kebutuhan + SS − stok (aturan Kurang di Ringkasan); potensi omzet = permintaan yang tidak tertutup stok.
+            short = float(math.ceil(need + ss - stok))
             available = {code: (None if pd.isna(r.get(f"stok_{code}")) else _num(r.get(f"stok_{code}"))) for code in codes}
             if any(v is not None for v in available.values()):
                 take, remaining = transfer_plan(short, available)
@@ -348,8 +350,8 @@ def priority_actions(
             rows.append({
                 "Jenis": "Stok", "SKU": sku, "Produk": label, "Tindakan": action,
                 "Tenggat": "Sudah kosong" if stok <= 0 else (f"Habis ±{out_day:%d/%m}" if out_day else ""),
-                "Potensi omzet": short * price * factor,
-                "Alasan": f"Prediksi {_units(daily)} unit/hari × {rest_days} hari = {_units(need)} unit, stok {_units(stok)}",
+                "Potensi omzet": lost * price * factor,
+                "Alasan": f"Prediksi {_units(daily)} unit/hari × {rest_days} hari = {_units(need)} unit + SS {_units(ss)}, stok {_units(stok)}",
             })
             continue
         expected = daily * recent_days

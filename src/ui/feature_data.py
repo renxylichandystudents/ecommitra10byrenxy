@@ -66,9 +66,11 @@ def product_frame(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def ad_cost_map(table: pd.DataFrame) -> dict[str, float]:
+    """Biaya iklan per unit: biaya iklan jendela laporan iklan ÷ QTY terjual di jendela yang sama (qty_sku)."""
     if table is None or table.empty or "biaya_iklan" not in table.columns:
         return {}
-    qty = pd.Series(pd.to_numeric(table["qty_total"], errors="coerce").fillna(0).to_numpy(), index=table["sku"].astype(str)) if "qty_total" in table.columns else None
+    column = "qty_sku" if "qty_sku" in table.columns else "qty_total" if "qty_total" in table.columns else None
+    qty = pd.Series(pd.to_numeric(table[column], errors="coerce").fillna(0).to_numpy(), index=table["sku"].astype(str)) if column else None
     ads = pd.DataFrame({"sku": table["sku"].astype(str), "biaya_iklan": pd.to_numeric(table["biaya_iklan"], errors="coerce").fillna(0)})
     return margin_core.ad_cost_per_unit(ads, qty)
 

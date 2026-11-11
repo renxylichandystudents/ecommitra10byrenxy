@@ -59,8 +59,11 @@ def daily_comparison(
     day: date,
     *,
     stock_by_sku: dict[str, float] | None = None,
+    sold: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Baris per SKU untuk tanggal D: prediksi (snapshot) vs aktual bersih (QTY & omzet)."""
+    """Baris per SKU untuk tanggal D: prediksi (snapshot) vs aktual bersih (QTY & omzet).
+
+    `sold` = baris terjual bersih (`metrics.sold_lines`); bila kosong, `lines` dipakai apa adanya."""
     columns = ["sku", "varian", "pred_qty", "pred_sales", "aktual_qty", "aktual_sales", "pct", "status", "penyebab"]
     if snapshot is None or snapshot.empty:
         return pd.DataFrame(columns=columns)
@@ -71,6 +74,8 @@ def daily_comparison(
         return pd.DataFrame(columns=columns)
     actual = pd.DataFrame(columns=["sku", "aktual_qty", "aktual_sales", "harga"])
     price7 = {}
+    if sold is not None:
+        lines = sold
     if lines is not None and not lines.empty:
         times = pd.to_datetime(lines["order_time"], errors="coerce").dt.date
         today_lines = lines.loc[times == day]

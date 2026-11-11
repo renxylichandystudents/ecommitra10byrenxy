@@ -75,9 +75,10 @@ def _framework(outcome, table: pd.DataFrame, params: dict, today: date, record: 
     """Hasil kerangka pengujian (sub-bab 4.9): forecasting, optimisasi, sistem pakar, kecepatan."""
     rows = []
     best = (record or {}).get("models", {}).get((record or {}).get("best_model") or "", {})
-    mape = best.get("mape") if best.get("mape") is not None else np.nan
+    agg = best.get("mape_agregat")
+    mape = float(agg) if agg is not None else np.nan
     rows.append({"No": 1, "Komponen": "Demand forecasting", "Metode": f"Walk-forward {len((record or {}).get('fold_dates') or [])} lipatan · model terbaik {best.get('label') or '-'}",
-                 "Target": f"MAPE ≤ {MAPE_TARGET_PCT:.0f}%", "Hasil": fmt_pct(mape) if np.isfinite(mape) else "belum tersedia",
+                 "Target": f"MAPE agregat toko ≤ {MAPE_TARGET_PCT:.0f}%", "Hasil": fmt_pct(mape) if np.isfinite(mape) else "belum tersedia",
                  "Status": ("Tercapai" if mape <= MAPE_TARGET_PCT else "Belum tercapai") if np.isfinite(mape) else "-"})
     if table is not None and not table.empty:
         top = table.head(50)

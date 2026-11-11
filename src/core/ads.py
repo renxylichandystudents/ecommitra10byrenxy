@@ -36,7 +36,7 @@ METRICS = {
     "products_sold": "terjual_iklan",
     "cart_adds": "keranjang",
 }
-SKU_COLUMNS = ["sku", *METRICS.values(), "omzet_iklan_shopee", "sales_sku", "hari_iklan", "biaya_harian"]
+SKU_COLUMNS = ["sku", *METRICS.values(), "omzet_iklan_shopee", "sales_sku", "qty_sku", "hari_iklan", "biaya_harian"]
 SUMMARY_CODES = {"", "-", "nan", "none", "null"}
 OVERALL = "ads_overall"
 DEFAULT_WINDOW_DAYS = 30
@@ -308,6 +308,7 @@ def attribute_ads(
     per_sku = merged.groupby("sku", as_index=False).agg(
         **{column: (column, "sum") for column in METRICS.values()},
         sales_sku=("sales_sku", "first"),
+        qty_sku=("qty_sku", "first"),
     )
     per_sku["omzet_iklan_shopee"] = per_sku["omzet_iklan"]
     per_sku["hari_iklan"] = days

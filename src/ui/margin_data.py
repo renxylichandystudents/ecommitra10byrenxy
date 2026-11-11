@@ -139,9 +139,11 @@ def upload_card(features, *, username: str, may_edit: bool, require, key: str) -
     for source, sheet in parsed["sheets"].items():
         items = mf.with_pct(sheet["items"])
         total = sheet["total"]
-        pct = total["gm_value"] / total["sales_excl"] * 100 if total["sales_excl"] else float("nan")
+        pct = total["gm_value"] / total["sales_incl"] * 100 if total["sales_incl"] else float("nan")
+        pct_file = total["gm_value"] / total["sales_excl"] * 100 if total["sales_excl"] else float("nan")
         lines.append(f"- **{mf.SOURCES[source]}** (sheet {sheet['sheet']}): {fmt_num(len(items))} item terjual, penjualan {fmt_idr(total['sales_incl'])} "
-                     f"(termasuk pajak), margin kotor {fmt_idr(total['gm_value'])} = {fmt_pct(pct, 1)}; {fmt_num(int((~items['wajar']).sum()))} item marginnya tidak wajar")
+                     f"(termasuk pajak), margin kotor {fmt_idr(total['gm_value'])} = {fmt_pct(pct, 1)} dari harga termasuk pajak, dasar semua hitungan "
+                     f"({fmt_pct(pct_file, 1)} dari harga tanpa pajak seperti di file); {fmt_num(int((~items['wajar']).sum()))} item marginnya tidak wajar")
     st.markdown("\n".join(lines))
     periode = st.text_input("Periode data", value=parsed["periode"] or datetime.now().strftime("%m/%Y"), key=f"{key}-periode-{round_no}",
                             help="Diisi otomatis dari file; ubah bila kurang tepat (mis. Oktober 2026).").strip()

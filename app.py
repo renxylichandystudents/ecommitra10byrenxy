@@ -3151,6 +3151,7 @@ def _with_ads(table: pd.DataFrame, orders: pd.DataFrame | None) -> pd.DataFrame:
         out["biaya_iklan"] = keys.map(ads["biaya_iklan"]).fillna(0.0).to_numpy()
         out["omzet_iklan"] = keys.map(ads["omzet_iklan"]).fillna(0.0).to_numpy()
     out["qty_total"] = keys.map(qty).fillna(0.0).to_numpy()
+    out["qty_sku"] = out["qty_total"]
     return out
 
 
@@ -8554,7 +8555,9 @@ with PAGE_ROOT.container(key="page-root"):
             from src.core.periods import calendar_period
 
             lo, _hi, cal_label = calendar_period(period, today)
-            show_performance_cards(lo, today, f"{cal_label} · {format_id_date(lo)} s.d. hari ini", tone="extra")
+            stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max() if orders_all is not None and not orders_all.empty else pd.NaT
+            upto = min(today, stamp.date()) if pd.notna(stamp) else today
+            show_performance_cards(lo, upto, f"{cal_label} · {format_id_date(lo)} s.d. {format_id_date(upto)}", tone="extra")
         note = (
             f"{resume_label}: {format_number(facts['pesanan_batal'], 0)} pesanan batal "
             f"({format_pct_id(facts['tingkat_batal'] * 100)}) dan {format_qty(facts['retur_unit'])} unit retur "

@@ -155,7 +155,7 @@ def enrich_catalog(
             hist = hist[["sku", "biaya_iklan", "omzet_iklan"]].rename(columns={"sku": "_sku", "biaya_iklan": "biaya_iklan_90", "omzet_iklan": "omzet_iklan_90"})
             key = table["sku"].fillna("").astype(str).str.strip()
             table = table.assign(_sku=key).merge(hist, on="_sku", how="left").drop(columns="_sku")
-    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "omzet_iklan_shopee", "terjual_iklan", "keranjang", "sales_sku", "biaya_harian", "biaya_iklan_90", "omzet_iklan_90"):
+    for column in ("dilihat", "klik", "biaya_iklan", "omzet_iklan", "omzet_iklan_shopee", "terjual_iklan", "keranjang", "sales_sku", "qty_sku", "biaya_harian", "biaya_iklan_90", "omzet_iklan_90"):
         if column not in table.columns:
             table[column] = 0.0
         table[column] = table[column].fillna(0.0)

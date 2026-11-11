@@ -32,6 +32,63 @@ def _daily_series(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, object]:
     return M.daily_net_sales(lines, lo, hi), M.daily_product_sales(lines, lo, hi), stamps.max()
 
 
+def full_day_cutoff(last_stamp) -> date:
+    """Hari penuh terakhir: hari data terakhir hanya dihitung penuh bila datanya sampai ≥ 23:00."""
+    stamp = pd.Timestamp(last_stamp)
+    return stamp.date() if stamp.hour >= 23 else stamp.date() - timedelta(days=1)
+
+
+def net_factor(net: pd.Series, product: pd.Series, first: date, month_cutoff: date, data_cutoff: date | None = None) -> float:
+    """Faktor sales bersih ÷ sales produk tgl 1 s.d. hari penuh terakhir bulan itu (cadangan: 30 hari s.d. hari penuh
+    terakhir data), dibatasi 0,5–1,2.
+
+    Satu aturan untuk Pantauan harian, breakdown Prediksi vs aktual, Kalkulator biaya, dan Rekomendasi › Iklan."""
+    lo, hi = pd.Timestamp(first), pd.Timestamp(month_cutoff)
+    net_m = float(net.loc[lo:hi].sum()) if month_cutoff >= first else 0.0
+    prod_m = float(product.loc[lo:hi].sum()) if month_cutoff >= first else 0.0
+    if prod_m <= 0:
+        end = data_cutoff or month_cutoff
+        lo, hi = pd.Timestamp(end - timedelta(days=29)), pd.Timestamp(end)
+        net_m, prod_m = float(net.loc[lo:hi].sum()), float(product.loc[lo:hi].sum())
+    return float(min(max(net_m / prod_m, 0.5), 1.2)) if prod_m > 0 and net_m > 0 else 1.0
+
+
+def month_state(features, orders_all: pd.DataFrame, first: date | None = None, *, today: date | None = None) -> dict:
+    """Tabel per tanggal & ringkasan bulan (aktual s.d. hari penuh terakhir + prediksi H-1/terbaru berpola × faktor).
+
+    Sumber tunggal "Proyeksi akhir bulan": Pantauan harian, Kalkulator biaya, dan Rekomendasi › Iklan."""
+    net, product, last_stamp = _daily_series(orders_all)
+    if last_stamp is None:
+        return {}
+    data_last = last_stamp.date()
+    cutoff = full_day_cutoff(last_stamp)
+    first = first or (cutoff + timedelta(days=1)).replace(day=1)
+    today = today or date.today()
+    month_days = calendar.monthrange(first.year, first.month)[1]
+    last_day = first + timedelta(days=month_days - 1)
+    current = first == (cutoff + timedelta(days=1)).replace(day=1)
+    month_cutoff = min(cutoff, last_day) if current else last_day
+    running = float(net.get(pd.Timestamp(data_last), 0.0)) if current and cutoff < data_last <= last_day else None
+    factor = net_factor(net, product, first, month_cutoff, cutoff)
+    profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
+
+    from src.ui.targets_view import monthly_targets
+
+    target = monthly_targets(features).get(f"{first.year:04d}-{first.month:02d}")
+    runs = _prediction_runs(features, first, last_day)
+    preds = M.as_of_predictions(runs, [first + timedelta(days=i) for i in range(month_days)])
+    done_lo, done_hi = pd.Timestamp(first), pd.Timestamp(month_cutoff)
+    table = M.month_table(
+        month_first=first, cutoff=month_cutoff, actual=net.loc[done_lo:done_hi] if month_cutoff >= first else pd.Series(dtype=float),
+        predictions=preds, factor=factor, profile=profile, target_month=target, running_actual=running,
+    )
+    return {
+        "table": table, "summary": M.month_summary(table, month_cutoff, target, today=today), "factor": factor, "profile": profile,
+        "target": target, "cutoff": month_cutoff, "running": running, "data_last": data_last, "current": current,
+        "net": net, "product": product,
+    }
+
+
 def _prediction_runs(features, first: date, last: date) -> pd.DataFrame:
     """Σ prediksi omzet per analisa per tanggal target di bulan itu (prediction_snapshot)."""
     try:
@@ -82,13 +139,11 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
     if orders_all is None or orders_all.empty:
         st.info("Belum ada data pesanan.")
         return
-    net, product, last_stamp = _daily_series(orders_all)
+    _net, _product, last_stamp = _daily_series(orders_all)
     if last_stamp is None:
         st.info("Belum ada data pesanan.")
         return
-    data_last = last_stamp.date()
-    complete = last_stamp.hour >= 23
-    cutoff = data_last if complete else data_last - timedelta(days=1)
+    cutoff = full_day_cutoff(last_stamp)
     months = []
     probe = (cutoff + timedelta(days=1)).replace(day=1)
     for _ in range(3):
@@ -97,39 +152,13 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
     labels = [f"{ID_MONTHS[m.month - 1]} {m.year}" for m in months]
     picked = st.selectbox("Bulan", labels, index=0, key="mt-month", label_visibility="collapsed")
     first = months[labels.index(picked)]
-    month_days = calendar.monthrange(first.year, first.month)[1]
-    last_day = first + timedelta(days=month_days - 1)
     current = first == months[0]
-    month_cutoff = min(cutoff, last_day) if current else last_day
-    running = None
-    if current and data_last > cutoff and data_last <= last_day:
-        running = float(net.get(pd.Timestamp(data_last), 0.0))
     if current and cutoff < today - timedelta(days=1):
         st.warning(f"Data pesanan baru sampai {last_stamp:%d/%m/%Y %H:%M}. Hari sesudahnya dihitung dari prediksi; "
                    "unggah data pesanan terbaru agar pencapaian kemarin terbaca.", icon=":material/schedule:")
-
-    done_lo = pd.Timestamp(first)
-    done_hi = pd.Timestamp(month_cutoff)
-    net_month = float(net.loc[done_lo:done_hi].sum()) if month_cutoff >= first else 0.0
-    prod_month = float(product.loc[done_lo:done_hi].sum()) if month_cutoff >= first else 0.0
-    if prod_month <= 0:
-        lo = pd.Timestamp(cutoff - timedelta(days=29))
-        net_month, prod_month = float(net.loc[lo:pd.Timestamp(cutoff)].sum()), float(product.loc[lo:pd.Timestamp(cutoff)].sum())
-    factor = float(min(max(net_month / prod_month, 0.5), 1.2)) if prod_month > 0 and net_month > 0 else 1.0
-    history = net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)]
-    profile = M.seasonal_profile(history)
-
-    from src.ui.targets_view import monthly_targets
-
-    target = monthly_targets(features).get(f"{first.year:04d}-{first.month:02d}")
-    runs = _prediction_runs(features, first, last_day)
-    days = [first + timedelta(days=i) for i in range(month_days)]
-    preds = M.as_of_predictions(runs, days)
-    month = M.month_table(
-        month_first=first, cutoff=month_cutoff, actual=net.loc[done_lo:done_hi] if month_cutoff >= first else pd.Series(dtype=float),
-        predictions=preds, factor=factor, profile=profile, target_month=target, running_actual=running,
-    )
-    summary = M.month_summary(month, month_cutoff, target, today=today)
+    state = month_state(features, orders_all, first, today=today)
+    summary, factor, profile, target = state["summary"], state["factor"], state["profile"], state["target"]
+    month_cutoff, running, data_last = state["cutoff"], state["running"], state["data_last"]
 
     _cards(summary, month_cutoff, today, running, data_last, target, current)
     _target_alert(summary, target, current)

@@ -151,7 +151,10 @@ def table_parts(
             cells[f"{p}_ss"] = {"v": float(row[f"{p}_ss"]), "t": fmt_qty(row[f"{p}_ss"])}
             cells[f"{p}_butuh"] = {"v": float(row[f"{p}_butuh"]), "t": fmt_qty(row[f"{p}_butuh"])}
             cells[f"{p}_stok"] = _stock_cell(row, p)
-            for name, value in ((f"{p}_pred", main), (f"{p}_ss", row[f"{p}_ss"]), (f"{p}_butuh", row[f"{p}_butuh"])):
+            # Total prediksi = jumlah nilai harapan sebelum dibulatkan per SKU, sama dengan kartu Ringkasan & matriks Top 50.
+            expected = row.get(f"{p}_qty_exp" if metric == "qty" else f"{p}_sales_exp", main)
+            expected = main if expected is None or pd.isna(expected) else expected
+            for name, value in ((f"{p}_pred", expected), (f"{p}_ss", row[f"{p}_ss"]), (f"{p}_butuh", row[f"{p}_butuh"])):
                 totals[name] = totals.get(name, 0.0) + float(value)
             if bool(row.get("ada_data_stok", False)):
                 totals[f"{p}_stok"] = totals.get(f"{p}_stok", 0.0) + float(row["stok"])
@@ -201,7 +204,9 @@ def table_parts(
             continue
         value = totals[name]
         money = metric == "sales" and (name.endswith("_pred") or name == "sold")
-        total[name] = {"t": fmt_idr(value) if money else fmt_qty(value)}
+        total[name] = {"t": fmt_idr(value) if money else fmt_qty(round(value))}
+        if name.endswith("_pred"):
+            total[name]["s"] = "sebelum dibulatkan per SKU"
     return columns, rows, total, pd.DataFrame(export_rows)
 
 
@@ -305,7 +310,7 @@ def safety_stock_box(
         else:
             formula = (
                 f"Z × σ permintaan harian × √(lead time + periode tinjau) = {fmt_num(z, 2) if z is not None else 'Z'} × σ × √({fmt_num(lead_days or 0)} + "
-                f"{fmt_num(review_days or 0)}) = √{fmt_num(exposure)} hari, dibulatkan ke atas per SKU"
+                f"{fmt_num(review_days or 0)}) = √{fmt_num(exposure)} hari, dibulatkan ke unit terdekat per SKU"
             )
         cols = st.columns(4)
         card(cols[0], "Service level", f"{fmt_num(service or 0)}%", hint=f"Z = {fmt_num(z, 2)}" if z is not None else "")

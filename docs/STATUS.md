@@ -1,6 +1,30 @@
 # Status terbaru aplikasi
 
-Diperbarui: 10 November 2026.
+Diperbarui: 11 November 2026.
+
+## Audit konsistensi angka antar halaman (11 Nov 2026)
+
+Rumus prediksi, safety stock, dan data terkunci tidak diubah. Tes baru: `tests/test_consistency.py`.
+
+Diperbaiki:
+- **Proyeksi akhir bulan satu sumber**: Kalkulator biaya dan Rekomendasi › Iklan (`targets_view.month_outlook`) kini memakai perhitungan Pantauan harian (`month_track_view.month_state`): aktual s.d. hari penuh terakhir (≥ 23:00) + prediksi per tanggal berpola × faktor. Dulu laju datar, hari berjalan dihitung penuh, dan faktor berbeda. Laju datar hanya cadangan bila snapshot prediksi bulan itu belum ada. Faktor sales bersih ÷ sales produk satu fungsi `net_factor` (dulu disalin 3×).
+- **Prediksi vs aktual**: "Aktual omzet bersih" selalu bersih (`metrics.sold_lines`: tanpa batal & Belum Bayar, setelah retur) walau saklar Kecualikan batal & retur mati; dulu kotor dan Belum Bayar terhitung dua kali di batang kuning. Hint "seluruh toko" kini sales bersih toko vs target harian berpola (sama dengan baris tabel breakdown), dulu sales produk vs target rata.
+- **Biaya iklan per unit** (margin bersih Kalkulator, Laporan margin, iklan/promo): biaya iklan 30 hari ÷ QTY di jendela laporan iklan yang sama (`qty_sku` dari `attribute_ads`). Dulu dibagi QTY seluruh periode penjualan terpilih → biaya iklan/unit terlalu kecil (periode 12 bulan ±12×), margin tampak lebih tinggi.
+- **Evaluasi model**: baris "Demand forecasting" di kerangka pengujian memakai MAPE agregat toko, sama dengan kartu, gauge, dan uji kesesuaian (dulu MAPE per SKU gabungan, bisa memberi status berlawanan).
+- **Laporan**: tabel pencapaian per bulan menilai bulan belum penuh terhadap target prorata (kolom baru "Target s.d. data"), sama dengan kartu Sales bersih; caption restock "stok DC" → stok Site 10037 + urutan ambil DC.
+- **Ringkasan**: kartu periode kalender (Kuartal/Semester/Tahun) memprorata target s.d. tanggal data terakhir, bukan s.d. hari ini. Baris Total tabel Top 50 kolom Prediksi = jumlah sebelum dibulatkan per SKU, sama dengan kartu "Prediksi QTY hari ini" dan matriks Top 50.
+- **Pantauan harian › Top 5 Stok**: jumlah restock = kebutuhan sisa bulan + SS − stok (aturan Kurang di Ringkasan); potensi omzet tetap permintaan yang tidak tertutup stok.
+- **Exposure**: "Omzet 30 hari" = laju harian × harga × 30, sama dengan Kapasitas gudang (dulu jendela bulan 28–31 hari dibulatkan ke bawah).
+- **File margin**: margin kotor di pratinjau unggah dari harga termasuk pajak (dasar semua hitungan) + angka versi file; caption SS "dibulatkan ke unit terdekat" (sesuai kode).
+
+Ditemukan, belum diubah (menyentuh rumus prediksi/SS atau perlu keputusan):
+- Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode).
+- SKU berprediksi 0 diganti rata-rata seumur data (`app.py` ±5747), tidak ikut dievaluasi.
+- Mode impor: SS memakai lead time impor, ROP & Monte Carlo memakai lead time lokal.
+- Simulasi tingkat layanan di Evaluasi memakai SS 1,645 × σ28 × √7, bukan SS produksi (Z × σ × √(L+R)).
+- ROAS impas: Rekomendasi › Iklan = 1 ÷ (margin kotor − potongan Shopee); Top 5 iklan = 100 ÷ margin bersih (sudah dikurangi iklan).
+- Kalkulator mengurangi voucher penjual per unit, Laporan margin tidak; periode bawaan berbeda (30 hari vs bulan penuh terakhir); "margin rendah" promo tetap 8%.
+- Tab Data membaca file mentah (`ledger_from_raw`), Ringkasan/Laporan membaca frame analisa — beda bila ada baris duplikat atau tanpa Harga Setelah Diskon; matriks Top 50 sengaja ikut saklar batal & retur.
 
 ## Serah terima terakhir (10 Nov 2026, 02:30)
 
