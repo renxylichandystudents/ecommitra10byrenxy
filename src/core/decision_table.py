@@ -153,13 +153,12 @@ def build_decision_table(
 
     for group in period_groups(period, today):
         p = group.prefix
+        # Unit pecahan tidak bisa terjual: QTY dibulatkan ke bawah, sales = QTY bulat × harga bersih (semua periode).
         if p == "p":
-            qty = pred_qty.astype(float)
-            sales = pred_sales.astype(float)
+            qty = whole_units(pred_qty.astype(float))
         else:
-            # Unit pecahan tidak bisa terjual: QTY dibulatkan ke bawah, sales = QTY bulat × harga bersih.
             qty = whole_units(out["pred_harian"] * (group.days if p == "m" else 1))
-            sales = qty * out["harga_bersih"]
+        sales = qty * out["harga_bersih"]
         out[f"{p}_qty"] = np.rint(qty)
         out[f"{p}_sales"] = np.rint(sales)
         # Nilai harapan sebelum dibulatkan per SKU: dipakai untuk TOTAL banyak SKU. Pembulatan ke bawah per SKU

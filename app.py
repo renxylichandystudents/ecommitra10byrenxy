@@ -3976,7 +3976,7 @@ def explain_qty_gap(
     key = str(row["item_key"])
     actual = int(round(float(row["qty_total"])))
     sold_value = float(row["sales_total"]) if "sales_total" in row.index and pd.notna(row["sales_total"]) else 0.0
-    predicted = int(round(float(row["pred_qty"])))
+    predicted = int(whole_units(float(row["pred_qty"])))
     month_pred = (
         int(round(float(row["pred_qty_bulan"])))
         if "pred_qty_bulan" in row.index and pd.notna(row["pred_qty_bulan"])
@@ -5451,7 +5451,7 @@ def ads_report_span(ads_frames) -> str:
 
 def ads_by_month(ads_frames, start, end) -> pd.DataFrame:
     """Biaya, omzet, ROAS all iklan per bulan kalender di dalam periode terpilih."""
-    from src.core.ads import OVERALL, ad_report_rows
+    from src.core.ads import OVERALL, SUMMARY_CODES, ad_report_rows
 
     rows = []
     if start is None or end is None:
@@ -5464,8 +5464,15 @@ def ads_by_month(ads_frames, start, end) -> pd.DataFrame:
         except Exception:
             continue
         overall = part.loc[part["_src"].eq(OVERALL)] if not part.empty else part
-        cost = float(overall["biaya_iklan"].sum()) if not overall.empty else 0.0
-        sales = float(overall["omzet_iklan"].sum()) if not overall.empty else 0.0
+        source = "All iklan"
+        if overall.empty and not part.empty:
+            # Tanpa laporan all iklan: jumlah baris per produk (tanpa baris ringkasan), sama dengan attribute_ads.
+            overall = part.loc[~part["product_code"].astype(str).str.lower().isin(SUMMARY_CODES)]
+            source = "Per produk (all iklan belum diunggah)"
+        if overall.empty:
+            continue
+        cost = float(overall["biaya_iklan"].sum())
+        sales = float(overall["omzet_iklan"].sum())
         rows.append(
             {
                 "Bulan": f"{ID_MONTHS[month.month - 1]} {month.year}",
@@ -5473,6 +5480,7 @@ def ads_by_month(ads_frames, start, end) -> pd.DataFrame:
                 "Omzet iklan": sales,
                 "ROAS": round(sales / cost, 1) if cost > 0 else None,
                 "Hari laporan": days,
+                "Sumber": source,
             }
         )
     return pd.DataFrame(rows)
@@ -5732,6 +5740,7 @@ def top_bestsellers(
         history["period_start"] == last_period, ["item_key", "qty", "sales"]
     ].rename(columns={"qty": "qty_histori", "sales": "sales_histori"})
     view = view.merge(last, on="item_key", how="left")
+    missed = view["pred_qty"].isna() & (view["qty_total"] > 0)
     for column, default in (
         ("qty_histori", 0.0),
         ("sales_histori", 0.0),
@@ -5741,20 +5750,18 @@ def top_bestsellers(
         ("stok_disarankan", 0),
     ):
         view[column] = view[column].fillna(default)
-    view["pred_qty"] = np.rint(view["pred_qty"].astype(float)).astype(int).clip(lower=0)
-    view["pred_sales"] = np.rint(view["pred_sales"].astype(float)).astype(int).clip(lower=0)
+    # Prediksi model disimpan apa adanya (pecahan); pembulatan ke bawah hanya di tabel keputusan, supaya laju harian
+    # SKU lambat tidak jadi 0 lalu tertimpa rata-rata. Rata-rata riwayat hanya bila model tidak punya prediksi SKU itu.
+    view["pred_qty"] = view["pred_qty"].astype(float).clip(lower=0)
+    view["pred_sales"] = view["pred_sales"].astype(float).clip(lower=0)
     view["safety_stock"] = np.ceil(view["safety_stock"].astype(float) - 1e-9).astype(int).clip(lower=0)
-    missed = (view["pred_qty"] <= 0) & (view["qty_total"] > 0)
     if missed.any():
         span_days = max(int((orders["order_time"].max() - orders["order_time"].min()).days) + 1, 1)
         horizon_days = horizon_day_count(period)
-        view.loc[missed, "pred_qty"] = np.maximum(
-            np.rint(view.loc[missed, "qty_total"] / span_days * horizon_days).astype(int),
-            1,
-        )
+        view.loc[missed, "pred_qty"] = view.loc[missed, "qty_total"].astype(float) / span_days * horizon_days
         unit_price = view.loc[missed, "sales_total"] / view.loc[missed, "qty_total"].replace(0, np.nan)
-        view.loc[missed, "pred_sales"] = np.rint(view.loc[missed, "pred_qty"] * unit_price.fillna(0)).astype(int)
-    view["stok_disarankan"] = (view["pred_qty"].astype(int) + view["safety_stock"].astype(int)).clip(lower=0)
+        view.loc[missed, "pred_sales"] = view.loc[missed, "pred_qty"] * unit_price.fillna(0)
+    view["stok_disarankan"] = (whole_units(view["pred_qty"].to_numpy()).astype(int) + view["safety_stock"].astype(int)).clip(lower=0)
     view["variasi_tampil"] = view["variation"].map(lambda value: value if str(value).strip() else "Tanpa variasi")
     return view
 

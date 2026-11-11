@@ -2,7 +2,7 @@
 
 promo_eligible dipakai Iklan, Flash sale, dan Exposure:
   stok_dc ≥ prediksi_window + SS  (iklan: "Dibatasi stok" bila stok ≥ SS)
-  AND margin_pct ≥ margin_min (flash sale: margin flash ≥ 0)
+  AND margin_pct ≥ margin_min (bawaan 0% = asal tidak rugi, sama dengan business_targets; flash sale: margin flash ≥ 0)
   AND tingkat_batal_sku_30hari ≤ 15%
   AND SKU tidak dikecualikan
 """
@@ -75,7 +75,7 @@ def promo_eligible(
     excluded: set[str],
     margin_pct: float | None,
     cancel_pct: float | None,
-    margin_min: float = 8.0,
+    margin_min: float = 0.0,
     mode: str = "iklan",
     flash_margin_pct: float | None = None,
 ) -> tuple[bool, list[str], str]:

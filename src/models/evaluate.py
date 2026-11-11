@@ -221,10 +221,83 @@ def evaluate_horizon(
         key=lambda info: info["wape"],
     )
     record["best_model"] = MODEL_KEYS.get(ranked[0]["label"], ranked[0]["label"]) if ranked else None
+    singles_only = {name: pairs[name] for name in pairs if name not in (MODEL_ENSEMBLE, MODEL_SEGMENT)}
+    record["luar_sampel"] = _nested_scores(singles_only, valid, segments, fold_classes_list=[classes[v] for v in valid],
+                                          fold_dates=record["fold_dates"])
     if days == HORIZONS["bulan"]:
         record["simulasi_ss"] = _service_simulation(matrix, usable, pairs.get(MODEL_SEGMENT, pairs[MODEL_ENSEMBLE]), days)
     record["kesimpulan"] = conclusion_text(record)
     return record
+
+
+def fit_combination(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], valid: list[np.ndarray], segments: np.ndarray,
+                    folds: list[int]) -> tuple[dict, float, dict]:
+    """(bobot 1/WAPE, faktor koreksi bias, model per segmen) dari lipatan `folds` saja — aturan yang sama dengan record."""
+    def stack(name: str) -> tuple[np.ndarray, np.ndarray]:
+        return (np.concatenate([singles[name][i][0][valid[i]] for i in folds]),
+                np.concatenate([singles[name][i][1][valid[i]] for i in folds]))
+
+    first = next(iter(singles))
+    scores = {}
+    for name in singles:
+        a, p = stack(name)
+        scores[name] = wape(a, p)
+    weights = ensemble_weights(scores)
+    actual = np.concatenate([singles[first][i][0][valid[i]] for i in folds])
+    raw = np.concatenate([blend({n: singles[n][i][1] for n in singles}, weights)[valid[i]] for i in folds])
+    raw_bias = bias_pct(actual, raw)
+    factor = 1.0 / (1.0 + raw_bias / 100.0) if np.isfinite(raw_bias) and raw_bias > -100 else 1.0
+    factor = float(np.clip(factor, *BIAS_FACTOR_LIMITS))
+    ens = raw * factor
+    seg = np.concatenate([segments[valid[i]] for i in folds])
+    choice = {}
+    for segment in sorted(set(segments)):
+        mask = seg == segment
+        if not mask.any() or actual[mask].sum() <= 0:
+            continue
+        best_name, best_score = None, wape(actual[mask], ens[mask])
+        for name in singles:
+            a, p = stack(name)
+            score = wape(a[mask], p[mask])
+            if np.isfinite(score) and score < best_score:
+                best_name, best_score = name, score
+        if best_name is not None:
+            choice[segment] = best_name
+    return weights, factor, choice
+
+
+def _nested_scores(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], valid: list[np.ndarray], segments: np.ndarray, *,
+                   fold_classes_list: list[np.ndarray], fold_dates: list[str]) -> dict:
+    """Uji luar sampel (nested walk-forward): lipatan k dinilai dengan bobot, faktor bias, dan pilihan segmen yang dihitung
+    hanya dari lipatan sebelum k. Lipatan pertama tidak dinilai. Model tunggal dinilai pada lipatan yang sama agar setara."""
+    count = len(valid)
+    if count < 2 or not singles:
+        return {}
+    combo: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {MODEL_ENSEMBLE: [], MODEL_SEGMENT: []}
+    for k in range(1, count):
+        weights, factor, choice = fit_combination(singles, valid, segments, list(range(k)))
+        actual = next(iter(singles.values()))[k][0]
+        ens = blend({n: singles[n][k][1] for n in singles}, weights) * factor
+        picked = ens.copy()
+        for segment, model in choice.items():
+            picked = np.where(segments == segment, singles[model][k][1], picked)
+        combo[MODEL_ENSEMBLE].append((actual, ens))
+        combo[MODEL_SEGMENT].append((actual, picked))
+    classes = np.concatenate(fold_classes_list[1:])
+    models = {}
+    for name, items in {**{n: v[1:] for n, v in singles.items()}, **combo}.items():
+        scored = [(a[valid[k + 1]], p[valid[k + 1]]) for k, (a, p) in enumerate(items)]
+        actual = np.concatenate([a for a, _ in scored])
+        pred = np.concatenate([p for _, p in scored])
+        models[MODEL_KEYS.get(name, name)] = {"label": name, **_scores(actual, pred, classes, [(float(a.sum()), float(p.sum())) for a, p in scored])}
+    ranked = sorted((info for info in models.values() if info["wape"] is not None), key=lambda info: info["wape"])
+    return {
+        "lipatan_dinilai": fold_dates[1:],
+        "models": models,
+        "best_model": MODEL_KEYS.get(ranked[0]["label"], ranked[0]["label"]) if ranked else None,
+        "catatan": "Bobot ensemble, faktor koreksi bias, dan model per segmen untuk lipatan k dihitung hanya dari lipatan sebelum k "
+                   "(tanpa melihat lipatan yang dinilai). Lipatan pertama hanya dipakai untuk menyetel.",
+    }
 
 
 def production_ss_settings() -> tuple[float, float, float, float]:
@@ -241,17 +314,22 @@ def production_ss_settings() -> tuple[float, float, float, float]:
 
 
 def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], ensemble_pairs, days: int) -> dict:
-    """Tingkat layanan simulasi: stok = prediksi ensemble + SS dengan Z dan √(L + R) yang sama dengan SS produksi."""
+    """Cycle service level simulasi: SS = Z × σ × √(L + R) melindungi permintaan selama lead time + periode tinjau, jadi diuji pada
+    L + R hari pertama tiap lipatan: stok = laju harian prediksi × (L + R) + SS dibanding permintaan aktual L + R hari itu."""
     pct, z, lead_days, review_days = production_ss_settings()
+    span = int(min(max(round(lead_days + review_days), 1), days))
     served, total, censored_caught, censored_total = 0, 0, 0, 0
-    for cut, (actual, pred) in zip(cutoffs, ensemble_pairs):
+    for cut, (_actual, pred_full) in zip(cutoffs, ensemble_pairs):
         sigma = np.nanstd(matrix.values[:, max(cut - 28, 0) : cut], axis=1)
         ss = np.ceil(z * np.nan_to_num(sigma) * np.sqrt(lead_days + review_days))
-        active = (actual > 0) | (pred > 0)
+        window = matrix.values[:, cut : cut + span]
+        actual = np.nan_to_num(window, nan=0.0).sum(axis=1)
+        pred = np.asarray(pred_full, dtype=float) * span / days
+        had_stockout = np.isnan(window).any(axis=1)
+        # Pasangan dengan hari stok kosong tidak dinilai: permintaan aslinya tidak terlihat, jadi "terlayani" tidak bisa dibuktikan.
+        active = ((actual > 0) | (pred > 0)) & ~had_stockout
         served += int(((pred + ss) >= actual)[active].sum())
         total += int(active.sum())
-        window = matrix.values[:, cut : cut + days]
-        had_stockout = np.isnan(window).any(axis=1)
         censored_total += int(had_stockout.sum())
         censored_caught += int((had_stockout & (pred > 0)).sum())
     return {
@@ -261,6 +339,7 @@ def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], ensemble_pairs
         "sku_stok_kosong": censored_total,
         "target_layanan_pct": pct,
         "rumus_ss": f"Z {z:.2f} × σ 28 hari × √({lead_days:g} + {review_days:g})",
+        "jendela_hari": span,
     }
 
 
@@ -278,14 +357,18 @@ def conclusion_text(record: dict) -> str:
         return " ".join(record.get("notes") or ["Hasil uji belum tersedia."])
     best = record["models"][best_key]
     label = HORIZON_LABELS[record["horizon"]].lower()
-    value = best["mape"]
-    gap = (value or 0.0) - MAPE_TARGET_PCT
-    side = "di atas" if gap > 0 else "di bawah"
-    parts = [
-        f"Model terbaik horizon {label}: {best['label']}, MAPE {fmt_num_id(value)}% — "
-        f"{fmt_num_id(abs(gap))} poin {side} target {MAPE_TARGET_PCT:.0f}%."
-    ]
-    parts[0] += f" MAPE agregat toko {fmt_num_id(best.get('mape_agregat'))}%, WAPE {fmt_num_id(best.get('wape'))}%."
+    value = best.get("mape_agregat")
+    parts = [f"Model terbaik horizon {label} (WAPE terkecil): {best['label']}, WAPE {fmt_num_id(best.get('wape'))}%."]
+    if value is not None:
+        gap = value - MAPE_TARGET_PCT
+        side = "di atas" if gap > 0 else "di bawah"
+        parts[0] += (f" MAPE agregat toko {fmt_num_id(value)}% — {fmt_num_id(abs(gap))} poin {side} target {MAPE_TARGET_PCT:.0f}%"
+                     f" (MAPE per SKU {fmt_num_id(best.get('mape'))}%).")
+    oos = record.get("luar_sampel") or {}
+    prod = (oos.get("models") or {}).get(best_key)
+    if prod and prod.get("wape") is not None:
+        parts.append(f"Uji luar sampel ({len(oos.get('lipatan_dinilai') or [])} lipatan, setelan dari lipatan sebelumnya saja): "
+                     f"WAPE {fmt_num_id(prod['wape'])}%, MAPE agregat {fmt_num_id(prod.get('mape_agregat'))}%, bias {fmt_num_id(prod.get('bias'))}%.")
     ens = record["models"].get("ensemble")
     if ens and best_key == "ensemble_segmen":
         parts.append(

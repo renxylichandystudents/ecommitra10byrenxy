@@ -98,6 +98,56 @@ def test_ads_break_even_uses_margin_before_ads():
     assert "titik impas 5,0" in before_ads.iloc[0]["Alasan"]
 
 
+def test_margin_report_deducts_seller_voucher_like_calculator():
+    from src.core import margin_file as mf
+    from src.core import margin_report as mr
+
+    shopee = pd.DataFrame({"sku": ["1"], "item_code": ["01"], "nama": ["A"], "sales_incl": [1100.0], "sales_excl": [1000.0], "gm_value": [550.0]})
+    orders = pd.DataFrame({"order_time": pd.to_datetime(["2026-10-03"]), "sku": ["1"], "qty": [2], "sales": [200_000.0],
+                           "seller_voucher": [20_000.0], "status": ["Selesai"], "product_name": ["A"]})
+    sales = mr.sales_by_sku(orders)
+    row = mr.build(sales, mf.lookup(shopee, None), programs={}, order_fee=0, admin={"1": 10}).iloc[0]
+    assert row["penjualan"] == 200_000 and row["penjualan_akhir"] == 180_000 and row["harga"] == 90_000
+    assert round(row["kotor_rp"]) == 90_000 and round(row["bersih_rp"]) == 72_000 and round(row["bersih_pct"]) == 40
+
+
+def test_slow_sku_prediction_floors_not_rounds():
+    from src.core.decision_table import build_decision_table
+
+    stock = pd.DataFrame({"item_key": ["A"], "sku": ["A"], "pred_qty": [2.7], "pred_sales": [270_000.0], "safety_stock": [0.0]})
+    table = build_decision_table(stock, period="kuartal", today=date(2026, 11, 10), horizon_days=90)
+    assert float(table["p_qty"].iloc[0]) == 2.0
+    assert float(table["p_sales"].iloc[0]) == 200_000.0
+
+
+def test_top_n_hits_ignores_unsold_ties():
+    from src.core.evaluation import top_n_hits
+
+    actual = np.array([5.0, 3.0, 0.0, 0.0, 0.0])
+    pred = np.array([0.0, 0.0, 0.0, 4.0, 2.0])
+    assert top_n_hits(actual, pred, n=50) == 0
+    assert top_n_hits(actual, np.array([4.0, 1.0, 0.0, 0.0, 0.0]), n=50) == 2
+
+
+def test_nested_evaluation_uses_only_earlier_folds():
+    from src.models import evaluate as E
+
+    rng = np.random.default_rng(1)
+    n = 30
+    actuals = [rng.poisson(10, n).astype(float) for _ in range(4)]
+    singles = {E.MODEL_MA: [(a, a * 1.2) for a in actuals], E.MODEL_LEVEL: [(a, a * 0.9) for a in actuals]}
+    valid = [np.ones(n, dtype=bool)] * 4
+    segments = np.array(["AX"] * n, dtype=object)
+    w_first, f_first, _ = E.fit_combination(singles, valid, segments, [0])
+    # Fold 3 berubah ekstrem: setelan untuk lipatan 1 (hanya dari lipatan 0) tidak boleh ikut berubah.
+    changed = {k: v[:3] + [(v[3][0], v[3][1] * 5)] for k, v in singles.items()}
+    w_again, f_again, _ = E.fit_combination(changed, valid, segments, [0])
+    assert w_first == w_again and f_first == f_again
+    out = E._nested_scores(singles, valid, segments, fold_classes_list=[np.array(["A"] * n, dtype=object)] * 4, fold_dates=["d0", "d1", "d2", "d3"])
+    assert out["lipatan_dinilai"] == ["d1", "d2", "d3"]
+    assert {"ensemble", "ensemble_segmen", "ma28", "level_terkini"} <= set(out["models"])
+
+
 def test_net_factor_single_rule():
     from src.ui.month_track_view import net_factor
 

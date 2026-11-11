@@ -206,7 +206,7 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
     c1, c2 = st.columns(2)
     with c1:
         st.latex(r"\text{WAPE}=\frac{\sum_i |y_i-\hat y_i|}{\sum_i y_i}\times100\%")
-        st.latex(r"\text{MAPE}=\frac{100\%}{n}\sum_{y_i>0}\left|\frac{y_i-\hat y_i}{y_i}\right|")
+        st.latex(r"\text{MAPE}=\frac{100\%}{|\{i: y_i>0\}|}\sum_{y_i>0}\left|\frac{y_i-\hat y_i}{y_i}\right|")
         st.latex(r"\text{Skill}=1-\frac{\text{WAPE}_{\text{model}}}{\text{WAPE}_{\text{MA28}}}")
     with c2:
         st.latex(r"\text{Bias}=\frac{\sum_i(\hat y_i-y_i)}{\sum_i y_i}\times100\%")
@@ -232,12 +232,15 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
     st.markdown(
         f"- **Target**: QTY terjual per SKU per hari, dijumlah ke horizon periode prediksi ({PERIOD_LABELS.get(period, period)}); sales = prediksi QTY × harga bersih 4 minggu.\n"
         "- **Data**: " + ", ".join(UPLOAD_MENUS).lower() + "; duplikat dibuang, snapshot stok per tanggal unggah.\n"
-        "- **Hari stok kosong**: dikeluarkan dari latih & uji (permintaan tersensor), bukan dianggap permintaan nol.\n"
+        "- **Hari stok kosong** (permintaan tersensor): pasangan SKU-lipatan dengan hari stok kosong di periode uji tidak dinilai; "
+        "MA28 dan Exponential Smoothing melewati hari itu saat latih; target latih GBM = rata-rata harian pada hari yang stoknya ada saja. "
+        "Level terkini, fitur lag/rolling GBM, dan Prophet (total toko) masih membaca hari itu sebagai 0 (keterbatasan, cenderung sedikit kurang prediksi pada SKU yang sering kosong).\n"
         "- **Safety stock**: SS = Z × σ permintaan × √(lead time + periode tinjau); impor memakai variasi lead time dari lead time maks. "
         "ROP = permintaan harian × lead time + SS.\n"
         "- **Tidak ada kebocoran data pada fitur**: fitur hanya dari data sebelum titik potong.\n"
-        "- **Keterbatasan**: bobot ensemble, faktor koreksi bias, dan pilihan model per segmen ditentukan dari lipatan yang sama dengan penilaiannya "
-        "(in-sample), sehingga skor Ensemble dan Ensemble per segmen sedikit optimis dibanding model tunggal."
+        "- **Setelan vs uji**: tabel hasil utama memakai bobot ensemble, faktor koreksi bias, dan pilihan model per segmen dari semua lipatan "
+        "(setelan produksi, in-sample). Klaim akurasi memakai **uji luar sampel**: lipatan k dinilai dengan setelan dari lipatan sebelum k saja.\n"
+        "- **Pemilihan SKU uji**: hingga 800 SKU terlaris 90 hari sebelum titik potong pertama (bukan 90 hari terakhir, agar tidak melihat data uji)."
     )
     if outcome is not None:
         rows = [{"Algoritma": name, "Status": "Aktif", "Keterangan": note} for name, note in outcome.availability.active.items()]
@@ -356,6 +359,12 @@ def _results(records: dict, period: str) -> dict:
     st.caption(f"Faktor koreksi bias ensemble {fmt_num(record.get('faktor_koreksi_bias', 1.0), 3)} (bias sebelum koreksi {fmt_pct(record.get('bias_sebelum_koreksi'))}).")
     for note in record.get("notes") or []:
         st.caption(note)
+    oos = record.get("luar_sampel") or {}
+    oos_frame = record_frame({"models": oos.get("models") or {}}).drop(columns=["Bobot ensemble"], errors="ignore") if oos.get("models") else pd.DataFrame()
+    if not oos_frame.empty:
+        st.markdown("**Uji luar sampel (nested walk-forward)** · lipatan " + ", ".join(_short_day(d) for d in oos.get("lipatan_dinilai") or []))
+        show_table(oos_frame, kinds={c: "dec" for c in METRIC_COLUMNS})
+        st.caption(oos.get("catatan", "") + " Pakai tabel ini untuk klaim akurasi di tesis; tabel di atas menunjukkan setelan produksi.")
     c1, c2 = st.columns(2)
     with c1:
         metric = st.selectbox("Metrik grafik", ["WAPE (%)", "MAPE agregat (%)", "MAPE (%)", "Bias (%)", "RMSE"], key="eval-res-metric")
@@ -424,7 +433,10 @@ def _results(records: dict, period: str) -> dict:
             fig.update_layout(barmode="group", yaxis_title="WAPE (%)", title="Model terbaik per segmen ABC-XYZ")
             _plot(fig, "eval-seg", height=380)
             _caption_figure("14", "Segmen tempat ensemble kalah memakai model tunggal terbaiknya.")
-    return {f"Hasil uji {horizon}": frame, "Metrik semua horizon": long}
+    out = {f"Hasil uji {horizon}": frame, "Metrik semua horizon": long}
+    if not oos_frame.empty:
+        out[f"Luar sampel {horizon}"] = oos_frame
+    return out
 
 
 # ---------------------------------------------------------------- 5. Kurva aktual vs prediksi

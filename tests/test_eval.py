@@ -46,7 +46,8 @@ class EvalTests(unittest.TestCase):
             frame = record_frame(record)
             row = frame.loc[frame["Model"] == best["label"]].iloc[0]
             self.assertEqual(row["MAPE (%)"], best["mape"])
-            self.assertIn(f"MAPE {fmt_num_id(best['mape'])}%", record["kesimpulan"], name)
+            self.assertIn(f"MAPE per SKU {fmt_num_id(best['mape'])}%", record["kesimpulan"], name)
+            self.assertIn(f"MAPE agregat toko {fmt_num_id(best['mape_agregat'])}%", record["kesimpulan"], name)
             self.assertIn(best["label"], record["kesimpulan"])
             numbers = re.findall(r"MAPE (-?[\d.]+,\d)%", record["kesimpulan"])
             allowed = {fmt_num_id(v) for v in frame[["MAPE (%)", "MAPE kelas A (%)", "MAPE kelas C (%)"]].to_numpy().ravel() if pd.notna(v)}

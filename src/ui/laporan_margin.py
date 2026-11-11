@@ -17,7 +17,7 @@ from src.utils.format import show_table
 
 ICON = {"Rugi": "🔴 Rugi", "Rendah": "🟠 Rendah", "Tinggi": "🟢 Tinggi", "Data tidak wajar": "⚪ Data tidak wajar", "Tanpa data margin": "⚪ Tanpa data margin"}
 COLOR = {"Rugi": "#dc2626", "Rendah": "#f59e0b", "Tinggi": "#1d4ed8", "Data tidak wajar": "#94a3b8", "Tanpa data margin": "#cbd5e1"}
-KINDS = {"Penjualan": "money", "Margin kotor": "money", "Margin bersih": "money", "Rugi": "money", "Kurang dari rata-rata": "money",
+KINDS = {"Penjualan": "money", "Setelah voucher penjual": "money", "Margin kotor": "money", "Margin bersih": "money", "Rugi": "money", "Kurang dari rata-rata": "money",
          "Margin kotor (%)": "pct", "Margin di file (%)": "pct", "Potongan Shopee (%)": "pct", "Iklan (%)": "pct", "Margin bersih (%)": "pct",
          "Margin nasional (%)": "pct", "Selisih vs nasional (poin)": "dec", "Terjual": "count", "No": "count",
          "Bulan terjual": "count", "Penjualan per bulan": "money", "Margin bersih per bulan": "money",
@@ -50,7 +50,8 @@ def _inputs(features, table: pd.DataFrame, data, keys: list[str], file_names: di
 def _view(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     full = pd.DataFrame({
         "No": range(1, len(frame) + 1), "Status": frame["status"].map(ICON), "SKU": frame["sku"], "Nama": frame["nama"],
-        "Tindak lanjut": frame["tindak_lanjut"], "Penjualan": frame["penjualan"], "Margin kotor": frame["kotor_rp"],
+        "Tindak lanjut": frame["tindak_lanjut"], "Penjualan": frame["penjualan"], "Setelah voucher penjual": frame["penjualan_akhir"],
+        "Margin kotor": frame["kotor_rp"],
         "Margin kotor (%)": frame["kotor_pct"], "Potongan Shopee (%)": frame["shopee_pct"], "Iklan (%)": frame["iklan_pct"],
         "Margin bersih": frame["bersih_rp"], "Margin bersih (%)": frame["bersih_pct"], "Rugi": frame["rugi_rp"],
         "Kurang dari rata-rata": frame["kurang_rp"], "Margin nasional (%)": frame["nasional_pct"],
@@ -66,10 +67,11 @@ def _with_total(view: pd.DataFrame) -> pd.DataFrame:
     total["Status"] = "Total"
     if "SKU" in view.columns:
         total["SKU"] = f"{fmt_num(len(view))} item"
-    for c in ("Penjualan", "Margin kotor", "Margin bersih", "Rugi", "Kurang dari rata-rata", "Terjual", "Penjualan per bulan", "Margin bersih per bulan"):
+    for c in ("Penjualan", "Setelah voucher penjual", "Margin kotor", "Margin bersih", "Rugi", "Kurang dari rata-rata", "Terjual", "Penjualan per bulan", "Margin bersih per bulan"):
         if c in view.columns:
             total[c] = view[c].sum()
-    sales = view["Penjualan"].sum() if "Penjualan" in view.columns else 0
+    basis = "Setelah voucher penjual" if "Setelah voucher penjual" in view.columns else "Penjualan"
+    sales = view[basis].sum() if basis in view.columns else 0
     if sales:
         if "Margin kotor (%)" in view.columns and "Margin kotor" in view.columns:
             total["Margin kotor (%)"] = view["Margin kotor"].sum() / sales * 100
@@ -170,7 +172,7 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
 
     label = range_label(start, end)
     ok = report.loc[report["bersih_rp"].notna()]
-    sales_rp, kotor, bersih = float(ok["penjualan"].sum()), float(ok["kotor_rp"].sum()), float(ok["bersih_rp"].sum())
+    sales_rp, kotor, bersih = float(ok["penjualan_akhir"].sum()), float(ok["kotor_rp"].sum()), float(ok["bersih_rp"].sum())
     rugi = report.loc[report["status"] == "Rugi"]
     low = report.loc[report["status"] == "Rendah"]
     high = report.loc[report["status"] == "Tinggi"]
@@ -180,7 +182,7 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
     k = st.columns(4)
     card(k[0], f"Penjualan SKU aktif · {label}", fmt_idr(float(report["penjualan"].sum())),
          hint=f"{fmt_num(len(report))} SKU aktif" + (f" · {fmt_idr(float(off_now['penjualan'].sum()))} dari {fmt_num(len(off_now))} SKU nonaktif" if len(off_now) else ""))
-    card(k[1], "Margin kotor", fmt_idr(kotor), hint=f"{fmt_pct(kotor / sales_rp * 100 if sales_rp else 0, 1)} dari penjualan")
+    card(k[1], "Margin kotor", fmt_idr(kotor), hint=f"{fmt_pct(kotor / sales_rp * 100 if sales_rp else 0, 1)} dari penjualan setelah voucher penjual")
     card(k[2], "Estimasi margin bersih", fmt_idr(bersih), hint=f"{fmt_pct(overall, 1)} setelah potongan Shopee & iklan")
     card(k[3], "Perlu segera ditindaklanjuti", fmt_num(len(rugi) + len(low)),
          hint=f"{fmt_num(len(rugi))} rugi ({fmt_idr(float(rugi['rugi_rp'].sum()))}) · {fmt_num(len(low))} " + (f"untung di bawah {fmt_pct(acuan, 1)}" if np.isfinite(acuan) else "margin rendah"))
@@ -226,7 +228,8 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
         st.markdown(
             "- **Periode** dipilih dari kalender. File margin berisi total setahun tanpa tanggal, jadi dipakai sebagai **tarif margin per SKU** "
             "(Gross Margin ÷ Sales Include Tax; sheet Shopee → bila tidak ada, Nasional). Penjualan diambil dari transaksi Shopee pada periode itu.\n"
-            "- **Margin bersih** = margin kotor − potongan Shopee (administrasi kategori + program Shopee Mall + proses pesanan, dari harga transaksi rata-rata) "
+            "- **Harga akhir** = (penjualan − voucher ditanggung penjual) ÷ QTY, sama dengan Kalkulator biaya. Margin kotor dan semua persen dihitung dari harga akhir.\n"
+            "- **Margin bersih** = margin kotor − potongan Shopee (administrasi kategori + program Shopee Mall + proses pesanan) "
             "− iklan (data iklan terakhir). Estimasi, bukan laporan keuangan.\n"
             f"- **Status**: 🔴 Rugi = margin bersih di bawah 0 · 🟠 Rendah = untung tetapi di bawah {fmt_pct(acuan, 1)} (rata-rata item yang untung) · "
             "🟢 Tinggi = sama/di atas batas itu · ⚪ data tidak wajar / tidak ada di file margin.\n"
@@ -247,7 +250,7 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
         base = base.loc[base["sku"] == str(query).split(" · ")[0]]
     st.caption(f"Urutan: 🔴 Rugi (kerugian Rp terbesar) → 🟠 Rendah (kekurangan Rp terbesar ke {fmt_pct(acuan, 1)}) → 🟢 Tinggi (margin bersih Rp terbesar). "
                "Margin nasional & selisihnya membantu melihat harga Shopee yang terlalu rendah.")
-    cols = ["No", "Status", "SKU", "Nama", "Tindak lanjut", "Penjualan", "Terjual", "Margin kotor (%)", "Potongan Shopee (%)", "Iklan (%)",
+    cols = ["No", "Status", "SKU", "Nama", "Tindak lanjut", "Penjualan", "Setelah voucher penjual", "Terjual", "Margin kotor (%)", "Potongan Shopee (%)", "Iklan (%)",
             "Margin bersih (%)", "Margin bersih", "Rugi", "Kurang dari rata-rata", "Margin nasional (%)", "Selisih vs nasional (poin)", "Sumber margin", "Catatan"]
     _paged(_view(base, cols), "report-all", "laporan_margin_sku_aktif.xlsx")
 

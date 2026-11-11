@@ -56,11 +56,15 @@ def bias_pct(actual: np.ndarray, pred: np.ndarray) -> float:
 
 
 def top_n_hits(actual: np.ndarray, pred: np.ndarray, n: int = 50) -> int:
-    count = min(n, len(actual))
+    """Jumlah SKU Top-n prediksi yang juga Top-n aktual. Hanya SKU dengan aktual > 0 yang bisa masuk Top aktual,
+    supaya SKU tak laku yang seri di 0 tidak terhitung 'tepat' karena urutan indeks."""
+    actual = np.asarray(actual, dtype=float)
+    pred = np.asarray(pred, dtype=float)
+    count = min(n, int((actual > 0).sum()))
     if count == 0:
         return 0
-    top_actual = set(np.argsort(-np.asarray(actual))[:count])
-    top_pred = set(np.argsort(-np.asarray(pred))[:count])
+    top_actual = set(np.argsort(-actual, kind="stable")[:count])
+    top_pred = set(np.argsort(-pred, kind="stable")[:count])
     return len(top_actual & top_pred)
 
 

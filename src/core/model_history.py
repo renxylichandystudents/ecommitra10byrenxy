@@ -148,9 +148,15 @@ def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataF
     agg = best.get("mape_agregat")
     add("Akurasi total toko", f"MAPE agregat ≤ {MAPE_TARGET_PCT:.0f}%", pct(agg), agg is not None and agg <= MAPE_TARGET_PCT if agg is not None else None,
         "Dipakai untuk rencana stok & target bulanan (kesalahan total, ditimbang volume).")
-    bias = best.get("bias")
-    add("Tidak bias sistematis", "|bias| ≤ 10%", pct(bias), abs(bias) <= 10 if bias is not None else None,
-        "Bias negatif = cenderung kurang prediksi (risiko stok kurang); positif = berlebih (stok menumpuk).")
+    oos = record.get("luar_sampel") or {}
+    oos_models = oos.get("models") or {}
+    oos_best = oos_models.get(record.get("best_model") or "", {})
+    # Bias ensemble setelah koreksi pada lipatan yang sama selalu ≈ 0 (faktornya disetel di situ); pakai bias luar sampel.
+    bias = oos_best.get("bias") if oos_best.get("bias") is not None else best.get("bias")
+    basis = "luar sampel" if oos_best.get("bias") is not None else "lipatan uji"
+    add("Tidak bias sistematis", "|bias| ≤ 10%", pct(bias) + f" ({basis})" if bias is not None else "–", abs(bias) <= 10 if bias is not None else None,
+        "Bias negatif = cenderung kurang prediksi (risiko stok kurang); positif = berlebih (stok menumpuk). "
+        "Diukur di luar sampel: faktor koreksi bias disetel dari lipatan sebelumnya saja.")
     top = best.get("top50_tepat")
     add("Mengenali produk terlaris", "≥ 35 dari 50", "–" if top is None else f"{top:.1f}".replace(".", ","), top >= 35 if top is not None else None,
         "Top 50 prediksi yang benar masuk Top 50 aktual: penting untuk prioritas restock & iklan.")
@@ -170,7 +176,13 @@ def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataF
         names = history["Model terbaik"].astype(str)
         share = float(names.eq(names.iloc[-1]).mean() * 100)
         add("Model terpilih konsisten", "≥ 60% analisa", pct(share), share >= 60, "Model yang sama terpilih di sebagian besar analisa.")
-    if record.get("model_per_segmen"):
+    if oos_best and oos_best.get("wape") is not None:
+        oos_skill = skill_score(oos_best.get("wape"), (oos_models.get("ma28") or {}).get("wape"))
+        add("Unggul di luar sampel", "skill vs MA28 > 0", pct(oos_skill * 100) if np.isfinite(oos_skill) else "–",
+            bool(np.isfinite(oos_skill) and oos_skill > 0) if np.isfinite(oos_skill) else None,
+            f"WAPE {pct(oos_best.get('wape'))} pada {len(oos.get('lipatan_dinilai') or [])} lipatan; bobot, faktor bias, dan model per segmen "
+            "disetel dari lipatan sebelumnya saja, jadi angka ini bebas dari penyetelan pada data uji.")
+    elif record.get("model_per_segmen"):
         add("Pemilihan per segmen di luar sampel", "uji terpisah", "in-sample", False,
             "Segmen dipilih dari lipatan yang sama dengan pengujian; skor ensemble per segmen cenderung optimistis (catat sebagai keterbatasan).")
     return pd.DataFrame(rows)

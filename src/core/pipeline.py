@@ -32,10 +32,17 @@ class DemandOutcome:
 
 
 def _evaluation_subset(matrix, limit: int):
-    """SKU aktif 90 hari terakhir, dibatasi `limit` SKU dengan penjualan terbesar agar evaluasi tetap cepat."""
+    """SKU aktif 90 hari sebelum titik potong pertama, dibatasi `limit` SKU dengan penjualan terbesar agar evaluasi tetap cepat.
+
+    Dipilih dari data sebelum lipatan uji pertama, supaya SKU yang berhenti laku di periode uji tetap ikut dinilai
+    (memilih dari 90 hari terakhir = melihat data uji, menguntungkan model yang memprediksi berlebih)."""
     if matrix.values.size == 0:
         return matrix
-    recent = matrix.filled[:, -90:].sum(axis=1)
+    from src.models.evaluate import month_cutoffs
+
+    cuts = month_cutoffs(matrix.dates)
+    end = cuts[0] if cuts else matrix.values.shape[1]
+    recent = matrix.filled[:, max(end - 90, 0) : end].sum(axis=1)
     order = np.argsort(-recent)
     keep = [index for index in order[:limit] if recent[index] > 0]
     if not keep:

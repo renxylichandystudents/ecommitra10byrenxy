@@ -24,10 +24,27 @@ Tahap 2 (atas permintaan pengguna: logika disamakan dengan aturan README). **Jal
 - **ROAS impas Top 5 iklan** = 100 ÷ margin sebelum iklan (margin bersih + iklan per unit ÷ harga), sama dengan Rekomendasi › Iklan. Dulu memakai margin yang sudah dipotong iklan → titik impas terlalu tinggi, usulan iklan hilang.
 - **Ruang stok iklan** (Rekomendasi › Iklan): sisa stok = stok − prediksi sisa bulan − SS, sama dengan Top 5.
 
+Tahap 3 (11 Nov malam, "temukan celah galat, salah hitung, salah logika"). **Jalankan analisa ulang** agar record evaluasi baru terbentuk:
+- **Prediksi tidak lagi dibulatkan dua kali**: katalog (`top_bestsellers`) menyimpan prediksi model apa adanya; hanya tabel keputusan yang membulatkan ke bawah. Dulu total periode dibulatkan ke terdekat → SKU lambat (< 0,5 unit/periode) jadi 0 lalu ditimpa rata-rata seumur data (min. 1 unit). Rata-rata riwayat kini hanya bila model tidak punya prediksi SKU itu. Periode Kuartal/Semester/Tahun juga dibulatkan ke bawah (dulu terdekat).
+- **Laporan margin = Kalkulator**: harga akhir = (penjualan − voucher ditanggung penjual) ÷ QTY; margin kotor, potongan, dan persen dari harga akhir. Kolom baru "Setelah voucher penjual".
+- **Batas margin promo** bawaan 0% (asal tidak rugi), sama dengan `business_targets`; dulu Ringkasan memakai 8%.
+- **Iklan per bulan** (Ringkasan) tanpa laporan all iklan memakai jumlah per produk (sama dengan kartu iklan), dulu Rp 0; kolom Sumber.
+- **Evaluasi model** (`src/models/evaluate.py`):
+  - **Uji luar sampel (nested walk-forward)** baru: lipatan k dinilai dengan bobot, faktor bias, dan model per segmen dari lipatan sebelum k saja (`fit_combination`, `_nested_scores`, record `luar_sampel`); tabel di tab Evaluasi › Hasil. Setelan produksi tidak berubah.
+  - Kesimpulan membandingkan **MAPE agregat** dengan target 15% (dulu MAPE per SKU); uji "Tidak bias" memakai bias luar sampel (dulu ≈ 0 karena faktor disetel di lipatan yang sama).
+  - Simulasi tingkat layanan = **cycle service level**: jendela L + R hari (SS melindungi lead time + tinjau), pasangan dengan hari stok kosong tidak dinilai.
+  - SKU uji dipilih dari 90 hari sebelum titik potong pertama (dulu 90 hari terakhir = melihat data uji). `top_n_hits` hanya menghitung SKU yang laku.
+  - Teks metodologi diperbaiki: penyebut MAPE, perlakuan hari stok kosong per model.
+- Dicek dengan data lokal: total Sales bersih harian Laporan = `order_metrics` (Rp 2.373.100.635, Okt 1–26).
+
+Hasil uji data lokal (horizon bulan, run terbaru) yang perlu keputusan pengguna:
+- Luar sampel (4 lipatan Jun–Sep): Ensemble per segmen WAPE 70,6% vs MA28 70,4% vs Exponential Smoothing 68,8% (terbaik); MAPE agregat 16,8%, bias −9,3%. In-sample 68,5% terlalu optimis.
+- Cycle service level SS produksi (Z 1,88 × σ × √14) = 71,8% vs target 97%: σ harian × √(L+R) menganggap hari saling bebas, padahal permintaan proyek bergerombol; ditambah bias kurang prediksi. Rumus SS tidak diubah tanpa keputusan.
+
 Ditemukan, belum diubah (perlu keputusan):
 - Laju harian prediksi ikut berubah saat Periode Bulan ↔ Kuartal (horizon model & pembulatan total periode) — pilihan desain; menyamakannya butuh dua kali jalan model.
-- SKU berprediksi 0 diganti rata-rata seumur data (`app.py` ±5747), tidak ikut dievaluasi.
-- Kalkulator mengurangi voucher penjual per unit, Laporan margin tidak; periode bawaan berbeda (30 hari vs bulan penuh terakhir); "margin rendah" promo tetap 8%.
+- Level terkini, fitur lag GBM, dan Prophet membaca hari stok kosong sebagai 0 (MA28, ES, target GBM, dan data uji sudah melewatinya).
+- Periode bawaan Kalkulator (30 hari) vs Laporan margin (bulan penuh terakhir).
 - Tab Data membaca file mentah (`ledger_from_raw`), Ringkasan/Laporan membaca frame analisa — beda bila ada baris duplikat atau tanpa Harga Setelah Diskon; matriks Top 50 sengaja ikut saklar batal & retur.
 
 ## Serah terima terakhir (10 Nov 2026, 02:30)
