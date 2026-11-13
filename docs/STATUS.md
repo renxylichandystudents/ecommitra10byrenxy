@@ -2,6 +2,16 @@
 
 Diperbarui: 13 November 2026.
 
+## Audit halaman Ringkasan: masuk vs bersih (QTY & sales), periode, angka lengkap (14 Nov 2026)
+
+- Prioritas hari ini: kartu hari ini bertanggal + sales produk + pembanding "terjual bersih/masuk <tgl>" dengan arah selisih ("prediksi X% lebih rendah dari ..."); bulan berjalan menyebut dasar dan sales produk; Kebutuhan stok = prediksi + SS, stok, kurang (unit); Stok kurang "N dari 50 SKU" dengan periode.
+- Insight: restock bertanggal + unit dari DC vs PO; iklan ditahan "X dari Y SKU beriklan (semua SKU)".
+- Sales hilang karena kosong: tanggal s.d. hari penuh terakhir; persen kekurangan target 2 desimal bila < 1% dan kalimat kesimpulan mengikuti besarnya (tidak lagi "sebagian kekurangan target..." saat 0%); sisa bulan bertanggal + unit + total s.d. akhir bulan.
+- Kartu Periode penjualan: masuk → bersih (%) dan rincian batal / Belum Bayar / retur untuk pesanan, sales (Total Pembayaran) dan QTY (`order_metrics` + `qty_masuk`, `qty_batal`, `qty_menunggu_bayar`); penjelasan masuk, bersih, sales Total Pembayaran vs sales produk. Kartu Kecualikan batal & retur menyebut rentang data latih.
+- Pergerakan: pembanding hari ini & bulan berjalan menyebut dasar (terjual bersih / masuk) dan arah selisih.
+- Kartu batang: chip stok "Kurang X dari kebutuhan Y unit (Z% belum tertutup stok)"; baris Aktual kemarin menyebut laporan baru s.d. tanggal terakhir bila belum masuk.
+- Analisa safety stock: baris Bulan berjalan menjelaskan hari yang sudah lewat tetapi belum ada di data latih.
+
 ## Grafik SKU (Grafik QTY/Sales · Bulan ini): bulan berjalan, dasar bersih/masuk, tanggal terbaca (14 Nov 2026)
 
 - Batang Terjual memakai dasar yang sama dengan data latih dan tabel Top 50 (`sku_insight.daily_profile` dari semua status); nama legenda "Terjual bersih" atau "Masuk (semua pesanan)"; hover menampilkan bersih, masuk, batal, Belum Bayar, retur per tanggal.

@@ -111,3 +111,11 @@ def test_stock_potential_and_description():
     desc = pd.DataFrame({"product_code": ["123"], "sku": [None], "product_name": ["Kloset Duduk"], "description": ["isi"]})
     assert find_description(desc, product_code="123", sku="", name="") == "isi"
     assert find_description(desc, product_code="", sku="", name="kloset  duduk") == "isi"
+
+
+def test_order_metrics_qty_masuk_breaks_down_to_net():
+    from src.core.metrics import order_metrics
+
+    m = order_metrics(_lines(), date(2026, 10, 1), date(2026, 11, 30), normalized=True)
+    assert m["qty_masuk"] == 21 and m["qty_batal"] == 5 and m["qty_menunggu_bayar"] == 1
+    assert m["qty_masuk"] - m["qty_batal"] - m["qty_menunggu_bayar"] - m["retur_unit"] == m["qty_bersih"]

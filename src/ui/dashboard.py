@@ -73,15 +73,31 @@ def last_actual(orders: pd.DataFrame | None, keys: list[str], today: date) -> tu
     return float(part["qty"].sum()), last
 
 
-def actual_hint(predicted: float, actual: float, day: date | None, today: date) -> str:
+BASIS_ACTUAL = {"bersih": "terjual bersih", "masuk": "masuk (semua pesanan)"}
+
+
+def gap_phrase(predicted: float, actual: float, word: str = "aktual") -> str:
+    """'prediksi 25,2% lebih rendah dari aktual' — arah selisih ditulis, bukan hanya tanda +/−."""
+    if actual <= 0:
+        return f"{word} 0, persen tidak bisa dihitung"
+    gap = (predicted - actual) / actual * 100
+    if abs(gap) < 0.05:
+        return f"prediksi sama dengan {word}"
+    return f"prediksi {fmt_num(abs(gap), 1)}% {'lebih tinggi' if gap > 0 else 'lebih rendah'} dari {word}"
+
+
+def actual_hint(predicted: float, actual: float, day: date | None, today: date, basis: str = "bersih") -> str:
     if day is None:
         return "Belum ada transaksi hari penuh"
+    word = BASIS_ACTUAL.get(basis, basis)
     when = "kemarin" if day == today - timedelta(days=1) else "hari penuh terakhir"
-    text = f"Aktual {when} ({short_date(day)}): {fmt_num(actual)}"
-    if actual > 0:
-        gap = (predicted - actual) / actual * 100
-        text += f" · selisih {'+' if gap >= 0 else '−'}{fmt_num(abs(gap), 1)}%"
-    return text
+    return f"Pembanding: {word} {short_date(day)} ({when}) {fmt_num(actual)} unit · {gap_phrase(predicted, actual, word.split(' (')[0])}"
+
+
+def month_end_day(day: date) -> int:
+    import calendar
+
+    return calendar.monthrange(day.year, day.month)[1]
 
 
 MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
@@ -131,10 +147,13 @@ def running_month_hint(parts: dict, actual: float, rest: float, fmt, actual_word
     return " + ".join(out)
 
 
-def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date) -> tuple[float, str]:
-    """(prediksi QTY bulan berjalan Top 50, keterangan)."""
+def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date, basis: str = "bersih") -> tuple[float, str]:
+    """(prediksi QTY bulan berjalan Top 50, keterangan QTY + sales produk)."""
     parts = running_month_parts(table, orders, orders_all, today)
-    return parts["actual_qty"] + parts["rest_qty"], running_month_hint(parts, parts["actual_qty"], parts["rest_qty"], fmt_num, "aktual terjual")
+    word = "aktual " + BASIS_ACTUAL.get(basis, basis)
+    qty = running_month_hint(parts, parts["actual_qty"], parts["rest_qty"], lambda v: f"{fmt_num(v)} unit", word)
+    sales = running_month_hint(parts, parts["actual_sales"], parts["rest_sales"], fmt_rp, "sales produk " + BASIS_ACTUAL.get(basis, basis).split(" (")[0])
+    return parts["actual_qty"] + parts["rest_qty"], f"{qty}<br>{sales} = {fmt_rp(parts['actual_sales'] + parts['rest_sales'])}"
 
 
 def show_priority_dashboard(
@@ -150,6 +169,7 @@ def show_priority_dashboard(
     window_start: date,
     fresh_period: bool,
     metric: str = "qty",
+    basis: str = "bersih",
 ) -> None:
     st.markdown("<div class='section-title'>Prioritas hari ini</div>", unsafe_allow_html=True)
     if table is None or table.empty:
@@ -161,27 +181,35 @@ def show_priority_dashboard(
     predicted_today = float(top["d_qty_exp"].sum()) if "d_qty_exp" in top.columns else float(top["d_qty"].sum())
     shortage = stock_shortage(top)
     cols = st.columns(5)
+    sales_today = float(top["d_sales_exp"].sum()) if "d_sales_exp" in top.columns else float(top.get("d_sales", pd.Series(dtype=float)).sum())
     card(
         cols[0],
-        "Prediksi QTY hari ini · Top 50",
-        fmt_num(predicted_today),
-        hint=actual_hint(predicted_today, actual_qty, actual_day, today),
+        f"Prediksi QTY hari ini ({short_date(today)}) · Top 50",
+        f"{fmt_num(predicted_today)} unit",
+        hint=(f"sales produk {fmt_rp(sales_today)}<br>" if sales_today > 0 else "") + actual_hint(predicted_today, actual_qty, actual_day, today, basis),
     )
-    month_qty, month_hint = running_month(top, orders, orders_all, today)
+    month_qty, month_hint = running_month(top, orders, orders_all, today, basis)
     month_name = MONTHS_SHORT[today.month - 1]
-    card(cols[1], f"Prediksi QTY bulan berjalan ({month_name} {today.year}) · Top 50", fmt_num(month_qty), hint=month_hint)
+    card(cols[1], f"Prediksi QTY bulan berjalan (1–{month_end_day(today)} {month_name} {today.year}) · Top 50", f"{fmt_num(month_qty)} unit", hint=month_hint)
     fresh = " " + badge("periode baru", "info") if fresh_period else ""
     lo, hi = prediction_window("bulan", window_start)
+    known = top["ada_data_stok"].astype(bool) if "ada_data_stok" in top.columns else pd.Series(False, index=top.index)
+    stok = pd.to_numeric(top.get("stok", 0), errors="coerce").fillna(0.0)
+    need = pd.to_numeric(top["m_butuh"], errors="coerce").fillna(0.0)
+    pred_whole = float(pd.to_numeric(top["m_qty"], errors="coerce").fillna(0.0).sum()) if "m_qty" in top.columns else float("nan")
+    short_units = float((need - stok).clip(lower=0).where(known, 0.0).sum())
     card(
         cols[2],
         f"Kebutuhan stok {window_label} · Top 50",
-        fmt_num(top["m_butuh"].sum()) + fresh,
-        hint=f"Prediksi (unit utuh) + safety stock · {short_date(lo)} – {short_date(hi)}",
+        f"{fmt_num(need.sum())} unit" + fresh,
+        hint=f"= prediksi {fmt_num(pred_whole)} (unit utuh) + safety stock {fmt_num(need.sum() - pred_whole)} · {short_date(lo)} – {short_date(hi)}"
+        f"<br>stok Site 10037 {fmt_num(stok.where(known, 0).sum())} unit · kurang {fmt_num(short_units)} unit (dijumlah dari SKU yang kurang)",
     )
-    gaps = [f"{fmt_num(shortage['kosong'])} kosong (stok 0)", f"{fmt_num(shortage['di_bawah_ss'])} di bawah SS"]
+    gaps = [f"{fmt_num(shortage['kosong'])} kosong (stok 0)", f"{fmt_num(shortage['di_bawah_ss'])} di bawah SS (sudah termasuk yang kosong)"]
     if shortage["tanpa_data"]:
         gaps.append(f"{fmt_num(shortage['tanpa_data'])} tanpa data stok")
-    card(cols[3], "SKU Top 50 stok kurang", fmt_num(shortage["kurang"]), hint="Stok di bawah prediksi + SS · " + " · ".join(gaps))
+    card(cols[3], "SKU Top 50 stok kurang", f"{fmt_num(shortage['kurang'])} dari {fmt_num(len(top))} SKU",
+         hint=f"stok Site 10037 < prediksi 30 hari ({short_date(lo)} – {short_date(hi)}) + SS · " + " · ".join(gaps))
     cap_value, cap_note = capacity_summary(features, table)
     card(cols[4], "Kapasitas gudang 10037", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
 
@@ -191,16 +219,16 @@ def show_priority_dashboard(
     weight = day_weight_fn(every, today)
     through = month_remaining_weight(every, today)[0]
     priority = restock_priority(top, today, po=data.po, orders=orders, day_weight=weight, through=through)
-    basis = "Sales value" if metric == "sales" else "QTY terjual"
+    rank_basis = "Sales value" if metric == "sales" else "QTY terjual"
     # Insight di atas, tabel restock selebar penuh agar kolom Produk/Varian tidak terpotong.
-    _insight_cards(table, priority, data, role)
+    _insight_cards(table, priority, data, role, top=top, span=(lo, hi))
     with st.container():
-        st.markdown(f"**Kebutuhan restock prioritas · Top 50 {basis}**")
+        st.markdown(f"**Kebutuhan restock prioritas · Top 50 {rank_basis}**")
         _empty_loss_box(priority, every, features, today)
         explain(
             [
-                ("SKU", f"Top 50 menurut {basis} (kolom Rank)"),
-                ("Restock", "prediksi + SS − stok Site 10037 (minimal 0)"),
+                ("SKU", f"Top 50 menurut {rank_basis} (kolom Rank)"),
+                ("Prediksi · Restock", f"Prediksi = prediksi QTY 30 hari ({short_date(lo)} – {short_date(hi)}, unit utuh); Restock = prediksi + SS − stok Site 10037 (minimal 0)"),
                 ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier"),
                 ("Stok habis", "hari ini + stok ÷ prediksi harian; SKU Kosong: tanggal stok mulai 0 menurut riwayat unggahan Data stok Site 10037"),
                 ("Kosong sejak · Hari kosong", "unggahan Data stok Site 10037 pertama yang mencatat stok 0 (rangkaian kosong terakhir) s.d. hari penuh terakhir data latih (data ≥ 23:00). "
@@ -324,8 +352,9 @@ def _empty_loss_box(priority: pd.DataFrame, orders_all: pd.DataFrame | None, fea
     oldest = empty.sort_values("_kosong_sejak").iloc[0]
     minimal = bool((empty["_kosong_sejak_awal"].astype(bool) & empty["Hari kosong"].fillna(0).gt(0)).any())
     lines = [
-        f"<b>{fmt_num(len(empty))}</b> SKU Top 50 sedang kosong di Site 10037. Sejak kosong, penjualan yang hilang ±<b>{fmt_rp(total)}</b> "
-        f"({fmt_num(float(empty['QTY hilang sejak kosong'].sum()))} unit)" + (" — angka minimal, karena sebagian SKU sudah kosong sejak data stok pertama" if minimal else "") + ".",
+        f"<b>{fmt_num(len(empty))}</b> SKU Top 50 sedang kosong di Site 10037. Sejak kosong s.d. {short_date(yesterday)} (hari penuh terakhir data latih), "
+        f"penjualan yang hilang ±<b>{fmt_rp(total)}</b> sales produk ({fmt_num(float(empty['QTY hilang sejak kosong'].sum()))} unit)"
+        + (" — angka minimal, karena sebagian SKU sudah kosong sejak data stok pertama" if minimal else "") + ".",
         f"Terlama: {html.escape(str(oldest['Produk'])[:60])} ({html.escape(str(oldest['sku']))}) kosong sejak "
         f"{'≤ ' if oldest['_kosong_sejak_awal'] else ''}{short_date(oldest['_kosong_sejak'])} ({fmt_num(oldest['Hari kosong'])} hari).",
     ]
@@ -336,14 +365,22 @@ def _empty_loss_box(priority: pd.DataFrame, orders_all: pd.DataFrame | None, fea
             gap, factor, cutoff = gap_text
             net = in_month * factor
             if gap > 0:
-                text += (f", setara ±{fmt_rp(net)} sales bersih = <b>{fmt_num(net / gap * 100, 0)}%</b> dari kekurangan target s.d. "
-                         f"{short_date(cutoff)} ({fmt_rp(gap)}). Artinya sebagian kekurangan target berasal dari SKU laris yang tidak bisa dibeli")
+                share = net / gap * 100
+                text += (f", setara ±{fmt_rp(net)} sales bersih (× {fmt_num(factor, 2)}) = <b>{fmt_num(share, 2 if share < 1 else 1)}%</b> dari kekurangan target s.d. "
+                         f"{short_date(cutoff)} ({fmt_rp(gap)}). ")
+                text += ("Artinya sebagian besar kekurangan target berasal dari SKU laris yang tidak bisa dibeli" if share >= 50
+                         else "Kekosongan ini ikut menyumbang kekurangan target, tetapi bukan penyebab utama" if share >= 5
+                         else "Porsinya kecil: kekurangan target terutama berasal dari hal lain (permintaan, iklan, harga), bukan dari SKU kosong")
             else:
                 text += f", setara ±{fmt_rp(net)} sales bersih. Target berjalan sudah tercapai; tanpa kekosongan ini pencapaian bisa lebih tinggi"
         lines.append(text + ".")
-    rest = _rest_of_month(empty, orders_all, today)
+    rest, rest_qty = _rest_of_month(empty, orders_all, today)
     if rest > 0:
-        lines.append(f"Bila tidak direstock, sisa bulan {month} hilang lagi ±<b>{fmt_rp(rest)}</b> (prediksi sisa hari × harga SKU kosong).")
+        start = max(yesterday + timedelta(days=1), today.replace(day=1))
+        end = today.replace(day=month_end_day(today))
+        lines.append(f"Bila tidak direstock, sisa bulan {start.day}–{end.day} {month} ({(end - start).days + 1} hari) hilang lagi ±<b>{fmt_rp(rest)}</b> sales produk "
+                     f"({fmt_num(rest_qty)} unit; prediksi harian × pola hari × harga, untuk {fmt_num(len(empty))} SKU kosong). "
+                     f"Total sejak kosong s.d. akhir bulan bila tidak direstock: ±<b>{fmt_rp(total + rest)}</b>.")
     worst = empty.loc[empty["Sales hilang sejak kosong"] > 0].sort_values("Sales hilang sejak kosong", ascending=False).head(3)
     if not worst.empty:
         names = "; ".join(f"{html.escape(str(r['Produk'])[:40])} {fmt_rp(r['Sales hilang sejak kosong'])} ({fmt_num(r['Hari kosong'])} hari)" for _, r in worst.iterrows())
@@ -382,27 +419,34 @@ def _target_gap(orders_all: pd.DataFrame | None, features, today: date) -> tuple
         return None
 
 
-def _rest_of_month(empty: pd.DataFrame, orders_all: pd.DataFrame | None, today: date) -> float:
+def _rest_of_month(empty: pd.DataFrame, orders_all: pd.DataFrame | None, today: date) -> tuple[float, float]:
     from src.ui.month_track_view import month_remaining_weight
 
     _cutoff, weight = month_remaining_weight(orders_all, today)
-    return float((empty["_sales_harian"].astype(float) * weight).sum())
+    return float((empty["_sales_harian"].astype(float) * weight).sum()), float((empty["_pred_harian"].astype(float) * weight).sum())
 
 
-def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureData, role: str) -> None:
+def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureData, role: str, *, top: pd.DataFrame | None = None,
+                   span: tuple[date, date] | None = None) -> None:
     lines = []
     if not priority.empty:
         empty = int((priority["Status"] == "Kosong").sum())
         total = float(priority["Restock"].sum())
-        lines.append(f"<b>{fmt_num(empty)}</b> SKU Top 50 kosong · total restock Top 50 <b>{fmt_num(total)}</b> unit.")
+        when = f" untuk kebutuhan 30 hari ({short_date(span[0])} – {short_date(span[1])}) = prediksi + SS − stok Site 10037" if span else ""
+        lines.append(f"<b>{fmt_num(empty)}</b> SKU Top 50 kosong · total restock Top 50 <b>{fmt_num(total)}</b> unit{when}.")
         source = priority.loc[priority["Restock"] > 0, "Ambil dari DC"].astype(str)
         if source.str.strip().any():
             covered = int((source.str.startswith("Ambil") & ~source.str.contains("PO")).sum())
             partly = int((source.str.startswith("Ambil") & source.str.contains("PO")).sum())
             po_only = int(source.str.startswith("Stok Site").sum())
+            units = ""
+            if top is not None and "kurang_setelah_dc" in top.columns:
+                take = sum(pd.to_numeric(top.get(f"ambil_{code}", 0), errors="coerce").fillna(0.0).sum() for code in ("10062", "10036"))
+                rest = float(pd.to_numeric(top["kurang_setelah_dc"], errors="coerce").fillna(0.0).sum())
+                units = f" Dalam unit: <b>{fmt_num(take)}</b> unit dari DC + <b>{fmt_num(rest)}</b> unit PO = {fmt_num(take + rest)} unit."
             lines.append(
                 f"Dari {fmt_num(len(source))} SKU yang perlu restock: <b>{fmt_num(covered)}</b> cukup diambil dari Site 10062/10036, "
-                f"{fmt_num(partly)} sebagian dari DC + PO, {fmt_num(po_only)} harus PO karena kedua DC kosong."
+                f"{fmt_num(partly)} sebagian dari DC + PO, {fmt_num(po_only)} harus PO karena kedua DC kosong." + units
             )
         first = priority.iloc[0]
         po = data.po.get(str(first["sku"]))
@@ -412,13 +456,15 @@ def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureDat
         elif data.po:
             lines.append(f"{fmt_num(len(data.po))} SKU punya PO impor terbuka (lihat kolom Inbound).")
     held = 0
+    spending = pd.DataFrame()
     if "biaya_iklan" in table.columns:
         spending = table.loc[table["biaya_iklan"].fillna(0) > 0]
         for _, row in spending.iterrows():
             ok, _reasons, _decision = promo_eligible(row, excluded=data.excluded, margin_pct=data.margin_pct.get(str(row["sku"])), cancel_pct=row.get("batal_pct"))
             held += 0 if ok else 1
     if held:
-        lines.append(f"<b>{fmt_num(held)}</b> SKU yang sedang beriklan sebaiknya ditahan (stok kurang, margin, atau batal tinggi).")
+        lines.append(f"<b>{fmt_num(held)}</b> dari {fmt_num(len(spending))} SKU yang sedang beriklan (semua SKU, bukan hanya Top 50; "
+                     f"{fmt_num(held / len(spending) * 100, 0)}%) sebaiknya ditahan karena stok kurang, margin rendah, atau batal tinggi.")
     body = "".join(f"<div style='margin:.25rem 0;font-size:var(--fs-sm)'>{line}</div>" for line in lines) or "<div class='field-hint'>Belum ada insight.</div>"
     st.markdown(f"<div class='stat-card'><div class='readable-metric-label'>Insight</div>{body}</div>", unsafe_allow_html=True)
     if role in ("team_dc", "team_icmd"):

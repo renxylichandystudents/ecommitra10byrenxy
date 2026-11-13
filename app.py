@@ -4495,7 +4495,8 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
             elif base == "Kosong":
                 word = f"Kosong · butuh {format_qty(float(row[f'{p}_butuh']))} unit"
             else:
-                word = f"{base} {format_qty(-gap)} unit ({format_number(abs(pct), 0)}%)" + (f" · {suffix}" if suffix else "")
+                word = (f"{base} {format_qty(-gap)} dari kebutuhan {format_qty(float(row[f'{p}_butuh']))} unit "
+                        f"({format_number(abs(pct), 0)}% belum tertutup stok)") + (f" · {suffix}" if suffix else "")
             parts.append(f"<span class='stock-chip {tone}'>{html.escape(group.label)}: {word}</span>")
         chips = "".join(parts)
     return (
@@ -4597,7 +4598,9 @@ def _card_bars(brief: dict, row: pd.Series, key: str, actuals: dict, *, basis: s
     pred_sub = brief["bars"][0]["sub"] + (f" · vs aktual {_short_id_date(month[0])} – {_short_id_date(month[1])} {month[1].year}" if month else "")
     rows = [
         (brief["bars"][0]["label"], pred_sub, brief.get("month_pred"), "month"),
-        (brief["bars"][1]["label"], f"prediksi vs {BASIS_WORD[basis]}", brief.get("yesterday_pred"), "yesterday"),
+        (brief["bars"][1]["label"], f"prediksi vs {BASIS_WORD[basis]}" + (
+            f" · laporan baru s.d. {_short_id_date(actuals['last_day'])}, tanggal ini belum masuk" if actuals.get("yesterday") is None and actuals.get("last_day") else ""
+        ), brief.get("yesterday_pred"), "yesterday"),
         (brief["bars"][2]["label"], brief["bars"][2]["sub"], brief.get("month_ago_pred"), "month_ago"),
     ]
     bars = [
@@ -4630,6 +4633,9 @@ def _board_actuals(orders_all: pd.DataFrame | None, as_of: date, period: str) ->
     yesterday = as_of - timedelta(days=1)
     month_ago = _same_day_last_month(as_of)
     out = {"yesterday": sku_actuals(orders_all, yesterday, yesterday), "month_ago": sku_actuals(orders_all, month_ago, month_ago)}
+    if isinstance(orders_all, pd.DataFrame) and not orders_all.empty:
+        stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max()
+        out["last_day"] = stamp.date() if pd.notna(stamp) else None
     span = _last_month_span(orders_all, as_of)
     if span is not None:
         out["month_span"] = span
@@ -8228,7 +8234,7 @@ def _today_pattern_hint(orders_all: pd.DataFrame | None, today: date, day_sales:
 
 
 def _running_month_cards(decision: pd.DataFrame, all_sku: pd.DataFrame | None, orders, orders_all, today: date,
-                         prior: dict | None, day_factor: float, metric: str) -> None:
+                         prior: dict | None, day_factor: float, metric: str, basis: str = "bersih") -> None:
     """Baris kartu bulan berjalan: aktual tgl 1 s.d. hari penuh terakhir + laju prediksi × pola sisa hari (sama dengan Ringkasan)."""
     from src.ui.dashboard import MONTHS_SHORT, running_month_hint, running_month_parts
 
@@ -8245,8 +8251,10 @@ def _running_month_cards(decision: pd.DataFrame, all_sku: pd.DataFrame | None, o
     sales_now = top["actual_sales"] + top["rest_sales"]
     qty_then = None if then_rate is None else top["actual_qty"] + then_rate[0] * top["weight"]
     sales_then = None if then_rate is None else top["actual_sales"] + then_rate[1] * top["weight"]
-    qty_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_qty'], top['rest_qty'], lambda v: format_number(round(v), 0), 'aktual terjual'))}</div>"
-    sales_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_sales'], top['rest_sales'], format_idr, 'aktual sales produk'))}</div>"
+    word = "terjual bersih" if basis == "bersih" else "masuk (semua pesanan)"
+    sales_word = "bersih" if basis == "bersih" else "masuk"
+    qty_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_qty'], top['rest_qty'], lambda v: format_number(round(v), 0) + ' unit', 'aktual ' + word))}</div>"
+    sales_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_sales'], top['rest_sales'], format_idr, 'aktual sales produk ' + sales_word))}</div>"
     st.markdown(f"<div class='field-hint' style='margin-top:.4rem'><b>Prediksi {html.escape(name)}</b></div>", unsafe_allow_html=True)
     cards = st.columns(4)
     money_first = metric == "sales"
@@ -8270,7 +8278,7 @@ def _running_month_cards(decision: pd.DataFrame, all_sku: pd.DataFrame | None, o
             "<div class='stat-card'>"
             f"<div class='readable-metric-label'>Prediksi sales produk {html.escape(name)} · All SKU</div>"
             f"<div class='readable-metric-value'>{html.escape(format_idr(total))}</div>"
-            f"<div class='metric-hint'>{html.escape(running_month_hint(whole, whole['actual_sales'], whole['rest_sales'], format_idr, 'aktual sales produk'))}"
+            f"<div class='metric-hint'>{html.escape(running_month_hint(whole, whole['actual_sales'], whole['rest_sales'], format_idr, 'aktual sales produk ' + sales_word))}"
             " · seluruh toko" + _net_month_hint(orders_all if orders_all is not None else orders) + "</div>"
             "</div>",
             unsafe_allow_html=True,
@@ -8332,6 +8340,10 @@ def show_analysis_movement(
     day_factor = _today_factor(orders_all if orders_all is not None else orders, today)
     prior = _period_totals(prior_frame, list(focus_keys) or keys, period=period_key, day=today, orders=orders, day_factor=day_factor)
     st.markdown("<div class='section-title'>Pergerakan dari analisa sebelumnya</div>", unsafe_allow_html=True)
+    from src.ui.dashboard import gap_phrase
+
+    movement_basis = "bersih" if current_meta.get("exclude_return_cancel", True) else "masuk"
+    movement_word = "terjual bersih" if movement_basis == "bersih" else "masuk (semua pesanan)"
     explain(
         [
             ("Setelan", f"{'QTY terjual' if metric == 'qty' else 'Sales value'} · safety stock {int(current_meta.get('service', service) or 0)}%"),
@@ -8367,15 +8379,14 @@ def show_analysis_movement(
             actual_html = ""
             if is_day:
                 if actual_day is None:
-                    actual_html = "<div class='metric-move flat'>Aktual terjual kemarin: belum ada transaksi</div>"
+                    actual_html = f"<div class='metric-move flat'>Aktual {movement_word} kemarin: belum ada transaksi</div>"
                 else:
-                    gap = (qty_now - actual_qty) / actual_qty * 100 if actual_qty > 0 else None
                     when = "kemarin" if actual_day == yesterday else format_id_date(actual_day) + " (hari penuh terakhir)"
-                    gap_text = f" · selisih {'+' if gap >= 0 else '−'}{format_number(abs(gap), 1)}%" if gap is not None else ""
+                    gap_text = " · " + gap_phrase(qty_now, actual_qty, movement_word.split(" (")[0])
                     then_mult = _today_factor(orders_all if orders_all is not None else orders, today, actual_day) if actual_day else 1.0
                     if abs(then_mult - day_factor) >= 0.05:
                         gap_text += f" (pola {actual_day:%d/%m} ×{format_number(then_mult, 2)}, hari ini ×{format_number(day_factor, 2)})"
-                    actual_html = f"<div class='metric-move flat'>Aktual terjual {html.escape(when)}: {format_qty(actual_qty)} unit{gap_text}</div>"
+                    actual_html = f"<div class='metric-move flat'>Pembanding: aktual {movement_word} {html.escape(when)} {format_qty(actual_qty)} unit{gap_text}</div>"
             _prediction_card(
                 cards[0],
                 f"Prediksi {'sales' if main_money else qty_label} {name} · Top 50 SKU",
@@ -8421,7 +8432,7 @@ def show_analysis_movement(
                     "</div>",
                     unsafe_allow_html=True,
                 )
-        _running_month_cards(decision, all_sku, orders, orders_all, today, prior, day_factor, metric)
+        _running_month_cards(decision, all_sku, orders, orders_all, today, prior, day_factor, metric, basis=movement_basis)
 
     st.markdown("<div class='section-title'>Pergerakan Top 50</div>", unsafe_allow_html=True)
     explain(
@@ -9012,18 +9023,36 @@ with PAGE_ROOT.container(key="page-root"):
         else:
             facts = cached_order_metrics(orders_all, start, end, exclude_return_cancel)
             coverage = cached_sku_coverage(orders_all, start, end)
+        def share(part, whole) -> str:
+            return f"{format_pct_id(part / whole * 100)}" if whole else "–"
+
         cols = st.columns(4)
-        metric_card(cols[0], "pesanan_bersih", format_number(facts["pesanan_bersih"], 0), hint=f"{label} · dari {format_number(facts['pesanan_semua'], 0)} pesanan semua status", tone=tone)
-        metric_card(cols[1], "sku_terjual_bersih", format_number(coverage["sku_terjual_bersih"], 0), hint=label, tone=tone)
+        metric_card(
+            cols[0], "pesanan_bersih", format_number(facts["pesanan_bersih"], 0), tone=tone,
+            hint=f"{label}<br>masuk (semua status) {format_number(facts['pesanan_semua'], 0)} pesanan → bersih {share(facts['pesanan_bersih'], facts['pesanan_semua'])}"
+            f"<br>batal {format_number(facts['pesanan_batal'], 0)} · Belum Bayar {format_number(facts['pesanan_menunggu_bayar'], 0)} · retur penuh {format_number(facts['pesanan_retur_penuh'], 0)}",
+        )
+        metric_card(cols[1], "sku_terjual_bersih", format_number(coverage["sku_terjual_bersih"], 0), hint=f"{label}<br>SKU yang QTY bersihnya > 0", tone=tone)
         reach = achievement_line(facts["sales_bersih"], start, end, FEATURES, orders=orders_all)
-        metric_card(cols[2], "sales_bersih", format_idr(facts["sales_bersih"]), hint=f"Bruto {format_idr(facts['sales_bruto'])}" + (f"<br>{reach}" if reach else ""), tone=tone)
-        metric_card(cols[3], "qty_bersih", format_qty(facts["qty_bersih"]), hint=label, tone=tone)
+        metric_card(
+            cols[2], "sales_bersih", format_idr(facts["sales_bersih"]), tone=tone,
+            hint=f"{label}<br>masuk (Total Pembayaran semua status) {format_idr(facts['sales_bruto'])} → bersih {share(facts['sales_bersih'], facts['sales_bruto'])}"
+            f"<br>batal {format_idr(facts['nominal_batal'])} · Belum Bayar {format_idr(facts['nominal_menunggu_bayar'])} · retur {format_idr(facts['nominal_retur'])}"
+            + (f"<br>{reach}" if reach else ""),
+        )
+        metric_card(
+            cols[3], "qty_bersih", f"{format_qty(facts['qty_bersih'])} unit", tone=tone,
+            hint=f"{label}<br>masuk (semua status) {format_qty(facts['qty_masuk'])} unit → bersih {share(facts['qty_bersih'], facts['qty_masuk'])}"
+            f"<br>batal {format_qty(facts['qty_batal'])} · Belum Bayar {format_qty(facts['qty_menunggu_bayar'])} · retur {format_qty(facts['retur_unit'])} unit",
+        )
         return facts
 
 
     def show_exclude_and_cards() -> None:
         removed_orders, removed_units = removed_counts(orders_raw)
-        exclude_status_card(exclude_return_cancel, removed_orders=removed_orders, removed_units=removed_units)
+        raw_days = pd.to_datetime(orders_raw["order_time"], errors="coerce") if isinstance(orders_raw, pd.DataFrame) and "order_time" in orders_raw.columns else pd.Series(dtype="datetime64[ns]")
+        raw_span = f"di seluruh data latih ({format_id_date(raw_days.min().date())} – {format_id_date(raw_days.max().date())}) " if raw_days.notna().any() else ""
+        exclude_status_card(exclude_return_cancel, removed_orders=removed_orders, removed_units=removed_units, span=raw_span)
         start, end = period_bounds(sales_orders)
         facts = show_performance_cards(start, end, resume_label)
         if period != "bulan":
@@ -9035,10 +9064,19 @@ with PAGE_ROOT.container(key="page-root"):
             show_performance_cards(lo, upto, f"{cal_label} · {format_id_date(lo)} s.d. {format_id_date(upto)}", tone="extra")
         note = (
             f"{resume_label}: {format_number(facts['pesanan_batal'], 0)} pesanan batal "
-            f"({format_pct_id(facts['tingkat_batal'] * 100)}) dan {format_qty(facts['retur_unit'])} unit retur "
-            f"({format_number(facts['pesanan_retur_penuh'], 0)} pesanan diretur penuh)."
+            f"({format_pct_id(facts['tingkat_batal'] * 100)} dari pesanan masuk), {format_number(facts['pesanan_menunggu_bayar'], 0)} pesanan masih Belum Bayar, "
+            f"dan {format_qty(facts['retur_unit'])} unit retur ({format_number(facts['pesanan_retur_penuh'], 0)} pesanan diretur penuh)."
         )
         st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
+        explain(
+            [
+                ("Masuk", "semua pesanan yang masuk ke toko pada periode itu, termasuk yang kemudian batal, belum dibayar, atau diretur (minat beli yang sebenarnya)"),
+                ("Bersih", "masuk − batal − Belum Bayar − retur: yang benar-benar menjadi penjualan (nett). Persen di tiap kartu = bagian masuk yang menjadi bersih"),
+                ("Sales di kartu ini", "Total Pembayaran per pesanan (sudah dipotong voucher & koin), angka yang sama dengan Seller Centre dan dasar target. "
+                 "Berbeda dengan sales produk (Harga Setelah Diskon × QTY) yang dipakai prediksi dan tabel Top 50, sehingga sales produk lebih besar"),
+                ("QTY", "jumlah unit barang; QTY bersih = unit selain batal & Belum Bayar dikurangi unit retur"),
+            ]
+        )
 
 
     def show_sku_detail(table: pd.DataFrame, picked: str, key: str) -> None:
@@ -9080,6 +9118,7 @@ with PAGE_ROOT.container(key="page-root"):
                 window_start=window_start,
                 fresh_period=window_start.day == 1,
                 metric=metric,
+                basis=(TABLE_META or {}).get("basis") or ("bersih" if exclude_return_cancel else "masuk"),
                 )
         show_exclude_and_cards()
         if isinstance(stock, pd.DataFrame) and not shown.empty:

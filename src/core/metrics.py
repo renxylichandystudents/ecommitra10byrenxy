@@ -88,6 +88,9 @@ EMPTY_ORDER_METRICS: dict[str, float] = {
     "pesanan_bersih": 0,
     "sales_bersih": 0.0,
     "qty_bersih": 0.0,
+    "qty_masuk": 0.0,
+    "qty_batal": 0.0,
+    "qty_menunggu_bayar": 0.0,
     "tingkat_batal": 0.0,
 }
 
@@ -235,6 +238,9 @@ def order_metrics(frame: pd.DataFrame | None, start=None, end=None, *, normalize
         "pesanan_bersih": pesanan_semua - pesanan_batal - pesanan_menunggu - full_orders,
         "sales_bersih": sales_bruto - nominal_batal - nominal_menunggu - nominal_retur,
         "qty_bersih": float(active["gross_qty"].sum()) - retur_unit,
+        "qty_masuk": float(lines["gross_qty"].sum()),
+        "qty_batal": float(cancel["gross_qty"].sum()),
+        "qty_menunggu_bayar": float(waiting["gross_qty"].sum()),
         "tingkat_batal": pesanan_batal / pesanan_semua if pesanan_semua else 0.0,
     }
 

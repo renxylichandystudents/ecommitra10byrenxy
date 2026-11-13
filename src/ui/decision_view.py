@@ -502,6 +502,9 @@ def safety_stock_box(
                 proj = act + rest_qty.sum()
                 note = (f"aktual {word} {span_text(run_meta['first'], run_meta['cutoff'])}: {fmt_qty(act)} unit (sudah terjual, tidak butuh stok) · "
                         f"proyeksi bulan {fmt_qty(proj)} unit" if run_meta["cutoff"] >= run_meta["first"] else "belum ada hari penuh bulan ini")
+                if rest_start < today:
+                    note += (f" · {span_text(rest_start, today - timedelta(days=1))} sudah lewat tetapi belum ada di data latih, "
+                             "jadi masih dihitung sebagai prediksi; unggah transaksi terbaru agar angka ini menjadi aktual")
                 rows.append(_row(f"Bulan berjalan · sisa {span_text(rest_start, run_meta['month_end'])} "
                                  f"({(run_meta['month_end'] - rest_start).days + 1} hari)", rest_qty, note=note))
         header = (

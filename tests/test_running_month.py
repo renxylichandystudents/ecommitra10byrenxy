@@ -18,7 +18,7 @@ def test_running_month_actual_plus_rest():
     table = pd.DataFrame({"item_key": ["A"], "pred_harian": [10.0]})
     total, hint = running_month(table, orders, orders, date(2026, 11, 13))
     # aktual 1–12 Nov = 120 unit; sisa 13–30 Nov = 18 hari × laju 10 × pola (rata-rata ±1)
-    assert hint.startswith("aktual terjual 1–12 Nov: 120 + prediksi 13–30 Nov: ")
+    assert hint.startswith("aktual terjual bersih 1–12 Nov: 120 unit + prediksi 13–30 Nov: ")
     assert 120 + 18 * 10 * 0.6 < total < 120 + 18 * 10 * 1.4
 
 

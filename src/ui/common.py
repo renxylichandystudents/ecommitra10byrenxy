@@ -201,7 +201,7 @@ def cached_order_metrics(frame: pd.DataFrame, start=None, end=None, exclude_flag
     from src.core.metrics import order_metrics
 
     del exclude_flag
-    return order_metrics(frame, start, end)
+    return dict(order_metrics(frame, start, end))
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -465,7 +465,7 @@ def exclude_toggle_card(*, key: str, removed_orders: int, removed_units: float) 
     return bool(value)
 
 
-def exclude_status_card(active: bool, *, removed_orders: int, removed_units: float) -> None:
+def exclude_status_card(active: bool, *, removed_orders: int, removed_units: float, span: str = "") -> None:
     """Keterangan (bukan saklar) setelan "Kecualikan batal & retur" analisa yang sedang dibuka."""
     with st.container(border=True):
         left, right = st.columns([3, 2], vertical_alignment="center")
@@ -475,10 +475,10 @@ def exclude_status_card(active: bool, *, removed_orders: int, removed_units: flo
         with right:
             if active:
                 st.markdown(badge("AKTIF · nilai bersih", "on"), unsafe_allow_html=True)
-                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur tidak dihitung")
+                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur {span}tidak ikut dilatih; prediksi = permintaan bersih")
             else:
                 st.markdown(badge("NONAKTIF · termasuk batal & retur", "off"), unsafe_allow_html=True)
-                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur ikut dihitung")
+                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur {span}ikut dilatih; prediksi = permintaan masuk")
 
 
 def explain(items, *, title: str | None = None, target=None) -> None:
