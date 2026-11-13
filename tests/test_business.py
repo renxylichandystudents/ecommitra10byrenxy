@@ -56,3 +56,20 @@ class BusinessTargetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TargetChangesTest(unittest.TestCase):
+    def test_replace_all_removes_months_missing_from_file(self) -> None:
+        saved = {f"2026-{m:02d}": 1e9 for m in range(1, 13)} | {f"2027-{m:02d}": 2e9 for m in range(1, 11)}
+        new = {f"2026-{m:02d}": 1e9 for m in range(1, 12)} | {"2026-12": 3e9}
+        changes = T.plan_changes(saved, new, replace_all=True)
+        actions = dict(zip(changes["periode"], changes["aksi"]))
+        self.assertEqual(sum(a == "Dihapus" for a in actions.values()), 10)
+        self.assertEqual(actions["2026-12"], "Diubah")
+        self.assertEqual(actions["2026-01"], "Tetap")
+        self.assertEqual(len(changes) - 10, 12)
+
+    def test_update_only_keeps_other_months(self) -> None:
+        changes = T.plan_changes({"2026-11": 1e9, "2027-01": 2e9}, {"2026-12": 5e8}, replace_all=False)
+        actions = dict(zip(changes["periode"], changes["aksi"]))
+        self.assertEqual(actions, {"2026-11": "Tetap", "2026-12": "Baru", "2027-01": "Tetap"})

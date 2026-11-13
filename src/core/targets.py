@@ -125,6 +125,25 @@ def parse_target_file(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def plan_changes(saved: dict[str, float], new: dict[str, float], *, replace_all: bool) -> pd.DataFrame:
+    """Perubahan target per bulan: kolom periode, lama, baru (None = dihapus), aksi (Baru/Diubah/Tetap/Dihapus).
+
+    replace_all: bulan tersimpan yang tidak ada di `new` dihapus; selain itu dibiarkan.
+    """
+    rows = []
+    for key in sorted(set(saved) | set(new)):
+        old = saved.get(key)
+        if key in new:
+            value = float(new[key])
+            action = "Baru" if old is None else ("Tetap" if abs(value - old) < 0.5 else "Diubah")
+            rows.append({"periode": key, "lama": old, "baru": value, "aksi": action})
+        elif replace_all:
+            rows.append({"periode": key, "lama": old, "baru": None, "aksi": "Dihapus"})
+        else:
+            rows.append({"periode": key, "lama": old, "baru": old, "aksi": "Tetap"})
+    return pd.DataFrame(rows, columns=["periode", "lama", "baru", "aksi"])
+
+
 def template_frame(today: date, saved: dict[str, float] | None = None) -> pd.DataFrame:
     """Januari tahun berjalan s.d. Desember tahun depan (plus bulan lama yang sudah bertarget).
 

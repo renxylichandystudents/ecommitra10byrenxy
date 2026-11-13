@@ -198,16 +198,109 @@ def show_target_uploader(features, *, username: str, today: date, title: bool = 
         "Folder data, dan Kalkulator biaya dihitung terhadap target bulan yang sama. Bulan tanpa target ditandai belum diunggah."
     )
     saved = monthly_targets(features)
-    if saved:
-        view = pd.DataFrame({"Bulan": [T.month_label(k) for k in sorted(saved)], "Target (Rp)": [fmt_idr(saved[k]) for k in sorted(saved)]})
-        st.dataframe(view, hide_index=True, width="stretch", height=min(38 + 35 * len(view), 320))
+    show_upload_notice("target")
+    tab_edit, tab_upload = st.tabs(["Lihat & koreksi target", "Unggah file target"])
+    with tab_edit:
+        _target_editor(features, saved, username=username)
+    with tab_upload:
+        _target_upload(features, saved, username=username, today=today)
+
+
+ACTION_LABELS = {"Baru": "Baru", "Diubah": "Diubah", "Tetap": "Tidak berubah", "Dihapus": "Dihapus"}
+
+
+def _summary_text(changes: pd.DataFrame) -> str:
+    parts = []
+    for action, verb in (("Baru", "ditambah"), ("Diubah", "diubah"), ("Dihapus", "dihapus")):
+        months = changes.loc[changes["aksi"] == action, "periode"].map(T.month_label).tolist()
+        if months:
+            parts.append(f"{len(months)} bulan {verb} ({', '.join(months[:12])}{'…' if len(months) > 12 else ''})")
+    return "; ".join(parts)
+
+
+def _save_changes(features, changes: pd.DataFrame, *, username: str, action: str) -> None:
+    """Simpan bulan Baru/Diubah/Dihapus. Dihapus = target 0, sehingga setelan iklan bulan itu tetap tersimpan."""
+    from auth.ui import require
+
+    require("rekomendasi", "edit")
+    todo = changes.loc[changes["aksi"].isin(["Baru", "Diubah", "Dihapus"])]
+    if todo.empty:
+        set_upload_notice("target", True, "Tidak ada perubahan target; target tersimpan tetap sama.")
+        st.rerun()
+    try:
+        existing = features.read("sales_target")
+        keep = {str(r["periode"]): r for r in existing.to_dict("records")} if not existing.empty else {}
+        rows = []
+        for item in todo.to_dict("records"):
+            old = keep.get(item["periode"], {})
+            rows.append({
+                "periode": item["periode"], "target_sales_bersih": float(item["baru"]) if item["aksi"] != "Dihapus" else 0.0,
+                "margin_min_pct": float(old.get("margin_min_pct", 0) or 0), "strategi": old.get("strategi", "") or "",
+                "budget_json": old.get("budget_json", "{}") or "{}", "set_by": username,
+            })
+        features.replace("sales_target", rows, keys=["periode"], username=username, action=action)
+    except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
+        set_upload_notice("target", False, f"Target bulanan gagal disimpan: {exc}")
     else:
-        st.info("Belum ada target bulanan. Unduh template, isi target per bulan, lalu unggah.")
+        from src.ui.feature_data import bump
+
+        bump(st.session_state)
+        remaining = len(changes) - int((changes["aksi"] == "Dihapus").sum())
+        set_upload_notice("target", True, f"Target bulanan tersimpan: {_summary_text(changes)}. Sekarang {remaining} bulan bertarget.")
+    for key in ("tgt-upload-round", "tgt-edit-round"):
+        st.session_state[key] = int(st.session_state.get(key, 0)) + 1
+    st.rerun()
+
+
+def _target_editor(features, saved: dict[str, float], *, username: str) -> None:
+    st.caption(
+        "Ubah angka langsung di tabel. Centang **Hapus** untuk membuang target bulan yang salah, atau tambah baris baru di bawah "
+        "(Bulan seperti Jan 2027 atau 2027-01). Tekan **Simpan koreksi** setelah selesai."
+    )
+    round_no = int(st.session_state.get("tgt-edit-round", 0))
+    base = pd.DataFrame({
+        "Bulan": [T.month_label(k) for k in sorted(saved)],
+        "Target (Rp)": [float(saved[k]) for k in sorted(saved)],
+        "Hapus": [False] * len(saved),
+    })
+    edited = st.data_editor(
+        base, hide_index=True, width="stretch", num_rows="dynamic", key=f"tgt-editor-{round_no}",
+        column_config={
+            "Bulan": st.column_config.TextColumn(required=True, help="mis. Nov 2026 atau 2026-11"),
+            "Target (Rp)": st.column_config.NumberColumn(min_value=0, step=1_000_000, format="localized", help="Target sales bersih bulan itu"),
+            "Hapus": st.column_config.CheckboxColumn(help="Centang untuk menghapus target bulan ini"),
+        },
+    )
+    new: dict[str, float] = {}
+    bad: list[str] = []
+    for row in edited.to_dict("records"):
+        text = str(row.get("Bulan") or "").strip()
+        if not text:
+            continue
+        key = T.parse_month(text)
+        if key is None:
+            bad.append(text)
+            continue
+        value = pd.to_numeric(row.get("Target (Rp)"), errors="coerce")
+        if bool(row.get("Hapus")) or pd.isna(value) or float(value) <= 0:
+            continue
+        new[key] = float(value)
+    if bad:
+        st.error(f"Bulan tidak dikenali: {', '.join(bad[:5])}. Tulis seperti Nov 2026 atau 2026-11.")
+        return
+    changes = T.plan_changes(saved, new, replace_all=True)
+    summary = _summary_text(changes)
+    if summary:
+        st.info(f"Belum disimpan: {summary}.")
+    if st.button("Simpan koreksi", type="primary", key=f"tgt-edit-save-{round_no}", disabled=not summary):
+        _save_changes(features, changes, username=username, action="koreksi:target_bulanan")
+
+
+def _target_upload(features, saved: dict[str, float], *, username: str, today: date) -> None:
     left, right = st.columns([1, 2])
     with left:
         download_excel(T.template_frame(today, saved), "template_target_bulanan.xlsx", key="tgt-template", label="Unduh template")
-        st.caption("Template berisi Januari tahun ini s.d. Desember tahun depan; target tersimpan sudah terisi. Isi bulan yang perlu, kosongkan yang tidak berubah.")
-    show_upload_notice("target")
+        st.caption("Template berisi Januari tahun ini s.d. Desember tahun depan; target tersimpan sudah terisi.")
     round_no = int(st.session_state.get("tgt-upload-round", 0))
     upload = right.file_uploader("Unggah target bulanan (xlsx/csv)", type=["xlsx", "xls", "csv"], key=f"tgt-upload-{round_no}")
     if upload is None:
@@ -222,34 +315,20 @@ def show_target_uploader(features, *, username: str, today: date, title: bool = 
         file_check(False, f"{upload.name}: tidak ada bulan yang berisi target. Isi kolom Target (Rp) pada template.")
         return
     file_check(True, f"{upload.name}: {len(parsed)} bulan berisi target.")
+    modes = ["Ganti semua target dengan isi file", "Perbarui hanya bulan yang ada di file"]
+    mode = st.radio(
+        "Cara menyimpan", modes, key=f"tgt-upload-mode-{round_no}", horizontal=True,
+        help="Ganti semua: bulan tersimpan yang tidak ada (atau kosong) di file dihapus. Perbarui: bulan lain tetap tersimpan.",
+    )
+    changes = T.plan_changes(saved, dict(zip(parsed["periode"], parsed["target"])), replace_all=mode == modes[0])
     preview = pd.DataFrame({
-        "Bulan": parsed["periode"].map(T.month_label),
-        "Target baru (Rp)": parsed["target"].map(fmt_idr),
-        "Target lama (Rp)": parsed["periode"].map(lambda k: fmt_idr(saved[k]) if k in saved else "–"),
+        "Bulan": changes["periode"].map(T.month_label),
+        "Target lama (Rp)": changes["lama"].map(lambda v: fmt_idr(v) if v is not None and pd.notna(v) else "–"),
+        "Target baru (Rp)": changes["baru"].map(lambda v: fmt_idr(v) if v is not None and pd.notna(v) else "–"),
+        "Perubahan": changes["aksi"].map(ACTION_LABELS),
     })
-    st.markdown(f"Terbaca **{len(parsed)} bulan**. Bulan yang sama akan diganti.")
-    st.dataframe(preview, hide_index=True, width="stretch")
-    if st.button("Simpan target bulanan", type="primary", key="tgt-upload-save"):
-        from auth.ui import require
-
-        require("rekomendasi", "edit")
-        existing = features.read("sales_target")
-        keep = {str(r["periode"]): r for r in existing.to_dict("records")} if not existing.empty else {}
-        rows = []
-        for item in parsed.to_dict("records"):
-            old = keep.get(item["periode"], {})
-            rows.append({
-                "periode": item["periode"], "target_sales_bersih": float(item["target"]),
-                "margin_min_pct": float(old.get("margin_min_pct", 0) or 0), "strategi": old.get("strategi", "") or "",
-                "budget_json": old.get("budget_json", "{}") or "{}", "set_by": username,
-            })
-        features.replace("sales_target", rows, keys=["periode"], username=username, action="unggah:target_bulanan")
-        from src.ui.feature_data import bump
-
-        bump(st.session_state)
-        st.session_state["tgt-upload-round"] = round_no + 1
-        set_upload_notice(
-            "target", True,
-            f"{len(rows)} target bulanan tersimpan: " + ", ".join(T.month_label(r["periode"]) for r in rows[:12]) + ("…" if len(rows) > 12 else "") + ".",
-        )
-        st.rerun()
+    removed = int((changes["aksi"] == "Dihapus").sum())
+    st.markdown(f"Setelah disimpan: **{len(changes) - removed} bulan bertarget**" + (f", **{removed} bulan dihapus**." if removed else "."))
+    st.dataframe(preview, hide_index=True, width="stretch", height=min(38 + 35 * len(preview), 420))
+    if st.button("Simpan target bulanan", type="primary", key=f"tgt-upload-save-{round_no}"):
+        _save_changes(features, changes, username=username, action="unggah:target_bulanan")

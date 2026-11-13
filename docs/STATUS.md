@@ -2,6 +2,12 @@
 
 Diperbarui: 13 November 2026.
 
+## Target bulanan bisa dikoreksi (13 Nov 2026)
+
+- Masalah: unggahan hanya menambah/mengganti bulan di file; bulan kosong/tidak ada dilewati, jadi target 2027 yang salah tetap tersimpan (12 + 10 = 22 bulan) dan tidak bisa dihapus.
+- Upload data › Target sales bulanan kini dua tab: **Lihat & koreksi target** (tabel bisa diedit: ubah angka, centang Hapus, tambah baris; ringkasan "Belum disimpan: …" lalu Simpan koreksi) dan **Unggah file target** dengan pilihan **Ganti semua target dengan isi file** (bawaan; bulan yang tidak ada/kosong di file dihapus) atau **Perbarui hanya bulan yang ada di file**, plus pratinjau Baru/Diubah/Tidak berubah/Dihapus.
+- Hapus = target 0 (baris `sales_target` tetap ada), sehingga Target ROAS & budget iklan bulan itu tidak hilang. Logika `targets.plan_changes`; tes `TargetChangesTest`.
+
 ## Stok tidak terbaca & umpan balik unggah (13 Nov 2026)
 
 - **Penyebab kotak kuning "Sebagian data pendukung … seconds=2372535360000000000"**: `tanggal_habis` = hari ini + stok ÷ prediksi harian. SKU berstok dengan prediksi harian hampir 0 menghasilkan ±27 triliun hari → `OutOfBoundsTimedelta`, sehingga `enrich_catalog` gagal dan Ringkasan memakai tabel dasar tanpa stok/iklan/label ("50 tanpa data stok"). Sekarang cakupan > 3.650 hari tidak diberi tanggal habis (`decision_table.MAX_COVER_DAYS`, juga kartu analisa SKU). Teks peringatan diganti bahasa manajer + detail teknis. Tes `test_tiny_forecast_with_stock_has_no_overflow_date`.
