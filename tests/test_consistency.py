@@ -279,7 +279,7 @@ def test_period_actuals_gross_and_net_with_dates():
                 "Jumlah": qty, "Returned quantity": returned, "Total Pembayaran": qty * 9_000, "Username (Pembeli)": "a"}
 
     raw = pd.DataFrame([
-        row("O1", "Selesai", "100", 4, "2026-10-05 10:00", returned=1),
+        row("O1", "Selesai", "100", 4, "2026-10-01 10:00", returned=1),
         row("O2", "Batal", "100", 2, "2026-10-06 10:00", reason="Ubah pesanan"),
         row("O3", "Belum Bayar", "100", 1, "2026-10-07 10:00"),
         row("O4", "Selesai", "200", 5, "2026-10-08 10:00"),
@@ -293,6 +293,12 @@ def test_period_actuals_gross_and_net_with_dates():
     assert out["sales_masuk"] == 70_000 and out["sales"] == 30_000
     assert out["store_sales"] == 80_000                         # + SKU 200 (5 × 10.000)
     assert out["store_net"] == 4 * 9_000 - 10_000 + 5 * 9_000   # Total Pembayaran − retur (batal & Belum Bayar keluar)
+
+    from src.core.decision_table import sku_actuals
+
+    per_sku = sku_actuals(orders, date(2026, 10, 1), date(2026, 10, 31))
+    assert per_sku.loc[key].to_dict() == {"qty_masuk": 7, "sales_masuk": 70_000, "qty_bersih": 3, "sales_bersih": 30_000}
+    assert sku_actuals(orders, date(2026, 9, 1), date(2026, 9, 30)) is None   # sebelum laporan: belum ada data
 
 
 def test_ads_plan_never_sells_beyond_stock():

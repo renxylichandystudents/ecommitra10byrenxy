@@ -1142,6 +1142,11 @@ _APP_CSS = """
         font-size: var(--fs-base);
         line-height: 1.2;
     }
+    .qty-side { display: flex; gap: 0.35rem; flex: 0 0 15.2rem; width: 15.2rem; }
+    .qty-side .qty-base { flex: 1 1 0; width: auto; font-size: var(--fs-sm); color: #94a3b8; border-radius: 6px; padding: 0.15rem 0.35rem; }
+    .qty-side .qty-base.basis { color: #0f172a; background: #eef2ff; }
+    .qty-side .qty-base small { color: inherit; opacity: 0.85; }
+    .qty-card.split .qty-line > .qty-base { flex: 0 0 15.2rem; width: 15.2rem; }
     div[data-testid="stElementContainer"]:has(.qty-board-anchor) + div [data-testid="stButton"] button {
         border-radius: 999px;
         min-height: 2.45rem;
@@ -3722,25 +3727,8 @@ def _short_id_date(value: date) -> str:
     return f"{value.day} {ID_MONTHS[value.month - 1][:3]}"
 
 
-def _day_sold_map(orders: pd.DataFrame | None, day: date) -> dict[str, int] | None:
-    """QTY terjual per SKU pada satu tanggal laporan. None bila tanggal itu di luar laporan."""
-    if not isinstance(orders, pd.DataFrame) or orders.empty or "order_time" not in orders.columns:
-        return None
-    stamps = pd.to_datetime(orders["order_time"], errors="coerce").dt.normalize()
-    if stamps.notna().sum() == 0:
-        return None
-    target = pd.Timestamp(day)
-    if target < stamps.min() or target > stamps.max():
-        return None
-    part = orders.loc[stamps == target]
-    if part.empty or "item_key" not in part.columns:
-        return {}
-    sold = part.groupby(part["item_key"].astype(str))["qty"].sum()
-    return {key: int(round(float(value))) for key, value in sold.items()}
-
-
-def _last_month_sold(orders: pd.DataFrame | None, as_of: date) -> tuple[str, dict[str, int], dict[str, float]] | None:
-    """QTY dan sales per SKU pada bulan penuh terakhir (dasar sama dengan Ringkasan total Top 50)."""
+def _last_month_span(orders: pd.DataFrame | None, as_of: date) -> tuple[date, date, str] | None:
+    """Bulan penuh terakhir di laporan (tanggal 1 s.d. akhir bulan) dan labelnya, mis. "Aktual Okt 2026"."""
     if not isinstance(orders, pd.DataFrame) or orders.empty or "order_time" not in orders.columns:
         return None
     stamps = pd.to_datetime(orders["order_time"], errors="coerce").dt.normalize()
@@ -3750,15 +3738,7 @@ def _last_month_sold(orders: pd.DataFrame | None, as_of: date) -> tuple[str, dic
     lo, hi = last_full_month(full.max().date())
     if pd.Timestamp(lo) < stamps.min():
         return None
-    part = orders.loc[stamps.ge(pd.Timestamp(lo)) & stamps.le(pd.Timestamp(hi))]
-    keys = part["item_key"].astype(str)
-    qty = part.groupby(keys)["qty"].sum()
-    sales = part.groupby(keys)["sales"].sum() if "sales" in part.columns else pd.Series(dtype=float)
-    return (
-        format_period_label("aktual_bulan", lo),
-        {key: int(round(float(value))) for key, value in qty.items()},
-        {key: float(value) for key, value in sales.items()},
-    )
+    return lo, hi, format_period_label("aktual_bulan", lo)
 
 
 PCT_DISPLAY_CAP = 999.0
@@ -4551,48 +4531,117 @@ def _dc_chip_row(row: pd.Series | None) -> str:
     )
 
 
-def _sales_bars(brief: dict, row: pd.Series, item_orders: pd.DataFrame | None, today: date) -> list[dict]:
-    """Versi Rupiah dari batang QTY untuk parameter Sales value (prediksi × harga bersih 4 minggu)."""
+BASIS_WORD = {"bersih": "terjual bersih", "masuk": "masuk"}
+
+
+def _split_bar(
+    label: str,
+    sub: str,
+    pred_qty: float | None,
+    pred_sales: float | None,
+    actual: dict | None,
+    *,
+    basis: str,
+    metric: str,
+) -> dict:
+    """Satu baris kartu: batang prediksi (QTY + sales produk) dibanding aktual dasar `basis`; kanan bersih dan masuk."""
+    spec = {"label": label, "sub": sub, "direction": "tetap", "width": 100.0, "actual": actual, "basis": basis}
+    if pred_qty is None:
+        spec["text"] = "Prediksi belum bisa dihitung"
+        return spec
+    pred_text = f"Prediksi {format_qty(pred_qty)} unit" + (f" · {format_idr(pred_sales)}" if pred_sales is not None else "")
+    if actual is None:
+        spec["text"] = pred_text
+        return spec
+    money = metric == "sales" and pred_sales is not None
+    predicted = int(round(float(pred_sales if money else pred_qty)))
+    compare = int(round(float(actual[f"{'sales' if money else 'qty'}_{basis}"])))
+    direction, _text, _gap, percent = _qty_pill(predicted, compare)
+    word = BASIS_WORD[basis]
+    if direction == "tetap":
+        tail = f"sama dengan {word}"
+    elif percent is None:
+        tail = f"{word} 0"
+    else:
+        tail = f"{format_number(abs(percent), 1)}% {'di atas' if direction == 'naik' else 'di bawah'} {word}"
+    spec.update(
+        direction=direction,
+        text=f"{'▲' if direction == 'naik' else '▼' if direction == 'turun' else '–'} {pred_text} · {tail}",
+        width=predicted / max(predicted, compare, 1) * 100,
+    )
+    return spec
+
+
+def _actual_of(table: pd.DataFrame | None, key: str) -> dict | None:
+    """Aktual satu SKU dari sku_actuals; SKU tanpa pesanan = 0, rentang di luar laporan = None."""
+    if table is None:
+        return None
+    if key in table.index:
+        return {name: float(table.at[key, name]) for name in table.columns}
+    return {name: 0.0 for name in table.columns}
+
+
+def _card_bars(brief: dict, row: pd.Series, key: str, actuals: dict, *, basis: str, metric: str, period: str, today: date) -> list[dict]:
+    """Baris kartu Top 50: Prediksi periode, Aktual kemarin, Tanggal sama bulan lalu, + periode tambahan."""
     price = float(row.get("harga_bersih", 0) or 0)
-    yesterday = today - timedelta(days=1)
-    month_ago = _same_day_last_month(today)
-    sold_sales = [None, None, None]
-    if isinstance(item_orders, pd.DataFrame) and not item_orders.empty:
-        days = pd.to_datetime(item_orders["order_time"]).dt.date
-        sold_sales = [
-            float(brief.get("month_actual_sales", row.get("sales_total", 0)) or 0),
-            float(item_orders.loc[days == yesterday, "sales"].sum()),
-            float(item_orders.loc[days == month_ago, "sales"].sum()),
-        ]
-    out = []
-    for bar, pred_qty, sold in zip(brief["bars"], (brief.get("month_pred"), brief.get("yesterday_pred"), brief.get("month_ago_pred")), sold_sales):
-        pred = None if pred_qty is None else int(round(float(pred_qty) * price))
-        spec = _bar_spec(bar["label"], bar["sub"], pred, None if sold is None else int(round(sold)), bar.get("sold_sub") or "terjual", money=True)
-        spec["sold"] = "–" if sold is None else format_idr(sold)
-        out.append(spec)
+
+    def money(qty):
+        return None if qty is None or price <= 0 else float(qty) * price
+
+    month = actuals.get("month_span")
+    pred_sub = brief["bars"][0]["sub"] + (f" · vs aktual {_short_id_date(month[0])} – {_short_id_date(month[1])} {month[1].year}" if month else "")
+    rows = [
+        (brief["bars"][0]["label"], pred_sub, brief.get("month_pred"), "month"),
+        (brief["bars"][1]["label"], f"prediksi vs {BASIS_WORD[basis]}", brief.get("yesterday_pred"), "yesterday"),
+        (brief["bars"][2]["label"], brief["bars"][2]["sub"], brief.get("month_ago_pred"), "month_ago"),
+    ]
+    bars = [
+        _split_bar(label, sub, pred, money(pred), _actual_of(actuals.get(name), key), basis=basis, metric=metric)
+        for label, sub, pred, name in rows
+    ]
+    if period != "bulan" and "p_qty" in row.index and actuals.get("extra_span"):
+        from src.core.periods import calendar_period
+
+        _lo, end, now_label = calendar_period(period, today)
+        prev_lo, prev_hi, prev_label = actuals["extra_span"]
+        spec = _split_bar(
+            PERIOD_LABELS[period],
+            f"sisa {now_label} s.d. {format_id_date(end)} · vs aktual {prev_label}",
+            float(row["p_qty"]),
+            float(row["p_sales"]) if "p_sales" in row.index else None,
+            _actual_of(actuals.get("extra"), key),
+            basis=basis,
+            metric=metric,
+        )
+        spec["extra"] = True
+        bars.append(spec)
+    return bars
+
+
+def _board_actuals(orders_all: pd.DataFrame | None, as_of: date, period: str) -> dict:
+    """Aktual masuk & bersih per SKU untuk tiap baris kartu (semua status dibaca)."""
+    from src.core.decision_table import sku_actuals
+
+    yesterday = as_of - timedelta(days=1)
+    month_ago = _same_day_last_month(as_of)
+    out = {"yesterday": sku_actuals(orders_all, yesterday, yesterday), "month_ago": sku_actuals(orders_all, month_ago, month_ago)}
+    span = _last_month_span(orders_all, as_of)
+    if span is not None:
+        out["month_span"] = span
+        out["month"] = sku_actuals(orders_all, span[0], span[1])
+    if period != "bulan":
+        from src.core.periods import previous_calendar_period
+
+        prev = previous_calendar_period(period, as_of)
+        out["extra_span"] = prev
+        out["extra"] = sku_actuals(orders_all, prev[0], prev[1])
     return out
 
 
-def _extra_period_bar(row: pd.Series | None, period: str, item_orders: pd.DataFrame | None, today: date, metric: str) -> dict | None:
-    """Baris periode tambahan (Kuartal/Semester/Tahun) di bawah Bulan lalu."""
-    if row is None or period == "bulan" or "p_qty" not in row.index:
+def _basis_map(table: pd.DataFrame | None, basis: str) -> dict[str, int] | None:
+    if table is None:
         return None
-    from src.core.periods import calendar_period, previous_calendar_period
-
-    prev_lo, prev_hi, prev_label = previous_calendar_period(period, today)
-    _lo, end, now_label = calendar_period(period, today)
-    sold = None
-    if isinstance(item_orders, pd.DataFrame) and not item_orders.empty:
-        days = pd.to_datetime(item_orders["order_time"]).dt.normalize()
-        part = item_orders.loc[days.ge(pd.Timestamp(prev_lo)) & days.le(pd.Timestamp(prev_hi))]
-        sold = float(part["qty" if metric == "qty" else "sales"].sum())
-    pred = float(row["p_qty"] if metric == "qty" else row["p_sales"])
-    label = PERIOD_LABELS[period]
-    spec = _bar_spec(label, f"sisa {now_label} s.d. {format_id_date(end)}", int(round(pred)), None if sold is None else int(round(sold)), f"aktual {prev_label}", money=metric == "sales")
-    if metric == "sales":
-        spec["sold"] = "–" if sold is None else format_idr(sold)
-    spec["extra"] = True
-    return spec
+    return {str(k): int(round(float(v))) for k, v in table[f"qty_{basis}"].items()}
 
 
 @st.dialog("Analisa prediksi", width="large", on_dismiss=_dismiss_qty_insight)
@@ -4609,26 +4658,50 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
     name = html.escape(_clean_product_piece(row["product_name"], "Tanpa nama"))
     variance = html.escape(_clean_product_piece(row["variasi_tampil"], "Tanpa variasi"))
     lines = []
+    split = False
     for bar in bars if bars is not None else brief["bars"]:
+        if "basis" in bar:
+            split = True
+            actual, basis = bar.get("actual"), bar["basis"]
+            cells = []
+            for side in ("bersih", "masuk"):
+                if actual is None:
+                    body = "–<small>belum ada di laporan</small>"
+                else:
+                    body = f"{format_qty(actual[f'qty_{side}'])} unit<small>{format_idr(actual[f'sales_{side}'])}</small>"
+                cells.append(f"<div class='qty-base{' basis' if side == basis else ''}'>{body}</div>")
+            right = f"<div class='qty-side'>{''.join(cells)}</div>"
+        else:
+            right = f"<div class='qty-base'>{html.escape(bar['sold'])}<small>{html.escape(bar['sold_sub'])}</small></div>"
         lines.append(
             f"<div class='qty-line{' extra' if bar.get('extra') else ''}'>"
             f"<div class='qty-metric'>{html.escape(bar['label'])}<small>{html.escape(bar['sub'])}</small></div>"
             "<div class='qty-track'>"
             f"<div class='qty-fill {html.escape(bar['direction'])}' style='width:{float(bar['width']):.1f}%'>"
             f"<span>{html.escape(bar['text'])}</span></div></div>"
-            f"<div class='qty-base'>{html.escape(bar['sold'])}<small>{html.escape(bar['sold_sub'])}</small></div>"
+            f"{right}"
             "</div>"
         )
+    if split:
+        basis = next(b["basis"] for b in bars if "basis" in b)
+        head = (
+            "<div class='qty-metric'>Periode</div>"
+            f"<div class='qty-head-mid'>Prediksi QTY & sales produk (batang) vs {BASIS_WORD[basis]}</div>"
+            "<div class='qty-side'>"
+            f"<div class='qty-base{' basis' if basis == 'bersih' else ''}'>Terjual bersih<small>nett</small></div>"
+            f"<div class='qty-base{' basis' if basis == 'masuk' else ''}'>Masuk<small>semua pesanan</small></div>"
+            "</div>"
+        )
+    else:
+        head = "<div class='qty-metric'>Periode</div><div class='qty-head-mid'>Prediksi (batang) vs terjual</div><div class='qty-base'>Terjual</div>"
     return (
-        "<div class='qty-card'>"
+        f"<div class='qty-card{' split' if split else ''}'>"
         "<div class='qty-id'>"
         f"<div class='qty-rank'>{rank}. SKU {sku}</div>"
         f"<div class='qty-name' title='{name}'>{name}</div>"
         f"<div class='qty-var'>Varian {variance}</div>"
         "</div>"
-        "<div class='qty-line qty-head-row'>"
-        "<div class='qty-metric'>Periode</div><div class='qty-head-mid'>Prediksi (batang) vs terjual</div><div class='qty-base'>Terjual</div>"
-        "</div>"
+        f"<div class='qty-line qty-head-row'>{head}</div>"
         f"{''.join(lines)}"
         f"{stock_row}"
         "</div>"
@@ -4656,6 +4729,7 @@ def show_qty_forecast_board(
     metric: str = "qty",
     decision: pd.DataFrame | None = None,
     performance: dict | None = None,
+    orders_all: pd.DataFrame | None = None,
 ) -> None:
     """R6: per SKU baris Prediksi bulan, Aktual kemarin, Tanggal sama bulan lalu, + periode tambahan, dan Stok Site 10037 paling bawah."""
     if view.empty:
@@ -4664,9 +4738,30 @@ def show_qty_forecast_board(
     as_of = as_of or date.today()
     yesterday = as_of - timedelta(days=1)
     month_ago = _same_day_last_month(as_of)
-    yesterday_map = _day_sold_map(orders, yesterday)
-    month_ago_map = _day_sold_map(orders, month_ago)
-    last_month = _last_month_sold(orders, as_of)
+    basis = "bersih" if exclude_cancel else "masuk"
+    source = orders_all if isinstance(orders_all, pd.DataFrame) else orders
+    actual_key = (
+        len(source) if isinstance(source, pd.DataFrame) else 0,
+        str(pd.to_datetime(source["order_time"], errors="coerce").max()) if isinstance(source, pd.DataFrame) and "order_time" in source.columns else "",
+        as_of,
+        period,
+    )
+    actual_cache = st.session_state.get("_qty-actuals")
+    if isinstance(actual_cache, tuple) and actual_cache[0] == actual_key:
+        board_actuals = actual_cache[1]
+    else:
+        board_actuals = _board_actuals(source, as_of, period)
+        st.session_state["_qty-actuals"] = (actual_key, board_actuals)
+    yesterday_map = _basis_map(board_actuals.get("yesterday"), basis)
+    month_ago_map = _basis_map(board_actuals.get("month_ago"), basis)
+    last_month = None
+    if "month" in board_actuals and board_actuals["month"] is not None:
+        month_table = board_actuals["month"]
+        last_month = (
+            board_actuals["month_span"][2],
+            _basis_map(month_table, basis),
+            {str(k): float(v) for k, v in month_table[f"sales_{basis}"].items()},
+        )
     yesterday_pred_map: dict[str, int] | None = None
     month_ago_pred_map: dict[str, int] | None = None
     if isinstance(history, pd.DataFrame) and not history.empty:
@@ -4770,14 +4865,32 @@ def show_qty_forecast_board(
             st.session_state["qty-board-direction"] = name
             reset_batches("qty-board")
             st.rerun(scope="fragment")
-    unit_word = "unit" if metric == "qty" else "Rp"
+    unit_word = "unit" if metric == "qty" else "Rp sales produk"
+    word = BASIS_WORD[basis]
+    if basis == "bersih":
+        basis_text = (
+            "Kartu ini menganalisa penjualan BERSIH (nett): prediksi dibanding barang yang benar-benar terjual, tanpa pesanan batal, "
+            "Belum Bayar, dan barang retur. Ini karena prediksi dihitung dengan setelan Kecualikan batal & retur aktif. "
+            "Kolom Masuk tetap ditampilkan (abu-abu) agar terlihat semua pesanan yang benar-benar masuk."
+        )
+    else:
+        basis_text = (
+            "Kartu ini menganalisa semua pesanan MASUK: prediksi dibanding semua pesanan, termasuk yang batal, Belum Bayar, dan retur. "
+            "Ini karena setelan Kecualikan batal & retur mati, jadi prediksi juga dihitung dari semua pesanan. "
+            "Kolom Terjual bersih tetap ditampilkan (abu-abu) agar terlihat berapa yang akhirnya benar-benar laku."
+        )
+    st.markdown(f"<p class='qty-board-copy'><b>Dasar analisa:</b> {html.escape(basis_text)}</p>", unsafe_allow_html=True)
     explain(
         [
-            ("Cara baca satu kartu", "tiap baris membandingkan PREDIKSI (batang, tengah) dengan yang TERJUAL (angka kanan) pada periode di kiri"),
-            (f"Baris {format_period_label('prediksi', as_of)}", "prediksi periode berjalan dibanding terjual bulan penuh terakhir; naik = permintaan diperkirakan lebih tinggi dari bulan lalu"),
-            (f"Baris {format_period_label('aktual_hari', as_of - timedelta(days=1))}", "prediksi untuk kemarin dibanding yang benar-benar terjual kemarin (cek ketepatan model)"),
+            ("Cara baca satu kartu", f"tiap baris membandingkan PREDIKSI (batang, tengah) dengan {word.upper()} (kolom kanan yang diberi latar biru muda) pada periode di kiri"),
+            ("Terjual bersih (nett)", "pesanan masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang yang diretur; yang benar-benar menjadi penjualan"),
+            ("Masuk (semua pesanan)", "semua pesanan yang masuk ke toko pada tanggal itu, termasuk yang kemudian batal, belum dibayar, atau diretur; menunjukkan minat beli sebenarnya"),
+            ("Angka Rupiah", "sales produk = Harga Setelah Diskon × QTY, sebelum voucher. Prediksi Rupiah = prediksi QTY × harga bersih 4 minggu terakhir. "
+             "Ini bukan sales bersih Total Pembayaran (dasar target), karena Total Pembayaran per pesanan tidak bisa dibagi tepat per SKU"),
+            (f"Baris {format_period_label('prediksi', as_of)}", "prediksi periode berjalan dibanding bulan kalender penuh terakhir (tanggal tertulis di bawah label); naik = permintaan diperkirakan lebih tinggi dari bulan lalu"),
+            (f"Baris {format_period_label('aktual_hari', as_of - timedelta(days=1))}", f"prediksi untuk kemarin dibanding {word} kemarin (cek ketepatan model)"),
             ("Baris Tanggal sama bulan lalu", "sama, untuk tanggal yang sama bulan lalu"),
-            ("Warna & panjang batang", f"🟢 prediksi di atas terjual · 🔴 di bawah terjual · ⚪ sama; batang penuh = prediksi ≥ terjual, batang pendek = prediksi lebih kecil ({unit_word})"),
+            ("Warna & panjang batang", f"🔵 prediksi di atas {word} · 🔴 di bawah {word} · ⚪ sama; persen dihitung dari {unit_word}; batang penuh = prediksi ≥ {word}, batang pendek = prediksi lebih kecil"),
             ("Stok Site 10037", "stok toko dibanding kebutuhan (prediksi + SS) per periode: hijau Aman, kuning Kurang, merah Kosong"),
             ("Stok DC", "stok Site 10062 (DC Cikupa) dan 10036 (DC Cipeucang); bila Site 10037 kurang, Rencana menunjukkan berapa yang bisa diambil dari DC sebelum PO"),
             ("Analisa", "klik untuk rincian per SKU: prediksi vs stok, stok DC & rencana transfer, iklan, dan langkah kerja"),
@@ -4821,11 +4934,7 @@ def show_qty_forecast_board(
         st.markdown("<div class='qty-row-anchor'></div>", unsafe_allow_html=True)
         card_col, action_col = st.columns([7.4, 1.15], vertical_alignment="center")
         enriched = decision_rows.get(key)
-        item_orders = groups.get(key)
-        bars = _sales_bars(brief, enriched if enriched is not None else row, item_orders, as_of) if metric == "sales" else list(brief["bars"])
-        extra_bar = _extra_period_bar(enriched, period, item_orders, as_of, metric)
-        if extra_bar:
-            bars.append(extra_bar)
+        bars = _card_bars(brief, enriched if enriched is not None else row, key, board_actuals, basis=basis, metric=metric, period=period, today=as_of)
         card_col.markdown(_qty_card_html(row, brief, bars, _stock_chip_row(enriched, period, as_of)), unsafe_allow_html=True)
         if action_col.button("Analisa", key=f"qty-insight-open-{key}", use_container_width=True):
             st.session_state["qty-insight-key"] = key
@@ -8903,6 +9012,7 @@ with PAGE_ROOT.container(key="page-root"):
                 metric=metric,
                 decision=shown,
                 performance=store_performance(frames.performance, today),
+                orders_all=orders_all,
             )
 
             st.subheader("Top 50 item terlaris")

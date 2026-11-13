@@ -2,6 +2,15 @@
 
 Diperbarui: 13 November 2026.
 
+## Kartu Prediksi per SKU (batang): sales + bersih vs masuk (13 Nov 2026 malam)
+
+- Masukan pengguna: tambahkan sales; harus jelas kartu menganalisa sales bersih atau aktual masuk.
+- Batang kini berbunyi "▲ Prediksi 1.194 unit · Rp … · 8,0% di atas terjual bersih" (QTY + sales produk = prediksi QTY × harga bersih 4 minggu).
+- Kolom kanan dua: Terjual bersih (nett) dan Masuk (semua pesanan), masing-masing QTY + sales produk, dibaca dari semua status (`orders_all`) lewat `decision_table.sku_actuals`.
+- Dasar analisa mengikuti setelan prediksi: Kecualikan batal & retur aktif → batang dibanding terjual bersih; mati → dibanding masuk. Kolom yang dipakai diberi latar biru muda; kalimat "Dasar analisa" tampil di atas kartu.
+- Baris prediksi menulis bulan pembanding ("vs aktual 1 Okt – 31 Okt 2026"). Dialog Analisa memakai angka dasar yang sama.
+- `_sales_bars`, `_extra_period_bar`, `_day_sold_map`, `_last_month_sold` diganti `_card_bars`/`_split_bar`/`_board_actuals`/`_last_month_span`.
+
 ## Ringkasan total Top 50: aktual masuk vs bersih (13 Nov 2026 malam)
 
 - Masukan pengguna: "Aktual Okt 2026" tidak jelas sales apa dan tanggal berapa; perlu angka bersih (nett) sekaligus semua data real yang masuk.

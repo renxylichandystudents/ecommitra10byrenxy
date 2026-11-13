@@ -260,6 +260,36 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
     return out
 
 
+SKU_ACTUAL_COLUMNS = ("qty_masuk", "sales_masuk", "qty_bersih", "sales_bersih")
+
+
+def sku_actuals(orders: pd.DataFrame | None, lo: date, hi: date) -> pd.DataFrame | None:
+    """QTY dan sales produk per SKU pada tanggal lo s.d. hi (inklusif), dasar sama dengan period_actuals.
+
+    masuk = semua pesanan (termasuk batal, Belum Bayar, retur); bersih = tanpa batal & Belum Bayar, setelah retur.
+    None bila rentang itu di luar laporan (belum ada data untuk dibandingkan).
+    """
+    if orders is None or orders.empty or "order_time" not in orders.columns:
+        return None
+    from src.core.metrics import normalize_lines
+
+    lines = normalize_lines(orders)
+    days = pd.to_datetime(lines["order_time"], errors="coerce").dt.normalize()
+    if days.notna().sum() == 0 or pd.Timestamp(lo) < days.min() or pd.Timestamp(hi) > days.max():
+        return None
+    part = lines.loc[days.ge(pd.Timestamp(lo)) & days.le(pd.Timestamp(hi))]
+    sold = ~part["is_cancel"] & ~part["is_open"]
+    frame = pd.DataFrame(
+        {
+            "qty_masuk": part["gross_qty"],
+            "sales_masuk": part["line_value"],
+            "qty_bersih": (part["gross_qty"] - np.minimum(part["returned_qty"], part["gross_qty"])).where(sold, 0.0),
+            "sales_bersih": (part["line_value"] - part["return_value"]).where(sold, 0.0),
+        }
+    )
+    return frame.groupby(part["item_key"].astype(str)).sum()
+
+
 def lama_kosong_text(row: pd.Series) -> str:
     days = row.get("lama_kosong_hari")
     since = row.get("zero_since")
