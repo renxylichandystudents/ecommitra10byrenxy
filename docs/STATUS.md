@@ -2,6 +2,14 @@
 
 Diperbarui: 13 November 2026.
 
+## Dialog Analisa prediksi per SKU: menyeluruh & bertanggal (14 Nov 2026)
+
+- Masukan pengguna: tambah analisa bulan berjalan, setiap angka sebut periodenya, jelaskan bersih vs masuk, analisa menyeluruh (transaksi, kompetitor, deskripsi, prediksi/potensi).
+- Modul baru `src/core/sku_insight.py` (dites di `tests/test_sku_insight.py`): `transaction_profile` (masuk, batal, Belum Bayar, retur, bersih, pesanan, pembeli, alasan batal per rentang), `running_month` (aktual 1 s.d. hari penuh terakhir + prediksi sisa bulan × pola hari = proyeksi; pembanding periode sama bulan lalu dan bulan lalu penuh), `stock_potential`, `description_review`/`find_description`, `competitor_view` (aturan sama dengan halaman Rekomendasi).
+- `app._insight_context` menyusun bahan saat tombol Analisa diklik (di-cache per SKU); `analysis_markup(..., context=)` sekarang 9 blok: Bulan berjalan, Prediksi per periode vs stok, Transaksi SKU, Stok & DC, Kompetitor, Deskripsi, Performa toko (seluruh toko, tanggal), Iklan (tanggal laporan: kolom baru `iklan_mulai`/`iklan_sampai` dari `enrich`), Dua sisi + Langkah kerja. Paragraf "Cara baca angka" menjelaskan masuk/bersih/sales produk dan dasar analisa (ikut setelan Kecualikan batal & retur).
+- Kalimat sistem pakar yang belum bertanggal ditempeli periode (tren 28 hari, tingkat batal seluruh laporan). `sku_facts` memakai `tanggal_habis` agar tanggal habis di langkah kerja sama dengan blok stok.
+- Kompetitor: file hanya berisi peringkat & judul (tanpa harga/terjual), jadi perbandingan harga ditulis belum bisa dihitung.
+
 ## Kartu Prediksi per SKU (batang): sales + bersih vs masuk (13 Nov 2026 malam)
 
 - Masukan pengguna: tambahkan sales; harus jelas kartu menganalisa sales bersih atau aktual masuk.

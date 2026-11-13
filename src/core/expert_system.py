@@ -98,7 +98,8 @@ def sku_facts(row: pd.Series, *, prefix: str = "m", today: date | None = None) -
     if not np.isfinite(cover):
         deadline_text = "segera" if np.isnan(cover) else "sebelum kebutuhan bulan ini berjalan"
     elif cover <= lead:
-        out_day = ref + timedelta(days=int(cover))
+        known = pd.to_datetime(row.get("tanggal_habis"), errors="coerce")
+        out_day = known.date() if pd.notna(known) else ref + timedelta(days=int(cover))
         deadline_text = f"hari ini juga, karena stok diperkirakan habis {_fmt(out_day)} sebelum barang tiba (lead time {_fmt(lead)} hari)"
     else:
         deadline_text = f"paling lambat {_fmt(ref + timedelta(days=int(min(cover, 365)) - int(lead)))}"

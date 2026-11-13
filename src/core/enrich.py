@@ -152,6 +152,8 @@ def enrich_catalog(
         from src.core.ads import HISTORY_DAYS, attribute_ads
 
         recent = attribute_ads(frames.ads, frames.stock, orders=orders_used)
+        table["iklan_mulai"] = recent.start
+        table["iklan_sampai"] = recent.end
         if recent.end is not None:
             hist = attribute_ads(frames.ads, frames.stock, orders=orders_used, start=recent.end - pd.Timedelta(days=HISTORY_DAYS - 1), end=recent.end).per_sku
             hist = hist[["sku", "biaya_iklan", "omzet_iklan"]].rename(columns={"sku": "_sku", "biaya_iklan": "biaya_iklan_90", "omzet_iklan": "omzet_iklan_90"})

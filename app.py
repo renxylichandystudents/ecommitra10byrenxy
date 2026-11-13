@@ -4018,8 +4018,10 @@ def explain_qty_gap(
     if data_end is None and isinstance(orders, pd.DataFrame) and "order_time" in orders.columns and not orders.empty:
         data_end = pd.to_datetime(orders["order_time"], errors="coerce").max()
     now_promo = then_promo = None
+    promo_span = None
     if isinstance(part, pd.DataFrame) and not part.empty and data_end is not None and pd.notna(data_end):
         end = pd.Timestamp(data_end).normalize()
+        promo_span = ((end - pd.Timedelta(days=27)).date(), end.date())
         now_promo = _promo_profile(_order_window(part, end, 0, 28))
         then_promo = _promo_profile(_order_window(part, end, 28, 28))
     promo = now_promo or {}
@@ -4414,6 +4416,8 @@ def explain_qty_gap(
         "busy_name": busy_name,
         "busy_share": busy_share,
         "run_rate": run_rate,
+        "promo": promo,
+        "promo_span": promo_span,
     }
 
 
@@ -4638,6 +4642,65 @@ def _board_actuals(orders_all: pd.DataFrame | None, as_of: date, period: str) ->
     return out
 
 
+def _insight_context(row: pd.Series, key: str, orders_all: pd.DataFrame | None, today: date, *, basis: str, frames=None) -> dict:
+    """Bahan dialog Analisa: bulan berjalan, transaksi masuk/bersih, potensi stok, kosong, kompetitor, deskripsi (semua bertanggal)."""
+    from src.core.metrics import normalize_lines
+    from src.core.restock import empty_loss
+    from src.core.sku_insight import competitor_view, description_review, find_description, running_month, stock_potential, transaction_profile
+    from src.ui.month_track_view import day_weight_fn, month_remaining_weight
+
+    ctx: dict = {"basis": basis}
+    if not isinstance(orders_all, pd.DataFrame) or orders_all.empty:
+        return ctx
+    lines = normalize_lines(orders_all.loc[orders_all["item_key"].astype(str) == str(key)])
+    stamps = pd.to_datetime(orders_all["order_time"], errors="coerce")
+    ctx["report_span"] = (stamps.min().date(), stamps.max().date())
+    end = min(pd.Timestamp(today).normalize(), stamps.max().normalize() + pd.Timedelta(days=1))
+    ctx["trend_span"] = (
+        ((end - pd.Timedelta(days=28)).date(), (end - pd.Timedelta(days=1)).date()),
+        ((end - pd.Timedelta(days=56)).date(), (end - pd.Timedelta(days=29)).date()),
+    )
+    cutoff, rest_weight = month_remaining_weight(orders_all, today)
+    daily = float(row.get("pred_harian", 0) or 0)
+    price = float(row.get("harga_bersih", 0) or 0)
+    month = running_month(lines, key, today, cutoff, rest_weight, daily, price, basis=basis)
+    ctx["month"] = month
+    has_stock = bool(row.get("ada_data_stok", False))
+    stock = float(row.get("stok", 0) or 0) if has_stock else None
+    ctx["potential"] = stock_potential(stock, daily, price, rest_weight, month["rest_days"])
+    if frames is not None and isinstance(getattr(frames, "stock", None), pd.DataFrame) and "_submitted_at" in frames.stock.columns:
+        stamp = pd.to_datetime(frames.stock["_submitted_at"], errors="coerce").max()
+        ctx["stock_date"] = None if pd.isna(stamp) else stamp.date()
+    since = row.get("zero_since")
+    if has_stock and stock is not None and stock <= 0 and since is not None and pd.notna(since):
+        since = pd.Timestamp(since).date()
+        yesterday = today - timedelta(days=1)
+        first = today.replace(day=1)
+        sold = transaction_profile(lines, key, since, yesterday)
+        sold_month = transaction_profile(lines, key, max(since, first), yesterday)
+        ctx["empty_since"] = since
+        ctx["empty_loss"] = empty_loss(
+            since, today, daily, price, day_weight=day_weight_fn(orders_all, today), month_first=first,
+            sold_qty=sold[f"qty_{basis}"], sold_sales=sold[f"sales_{basis}"],
+            sold_month=(sold_month[f"qty_{basis}"], sold_month[f"sales_{basis}"]),
+        )
+    if frames is not None:
+        name = str(row.get("product_name", ""))
+        code = ""
+        stock_frame = getattr(frames, "stock", None)
+        if isinstance(stock_frame, pd.DataFrame) and {"sku", "product_code"} <= set(stock_frame.columns):
+            hit = stock_frame.loc[stock_frame["sku"].astype(str).str.strip().str.replace(r"\.0+$", "", regex=True) == str(row.get("sku", "")).strip(), "product_code"]
+            code = str(hit.iloc[0]).strip() if not hit.empty else ""
+        descriptions = getattr(frames, "descriptions", None)
+        if isinstance(descriptions, pd.DataFrame) and not descriptions.empty:
+            ctx["description"] = description_review(find_description(descriptions, product_code=code, sku=str(row.get("sku", "")), name=name))
+        try:
+            ctx["competitor"] = competitor_view(getattr(frames, "competitors", None), key, name)
+        except Exception:
+            ctx["competitor"] = None
+    return ctx
+
+
 def _basis_map(table: pd.DataFrame | None, basis: str) -> dict[str, int] | None:
     if table is None:
         return None
@@ -4730,6 +4793,7 @@ def show_qty_forecast_board(
     decision: pd.DataFrame | None = None,
     performance: dict | None = None,
     orders_all: pd.DataFrame | None = None,
+    frames=None,
 ) -> None:
     """R6: per SKU baris Prediksi bulan, Aktual kemarin, Tanggal sama bulan lalu, + periode tambahan, dan Stok Site 10037 paling bawah."""
     if view.empty:
@@ -4946,7 +5010,17 @@ def show_qty_forecast_board(
     if selected and selected in briefs:
         enriched = decision_rows.get(selected)
         if enriched is not None:
-            _qty_insight_dialog(analysis_markup(enriched, period=period, today=as_of, performance=performance, brief=briefs[selected]))
+            context_key = (selected, actual_key, basis)
+            cached_ctx = st.session_state.get("_qty-insight-ctx")
+            if isinstance(cached_ctx, tuple) and cached_ctx[0] == context_key:
+                context = cached_ctx[1]
+            else:
+                with st.spinner("Menyiapkan analisa transaksi, kompetitor, dan deskripsi..."):
+                    context = _insight_context(enriched, selected, source, as_of, basis=basis, frames=frames)
+                st.session_state["_qty-insight-ctx"] = (context_key, context)
+            _qty_insight_dialog(
+                analysis_markup(enriched, period=period, today=as_of, performance=performance, brief=briefs[selected], context=context)
+            )
         else:
             match = work.loc[work["item_key"].astype(str) == selected]
             if not match.empty:
@@ -9013,6 +9087,7 @@ with PAGE_ROOT.container(key="page-root"):
                 decision=shown,
                 performance=store_performance(frames.performance, today),
                 orders_all=orders_all,
+                frames=frames,
             )
 
             st.subheader("Top 50 item terlaris")
