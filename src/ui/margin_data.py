@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core import margin_file as mf
-from src.ui.common import file_check, fmt_idr, fmt_num, fmt_pct, set_upload_notice, show_upload_notice
+from src.ui.common import file_check, fmt_idr, fmt_num, fmt_pct, mark_upload_done, set_upload_notice, show_upload_notice
 
 TABLE = "margin_item"
 
@@ -156,6 +156,7 @@ def upload_card(features, *, username: str, may_edit: bool, require, key: str) -
         except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
             set_upload_notice(key, False, f"File margin {upload.name} gagal disimpan: {exc}")
         else:
+            mark_upload_done(TABLE)
             set_upload_notice(
                 key, True,
                 f"File margin {upload.name} periode {periode} berhasil disimpan: {fmt_num(count)} baris. "

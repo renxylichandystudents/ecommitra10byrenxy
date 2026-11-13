@@ -10,7 +10,7 @@ import streamlit as st
 
 from src.core import targets as T
 from src.core.fmt import fmt_date
-from src.ui.common import download_excel, file_check, fmt_idr, fmt_pct, set_upload_notice, show_upload_notice
+from src.ui.common import download_excel, file_check, fmt_idr, fmt_pct, mark_upload_done, set_upload_notice, show_upload_notice
 
 UP = "#1d4ed8"
 DOWN = "#dc2626"
@@ -245,6 +245,7 @@ def _save_changes(features, changes: pd.DataFrame, *, username: str, action: str
         from src.ui.feature_data import bump
 
         bump(st.session_state)
+        mark_upload_done("sales_target")
         remaining = len(changes) - int((changes["aksi"] == "Dihapus").sum())
         set_upload_notice("target", True, f"Target bulanan tersimpan: {_summary_text(changes)}. Sekarang {remaining} bulan bertarget.")
     for key in ("tgt-upload-round", "tgt-edit-round"):

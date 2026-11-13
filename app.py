@@ -124,7 +124,7 @@ from src.ui.decision_view import (
 from src.ui.region import show_region_analysis
 from src.ui.instant import show_instant_analysis
 from src.ui.order_ops import show_ops_analysis
-from src.ui.targets_view import achievement_line, monthly_targets, show_target_uploader, target_upload_label
+from src.ui.targets_view import achievement_line, monthly_targets, show_target_uploader
 from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
 from src.utils.format import desimal as fmt_desimal
@@ -2004,12 +2004,21 @@ def show_training_uploads(groups=UPLOAD_GROUPS) -> tuple[list[str], str | None]:
 
     def menu_label(spec) -> str:
         if spec == TARGET_UPLOAD:
-            return target_upload_label(get_features())
+            months = len(monthly_targets(get_features()))
+            if not months:
+                return "Target sales bulanan · Kosong"
+            mark = "✓ Siap (baru disimpan)" if TARGET_UPLOAD in done else "tersimpan"
+            return f"Target sales bulanan · {mark} · {months} bulan"
         if spec == MARGIN_UPLOAD:
             from src.ui.margin_data import load_margin
 
             md = load_margin(get_features())
-            return f"File margin · periode {md.periode}" if md.ready else "File margin · Kosong"
+            if not md.ready:
+                return "File margin · Kosong"
+            if MARGIN_UPLOAD in done:
+                return f"File margin · ✓ Siap (baru disimpan) · periode {md.periode}"
+            when = f" {md.uploaded_at:%d/%m/%Y}" if md.uploaded_at is not None and pd.notna(md.uploaded_at) else ""
+            return f"File margin · tersimpan{when} · periode {md.periode}"
         status = statuses.get(spec.key, "Kosong")
         if status == "Siap" and spec.key in done:
             return f"{spec.label} · ✓ Siap (baru disimpan)"

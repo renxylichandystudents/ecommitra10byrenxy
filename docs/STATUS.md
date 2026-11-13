@@ -6,6 +6,7 @@ Diperbarui: 13 November 2026.
 
 - Masalah: unggahan hanya menambah/mengganti bulan di file; bulan kosong/tidak ada dilewati, jadi target 2027 yang salah tetap tersimpan (12 + 10 = 22 bulan) dan tidak bisa dihapus.
 - Upload data › Target sales bulanan kini dua tab: **Lihat & koreksi target** (tabel bisa diedit: ubah angka, centang Hapus, tambah baris; ringkasan "Belum disimpan: …" lalu Simpan koreksi) dan **Unggah file target** dengan pilihan **Ganti semua target dengan isi file** (bawaan; bulan yang tidak ada/kosong di file dihapus) atau **Perbarui hanya bulan yang ada di file**, plus pratinjau Baru/Diubah/Tidak berubah/Dihapus.
+- Menu upload: Target sales bulanan dan File margin kini ikut tanda "✓ Siap (baru disimpan)" setelah disimpan di sesi ini (`common.mark_upload_done`), selain itu "tersimpan" (+ tanggal unggah untuk margin), sama dengan menu lain.
 - Hapus = target 0 (baris `sales_target` tetap ada), sehingga Target ROAS & budget iklan bulan itu tidak hilang. Logika `targets.plan_changes`; tes `TargetChangesTest`.
 
 ## Stok tidak terbaca & umpan balik unggah (13 Nov 2026)

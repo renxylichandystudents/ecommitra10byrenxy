@@ -126,6 +126,11 @@ def set_upload_notice(key: str, ok: bool, text: str) -> None:
     st.session_state[f"_upload-notice-{key}"] = (bool(ok), str(text), datetime.now().strftime("%d/%m/%Y %H:%M"))
 
 
+def mark_upload_done(menu_key: str) -> None:
+    """Menu upload diberi tanda "✓ Siap (baru disimpan)" di daftar Menu upload."""
+    st.session_state["upload-done"] = set(st.session_state.get("upload-done", set())) | {menu_key}
+
+
 def show_upload_notice(key: str) -> None:
     notice = st.session_state.get(f"_upload-notice-{key}")
     if not notice:
