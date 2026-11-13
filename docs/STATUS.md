@@ -2,6 +2,10 @@
 
 Diperbarui: 13 November 2026.
 
+## Ringkasan: kartu Prediksi QTY bulan berjalan (13 Nov 2026)
+
+- Prioritas hari ini kini 5 kartu; kartu baru kedua **Prediksi QTY bulan berjalan (Nov 2026) · Top 50** = QTY aktual Top 50 tgl 1 s.d. hari penuh terakhir + laju prediksi harian Top 50 (nilai harapan, sama dengan kartu hari ini) × jumlah pola hari sisa bulan (`month_track_view.month_remaining_weight`, pola sama dengan Pantauan harian). Keterangan: "aktual 1–12 Nov: … + prediksi 13–30 Nov: …". Rumus prediksi tidak berubah. Kode `dashboard.running_month`; tes `tests/test_running_month.py`.
+
 ## Target bulanan bisa dikoreksi (13 Nov 2026)
 
 - Masalah: unggahan hanya menambah/mengganti bulan di file; bulan kosong/tidak ada dilewati, jadi target 2027 yang salah tetap tersimpan (12 + 10 = 22 bulan) dan tidak bisa dihapus.

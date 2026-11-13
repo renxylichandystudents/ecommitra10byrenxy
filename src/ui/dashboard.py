@@ -75,11 +75,41 @@ def actual_hint(predicted: float, actual: float, day: date | None, today: date) 
     return text
 
 
+def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date) -> tuple[float, str]:
+    """(prediksi QTY bulan berjalan Top 50, keterangan) = aktual tgl 1 s.d. hari penuh terakhir + laju harian × pola sisa hari."""
+    import calendar
+
+    from src.ui.month_track_view import month_remaining_weight
+
+    month_first = today.replace(day=1)
+    month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+    cutoff, weight = month_remaining_weight(orders_all if orders_all is not None else orders, today)
+    actual = 0.0
+    if orders is not None and not orders.empty and cutoff >= month_first:
+        days = pd.to_datetime(orders["order_time"], errors="coerce").dt.date
+        mask = (days >= month_first) & (days <= cutoff) & orders["item_key"].astype(str).isin(set(table["item_key"].astype(str)))
+        actual = float(orders.loc[mask, "qty"].sum())
+    rest = float(table["pred_harian"].sum()) * weight if "pred_harian" in table.columns else 0.0
+    rest_start = max(month_first, cutoff + timedelta(days=1))
+    month = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")[today.month - 1]
+
+    def span(lo: date, hi: date) -> str:
+        return f"{lo.day} {month}" if lo == hi else f"{lo.day}–{hi.day} {month}"
+
+    parts = []
+    if cutoff >= month_first:
+        parts.append(f"aktual {span(month_first, cutoff)}: {fmt_num(actual)}")
+    if rest_start <= month_end:
+        parts.append(f"prediksi {span(rest_start, month_end)}: {fmt_num(rest)}")
+    return actual + rest, " + ".join(parts)
+
+
 def show_priority_dashboard(
     table: pd.DataFrame,
     *,
     today: date,
     orders: pd.DataFrame | None,
+    orders_all: pd.DataFrame | None = None,
     features,
     data: FeatureData,
     role: str,
@@ -97,17 +127,20 @@ def show_priority_dashboard(
     actual_qty, actual_day = last_actual(orders, keys, today)
     predicted_today = float(top["d_qty_exp"].sum()) if "d_qty_exp" in top.columns else float(top["d_qty"].sum())
     shortage = stock_shortage(top)
-    cols = st.columns(4)
+    cols = st.columns(5)
     card(
         cols[0],
         "Prediksi QTY hari ini · Top 50",
         fmt_num(predicted_today),
         hint=actual_hint(predicted_today, actual_qty, actual_day, today),
     )
+    month_qty, month_hint = running_month(top, orders, orders_all, today)
+    month_name = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")[today.month - 1]
+    card(cols[1], f"Prediksi QTY bulan berjalan ({month_name} {today.year}) · Top 50", fmt_num(month_qty), hint=month_hint)
     fresh = " " + badge("periode baru", "info") if fresh_period else ""
     lo, hi = prediction_window("bulan", window_start)
     card(
-        cols[1],
+        cols[2],
         f"Kebutuhan stok {window_label} · Top 50",
         fmt_num(top["m_butuh"].sum()) + fresh,
         hint=f"Prediksi (unit utuh) + safety stock · {short_date(lo)} – {short_date(hi)}",
@@ -115,9 +148,9 @@ def show_priority_dashboard(
     gaps = [f"{fmt_num(shortage['kosong'])} kosong (stok 0)", f"{fmt_num(shortage['di_bawah_ss'])} di bawah SS"]
     if shortage["tanpa_data"]:
         gaps.append(f"{fmt_num(shortage['tanpa_data'])} tanpa data stok")
-    card(cols[2], "SKU Top 50 stok kurang", fmt_num(shortage["kurang"]), hint="Stok di bawah prediksi + SS · " + " · ".join(gaps))
+    card(cols[3], "SKU Top 50 stok kurang", fmt_num(shortage["kurang"]), hint="Stok di bawah prediksi + SS · " + " · ".join(gaps))
     cap_value, cap_note = capacity_summary(features, table)
-    card(cols[3], "Kapasitas gudang 10037", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
+    card(cols[4], "Kapasitas gudang 10037", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
 
     priority = restock_priority(top, today, po=data.po)
     basis = "Sales value" if metric == "sales" else "QTY terjual"

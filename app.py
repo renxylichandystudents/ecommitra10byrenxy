@@ -8690,6 +8690,7 @@ with PAGE_ROOT.container(key="page-root"):
                 enriched,
                 today=today,
                 orders=orders,
+                orders_all=orders_all,
                 features=FEATURES,
                 data=FEATURE_DATA,
                 role=AUTH_USER.role,

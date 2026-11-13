@@ -54,6 +54,28 @@ def day_multiplier(orders_all: pd.DataFrame | None, day: date, today: date | Non
     return value if np.isfinite(value) and value > 0 else 1.0
 
 
+def month_remaining_weight(orders_all: pd.DataFrame | None, today: date) -> tuple[date, float]:
+    """(hari penuh terakhir yang dihitung aktual, jumlah pengali pola hari sisa bulan berjalan).
+
+    Laju harian × bobot ini = prediksi sisa bulan, dengan pola yang sama dengan Pantauan harian."""
+    import calendar
+
+    month_first = today.replace(day=1)
+    month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+    cutoff = today - timedelta(days=1)
+    shape: dict = {}
+    if orders_all is not None and not orders_all.empty:
+        net, _product, last_stamp = _daily_series(orders_all)
+        if last_stamp is not None:
+            cutoff = min(full_day_cutoff(last_stamp, today), cutoff)
+            profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
+            shape = M.month_shape(profile, month_first)
+    start = max(month_first, cutoff + timedelta(days=1))
+    days = [start + timedelta(days=i) for i in range((month_end - start).days + 1)]
+    weight = sum(float(shape.get(day, 1.0)) for day in days)
+    return cutoff, weight
+
+
 def target_pattern(orders_all: pd.DataFrame | None):
     """(pola hari untuk membagi target bulan, hari penuh terakhir data), sama dengan `month_state`; (None, None) bila tanpa data."""
     if orders_all is None or orders_all.empty:
