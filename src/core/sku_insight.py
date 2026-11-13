@@ -48,6 +48,35 @@ def transaction_profile(lines: pd.DataFrame, key: str, lo: date, hi: date) -> di
     return out
 
 
+DAILY_COLUMNS = ["qty_masuk", "sales_masuk", "qty_bersih", "sales_bersih", "qty_batal", "qty_belum_bayar", "qty_retur"]
+
+
+def daily_profile(lines: pd.DataFrame | None, key: str, lo: date, hi: date) -> pd.DataFrame:
+    """Per tanggal lo s.d. hi (inklusif, hari tanpa transaksi = 0): masuk, bersih, batal, Belum Bayar, retur satu SKU.
+    Aturan sama dengan `transaction_profile`, sehingga jumlahnya sama dengan total periode."""
+    index = pd.date_range(pd.Timestamp(lo), pd.Timestamp(hi), freq="D")
+    out = pd.DataFrame(0.0, index=index, columns=DAILY_COLUMNS)
+    if lines is None or lines.empty or lo > hi:
+        return out
+    days = pd.to_datetime(lines["order_time"], errors="coerce").dt.normalize()
+    mask = lines["item_key"].astype(str).eq(str(key)) & days.ge(index[0]) & days.le(index[-1])
+    part, day = lines.loc[mask], days.loc[mask]
+    if part.empty:
+        return out
+    sold = ~part["is_cancel"] & ~part["is_open"]
+    ret_qty = np.minimum(part["returned_qty"], part["gross_qty"]).where(sold, 0.0)
+    frame = pd.DataFrame({
+        "qty_masuk": part["gross_qty"],
+        "sales_masuk": part["line_value"],
+        "qty_bersih": part["gross_qty"].where(sold, 0.0) - ret_qty,
+        "sales_bersih": (part["line_value"] - part["return_value"]).where(sold, 0.0),
+        "qty_batal": part["gross_qty"].where(part["is_cancel"], 0.0),
+        "qty_belum_bayar": part["gross_qty"].where(part["is_open"], 0.0),
+        "qty_retur": ret_qty,
+    }).groupby(day.to_numpy()).sum()
+    return out.add(frame.reindex(index, fill_value=0.0), fill_value=0.0)
+
+
 def month_end(day: date) -> date:
     return day.replace(day=calendar.monthrange(day.year, day.month)[1])
 

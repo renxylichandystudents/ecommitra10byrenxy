@@ -9052,7 +9052,13 @@ with PAGE_ROOT.container(key="page-root"):
         weekday = _weekday_profile(base_hist) if isinstance(base_hist, pd.DataFrame) and not base_hist.empty else np.ones(7)
         try:
             past = past_predictions(FEATURES, str(chosen["sku"]), str(chosen.get("variasi_tampil") or ""), date(today.year, today.month, 1), today - timedelta(days=1))
-            sku_charts(chosen, item_orders, period=period, today=today, window_end=window_end, weekday=weekday, key=key, past=past)
+            sku_lines = None
+            if isinstance(orders_all, pd.DataFrame) and not orders_all.empty:
+                from src.core.metrics import normalize_lines
+
+                sku_lines = normalize_lines(orders_all.loc[orders_all["item_key"].astype(str) == picked])
+            basis = (TABLE_META or {}).get("basis") or ("bersih" if stored.get("exclude_return_cancel", exclude_return_cancel) else "masuk")
+            sku_charts(chosen, item_orders, period=period, today=today, window_end=window_end, weekday=weekday, key=key, past=past, lines=sku_lines, basis=basis)
         except Exception as exc:  # grafik tidak boleh menghentikan halaman
             st.info(f"Grafik SKU belum bisa digambar: {exc}")
 

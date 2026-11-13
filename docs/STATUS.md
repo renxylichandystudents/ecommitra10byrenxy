@@ -2,6 +2,13 @@
 
 Diperbarui: 13 November 2026.
 
+## Grafik SKU (Grafik QTY/Sales · Bulan ini): bulan berjalan, dasar bersih/masuk, tanggal terbaca (14 Nov 2026)
+
+- Batang Terjual memakai dasar yang sama dengan data latih dan tabel Top 50 (`sku_insight.daily_profile` dari semua status); nama legenda "Terjual bersih" atau "Masuk (semua pesanan)"; hover menampilkan bersih, masuk, batal, Belum Bayar, retur per tanggal.
+- Prediksi sisa bulan memakai `run_rest_qty` (laju harian × pola hari, sama dengan tabel); kartu baru "Bulan berjalan" = terjual (dasar) tgl 1 s.d. kemarin + prediksi sisa. Kartu Terjual menyebut dasarnya dan angka dasar lain.
+- Tanggal kini tampil juga di bawah panel batang (sebelumnya hanya di bawah panel stok); garis "aktual | prediksi" di hari ini. Prediksi sebelumnya tampil mulai tgl 1 termasuk nilai 0 (dulu batang 0 tidak terlihat), dan catatan "Aktual vs prediksi sebelumnya" dihitung mulai tgl 1.
+- Tabel baru "Aktual vs prediksi sebelumnya per tanggal" (masuk, bersih, prediksi, selisih, sales, sumber) agar hari yang meleset terlihat.
+
 ## Analisa safety stock: baris Bulan berjalan (14 Nov 2026)
 
 - Baris baru "Bulan berjalan · sisa 13–30 Nov (18 hari)": kebutuhan = prediksi sisa bulan (laju harian × pola hari, unit utuh per SKU, dari `run_rest_qty`) + SS; keterangan aktual 1 s.d. hari penuh terakhir (dasar bersih/masuk) dan proyeksi bulan. Aktual tidak dihitung sebagai kebutuhan stok.

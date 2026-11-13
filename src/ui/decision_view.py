@@ -692,25 +692,29 @@ def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, 
     return pd.DataFrame({"date": dates, "qty": qty, "sales": qty * price})
 
 
-def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str, past=None, past_source=None) -> go.Figure:
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.62, 0.38], subplot_titles=(title, "Proyeksi sisa stok"))
+def _two_panel(
+    x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str,
+    past=None, past_source=None, sold_name: str = "Terjual", sold_hover=None, today_index: int | None = None,
+) -> go.Figure:
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.16, row_heights=[0.62, 0.38], subplot_titles=(title, "Proyeksi sisa stok"))
     fmt = fmt_idr_short if money else fmt_qty
     fig.add_bar(
-        x=x_labels, y=sold, name="Terjual", marker_color="#1b3da6",
+        x=x_labels, y=sold, name=sold_name, marker_color="#1b3da6",
         text=[fmt(v) if v else "" for v in sold], textposition="outside",
-        hovertemplate="%{x}<br>Terjual: %{customdata}<extra></extra>", customdata=[fmt(v) for v in sold], row=1, col=1,
+        hovertemplate="%{x}<br>%{customdata}<extra></extra>",
+        customdata=list(sold_hover) if sold_hover is not None else [f"{sold_name}: {fmt(v)}" for v in sold], row=1, col=1,
     )
     if past is not None and np.nansum(np.asarray(past, dtype=float)) > 0:
         # Prediksi yang dulu dibuat untuk hari yang sudah lewat: dibandingkan langsung dengan batang Terjual.
         sources = list(past_source) if past_source is not None else [""] * len(past)
         hit = [
-            ("" if not p else f"{fmt(p)} ({src or 'tersimpan'}) · aktual {fmt(a)} ({fmt_num(a / p * 100, 0)}%)")
+            ("" if not src else f"{fmt(p)} ({src}) · aktual {fmt(a)}" + (f" ({fmt_num(a / p * 100, 0)}% dari prediksi)" if p else " (prediksi 0)"))
             for a, p, src in zip(sold, past, sources)
         ]
         fig.add_bar(
             x=x_labels, y=past, name="Prediksi sebelumnya (hari lewat)", marker_color="rgba(238,77,45,0.30)",
             marker_line=dict(color="#ee4d2d", width=1.2), marker_pattern_shape="/",
-            text=[fmt(v) if v else "" for v in past], textposition="outside",
+            text=[fmt(v) if src else "" for v, src in zip(past, sources)], textposition="outside",
             hovertemplate="%{x}<br>Prediksi sebelumnya: %{customdata}<extra></extra>", customdata=hit, row=1, col=1,
         )
     fig.add_bar(
@@ -733,7 +737,11 @@ def _two_panel(x_labels, sold, pred, stock_line, ss_value: float, out_label: str
                 x=[out_label], y=[stock_line[idx]], mode="markers+text", name="Perkiraan stok habis", marker=dict(color=DOWN_COLOR, size=12, symbol="x"),
                 text=["habis"], textposition="top center", hovertemplate="%{x}<br>Perkiraan stok habis<extra></extra>", row=2, col=1,
             )
-    fig.update_layout(barmode="group", height=560, margin=dict(l=40, r=20, t=60, b=40), legend=dict(orientation="h", y=-0.12), font=dict(family="Plus Jakarta Sans"))
+    if today_index is not None and 0 < today_index < len(x_labels):
+        fig.add_shape(type="line", xref="x", yref="paper", x0=today_index - 0.5, x1=today_index - 0.5, y0=0, y1=1, line=dict(color="#64748b", width=1, dash="dot"))
+        fig.add_annotation(xref="x", yref="y domain", x=today_index - 0.5, y=1.0, yanchor="bottom", text="◀ aktual | prediksi ▶", showarrow=False, font=dict(size=10, color="#64748b"))
+    fig.update_layout(barmode="group", height=620, margin=dict(l=40, r=20, t=60, b=40), legend=dict(orientation="h", y=-0.12), font=dict(family="Plus Jakarta Sans"))
+    fig.update_xaxes(showticklabels=True, tickangle=-60, tickfont=dict(size=9), row=1, col=1)
     fig.update_yaxes(title_text=unit, row=1, col=1)
     fig.update_yaxes(title_text=unit, row=2, col=1)
     return fig
@@ -764,21 +772,35 @@ def sku_charts(
     weekday: np.ndarray,
     key: str,
     past: pd.DataFrame | None = None,
+    lines: pd.DataFrame | None = None,
+    basis: str = "bersih",
 ) -> None:
-    """R9: Grafik QTY dan Grafik Sales, dua panel sumbu X bersama."""
+    """R9: Grafik QTY dan Grafik Sales, dua panel sumbu X bersama.
+
+    Batang Terjual memakai dasar `basis` yang sama dengan data latih dan tabel Top 50 (bersih atau masuk), dihitung
+    dari `lines` (`normalize_lines` semua status) bila ada; hover menampilkan keduanya beserta batal/Belum Bayar/retur."""
+    from src.core.sku_insight import daily_profile
+
     month_start = date(today.year, today.month, 1)
     month_end = (pd.Timestamp(today) + pd.offsets.MonthEnd(0)).date()
     days = pd.date_range(month_start, month_end, freq="D")
+    yesterday = pd.Timestamp(today) - pd.Timedelta(days=1)
     sold = pd.Series(0.0, index=days)
     sold_sales = pd.Series(0.0, index=days)
-    if item_orders is not None and not item_orders.empty:
+    daily = None
+    if lines is not None and today > month_start:
+        daily = daily_profile(lines, str(row["item_key"]), month_start, yesterday.date())
+        sold = sold.add(daily[f"qty_{basis}"], fill_value=0.0)
+        sold_sales = sold_sales.add(daily[f"sales_{basis}"], fill_value=0.0)
+    elif item_orders is not None and not item_orders.empty:
         stamps = pd.to_datetime(item_orders["order_time"]).dt.normalize()
-        part = item_orders.loc[stamps.between(pd.Timestamp(month_start), pd.Timestamp(today) - pd.Timedelta(days=1))]
+        part = item_orders.loc[stamps.between(pd.Timestamp(month_start), yesterday)]
         if not part.empty:
             grouped = part.groupby(pd.to_datetime(part["order_time"]).dt.normalize()).agg(qty=("qty", "sum"), sales=("sales", "sum"))
             sold = sold.add(grouped["qty"].reindex(days, fill_value=0.0), fill_value=0.0)
             sold_sales = sold_sales.add(grouped["sales"].reindex(days, fill_value=0.0), fill_value=0.0)
-    remain_total = float(row["pred_harian"]) * max((month_end - today).days + 1, 0)
+    run_rest = pd.to_numeric(pd.Series([row.get("run_rest_qty")]), errors="coerce").iat[0]
+    remain_total = float(run_rest) if pd.notna(run_rest) else float(row["pred_harian"]) * max((month_end - today).days + 1, 0)
     path = _daily_path(row, item_orders, weekday, today, month_end, remain_total)
     pred = pd.Series(0.0, index=days)
     pred_sales = pd.Series(0.0, index=days)
@@ -810,6 +832,24 @@ def sku_charts(
     ss = float(row["ss"])
     price = float(row.get("harga_bersih", 0) or 0)
     labels = [fmt_date(d, short=True) for d in days]
+    basis_word = "Terjual bersih" if basis == "bersih" else "Masuk (semua pesanan)"
+    today_index = int((pd.Timestamp(today) - pd.Timestamp(month_start)).days)
+
+    def sold_hover(money: bool) -> list[str]:
+        fmt = fmt_idr_short if money else fmt_qty
+        values = sold_sales if money else sold
+        if daily is None:
+            return [f"{basis_word}: {fmt(v)}" if d < pd.Timestamp(today) else "belum terjadi" for d, v in values.items()]
+        out = []
+        for d in days:
+            if d >= pd.Timestamp(today):
+                out.append("belum terjadi (lihat batang Prediksi)")
+                continue
+            r = daily.loc[d]
+            head = (f"bersih {fmt(r['sales_bersih'])} · masuk {fmt(r['sales_masuk'])}" if money
+                    else f"bersih {fmt_qty(r['qty_bersih'])} · masuk {fmt_qty(r['qty_masuk'])} unit")
+            out.append(f"Dipakai: {basis_word.lower()}<br>{head}<br>batal {fmt_qty(r['qty_batal'])} · Belum Bayar {fmt_qty(r['qty_belum_bayar'])} · retur {fmt_qty(r['qty_retur'])} unit")
+        return out
 
     def stock_projection(pred_series: np.ndarray, base: float) -> tuple[np.ndarray, str | None]:
         mask = np.array([d >= pd.Timestamp(today) for d in days]) if len(pred_series) == len(days) else np.ones(len(pred_series), bool)
@@ -824,17 +864,19 @@ def sku_charts(
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(
-            _two_panel(labels, sold.to_numpy(), pred.to_numpy(), qty_line, ss, labels[qty_out] if qty_out is not None else None, money=False, title="Grafik QTY · Bulan ini", unit="Unit", past=past_qty.to_numpy(), past_source=past_source.to_numpy()),
+            _two_panel(labels, sold.to_numpy(), pred.to_numpy(), qty_line, ss, labels[qty_out] if qty_out is not None else None, money=False, title="Grafik QTY · Bulan ini", unit="Unit", past=past_qty.to_numpy(), past_source=past_source.to_numpy(),
+                       sold_name=basis_word, sold_hover=sold_hover(False), today_index=today_index),
             use_container_width=True, key=f"{key}-qty",
         )
     with c2:
         st.plotly_chart(
-            _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah", past=past_sales.to_numpy(), past_source=past_source.to_numpy()),
+            _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah", past=past_sales.to_numpy(), past_source=past_source.to_numpy(),
+                       sold_name=basis_word, sold_hover=sold_hover(True), today_index=today_index),
             use_container_width=True, key=f"{key}-sales",
         )
     _sku_summary(
         row, today=today, month_end=month_end, sold=sold, sold_sales=sold_sales, pred=pred, pred_sales=pred_sales,
-        qty_line=qty_line, days=days, past_qty=past_qty, past_sales=past_sales,
+        qty_line=qty_line, days=days, past_qty=past_qty, past_sales=past_sales, past_source=past_source, daily=daily, basis=basis,
     )
 
     if period == "bulan":
@@ -889,6 +931,9 @@ def _sku_summary(
     days: pd.DatetimeIndex,
     past_qty: pd.Series | None = None,
     past_sales: pd.Series | None = None,
+    past_source: pd.Series | None = None,
+    daily: pd.DataFrame | None = None,
+    basis: str = "bersih",
 ) -> None:
     """Kartu di bawah grafik SKU: penjualan, prediksi, stok Site 10037/10062/10036, rencana, dan catatan analisa."""
     month_start = date(today.year, today.month, 1)
@@ -903,28 +948,41 @@ def _sku_summary(
     month_name = fmt_date(month_start, short=True).split(" ")[1]
 
     # Baris 1: penjualan dan prediksi
-    cols = st.columns(4)
+    cols = st.columns(5)
     sold_span = f"1–{fmt_date(yesterday, short=True)}" if sold_days else "belum ada hari penuh"
+    word = "bersih" if basis == "bersih" else "masuk"
+    other = "masuk" if basis == "bersih" else "bersih"
+    other_text = ""
+    if daily is not None:
+        other_text = (f"<br>{other} {fmt_qty(daily[f'qty_{other}'].sum())} unit ({fmt_idr(daily[f'sales_{other}'].sum())}) · "
+                      f"batal {fmt_qty(daily['qty_batal'].sum())} · Belum Bayar {fmt_qty(daily['qty_belum_bayar'].sum())} · retur {fmt_qty(daily['qty_retur'].sum())}")
     card(
         cols[0],
-        f"Terjual {sold_span}",
+        f"Terjual {word} {sold_span}",
         f"{fmt_qty(sold_qty)} unit",
-        hint=f"{fmt_idr(sold_val)} · rata-rata {fmt_num(sold_qty / sold_days, 1) if sold_days else '0'} unit/hari",
+        hint=f"{fmt_idr(sold_val)} · rata-rata {fmt_num(sold_qty / sold_days, 1) if sold_days else '0'} unit/hari" + other_text,
     )
     card(
         cols[1],
         f"Prediksi sisa {month_name} ({fmt_date(today, short=True)}–{fmt_date(month_end, short=True)})",
         f"{fmt_num(rest_qty, 1)} unit",
-        hint=f"{fmt_idr(rest_val)} · perkiraan total {month_name}: {fmt_num(sold_qty + rest_qty, 1)} unit ({fmt_idr(sold_val + rest_val)})",
+        hint=f"{fmt_idr(rest_val)} · {(month_end - today).days + 1} hari, laju harian × pola hari",
     )
     card(
         cols[2],
+        f"Bulan berjalan {month_name} (1–{fmt_date(month_end, short=True)})",
+        f"{fmt_num(sold_qty + rest_qty, 1)} unit",
+        hint=f"{fmt_idr(sold_val + rest_val)} = terjual {word} {sold_span} + prediksi sisa",
+        tone="extra",
+    )
+    card(
+        cols[3],
         f"Prediksi {fmt_date(window_lo, short=True)} – {fmt_date(window_hi, short=True)}",
         f"{fmt_qty(row['m_qty'])} unit",
         hint=f"{fmt_idr(row['m_sales'])} · {fmt_num(daily_pred, 2)} unit/hari · dasar kebutuhan stok",
     )
     card(
-        cols[3],
+        cols[4],
         "Safety stock",
         f"{fmt_qty(ss)} unit",
         hint=f"nilai {fmt_idr(ss * price)} · harga bersih {fmt_idr(price)}/unit",
@@ -978,6 +1036,8 @@ def _sku_summary(
         plan_value, plan_hint = "PO supplier", plan
     card(cols[3], "Rencana restock", plan_value, hint=plan_hint, tone="stock")
 
+    _past_table(sold, sold_sales, past_qty, past_sales, past_source, daily, basis=basis, today=today)
+
     # Catatan analisa
     notes = []
     if has_stock:
@@ -1009,8 +1069,8 @@ def _sku_summary(
                 + (f" ({'+' if diff >= 0 else '−'}{fmt_num(abs(diff), 0)}%)" if diff is not None else ""),
             )
         )
-    if past_qty is not None and float(past_qty.sum()) > 0:
-        covered = past_qty > 0
+    covered = (past_source.astype(str) != "") if past_source is not None else (past_qty > 0 if past_qty is not None else None)
+    if covered is not None and bool(covered.any()):
         p_qty, a_qty = float(past_qty[covered].sum()), float(sold[covered].sum())
         p_val, a_val = float(past_sales[covered].sum()), float(sold_sales[covered].sum())
         first_day = past_qty.index[covered][0]
@@ -1019,15 +1079,48 @@ def _sku_summary(
         notes.append(
             (
                 f"Aktual vs prediksi sebelumnya ({fmt_date(first_day.date(), short=True)}–{fmt_date(yesterday, short=True)})",
-                f"terjual {fmt_qty(a_qty)} vs prediksi {fmt_num(p_qty, 1)} unit ({fmt_num(rate, 0)}%, {verdict}); "
+                f"terjual {word} {fmt_qty(a_qty)} vs prediksi {fmt_num(p_qty, 1)} unit ({fmt_num(rate, 0)}%, {verdict}); "
                 f"sales {fmt_idr(a_val)} vs {fmt_idr(p_val)}",
             )
         )
     else:
         notes.append(("Prediksi sebelumnya", "belum ada riwayat penjualan yang cukup untuk menghitung prediksi hari-hari yang sudah lewat"))
     notes.append(("Prediksi sebelumnya", "dari analisa tersimpan bila ada; tanggal tanpa analisa tersimpan memakai uji mundur (model yang sama, hanya data s.d. sehari sebelumnya)"))
-    notes.append(("Grafik", "batang biru = terjual s.d. kemarin; batang arsir = prediksi untuk hari itu (bandingkan dengan biru); merah = prediksi mulai hari ini; garis oranye = stok Site 10037 dikurangi prediksi kumulatif, garis putus = SS"))
+    notes.append(("Grafik", f"batang biru = terjual {word} s.d. {fmt_date(yesterday, short=True)} (arahkan kursor untuk melihat bersih dan masuk); batang arsir = prediksi untuk hari itu (bandingkan dengan biru); merah = prediksi mulai hari ini; garis oranye = stok Site 10037 dikurangi prediksi kumulatif, garis putus = SS"))
     explain(notes, title="Catatan analisa")
+
+
+def _past_table(sold, sold_sales, past_qty, past_sales, past_source, daily, *, basis: str, today: date) -> None:
+    """Tabel per tanggal tgl 1 s.d. kemarin: aktual (masuk & bersih) vs prediksi sebelumnya, agar terlihat hari yang meleset."""
+    if past_qty is None or past_source is None:
+        return
+    lapsed = [d for d in past_qty.index if d < pd.Timestamp(today)]
+    if not lapsed:
+        return
+    word = "bersih" if basis == "bersih" else "masuk"
+    rows = []
+    for d in lapsed:
+        actual, predicted = float(sold.get(d, 0.0)), float(past_qty.get(d, 0.0))
+        source = str(past_source.get(d, "") or "")
+        rec = {"Tanggal": fmt_date(d.date(), short=True)}
+        if daily is not None:
+            rec["Masuk (semua) unit"] = fmt_qty(daily.at[d, "qty_masuk"])
+            rec["Bersih unit"] = fmt_qty(daily.at[d, "qty_bersih"])
+        else:
+            rec[f"Terjual {word} unit"] = fmt_qty(actual)
+        rec["Prediksi sebelumnya unit"] = fmt_num(predicted, 1) if source else "-"
+        rec[f"Selisih ({word} − prediksi)"] = (("+" if actual - predicted >= 0 else "−") + fmt_num(abs(actual - predicted), 1)) if source else "-"
+        rec[f"Sales {word}"] = fmt_idr(float(sold_sales.get(d, 0.0)))
+        rec["Prediksi sales"] = fmt_idr(float(past_sales.get(d, 0.0))) if source else "-"
+        rec["Sumber prediksi"] = source or "tidak ada"
+        rows.append(rec)
+    first, last = lapsed[0].date(), lapsed[-1].date()
+    with st.expander(f"Aktual vs prediksi sebelumnya per tanggal · {fmt_date(first, short=True)}–{fmt_date(last)} (dasar {word})", expanded=True):
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption(
+            "Masuk = semua pesanan (termasuk batal, Belum Bayar, retur); bersih = tanpa batal & Belum Bayar, setelah retur. "
+            f"Selisih dihitung dengan dasar {word}, sama dengan data latih model. Prediksi 0 berarti model tidak memperkirakan penjualan hari itu."
+        )
 
 
 def direction_html(value: float) -> str:

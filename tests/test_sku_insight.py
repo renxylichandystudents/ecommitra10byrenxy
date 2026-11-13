@@ -4,6 +4,7 @@ import pandas as pd
 
 from src.core.metrics import normalize_lines
 from src.core.sku_insight import (
+    daily_profile,
     description_review,
     find_description,
     running_month,
@@ -45,6 +46,17 @@ def test_transaction_profile_splits_gross_and_net():
     assert p["sales_bersih"] == 80_000 and p["sales_masuk"] == 110_000
     assert p["pesanan"] == 3 and p["pembeli"] == 2
     assert p["alasan_batal"] == [("Ubah alamat", 1)]
+
+
+def test_daily_profile_matches_period_totals():
+    lines = _lines()
+    daily = daily_profile(lines, "K", date(2026, 11, 1), date(2026, 11, 12))
+    total = transaction_profile(lines, "K", date(2026, 11, 1), date(2026, 11, 12))
+    assert len(daily) == 12 and daily.index[0] == pd.Timestamp("2026-11-01")
+    for name in ("qty_masuk", "sales_masuk", "qty_bersih", "sales_bersih", "qty_batal", "qty_belum_bayar", "qty_retur"):
+        assert daily[name].sum() == total[name]
+    assert daily.at[pd.Timestamp("2026-11-04"), "qty_bersih"] == 6 and daily.at[pd.Timestamp("2026-11-05"), "qty_batal"] == 3
+    assert daily_profile(lines, "X", date(2026, 11, 1), date(2026, 11, 3)).to_numpy().sum() == 0
 
 
 def test_running_month_projection_uses_basis_and_dates():
