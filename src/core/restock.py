@@ -108,10 +108,11 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
 
 
 def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None, orders: pd.DataFrame | None = None,
-                     day_weight: Callable[[date], float] | None = None) -> pd.DataFrame:
+                     day_weight: Callable[[date], float] | None = None, through: date | None = None) -> pd.DataFrame:
     """Tabel "Kebutuhan restock prioritas": kosong + ada stok DC dulu, lalu dampak omzet (sales value & QTY) terbesar.
 
-    SKU Kosong juga diberi penjualan yang sudah hilang sejak kosong (`empty_loss`), total dan bagian bulan berjalan."""
+    SKU Kosong juga diberi penjualan yang sudah hilang sejak kosong (`empty_loss`), total dan bagian bulan berjalan,
+    dihitung s.d. `through` (hari penuh terakhir data latih; bawaan kemarin)."""
     columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi sales hilang", "Potensi QTY hilang",
                "Hari kosong", "QTY hilang sejak kosong", "Sales hilang sejak kosong", "Sales hilang bulan ini", "_habis", "_pred_harian", "_sales_harian",
                "_kosong_sejak", "_lama_kosong", "_kosong_sejak_awal"]
@@ -120,7 +121,7 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
     po = po or {}
     sold = _sold_since(orders)
     month_first = today.replace(day=1)
-    yesterday = today - timedelta(days=1)
+    yesterday = through or today - timedelta(days=1)
     rows = []
     for _, row in table.iterrows():
         known = bool(row.get("ada_data_stok", False))
@@ -148,7 +149,7 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
         lost = None
         if since:
             sold_qty, sold_sales = _sold_between(sold, key, since, yesterday)
-            lost = empty_loss(since, today, daily, price, day_weight=day_weight, month_first=month_first, sold_qty=sold_qty, sold_sales=sold_sales,
+            lost = empty_loss(since, yesterday + timedelta(days=1), daily, price, day_weight=day_weight, month_first=month_first, sold_qty=sold_qty, sold_sales=sold_sales,
                               sold_month=_sold_between(sold, key, max(since, month_first), yesterday))
         rows.append(
             {

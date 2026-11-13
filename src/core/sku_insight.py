@@ -102,6 +102,78 @@ def running_month(
     }
 
 
+def table_extras(
+    table: pd.DataFrame,
+    orders_all: pd.DataFrame | None,
+    today: date,
+    *,
+    basis: str,
+    sold_span: tuple[date, date] | None,
+    cutoff: date,
+    rest_weight: float,
+    day_weight=None,
+) -> pd.DataFrame:
+    """Kolom tambahan tabel Top 50 / Prediksi semua produk per item_key (semua status dibaca dari `orders_all`).
+
+    sold_*      : aktual masuk & bersih pada periode penjualan terpilih (`sold_span`);
+    run_*       : prediksi bulan berjalan = aktual dasar `basis` tgl 1 s.d. `cutoff` + laju harian × pola hari sisa bulan;
+    empty_*     : lama kosong & sales hilang dari unggahan stok 0 pertama s.d. `cutoff` (hari penuh terakhir data latih),
+                  aturan sama dengan Restock prioritas (`restock.empty_loss`)."""
+    from src.core.decision_table import sku_actuals
+    from src.core.restock import empty_loss
+
+    keys = table["item_key"].astype(str)
+    out = pd.DataFrame(index=table.index)
+    blank = pd.DataFrame(columns=["qty_masuk", "sales_masuk", "qty_bersih", "sales_bersih"])
+    sold = sku_actuals(orders_all, *sold_span) if sold_span else None
+    sold = blank if sold is None else sold
+    for name in ("qty_masuk", "sales_masuk", "qty_bersih", "sales_bersih"):
+        out[f"sold_{name}"] = keys.map(sold[name]).fillna(0.0).astype(float) if sold_span else np.nan
+    first = today.replace(day=1)
+    run = sku_actuals(orders_all, first, cutoff) if cutoff >= first else None
+    run = blank if run is None else run
+    daily_qty = pd.to_numeric(table.get("pred_harian", 0.0), errors="coerce").fillna(0.0)
+    pred_qty = pd.to_numeric(table.get("pred_qty", np.nan), errors="coerce")
+    pred_sales = pd.to_numeric(table.get("pred_sales", np.nan), errors="coerce")
+    price = pd.to_numeric(table.get("harga_bersih", 0.0), errors="coerce").fillna(0.0)
+    unit_value = (pred_sales / pred_qty).where(pred_qty > 0).fillna(price)
+    out["run_act_qty"] = keys.map(run[f"qty_{basis}"]).fillna(0.0).astype(float)
+    out["run_act_sales"] = keys.map(run[f"sales_{basis}"]).fillna(0.0).astype(float)
+    out["run_rest_qty"] = daily_qty * float(rest_weight)
+    out["run_rest_sales"] = out["run_rest_qty"] * unit_value
+    out["run_qty"] = out["run_act_qty"] + out["run_rest_qty"]
+    out["run_sales"] = out["run_act_sales"] + out["run_rest_sales"]
+    for name in ("empty_days", "empty_qty", "empty_sales", "empty_month_sales"):
+        out[name] = np.nan
+    known = table["ada_data_stok"].astype(bool) if "ada_data_stok" in table.columns else pd.Series(False, index=table.index)
+    stock = pd.to_numeric(table.get("stok", np.nan), errors="coerce")
+    empty_idx = table.index[known & stock.le(0)]
+    lines = pd.DataFrame()
+    if len(empty_idx) and orders_all is not None and not orders_all.empty:
+        from src.core.metrics import normalize_lines
+
+        wanted = set(keys.loc[empty_idx])
+        lines = normalize_lines(orders_all.loc[orders_all["item_key"].astype(str).isin(wanted)])
+    for idx in empty_idx:
+        since = pd.to_datetime(table.at[idx, "zero_since"], errors="coerce") if "zero_since" in table.columns else pd.NaT
+        if pd.isna(since):
+            continue
+        since = since.date()
+        key = str(table.at[idx, "item_key"])
+        got = transaction_profile(lines, key, since, cutoff)
+        got_month = transaction_profile(lines, key, max(since, first), cutoff)
+        loss = empty_loss(
+            since, cutoff + timedelta(days=1), float(daily_qty.at[idx]), float(price.at[idx] if price.at[idx] > 0 else unit_value.at[idx]),
+            day_weight=day_weight, month_first=first,
+            sold_qty=got[f"qty_{basis}"], sold_sales=got[f"sales_{basis}"], sold_month=(got_month[f"qty_{basis}"], got_month[f"sales_{basis}"]),
+        )
+        out.at[idx, "empty_days"] = loss["hari"]
+        out.at[idx, "empty_qty"] = loss["qty"]
+        out.at[idx, "empty_sales"] = loss["sales"]
+        out.at[idx, "empty_month_sales"] = loss["sales_bulan"]
+    return out
+
+
 def stock_potential(stock: float | None, daily_qty: float, price: float, rest_weight: float, rest_days: int) -> dict:
     """Potensi sisa bulan yang tidak tertutup stok Site 10037 (tanpa transfer/PO): QTY dan sales produk."""
     need = max(float(daily_qty), 0.0) * float(rest_weight)

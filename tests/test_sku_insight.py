@@ -64,6 +64,31 @@ def test_same_span_last_month_clips_to_month_end():
     assert same_span_last_month(date(2026, 3, 1), date(2026, 3, 31)) == (date(2026, 2, 1), date(2026, 2, 28))
 
 
+def test_table_extras_sold_running_month_and_empty_age():
+    from src.core.sku_insight import table_extras
+
+    rows = []
+    for day in pd.date_range("2026-10-01", "2026-11-12"):
+        rows.append({"order_id": f"A{day:%m%d}", "status": "Selesai", "order_time": day + pd.Timedelta(hours=23, minutes=30), "qty": 2, "sales": 20_000,
+                     "returned_qty": 0, "item_key": "A"})
+        rows.append({"order_id": f"B{day:%m%d}", "status": "Batal", "order_time": day + pd.Timedelta(hours=10), "qty": 1, "sales": 10_000,
+                     "returned_qty": 0, "item_key": "A"})
+    orders_all = pd.DataFrame(rows)
+    table = pd.DataFrame({
+        "item_key": ["A", "B"], "pred_harian": [3.0, 1.0], "pred_qty": [90.0, 30.0], "pred_sales": [900_000.0, 300_000.0],
+        "harga_bersih": [10_000.0, 10_000.0], "ada_data_stok": [True, True], "stok": [0.0, 5.0],
+        "zero_since": [date(2026, 11, 10), None],
+    })
+    out = table_extras(table, orders_all, date(2026, 11, 13), basis="bersih", sold_span=(date(2026, 11, 1), date(2026, 11, 12)),
+                       cutoff=date(2026, 11, 12), rest_weight=18.0)
+    a = out.iloc[0]
+    assert (a["sold_qty_masuk"], a["sold_qty_bersih"]) == (36, 24)          # 12 hari × (2 + 1 batal) vs 12 × 2
+    assert a["run_act_qty"] == 24 and a["run_qty"] == 24 + 54             # + 3/hari × 18 pola hari
+    assert a["empty_days"] == 3                                            # 10, 11, 12 Nov s.d. hari penuh terakhir
+    assert a["empty_qty"] == 9 - 6                                          # permintaan 3 × 3 hari − terjual bersih 2 × 3
+    assert out.iloc[1][["sold_qty_masuk", "run_act_qty"]].tolist() == [0, 0] and pd.isna(out.iloc[1]["empty_days"])
+
+
 def test_stock_potential_and_description():
     pot = stock_potential(10, 2.0, 10_000, 18.0, 18)
     assert pot["need"] == 36 and pot["covered"] == 10 and pot["short_qty"] == 26 and pot["short_sales"] == 260_000

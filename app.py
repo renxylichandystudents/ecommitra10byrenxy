@@ -114,6 +114,7 @@ from src.ui.laporan import show_report
 from src.ui.rekomendasi import show_recommendations
 from src.ui.decision_view import (
     SS_DEFINITION_TOP,
+    decision_table_guide,
     label_legend,
     past_predictions,
     safety_stock_box,
@@ -4674,13 +4675,13 @@ def _insight_context(row: pd.Series, key: str, orders_all: pd.DataFrame | None, 
     since = row.get("zero_since")
     if has_stock and stock is not None and stock <= 0 and since is not None and pd.notna(since):
         since = pd.Timestamp(since).date()
-        yesterday = today - timedelta(days=1)
         first = today.replace(day=1)
-        sold = transaction_profile(lines, key, since, yesterday)
-        sold_month = transaction_profile(lines, key, max(since, first), yesterday)
+        sold = transaction_profile(lines, key, since, cutoff)
+        sold_month = transaction_profile(lines, key, max(since, first), cutoff)
         ctx["empty_since"] = since
+        ctx["empty_until"] = cutoff
         ctx["empty_loss"] = empty_loss(
-            since, today, daily, price, day_weight=day_weight_fn(orders_all, today), month_first=first,
+            since, cutoff + timedelta(days=1), daily, price, day_weight=day_weight_fn(orders_all, today), month_first=first,
             sold_qty=sold[f"qty_{basis}"], sold_sales=sold[f"sales_{basis}"],
             sold_month=(sold_month[f"qty_{basis}"], sold_month[f"sales_{basis}"]),
         )
@@ -7851,6 +7852,14 @@ def _running_month_actuals(orders: pd.DataFrame | None, orders_all: pd.DataFrame
     cutoff, weight = month_remaining_weight(orders_all if orders_all is not None else orders, today)
     first = today.replace(day=1)
     actual: dict = {}
+    if isinstance(orders_all, pd.DataFrame) and not orders_all.empty and cutoff >= first:
+        from src.core.decision_table import sku_actuals
+
+        basis = "bersih" if (st.session_state.get("analysis") or {}).get("exclude_return_cancel", training_exclude()) else "masuk"
+        table = sku_actuals(orders_all, first, cutoff)
+        if table is not None:
+            actual = {str(k): (float(r[f"qty_{basis}"]), float(r[f"sales_{basis}"])) for k, r in table.iterrows()}
+        return actual, weight, cutoff
     if orders is not None and not orders.empty and cutoff >= first:
         days = pd.to_datetime(orders["order_time"], errors="coerce").dt.date
         part = orders.loc[(days >= first) & (days <= cutoff)]
@@ -7859,6 +7868,33 @@ def _running_month_actuals(orders: pd.DataFrame | None, orders_all: pd.DataFrame
             grouped = pd.DataFrame({"k": part["item_key"].astype(str), "q": part["qty"].astype(float), "s": sales.astype(float)}).groupby("k")[["q", "s"]].sum()
             actual = {k: (float(r.q), float(r.s)) for k, r in grouped.iterrows()}
     return actual, weight, cutoff
+
+
+def _with_table_extras(
+    table: pd.DataFrame, orders_all: pd.DataFrame | None, sales_orders: pd.DataFrame | None, today: date, *, basis: str, stamp: str = ""
+) -> tuple[pd.DataFrame, dict]:
+    """Tabel + kolom aktual masuk/bersih (periode penjualan), prediksi bulan berjalan, lama kosong s.d. hari penuh terakhir data latih."""
+    from src.core.sku_insight import month_end, table_extras
+    from src.ui.month_track_view import day_weight_fn, month_remaining_weight
+
+    sold_span = None
+    if isinstance(sales_orders, pd.DataFrame) and not sales_orders.empty:
+        days = pd.to_datetime(sales_orders["order_time"], errors="coerce").dropna()
+        if not days.empty:
+            sold_span = (days.min().date(), days.max().date())
+    cache_key = (stamp, len(table), len(orders_all) if isinstance(orders_all, pd.DataFrame) else 0, today, basis, sold_span,
+                 int(pd.util.hash_pandas_object(table["item_key"].astype(str), index=False).sum()))
+    cached = st.session_state.get("_table-extras")
+    if isinstance(cached, tuple) and cached[0] == cache_key:
+        extras, meta = cached[1], cached[2]
+    else:
+        cutoff, rest_weight = month_remaining_weight(orders_all, today)
+        extras = table_extras(table, orders_all, today, basis=basis, sold_span=sold_span, cutoff=cutoff, rest_weight=rest_weight,
+                              day_weight=day_weight_fn(orders_all, today))
+        meta = {"basis": basis, "sold_span": sold_span, "first": today.replace(day=1), "cutoff": cutoff, "month_end": month_end(today)}
+        st.session_state["_table-extras"] = (cache_key, extras, meta)
+    keep = [c for c in table.columns if c not in extras.columns]
+    return pd.concat([table[keep], extras.reindex(table.index)], axis=1), meta
 
 
 def _render_movement_board(
@@ -8960,6 +8996,14 @@ with PAGE_ROOT.container(key="page-root"):
         stamp=str(stored.get("run_id") or ""),
     )
     _tick("data fitur")
+    TABLE_META = None
+    if isinstance(enriched, pd.DataFrame) and not enriched.empty:
+        enriched, TABLE_META = _with_table_extras(
+            enriched, orders_all, sales_orders, today, basis="bersih" if stored.get("exclude_return_cancel", exclude_return_cancel) else "masuk",
+            stamp=str(stored.get("run_id") or ""),
+        )
+        shown = enriched.head(TOP_N).reset_index(drop=True)
+    _tick("kolom aktual & bulan berjalan")
 
 
     def show_performance_cards(start, end, label: str, *, tone: str | None = None) -> dict:
@@ -9092,6 +9136,7 @@ with PAGE_ROOT.container(key="page-root"):
 
             st.subheader("Top 50 item terlaris")
             label_legend()
+            decision_table_guide(TABLE_META, metric)
             picked = show_decision_table(
                 shown,
                 period=period,
@@ -9102,6 +9147,7 @@ with PAGE_ROOT.container(key="page-root"):
                 key=f"top50-{metric}-{period}",
                 filename="top50_item_terlaris.xlsx",
                 step=5,
+                meta=TABLE_META,
             )
             # Grafik SKU langsung di bawah tabel (dekat centang Grafik); analisa safety stock sesudahnya.
             if picked:
@@ -9125,6 +9171,7 @@ with PAGE_ROOT.container(key="page-root"):
             st.write("Tidak ada item untuk ditampilkan.")
         else:
             label_legend()
+            decision_table_guide(TABLE_META, metric)
             f1, f2, f3, f4 = st.columns([2.4, 1.2, 1.2, 0.8])
             # Cari: saat diketik, daftar menampilkan SKU · nama produk · varian sehingga SKU yang tidak sesuai terlihat.
             labels_all = (
@@ -9169,7 +9216,7 @@ with PAGE_ROOT.container(key="page-root"):
             def _allpred_excel() -> None:
                 from src.ui.decision_view import table_parts
 
-                export = table_parts(work, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label)[3]
+                export = table_parts(work, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label, meta=TABLE_META)[3]
                 download_excel(export, "prediksi_semua_produk.xlsx", key="xl-allpred")
 
             # Tombol Excel di bilah navigasi (sejajar nomor halaman), berisi semua SKU sesuai saringan, bukan hanya halaman ini.
@@ -9189,6 +9236,7 @@ with PAGE_ROOT.container(key="page-root"):
                     filename=None,
                     height=720,
                     sort="",
+                    meta=TABLE_META,
                 )
                 if picked:
                     show_sku_detail(page_view, picked, key=f"allpred-chart-{picked}")

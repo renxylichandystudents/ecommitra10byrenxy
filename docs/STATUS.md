@@ -2,6 +2,13 @@
 
 Diperbarui: 13 November 2026.
 
+## Tabel Top 50 / Prediksi semua produk: masuk vs bersih, bulan berjalan, lama kosong (14 Nov 2026)
+
+- Masukan pengguna: kolom Terjual ambigu (bersih atau semua), tambah prediksi bulan berjalan, lama kosong mengikuti data latih seperti Restock.
+- `sku_insight.table_extras` (dites): `sold_*` masuk & bersih pada periode penjualan terpilih (semua status dari `orders_all`), `run_*` prediksi bulan berjalan (aktual dasar tgl 1 s.d. hari penuh terakhir + laju × pola hari sisa bulan), `empty_*` hari kosong & sales hilang dari unggahan stok 0 pertama s.d. hari penuh terakhir data latih.
+- `app._with_table_extras` (cache per run) menambah kolom ke `enriched`/`shown`; `table_parts(meta=)` menampilkan kelompok "Aktual · tanggal" (Terjual bersih / Masuk, kolom dasar ditandai "(dasar)"), "Prediksi bulan berjalan · 1–30 Nov", dan Lama kosong "N hari · sejak … s.d. … · hilang Rp …". Excel ikut. `decision_table_guide` menjelaskan semua istilah di atas kedua tabel.
+- Batas "s.d." disamakan ke hari penuh terakhir data latih (data ≥ 23:00): Restock prioritas (`restock_priority(through=)`), kotak sales hilang, dialog Analisa. Pergerakan Top 50: aktual bulan berjalan kini dari `orders_all` dengan dasar yang sama (bersih/masuk), jadi angkanya sama dengan tabel ini.
+
 ## Dialog Analisa prediksi per SKU: menyeluruh & bertanggal (14 Nov 2026)
 
 - Masukan pengguna: tambah analisa bulan berjalan, setiap angka sebut periodenya, jelaskan bersih vs masuk, analisa menyeluruh (transaksi, kompetitor, deskripsi, prediksi/potensi).

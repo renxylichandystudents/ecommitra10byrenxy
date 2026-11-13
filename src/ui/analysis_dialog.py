@@ -219,7 +219,7 @@ def _month_block(ctx: dict, row: pd.Series) -> str:
     if lost and lost.get("hari"):
         since = ctx.get("empty_since")
         lines.append(
-            f"Stok kosong sejak {short_date(since)} ({lost['hari']} hari s.d. kemarin): potensi sales hilang {fmt_qty(round(lost['qty']))} unit ≈ {fmt_idr(lost['sales'])}; "
+            f"Stok kosong sejak {short_date(since)} ({lost['hari']} hari s.d. {short_date(ctx.get('empty_until') or since)}, hari penuh terakhir data latih): potensi sales hilang {fmt_qty(round(lost['qty']))} unit ≈ {fmt_idr(lost['sales'])}; "
             f"bagian {ID_MONTHS[first.month - 1]} {fmt_idr(lost['sales_bulan'])}. Ini bisa menjelaskan kenapa target bulan ini sulit tercapai."
         )
     return table + "".join(f"<p class='insight-copy'>{html.escape(text)}</p>" for text in lines)

@@ -185,11 +185,12 @@ def show_priority_dashboard(
     cap_value, cap_note = capacity_summary(features, table)
     card(cols[4], "Kapasitas gudang 10037", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
 
-    from src.ui.month_track_view import day_weight_fn
+    from src.ui.month_track_view import day_weight_fn, month_remaining_weight
 
     every = orders_all if orders_all is not None else orders
     weight = day_weight_fn(every, today)
-    priority = restock_priority(top, today, po=data.po, orders=orders, day_weight=weight)
+    through = month_remaining_weight(every, today)[0]
+    priority = restock_priority(top, today, po=data.po, orders=orders, day_weight=weight, through=through)
     basis = "Sales value" if metric == "sales" else "QTY terjual"
     # Insight di atas, tabel restock selebar penuh agar kolom Produk/Varian tidak terpotong.
     _insight_cards(table, priority, data, role)
@@ -202,10 +203,10 @@ def show_priority_dashboard(
                 ("Restock", "prediksi + SS − stok Site 10037 (minimal 0)"),
                 ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier"),
                 ("Stok habis", "hari ini + stok ÷ prediksi harian; SKU Kosong: tanggal stok mulai 0 menurut riwayat unggahan Data stok Site 10037"),
-                ("Kosong sejak · Hari kosong", "unggahan Data stok Site 10037 pertama yang mencatat stok 0 (rangkaian kosong terakhir) s.d. kemarin. "
+                ("Kosong sejak · Hari kosong", "unggahan Data stok Site 10037 pertama yang mencatat stok 0 (rangkaian kosong terakhir) s.d. hari penuh terakhir data latih (data ≥ 23:00). "
                  "\"≤\" bila semua unggahan tersimpan sudah 0: stok habis pada atau sebelum tanggal itu, jadi hari kosong dan sales hilang adalah angka minimal"),
                 ("Sales / QTY hilang sejak kosong", "yang SUDAH hilang: prediksi harian × pola hari (hari dalam minggu, gajian, tanggal kembar; sama dengan "
-                 "Pantauan harian) untuk tiap hari kosong s.d. kemarin, dikurangi yang tetap terjual pada hari-hari itu. Sales = sales produk (Harga Setelah Diskon × QTY)"),
+                 "Pantauan harian) untuk tiap hari kosong s.d. hari penuh terakhir data latih, dikurangi yang tetap terjual pada hari-hari itu. Sales = sales produk (Harga Setelah Diskon × QTY)"),
                 ("Sales hilang bulan ini", "bagian dari sales hilang sejak kosong yang jatuh di bulan berjalan, pembanding langsung dengan target bulan ini"),
                 ("Potensi hilang ke depan", "yang AKAN hilang bila tidak direstock: prediksi periode − stok Site 10037; dalam unit (QTY) dan rupiah"),
                 ("Urutan", "🔴 Kosong & ada stok di Site 10062/10036 → 🔴 Kosong tanpa stok DC → 🟡 Kurang & ada stok DC → 🟡 Kurang tanpa stok DC → 🟢 Aman"),
@@ -315,7 +316,9 @@ def _empty_loss_box(priority: pd.DataFrame, orders_all: pd.DataFrame | None, fea
     if empty.empty:
         return
     month = MONTHS_SHORT[today.month - 1]
-    yesterday = today - timedelta(days=1)
+    from src.ui.month_track_view import month_remaining_weight
+
+    yesterday = month_remaining_weight(orders_all, today)[0] if orders_all is not None else today - timedelta(days=1)
     total = float(empty["Sales hilang sejak kosong"].sum())
     in_month = float(empty["Sales hilang bulan ini"].fillna(0).sum())
     oldest = empty.sort_values("_kosong_sejak").iloc[0]

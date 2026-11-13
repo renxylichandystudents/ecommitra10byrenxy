@@ -64,6 +64,43 @@ def _stock_cell(row: pd.Series, prefix: str) -> dict:
     return {"v": stok, "t": fmt_qty(stok), "s": sub, "c": STATUS_CLASS.get(status, "")}
 
 
+def span_text(lo, hi) -> str:
+    from src.ui.analysis_dialog import span_text as _span
+
+    return _span(lo, hi)
+
+
+def empty_cell(row: pd.Series, cutoff: date) -> tuple[str, str, float | None]:
+    """Lama kosong s.d. hari penuh terakhir data latih + sales hilang; aturan sama dengan Restock prioritas."""
+    from src.core.periods import short_date
+
+    known = bool(row.get("ada_data_stok", False))
+    stock = row.get("stok")
+    if not known:
+        return "-", "belum ada data stok", None
+    if stock is None or pd.isna(stock) or float(stock) > 0:
+        return "-", "stok ada", None
+    since = pd.to_datetime(row.get("zero_since"), errors="coerce")
+    days = row.get("empty_days")
+    if pd.isna(since) or days is None or pd.isna(days):
+        return "Kosong", "tanggal mulai kosong belum tercatat", None
+    first = bool(row.get("kosong_sejak_awal", False))
+    mark = "≤ " if first else ""
+    days = int(days)
+    if days <= 0:
+        text = f"kosong sejak {mark}{short_date(since.date())}"
+        return text, f"belum ada hari penuh kosong s.d. {short_date(cutoff)}", 0.0
+    text = f"{'≥ ' if first else ''}{days} hari"
+    sub = f"sejak {mark}{short_date(since.date())} s.d. {short_date(cutoff)}"
+    lost = row.get("empty_sales")
+    if lost is not None and pd.notna(lost):
+        sub += f" · hilang {fmt_idr(lost)}"
+        month_lost = row.get("empty_month_sales")
+        if month_lost is not None and pd.notna(month_lost) and float(month_lost) > 0 and float(month_lost) < float(lost) - 0.5:
+            sub += f" (bulan ini {fmt_idr(month_lost)})"
+    return text, sub, float(days)
+
+
 def table_parts(
     view: pd.DataFrame,
     *,
@@ -72,8 +109,13 @@ def table_parts(
     metric: str,
     resume_label: str,
     window_label: str,
+    meta: dict | None = None,
 ) -> tuple[list[dict], list[dict], dict, pd.DataFrame]:
-    """Kolom, baris, baris Total, dan salinan Excel. Kolom per kelompok: Prediksi, SS, Butuh, Stok."""
+    """Kolom, baris, baris Total, dan salinan Excel. Kolom per kelompok: Prediksi, SS, Butuh, Stok.
+
+    meta (dari `sku_insight.table_extras`): basis, sold_span, first, cutoff, month_end. Bila ada, kolom Terjual dipecah
+    masuk vs terjual bersih, ditambah Prediksi bulan berjalan, dan Lama kosong dihitung s.d. hari penuh terakhir data latih."""
+    meta = meta if meta and "run_qty" in view.columns else None
     groups = period_groups(period, today)
     month_group = next(g for g in groups if g.prefix == "m")
     month_end = prediction_window("bulan", today)[1]
@@ -89,8 +131,18 @@ def table_parts(
         {"id": "sku", "label": "SKU", "pin": True, "width": 116, "sort": True},
         {"id": "name", "label": "Produk", "pin": True, "width": 290, "kind": "name", "sort": True},
         {"id": "variance", "label": "Varian", "width": 160, "kind": "name", "sort": True},
-        {"id": "sold", "label": main_label, "group": f"Terjual · {resume_label}", "kind": "num", "sort": True},
     ]
+    if meta:
+        basis = meta["basis"]
+        lo, hi = meta["sold_span"] if meta.get("sold_span") else (None, None)
+        sold_group = f"Aktual · {span_text(lo, hi)}" if lo else f"Aktual · {resume_label}"
+        columns += [
+            {"id": "sold_bersih", "label": "Terjual bersih" + (" (dasar)" if basis == "bersih" else ""), "group": sold_group, "kind": "num", "sort": True},
+            {"id": "sold_masuk", "label": "Masuk" + (" (dasar)" if basis == "masuk" else " (semua)"), "group": sold_group, "kind": "num", "sort": True},
+            {"id": "run", "label": main_label, "group": f"Prediksi bulan berjalan · {span_text(meta['first'], meta['month_end'])}", "kind": "num", "sort": True},
+        ]
+    else:
+        columns.append({"id": "sold", "label": main_label, "group": f"Terjual · {resume_label}", "kind": "num", "sort": True})
     for group in groups:
         tone = "extra" if group.extra else None
         title = titles[group.prefix]
@@ -122,22 +174,52 @@ def table_parts(
             "sku": {"v": _clean(row["sku"], "Tanpa SKU"), "t": _clean(row["sku"], "Tanpa SKU")},
             "name": {"v": _clean(row["product_name"], "Tanpa nama"), "t": _clean(row["product_name"], "Tanpa nama"), "l": labels},
             "variance": {"v": _clean(row.get("variasi_tampil"), "Tanpa variasi"), "t": _clean(row.get("variasi_tampil"), "Tanpa variasi")},
-            "sold": {
+        }
+        if meta:
+            for side in ("bersih", "masuk"):
+                qty, sales = float(row[f"sold_qty_{side}"]), float(row[f"sold_sales_{side}"])
+                main = qty if metric == "qty" else sales
+                cells[f"sold_{side}"] = {"v": main, "t": fmt_qty(qty) if metric == "qty" else fmt_idr(sales),
+                                         "s": fmt_idr(sales) if metric == "qty" else f"{fmt_qty(qty)} unit"}
+                totals[f"sold_{side}"] = totals.get(f"sold_{side}", 0.0) + main
+            run_qty, run_sales = float(row["run_qty"]), float(row["run_sales"])
+            run_main = run_qty if metric == "qty" else run_sales
+            act = float(row["run_act_qty"] if metric == "qty" else row["run_act_sales"])
+            act_text = fmt_qty(act) if metric == "qty" else fmt_idr(act)
+            cells["run"] = {
+                "v": run_main,
+                "t": fmt_qty(round(run_qty)) if metric == "qty" else fmt_idr(run_sales),
+                "s": (f"{fmt_idr(run_sales)} · " if metric == "qty" else f"{fmt_qty(round(run_qty))} unit · ")
+                + (f"aktual {'bersih' if meta['basis'] == 'bersih' else 'masuk'} {span_text(meta['first'], meta['cutoff'])}: {act_text}" if meta["cutoff"] >= meta["first"] else "belum ada hari penuh"),
+            }
+            totals["run"] = totals.get("run", 0.0) + run_main
+        else:
+            cells["sold"] = {
                 "v": sold_value,
                 "t": fmt_qty(sold_value) if metric == "qty" else fmt_idr(sold_value),
                 "s": fmt_idr(row["sales_total"]) if metric == "qty" else f"{fmt_qty(row['qty_total'])} unit",
-            },
-        }
-        totals["sold"] = totals.get("sold", 0.0) + sold_value
+            }
+            totals["sold"] = totals.get("sold", 0.0) + sold_value
         export = {
             "Rank": int(row["peringkat"]),
             "SKU": cells["sku"]["t"],
             "Produk": cells["name"]["t"],
             "Varian": cells["variance"]["t"],
             "Label": ", ".join(row.get("label") or []),
-            "QTY terjual": float(row["qty_total"]),
-            "Sales terjual": float(row["sales_total"]),
         }
+        if meta:
+            when = span_text(*meta["sold_span"]) if meta.get("sold_span") else resume_label
+            export[f"QTY masuk ({when})"] = float(row["sold_qty_masuk"])
+            export[f"Sales produk masuk ({when})"] = float(row["sold_sales_masuk"])
+            export[f"QTY terjual bersih ({when})"] = float(row["sold_qty_bersih"])
+            export[f"Sales produk bersih ({when})"] = float(row["sold_sales_bersih"])
+            run_when = span_text(meta["first"], meta["month_end"])
+            export[f"Prediksi bulan berjalan QTY ({run_when})"] = float(row["run_qty"])
+            export[f"Prediksi bulan berjalan sales produk ({run_when})"] = float(row["run_sales"])
+            export[f"Aktual {meta['basis']} bulan berjalan QTY (s.d. {span_text(meta['cutoff'], meta['cutoff'])})"] = float(row["run_act_qty"])
+        else:
+            export["QTY terjual"] = float(row["qty_total"])
+            export["Sales terjual"] = float(row["sales_total"])
         for group in groups:
             p = group.prefix
             qty = float(row[f"{p}_qty"])
@@ -191,8 +273,14 @@ def table_parts(
             "t": fmt_num(cover, 0) if cover_ok else ("∞" if pd.notna(cover) else "-"),
             "s": f"habis {fmt_date(row.get('tanggal_habis'), short=True)}" if cover_ok and row.get("tanggal_habis") else "",
         }
-        empty_text = lama_kosong_text(row)
-        cells["empty"] = {"v": float(row["lama_kosong_hari"]) if pd.notna(row.get("lama_kosong_hari")) else None, "t": empty_text}
+        if meta:
+            empty_text, empty_sub, empty_days = empty_cell(row, meta["cutoff"])
+            cells["empty"] = {"v": empty_days, "t": empty_text, "s": empty_sub}
+            if empty_sub:
+                export["Sales hilang sejak kosong"] = float(row["empty_sales"]) if pd.notna(row.get("empty_sales")) else None
+        else:
+            empty_text = lama_kosong_text(row)
+            cells["empty"] = {"v": float(row["lama_kosong_hari"]) if pd.notna(row.get("lama_kosong_hari")) else None, "t": empty_text}
         export["Hari cukup"] = float(cover) if cover_ok else None
         export["Lama kosong"] = empty_text
         rows.append({"key": str(row["item_key"]), "cells": cells})
@@ -203,11 +291,41 @@ def table_parts(
         if name not in totals:
             continue
         value = totals[name]
-        money = metric == "sales" and (name.endswith("_pred") or name == "sold")
+        money = metric == "sales" and (name.endswith("_pred") or name.startswith("sold") or name == "run")
         total[name] = {"t": fmt_idr(value) if money else fmt_qty(round(value))}
-        if name.endswith("_pred"):
+        if name.endswith("_pred") or name == "run":
             total[name]["s"] = "sebelum dibulatkan per SKU"
     return columns, rows, total, pd.DataFrame(export_rows)
+
+
+def decision_table_guide(meta: dict | None, metric: str) -> None:
+    """Cara baca kolom aktual, prediksi bulan berjalan, dan lama kosong (dasar bersih/masuk tertulis)."""
+    if not meta:
+        return
+    basis = meta["basis"]
+    word = "terjual bersih" if basis == "bersih" else "masuk"
+    sold = f"{span_text(*meta['sold_span'])}" if meta.get("sold_span") else "periode penjualan terpilih"
+    cutoff = span_text(meta["cutoff"], meta["cutoff"])
+    explain(
+        [
+            ("Dasar tabel ini", f"{word.upper()}, sama dengan dasar prediksi (setelan Kecualikan batal & retur {'aktif' if basis == 'bersih' else 'mati'}). "
+             "Kolom yang menjadi dasar ditandai (dasar)"),
+            (f"Aktual · {sold}", "data nyata pada periode penjualan yang dipilih di atas, dihitung dari semua status pesanan. "
+             "Terjual bersih = masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang retur (nett). "
+             "Masuk = semua pesanan yang masuk, termasuk yang kemudian batal, belum dibayar, atau diretur"),
+            ("Sales", "sales produk = Harga Setelah Diskon × QTY, sebelum voucher; bukan sales bersih Total Pembayaran (dasar target), "
+             "karena Total Pembayaran per pesanan tidak bisa dibagi tepat per SKU"),
+            (f"Prediksi bulan berjalan · {span_text(meta['first'], meta['month_end'])}",
+             f"aktual {word} tgl 1 s.d. {cutoff} (hari penuh terakhir data latih, data ≥ 23:00) + prediksi harian × pola hari untuk sisa bulan. "
+             "Angka abu-abu menyebut bagian aktualnya. Sama dengan kolom Prediksi bulan berjalan di Pergerakan Top 50"),
+            ("Prediksi 30 hari", "jendela hari ini s.d. 30 hari ke depan (bukan bulan kalender); dasar kebutuhan stok dan safety stock"),
+            ("Lama kosong", f"hanya untuk SKU yang stok Site 10037 terakhirnya 0: dari unggahan Data stok pertama yang mencatat 0 (rangkaian kosong terakhir) "
+             f"s.d. {cutoff}, hari penuh terakhir data latih; bertambah setiap data latih ditambah selama stok belum diisi. "
+             "\"≥/≤\" bila semua unggahan tersimpan sudah 0 (angka minimal). Hilang = prediksi harian × pola hari tiap hari kosong − yang tetap terjual, "
+             "sama dengan Restock prioritas"),
+        ],
+        title="Cara membaca tabel",
+    )
 
 
 def show_decision_table(
@@ -223,13 +341,14 @@ def show_decision_table(
     height: int = 680,
     step: int | None = None,
     sort: str = "rank",
+    meta: dict | None = None,
 ) -> str:
     """Tabel bersama R8 dan Prediksi semua produk. Mengembalikan item_key yang dicentang di kolom Grafik.
 
     filename=None: tombol unduh tidak dibuat di dalam tabel (pemanggil menaruhnya di bilah navigasi halaman).
     step: tampilkan `step` baris teratas (setelah diurutkan) lalu tombol Muat lagi menambah `step` baris.
     """
-    columns, rows, total, export = table_parts(view, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label)
+    columns, rows, total, export = table_parts(view, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label, meta=meta)
     keys = {row["key"] for row in rows}
     previous = str(st.session_state.get(f"{key}-value") or "")
     # Satu tabel, urut atas semua baris; tampil per kelompok (5 lalu +10) yang bisa dibuka/ditutup di dalam tabel.
