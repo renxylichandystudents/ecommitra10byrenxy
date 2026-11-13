@@ -49,6 +49,23 @@ class FileVaultTest(unittest.TestCase):
         self.assertIn("stock", (self.team / "registry.json").read_text(encoding="utf-8"))
         self.assertFalse((self.runs / "7").exists())
 
+    def test_read_only_mirror_takes_database_version_and_never_pushes(self):
+        self._vault().push()
+        mirror = Path(self.tmp.name) / "laptop"
+        (mirror / "team").mkdir(parents=True)
+        (mirror / "team" / "registry.json").write_text('{"laptop": true}', encoding="utf-8")
+        copy = FileVault(self.engine, {"team": mirror / "team", "runs": mirror / "runs"}, read_only=True)
+        self.assertEqual(copy.restore(refresh=True), 3)
+        self.assertEqual((mirror / "team" / "registry.json").read_text(encoding="utf-8"), '{"sources": {}}')
+        (mirror / "team" / "registry.json").write_text('{"laptop": true}', encoding="utf-8")
+        self.assertEqual(copy.push(), 0)
+        fresh = Path(self.tmp.name) / "fresh"
+        self._vault_at(fresh).restore()
+        self.assertEqual((fresh / "team" / "registry.json").read_text(encoding="utf-8"), '{"sources": {}}')
+
+    def _vault_at(self, base: Path):
+        return FileVault(self.engine, {"team": base / "team", "runs": base / "runs"})
+
     def test_repetitive_files_are_stored_compressed(self):
         vault = self._vault()
         vault.push()

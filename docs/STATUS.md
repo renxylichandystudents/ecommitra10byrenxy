@@ -2,6 +2,12 @@
 
 Diperbarui: 13 November 2026.
 
+## Localhost + Supabase = salinan baca-saja dari Cloud (14 Nov 2026)
+
+- Insiden: localhost yang disambungkan ke Supabase (DATABASE_URL) memakai folder laptop dan brankas mendorong file laptop ke `file_vault`, menimpa `team/sources/*`, `team/registry.json`, dan file analisa 6–11 milik Cloud (analisa 12–15 utuh), serta menambah kunci `library/` dan `history/` yang tidak dipakai Cloud. Beranda lokal juga menampilkan transaksi s.d. 8 Nov karena file laptop tidak ditimpa versi database.
+- Perbaikan: `CLOUD_MIRROR` (lokal + database bukan SQLite) memakai `~/.prediksi_shopee/salinan_cloud/{shared,runs}` dengan susunan sama seperti Cloud; `FileVault(read_only=True)` tidak pernah push; `restore(refresh=True)` menimpa file yang berbeda dari database (diulang tiap 5 menit). Upload data dan Jalankan analisa dikunci di localhost mode ini, dengan keterangan di Beranda.
+- Pemulihan Cloud: perubahan `file_vault()` membuat Cloud membuat brankas baru dan mengirim ulang file dari disknya sendiri pada kunjungan berikutnya; kunci `library/` dan `history/` dari laptop dihapus dari brankas.
+
 ## Ringkasan: hari belum penuh & sumber data latih (14 Nov 2026)
 
 - Kartu "Kecualikan batal & retur" menghitung periode, pesanan batal/Belum Bayar, dan unit retur dari data transaksi yang tersimpan bersama analisa (bukan file pustaka yang sedang dipilih), sehingga selalu sesuai analisa yang dibuka.

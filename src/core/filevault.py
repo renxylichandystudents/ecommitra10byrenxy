@@ -60,9 +60,10 @@ def vault_enabled(engine: Engine) -> bool:
 class FileVault:
     """Sinkron dua arah sederhana: disk → database setiap ada perubahan, database → disk bila file hilang."""
 
-    def __init__(self, engine: Engine, areas: dict[str, Path]) -> None:
+    def __init__(self, engine: Engine, areas: dict[str, Path], *, read_only: bool = False) -> None:
         self.engine = engine
         self.areas = {name: Path(root) for name, root in areas.items()}
+        self.read_only = read_only
         self._seen: dict[str, tuple[int, int]] = {}
         self._hashes: dict[str, str] = {}
         self._lock = threading.Lock()
@@ -86,8 +87,10 @@ class FileVault:
             return None
         return root / rel
 
-    def restore(self) -> int:
-        """Tulis ulang file yang ada di database tetapi tidak ada di disk. Hasil: jumlah file dipulihkan."""
+    def restore(self, *, refresh: bool = False) -> int:
+        """Tulis ulang file yang ada di database tetapi tidak ada di disk. Hasil: jumlah file dipulihkan.
+
+        refresh=True: file di disk yang isinya berbeda dari database juga ditimpa (salinan baca-saja)."""
         restored = 0
         with self._lock, self.engine.connect() as conn:
             rows = conn.execute(select(VAULT.c.path, VAULT.c.sha1)).all()
@@ -96,7 +99,7 @@ class FileVault:
                 if target is None:
                     continue
                 self._hashes[key] = digest
-                if target.exists():
+                if target.exists() and (not refresh or _sha1(target.read_bytes()) == digest):
                     continue
                 data = conn.execute(select(VAULT.c.data).where(VAULT.c.path == key)).scalar()
                 if data is None:
@@ -111,6 +114,8 @@ class FileVault:
     def push(self) -> int:
         """Simpan file baru/berubah ke database dan hapus yang sudah dihapus di disk. Hasil: jumlah perubahan."""
         changes = 0
+        if self.read_only:
+            return changes
         with self._lock:
             files = self._local_files()
             with self.engine.begin() as conn:

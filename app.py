@@ -135,7 +135,7 @@ from src.utils.format import rupiah as fmt_rupiah
 from src.core.storage import LocalDataStore, read_upload_file
 from src.core.filevault import FileVault, vault_enabled
 from src.core.storage_guard import database_size_mb, enforce as enforce_storage, settings as storage_settings
-from src.core.userspace import deploy_mode, team_root
+from src.core.userspace import LOCAL_ROOT, deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
 from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, account_menu
 from auth.ui import logout as auth_logout
@@ -149,7 +149,7 @@ from src.ui.prediksi_top import save_run_snapshot, show_pred_vs_actual
 from src.ui.setting_page import show_setting
 from src.core.access import allowed as allowed_access, setting_tabs
 from src.core.fmt import fmt_date_short
-from src.core.runs import RunRepository, data_hash as training_data_hash
+from src.core.runs import DEFAULT_RUNS_ROOT, RunRepository, data_hash as training_data_hash
 from src.core import journey
 import src.library as library_store
 from src.library import configure_root as configure_library_root
@@ -198,18 +198,34 @@ def _app_page() -> None:
 # Tanpa st.navigation, Streamlit tidak rerun saat tombol back browser mengubah ?page=.
 st.navigation([st.Page(_app_page, title="Mitra10 × Shopee", default=True)], position="hidden").run()
 
-USER_ROOT = team_root()
-if deploy_mode() == "server":
+# Laptop yang tersambung ke database Cloud (Supabase) memakai salinan baca-saja dengan susunan folder
+# yang sama dengan Cloud; file laptop sendiri tidak pernah dikirim ke brankas Cloud.
+CLOUD_MIRROR = deploy_mode() == "lokal" and vault_enabled(get_engine())
+if CLOUD_MIRROR:
+    USER_ROOT = LOCAL_ROOT / "salinan_cloud" / "shared"
+    RUNS_ROOT = LOCAL_ROOT / "salinan_cloud" / "runs"
+    USER_ROOT.mkdir(parents=True, exist_ok=True)
+else:
+    USER_ROOT = team_root()
+    RUNS_ROOT = DEFAULT_RUNS_ROOT
+if deploy_mode() == "server" or CLOUD_MIRROR:
     configure_library_root(USER_ROOT)
     configure_movement_root(USER_ROOT)
 DATA_STORE = LocalDataStore(USER_ROOT)
+MIRROR_BLOCKED = {"jalankan_analisa", "ubah_data_latih", "unggah_stok", "unggah_replenishment"}
+_role_can = can
+
+
+def can(role: str | None, permission: str) -> bool:
+    if CLOUD_MIRROR and permission in MIRROR_BLOCKED:
+        return False
+    return _role_can(role, permission)
 
 
 def _vault_areas() -> dict[str, Path]:
     import src.movement as movement_store
-    from src.core.runs import DEFAULT_RUNS_ROOT
 
-    areas = {"team": USER_ROOT, "runs": DEFAULT_RUNS_ROOT}
+    areas = {"team": USER_ROOT, "runs": RUNS_ROOT}
     for name, folder in (("library", library_store.LIBRARY_DIR), ("history", movement_store.RUNS_DIR)):
         if USER_ROOT not in Path(folder).resolve().parents:
             areas[name] = Path(folder)
@@ -222,8 +238,9 @@ def file_vault() -> FileVault | None:
     engine = get_engine()
     if not vault_enabled(engine):
         return None
-    vault = FileVault(engine, _vault_areas())
-    vault.restore()
+    vault = FileVault(engine, _vault_areas(), read_only=CLOUD_MIRROR)
+    vault.restore(refresh=CLOUD_MIRROR)
+    vault.refreshed_at = time.time()
     return vault
 
 
@@ -231,7 +248,11 @@ def sync_file_vault() -> None:
     """Salin file data/hasil yang baru berubah ke database. Gagal sinkron tidak menghentikan halaman."""
     try:
         vault = file_vault()
-        if vault is not None:
+        if vault is not None and CLOUD_MIRROR:
+            if time.time() - getattr(vault, "refreshed_at", 0.0) > 300:
+                vault.restore(refresh=True)
+                vault.refreshed_at = time.time()
+        elif vault is not None:
             vault.push()
     except Exception as exc:  # noqa: BLE001
         st.session_state["_vault-error"] = str(exc)
@@ -254,6 +275,9 @@ def show_vault_status() -> None:
                 "Data latih tersimpan di disk server sementara dan akan hilang saat server tidur, restart, atau redeploy. "
                 "Isi `DATABASE_URL` (Postgres Supabase) di Secrets agar data latih dan hasil analisa tetap ada."
             )
+        return
+    if CLOUD_MIRROR:
+        st.caption("Localhost ini salinan baca-saja dari Cloud: data dan hasil analisa diambil dari database, tidak dikirim balik.")
         return
     files, size, stored = vault.summary()
     cfg = storage_settings(current_params())
@@ -2473,6 +2497,11 @@ def show_daily_journey(status: dict, *, where: str) -> None:
         action = journey.ACTION_RUN if may_run else journey.ACTION_VIEW
     if action == journey.ACTION_RUN and not may_run:
         action = journey.ACTION_VIEW
+    if CLOUD_MIRROR:
+        st.info(
+            "Localhost ini menampilkan salinan data dan hasil analisa dari Cloud (diperbarui tiap 5 menit). "
+            "Upload data dan Jalankan analisa hanya di Cloud, agar data di Cloud tidak tertimpa data laptop."
+        )
     with st.container(border=True):
         show_status_banner(status)
         today = status["today"]
@@ -2548,7 +2577,7 @@ def show_data_status(status: dict) -> None:
 
 @st.cache_resource(show_spinner=False)
 def run_repository() -> RunRepository:
-    repo = RunRepository(get_engine())
+    repo = RunRepository(get_engine(), runs_root=RUNS_ROOT)
     repo.cleanup()
     guard_storage(repo)
     return repo
