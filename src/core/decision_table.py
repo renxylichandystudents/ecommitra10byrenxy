@@ -18,6 +18,8 @@ from src.core.periods import format_period_label, last_full_month, window_days
 
 PERIOD_MONTHS = {"bulan": 1, "kuartal": 3, "semester": 6, "tahun": 12}
 PERIOD_LABELS = {"bulan": "Bulan", "kuartal": "Kuartal", "semester": "Semester", "tahun": "Tahun"}
+# Cakupan stok lebih dari ±10 tahun tidak diberi tanggal habis (pandas hanya sampai tahun 2262).
+MAX_COVER_DAYS = 3650
 
 
 @dataclass(frozen=True)
@@ -187,7 +189,7 @@ def build_decision_table(
     ]
     ref = pd.Timestamp(today).normalize()
     out["tanggal_habis"] = [
-        (ref + pd.Timedelta(days=int(days))).date() if pd.notna(days) and np.isfinite(days) else None
+        (ref + pd.Timedelta(days=int(days))).date() if pd.notna(days) and np.isfinite(days) and days <= MAX_COVER_DAYS else None
         for days in out["hari_cukup"]
     ]
     out["di_bawah_ss"] = out["ada_data_stok"] & (out["stok"].fillna(0) < out["ss"])

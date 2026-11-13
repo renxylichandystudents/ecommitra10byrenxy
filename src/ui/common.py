@@ -119,6 +119,32 @@ def badge(text: str, tone: str = "neutral") -> str:
     )
 
 
+def set_upload_notice(key: str, ok: bool, text: str) -> None:
+    """Simpan hasil unggah; tetap tampil sampai unggahan berikutnya (rerun otomatis tidak menghapusnya)."""
+    from datetime import datetime
+
+    st.session_state[f"_upload-notice-{key}"] = (bool(ok), str(text), datetime.now().strftime("%d/%m/%Y %H:%M"))
+
+
+def show_upload_notice(key: str) -> None:
+    notice = st.session_state.get(f"_upload-notice-{key}")
+    if not notice:
+        return
+    ok, text, when = notice
+    if ok:
+        st.success(f"{text}  \nDiterima {when}.", icon=":material/check_circle:")
+    else:
+        st.error(f"{text}  \nPercobaan {when}. Perbaiki file lalu unggah lagi.", icon=":material/error:")
+
+
+def file_check(ok: bool, text: str) -> None:
+    """Hasil pemeriksaan file sebelum disimpan."""
+    if ok:
+        st.success(f"**File sesuai, belum disimpan.** {text} Tekan tombol Simpan untuk menerima data.", icon=":material/task_alt:")
+    else:
+        st.error(f"**File tidak sesuai, tidak disimpan.** {text}", icon=":material/error:")
+
+
 def _keep_rp(value: str) -> str:
     """ "Rp" tidak terpisah baris dari angkanya di kartu sempit."""
     return str(value).replace("Rp ", "Rp&nbsp;")

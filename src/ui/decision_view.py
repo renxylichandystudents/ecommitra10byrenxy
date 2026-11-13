@@ -805,7 +805,9 @@ def _sku_summary(
     notes = []
     if has_stock:
         cover_days = stok / daily_pred if daily_pred > 0 else float("inf")
-        if np.isfinite(cover_days):
+        if np.isfinite(cover_days) and cover_days > 3650:
+            notes.append(("Stok Site 10037 cukup", "lebih dari 10 tahun pada laju prediksi sekarang"))
+        elif np.isfinite(cover_days):
             out_day = pd.Timestamp(today) + pd.Timedelta(days=int(cover_days))
             notes.append(("Stok Site 10037 cukup", f"±{fmt_num(cover_days, 0)} hari, perkiraan habis {fmt_date(out_day.date())}"))
         else:

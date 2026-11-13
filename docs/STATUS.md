@@ -1,6 +1,11 @@
 # Status terbaru aplikasi
 
-Diperbarui: 11 November 2026.
+Diperbarui: 13 November 2026.
+
+## Stok tidak terbaca & umpan balik unggah (13 Nov 2026)
+
+- **Penyebab kotak kuning "Sebagian data pendukung … seconds=2372535360000000000"**: `tanggal_habis` = hari ini + stok ÷ prediksi harian. SKU berstok dengan prediksi harian hampir 0 menghasilkan ±27 triliun hari → `OutOfBoundsTimedelta`, sehingga `enrich_catalog` gagal dan Ringkasan memakai tabel dasar tanpa stok/iklan/label ("50 tanpa data stok"). Sekarang cakupan > 3.650 hari tidak diberi tanggal habis (`decision_table.MAX_COVER_DAYS`, juga kartu analisa SKU). Teks peringatan diganti bahasa manajer + detail teknis. Tes `test_tiny_forecast_with_stock_has_no_overflow_date`.
+- **Umpan balik unggah seragam** (`common.file_check`, `set_upload_notice`, `show_upload_notice`) untuk File margin, Target bulanan, Denah gudang, Replenishment Site 10037, dan isian data barang: setelah file dipilih tampil kotak hijau "File sesuai, belum disimpan" atau merah "File tidak sesuai" + alasan; setelah Simpan hasilnya tetap tampil (dengan jam diterima) sampai unggahan berikutnya. Dulu pesan sekali pakai (`pop`) bisa terhapus oleh rerun otomatis, pesan replenishment berada di expander yang tertutup setelah simpan, dan denah hanya `st.toast` sebelum `st.rerun()` tanpa penanganan galat.
 
 ## Audit konsistensi angka antar halaman (11 Nov 2026)
 

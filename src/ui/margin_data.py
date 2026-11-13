@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core import margin_file as mf
-from src.ui.common import fmt_idr, fmt_num, fmt_pct
+from src.ui.common import file_check, fmt_idr, fmt_num, fmt_pct, set_upload_notice, show_upload_notice
 
 TABLE = "margin_item"
 
@@ -120,9 +120,7 @@ def upload_card(features, *, username: str, may_edit: bool, require, key: str) -
         "periode lain tetap tersimpan untuk perbandingan.</div>",
         unsafe_allow_html=True,
     )
-    flash = st.session_state.pop(f"{key}-flash", None)
-    if flash:
-        (st.success if flash[0] == "ok" else st.error)(flash[1])
+    show_upload_notice(key)
     if not may_edit:
         st.caption("Hanya Super user atau E-commerce specialist yang bisa mengunggah file margin.")
         return
@@ -133,8 +131,11 @@ def upload_card(features, *, username: str, may_edit: bool, require, key: str) -
     try:
         parsed = mf.read_margin_workbook(upload.getvalue())
     except Exception as exc:  # noqa: BLE001
-        st.error(f"File tidak bisa dibaca: {exc}")
+        file_check(False, f"{upload.name}: {exc}")
         return
+    found = ", ".join(f"{mf.SOURCES[s]} ({fmt_num(len(sheet['items']))} item)" for s, sheet in parsed["sheets"].items())
+    missing = [mf.SOURCES[s] for s in mf.SOURCES if s not in parsed["sheets"]]
+    file_check(True, f"{upload.name}: sheet {found} terbaca" + (f"; sheet {', '.join(missing)} tidak ada di file." if missing else "."))
     lines = []
     for source, sheet in parsed["sheets"].items():
         items = mf.with_pct(sheet["items"])
@@ -153,12 +154,12 @@ def upload_card(features, *, username: str, may_edit: bool, require, key: str) -
             with st.spinner("Menyimpan file margin..."):
                 count = save_upload(features, parsed, periode, username)
         except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
-            st.session_state[f"{key}-flash"] = ("err", f"File margin gagal disimpan: {exc}")
+            set_upload_notice(key, False, f"File margin {upload.name} gagal disimpan: {exc}")
         else:
-            st.session_state[f"{key}-flash"] = (
-                "ok",
-                f"✓ File margin periode {periode} berhasil disimpan: {fmt_num(count)} baris "
-                f"({datetime.now():%d/%m/%Y %H:%M}). Kalkulator biaya dan Laporan margin sudah memakai data ini.",
+            set_upload_notice(
+                key, True,
+                f"File margin {upload.name} periode {periode} berhasil disimpan: {fmt_num(count)} baris. "
+                "Kalkulator biaya dan Laporan margin sudah memakai data ini.",
             )
             st.session_state[f"{key}-round"] = round_no + 1
         st.rerun()

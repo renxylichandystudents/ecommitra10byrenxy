@@ -88,6 +88,17 @@ def test_safety_stock_rounds_up():
     assert float(table["ss"].iloc[0]) == 3.0
 
 
+def test_tiny_forecast_with_stock_has_no_overflow_date():
+    from src.core.decision_table import build_decision_table
+
+    view = pd.DataFrame({"item_key": ["A", "B"], "sku": ["A", "B"], "product_name": ["Pipa", "Semen"], "variation_name": ["", ""],
+                         "pred_qty": [1e-9, 30.0], "pred_sales": [0.001, 3_000_000.0], "safety_stock": [0.0, 0.0]})
+    stock = pd.DataFrame({"sku": ["A", "B"], "stock_dc_cikupa": [500, 60]})
+    table = build_decision_table(view, period="bulan", today=date(2026, 11, 13), horizon_days=30, stock_frame=stock).set_index("sku")
+    assert table.loc["A", "tanggal_habis"] is None
+    assert isinstance(table.loc["B", "tanggal_habis"], date)
+
+
 def test_today_follows_day_pattern_month_window_does_not():
     from src.core.decision_table import build_decision_table
 

@@ -10,7 +10,7 @@ import streamlit as st
 
 from src.core import targets as T
 from src.core.fmt import fmt_date
-from src.ui.common import download_excel, fmt_idr, fmt_pct
+from src.ui.common import download_excel, file_check, fmt_idr, fmt_pct, set_upload_notice, show_upload_notice
 
 UP = "#1d4ed8"
 DOWN = "#dc2626"
@@ -207,9 +207,7 @@ def show_target_uploader(features, *, username: str, today: date, title: bool = 
     with left:
         download_excel(T.template_frame(today, saved), "template_target_bulanan.xlsx", key="tgt-template", label="Unduh template")
         st.caption("Template berisi Januari tahun ini s.d. Desember tahun depan; target tersimpan sudah terisi. Isi bulan yang perlu, kosongkan yang tidak berubah.")
-    flash = st.session_state.pop("tgt-flash", None)
-    if flash:
-        st.success(flash)
+    show_upload_notice("target")
     round_no = int(st.session_state.get("tgt-upload-round", 0))
     upload = right.file_uploader("Unggah target bulanan (xlsx/csv)", type=["xlsx", "xls", "csv"], key=f"tgt-upload-{round_no}")
     if upload is None:
@@ -218,8 +216,12 @@ def show_target_uploader(features, *, username: str, today: date, title: bool = 
         raw = pd.read_csv(upload, dtype=object) if upload.name.lower().endswith(".csv") else pd.read_excel(upload, dtype=object)
         parsed = T.parse_target_file(raw)
     except Exception as exc:  # noqa: BLE001
-        st.error(f"File target tidak bisa dibaca: {exc}")
+        file_check(False, f"{upload.name} tidak bisa dibaca sebagai target bulanan: {exc}")
         return
+    if parsed.empty:
+        file_check(False, f"{upload.name}: tidak ada bulan yang berisi target. Isi kolom Target (Rp) pada template.")
+        return
+    file_check(True, f"{upload.name}: {len(parsed)} bulan berisi target.")
     preview = pd.DataFrame({
         "Bulan": parsed["periode"].map(T.month_label),
         "Target baru (Rp)": parsed["target"].map(fmt_idr),
@@ -246,7 +248,8 @@ def show_target_uploader(features, *, username: str, today: date, title: bool = 
 
         bump(st.session_state)
         st.session_state["tgt-upload-round"] = round_no + 1
-        st.session_state["tgt-flash"] = (
-            f"✓ {len(rows)} target bulanan tersimpan: " + ", ".join(T.month_label(r["periode"]) for r in rows[:12]) + ("…" if len(rows) > 12 else "") + "."
+        set_upload_notice(
+            "target", True,
+            f"{len(rows)} target bulanan tersimpan: " + ", ".join(T.month_label(r["periode"]) for r in rows[:12]) + ("…" if len(rows) > 12 else "") + ".",
         )
         st.rerun()

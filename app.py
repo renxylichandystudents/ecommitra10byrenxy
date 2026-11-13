@@ -8171,7 +8171,10 @@ def enriched_catalog(
             day_factor=day_factor,
         )
     except Exception as exc:  # data tambahan bermasalah: tetap tampilkan tabel keputusan dasar
-        st.warning(f"Sebagian data pendukung (stok/iklan/label) belum bisa dipakai: {exc}")
+        st.warning(
+            "Data stok, iklan, dan label belum bisa digabung dengan prediksi, jadi kolom stok tampil sebagai \"tanpa data stok\". "
+            f"Data yang diunggah tetap tersimpan. Detail teknis untuk perbaikan: {type(exc).__name__}: {exc}"
+        )
         table = build_decision_table(catalog, period=period, today=today, horizon_days=horizon_days, orders=orders, day_factor=day_factor)
         table["label"] = [[] for _ in range(len(table))]
         table["label_text"] = ""

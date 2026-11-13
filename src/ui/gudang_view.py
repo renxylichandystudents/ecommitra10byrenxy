@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from src.core import gudang
-from src.ui.common import batched_view, card, download_excel, explain, fmt_num, fmt_pct
+from src.ui.common import batched_view, card, download_excel, explain, file_check, fmt_num, fmt_pct, set_upload_notice, show_upload_notice
 from src.utils.format import show_table
 
 STATUS_ICON = {"Kosong": "🔴 Kosong", "Hampir habis": "🟠 Hampir habis", "Stok berlebih": "🟣 Stok berlebih", "Aman": "🟢 Aman"}
@@ -437,8 +437,30 @@ def _read_upload(upload) -> dict | None:
             return {"denah": None, "locations": None, "repl": repl, "snapshot": snap}
         return gudang.read_layout_workbook(upload.getvalue())
     except Exception as exc:  # noqa: BLE001 - pesan yang bisa dibaca
-        st.error(f"File tidak bisa dibaca: {exc}")
+        file_check(False, f"{upload.name} tidak bisa dibaca: {exc}")
         return None
+
+
+def _save_denah(features, denah, locations, *, username: str, require, name: str) -> None:
+    import json
+
+    require("setting_kapasitas_gudang", "upload")
+    try:
+        with st.spinner("Menyimpan denah gudang..."):
+            features.clear("warehouse_location", username=username, action="ganti:lokasi_gudang")
+            keep = locations[["lokasi", "rak", "lorong", "bay", "level", "slot", "kategori"]]
+            features.insert("warehouse_location", keep, username=username, action="unggah:lokasi_gudang")
+            if denah is not None:
+                features.insert("warehouse_denah", [{"created_at": datetime.now(), "uploaded_by": username, "content": json.dumps(denah)}],
+                                username=username, action="unggah:denah_gudang")
+    except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
+        set_upload_notice("denah", False, f"Denah {name} gagal disimpan: {exc}")
+    else:
+        set_upload_notice("denah", True, f"Denah {name} tersimpan: {fmt_num(len(locations))} lokasi"
+                          + (" dan gambar denah." if denah is not None else ", tanpa gambar denah."))
+        st.session_state["denah-round"] = int(st.session_state.get("denah-round", 0)) + 1
+    st.session_state.pop("_gudang_view", None)
+    st.rerun()
 
 
 def _upload_cards(features, view: dict, *, may_upload: bool, may_upload_repl: bool, username: str, require) -> None:
@@ -457,7 +479,10 @@ def _upload_cards(features, view: dict, *, may_upload: bool, may_upload_repl: bo
                 + (f"<br>Diperbarui {when}" + (f" oleh {html.escape(who)}" if who else "") if when else "") + "</div>",
                 unsafe_allow_html=True,
             )
-        with st.expander("Ganti denah" if not loc.empty else "Unggah denah", expanded=loc.empty and may_upload):
+        show_upload_notice("denah")
+        round_no = int(st.session_state.get("denah-round", 0))
+        picked = st.session_state.get(f"gudang-denah-upload-{round_no}") is not None
+        with st.expander("Ganti denah" if not loc.empty else "Unggah denah", expanded=(loc.empty and may_upload) or picked):
             if not may_upload:
                 st.caption("Hanya Team DC atau Super user yang bisa mengunggah.")
             st.markdown(
@@ -465,27 +490,19 @@ def _upload_cards(features, view: dict, *, may_upload: bool, may_upload_repl: bo
                 "Denah lama akan diganti seluruhnya.</div>",
                 unsafe_allow_html=True,
             )
-            denah_upload = st.file_uploader("File denah gudang", type=["xlsx"], key="gudang-denah-upload") if may_upload else None
+            denah_upload = st.file_uploader("File denah gudang", type=["xlsx"], key=f"gudang-denah-upload-{round_no}") if may_upload else None
             found = _read_upload(denah_upload) if denah_upload is not None else None
             if found is not None:
                 denah, locations = found["denah"], found["locations"]
                 if locations is None:
-                    st.error("Daftar lokasi rak tidak ditemukan di file ini. Pastikan file berisi sheet Location.")
+                    file_check(False, f"{denah_upload.name}: daftar lokasi rak tidak ditemukan. Pastikan file tata letak gudang berisi sheet Location "
+                               "(file replenishment diunggah di kotak Data stok harian).")
                 else:
                     bays = sum(1 for c in (denah or {}).get("cells", []) if c.get("k"))
-                    st.markdown(f"Terbaca **{fmt_num(len(locations))} lokasi**" + (f" dan gambar denah ({fmt_num(bays)} bay)." if denah else ", tanpa gambar denah."))
-                    if st.button("Simpan denah", type="primary", key="gudang-denah-save", use_container_width=True):
-                        import json
-
-                        require("setting_kapasitas_gudang", "upload")
-                        features.clear("warehouse_location", username=username, action="ganti:lokasi_gudang")
-                        keep = locations[["lokasi", "rak", "lorong", "bay", "level", "slot", "kategori"]]
-                        features.insert("warehouse_location", keep, username=username, action="unggah:lokasi_gudang")
-                        if denah is not None:
-                            features.insert("warehouse_denah", [{"created_at": datetime.now(), "uploaded_by": username, "content": json.dumps(denah)}], username=username, action="unggah:denah_gudang")
-                        st.session_state.pop("_gudang_view", None)
-                        st.toast("Denah gudang tersimpan.")
-                        st.rerun()
+                    file_check(True, f"{denah_upload.name}: {fmt_num(len(locations))} lokasi"
+                               + (f" dan gambar denah ({fmt_num(bays)} bay) terbaca." if denah else " terbaca, tanpa gambar denah."))
+                    if st.button("Simpan denah", type="primary", key=f"gudang-denah-save-{round_no}", use_container_width=True):
+                        _save_denah(features, denah, locations, username=username, require=require, name=denah_upload.name)
     with right.container(border=True):
         snap = view.get("snapshot")
         st.markdown("**📦 Data stok harian (replenishment)**")
@@ -499,7 +516,9 @@ def _upload_cards(features, view: dict, *, may_upload: bool, may_upload_repl: bo
             )
         else:
             st.markdown("<div class='field-hint'>Belum ada data.</div>", unsafe_allow_html=True)
-        with st.expander("Unggah data hari ini", expanded=not loc.empty and not snap and may_upload_repl):
+        show_upload_notice("replenishment")
+        picked = st.session_state.get(f"gudang-repl-upload-{int(st.session_state.get('repl-round', 0))}") is not None
+        with st.expander("Unggah data hari ini", expanded=(not loc.empty and not snap and may_upload_repl) or picked):
             if loc.empty:
                 st.caption("Unggah denah gudang dulu.")
             else:
@@ -514,9 +533,6 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
         "Tanggal yang sama akan diganti.</div>",
         unsafe_allow_html=True,
     )
-    flash = st.session_state.pop("repl-flash", None)
-    if flash:
-        (st.success if flash[0] == "ok" else st.error)(flash[1])
     if not may_upload:
         st.caption("Hanya Team DC, Team IC/MD, atau Super user yang bisa mengunggah.")
         return
@@ -527,16 +543,20 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
         return
     repl = found["repl"]
     if repl is None:
-        st.error("Tabel replenishment tidak ditemukan. Pastikan file berasal dari laporan Replenishment Calculation by Date.")
+        file_check(False, f"{upload.name}: tabel replenishment tidak ditemukan. Pastikan file berasal dari laporan "
+                   "Replenishment Calculation by Date (kolom Item No, Stock On Hand, Min, Max).")
         return
     other = [code for code in repl.attrs.get("sites", []) if code != gudang.SITE]
     if other:
-        st.error(
-            f"File ini berisi Site {', '.join(other)}, bukan Site {gudang.SITE}. Replenishment di sini khusus Site {gudang.SITE}."
-        )
+        file_check(False, f"{upload.name} berisi Site {', '.join(other)}, bukan Site {gudang.SITE}. Replenishment di sini khusus Site {gudang.SITE}; "
+                   "stok DC 10062/10036 diunggah di Upload data › Stok.")
+        return
+    if repl.empty:
+        file_check(False, f"{upload.name}: tabel replenishment terbaca tetapi tidak berisi SKU.")
         return
     snap_new = found["snapshot"] or datetime.now().date()
-    st.markdown(f"Terbaca **{fmt_num(len(repl))} SKU** untuk tanggal **{snap_new:%d/%m/%Y}**.")
+    file_check(True, f"{upload.name}: Replenishment Site {gudang.SITE}, {fmt_num(len(repl))} SKU, tanggal {snap_new:%d/%m/%Y}"
+               + ("." if found["snapshot"] else " (tanggal tidak ada di file, dipakai tanggal hari ini)."))
     master = load_master(features, features.snapshot_dates("warehouse_replenishment"))
     new_skus = int((~repl["sku"].isin(set(master["sku"].map(gudang.norm_sku)))).sum()) if not master.empty else len(repl)
     if new_skus:
@@ -556,9 +576,10 @@ def replenishment_uploader(features, *, username: str, may_upload: bool, require
                 if not carried.empty:
                     save_master(features, carried, username=username, action="unggah:master_barang_gudang")
         except Exception as exc:  # noqa: BLE001 - gagal simpan ditampilkan, app tidak berhenti
-            st.session_state["repl-flash"] = ("err", f"Data replenishment gagal disimpan: {exc}")
+            set_upload_notice("replenishment", False, f"Replenishment {upload.name} gagal disimpan: {exc}")
         else:
-            st.session_state["repl-flash"] = ("ok", f"✓ Replenishment Site {gudang.SITE} tanggal {snap_new:%d/%m/%Y} tersimpan ({fmt_num(len(repl))} SKU).")
+            set_upload_notice("replenishment", True, f"Replenishment Site {gudang.SITE} tanggal {snap_new:%d/%m/%Y} dari {upload.name} tersimpan "
+                              f"({fmt_num(len(repl))} SKU). Kapasitas gudang sudah memakai data ini.")
             st.session_state["repl-round"] = round_no + 1
             st.session_state.pop("_gudang_view", None)
         st.rerun()
@@ -572,9 +593,7 @@ def _master_section(features, view: dict, *, may_edit: bool, username: str, requ
     items = view["items"]
     todo = gudang.incomplete_items(items)
     known = set(view["locations"]["lokasi"])
-    flash = st.session_state.pop("master-flash", None)
-    if flash:
-        (st.success if flash[0] == "ok" else st.error)(flash[1])
+    show_upload_notice("master")
     if not todo.empty:
         no_spec = int(todo["kurang"].eq("Spesifikasi Barang").sum())
         no_pick = len(todo) - no_spec
@@ -666,11 +685,15 @@ def _master_upload(features, items: pd.DataFrame, todo: pd.DataFrame, known: set
         raw = pd.read_csv(upload, header=None, dtype=object) if upload.name.lower().endswith(".csv") else pd.read_excel(upload, header=None, dtype=object)
         rows = gudang.parse_master_upload(raw)
     except Exception as exc:  # noqa: BLE001 - pesan yang bisa dibaca
-        st.error(f"File tidak bisa dibaca: {exc}")
+        file_check(False, f"{upload.name} tidak bisa dibaca: {exc}")
         return
     rows = rows.loc[rows["spesifikasi"].ne("") | rows["pick_location"].ne("") | rows["spesifikasi_asli"].ne("")]
     unknown = int((~rows["sku"].isin(set(items["sku"]))).sum())
-    st.markdown(f"Terbaca **{fmt_num(len(rows))} SKU** berisi isian" + (f" ({fmt_num(unknown)} SKU tidak ada di replenishment terbaru, tetap disimpan)." if unknown else "."))
+    if rows.empty:
+        file_check(False, f"{upload.name}: tidak ada baris berisi Spesifikasi Barang atau Pick Location.")
+        return
+    file_check(True, f"{upload.name}: {fmt_num(len(rows))} SKU berisi isian"
+               + (f" ({fmt_num(unknown)} SKU tidak ada di replenishment terbaru, tetap disimpan)." if unknown else "."))
     if st.button("Simpan isian", type="primary", key=f"master-upload-save-{round_no}", disabled=rows.empty):
         require("upload_replenishment", "upload")
         st.session_state["master-round"] = round_no + 1
@@ -691,9 +714,9 @@ def _save_master_rows(features, rows: pd.DataFrame, known: set, *, username: str
         st.error(f"Data barang gagal disimpan: {exc}")
         return
     st.session_state.pop("_gudang_view", None)
-    message = f"✓ Data barang {fmt_num(len(good))} SKU tersimpan."
+    message = f"Data barang {fmt_num(len(good))} SKU tersimpan."
     if problems.empty:
-        st.session_state["master-flash"] = ("ok", message)
+        set_upload_notice("master", True, message)
         st.rerun()
     st.success(message + " Perbaiki baris di atas lalu simpan lagi; muat ulang halaman untuk melihat kapasitas terbaru.")
 
