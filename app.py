@@ -7938,6 +7938,55 @@ def _today_pattern_hint(orders_all: pd.DataFrame | None, today: date, day_sales:
             "sales produk; Pantauan harian = angka ini × faktor sales bersih")
 
 
+def _running_month_cards(decision: pd.DataFrame, all_sku: pd.DataFrame | None, orders, orders_all, today: date,
+                         prior: dict | None, day_factor: float, metric: str) -> None:
+    """Baris kartu bulan berjalan: aktual tgl 1 s.d. hari penuh terakhir + laju prediksi × pola sisa hari (sama dengan Ringkasan)."""
+    from src.ui.dashboard import MONTHS_SHORT, running_month_hint, running_month_parts
+
+    top = running_month_parts(decision, orders, orders_all, today)
+    name = f"bulan berjalan ({MONTHS_SHORT[today.month - 1]} {today.year})"
+    then_rate = None
+    if prior and prior.get("d") and day_factor > 0:
+        then_rate = (float(prior["d"][0]) / day_factor, float(prior["d"][1]) / day_factor)
+    tip = ("Aktual tgl 1 s.d. hari penuh terakhir (data ≥ 23:00) + laju prediksi harian × pola hari sisa bulan "
+           "(hari dalam minggu, gajian, tanggal kembar; sama dengan Pantauan harian). Pembanding: aktual yang sama + laju prediksi kemarin. "
+           "Sales = sales produk (dasar prediksi), belum dikali faktor sales bersih.")
+    qty_now = top["actual_qty"] + top["rest_qty"]
+    sales_now = top["actual_sales"] + top["rest_sales"]
+    qty_then = None if then_rate is None else top["actual_qty"] + then_rate[0] * top["weight"]
+    sales_then = None if then_rate is None else top["actual_sales"] + then_rate[1] * top["weight"]
+    qty_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_qty'], top['rest_qty'], lambda v: format_number(round(v), 0)))}</div>"
+    sales_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_sales'], top['rest_sales'], format_idr))}</div>"
+    st.markdown(f"<div class='field-hint' style='margin-top:.4rem'><b>Prediksi {html.escape(name)}</b></div>", unsafe_allow_html=True)
+    cards = st.columns(4)
+    money_first = metric == "sales"
+    order = [("sales", sales_now, sales_then, sales_hint), ("qty", qty_now, qty_then, qty_hint)]
+    if not money_first:
+        order.reverse()
+    for column, (kind, now, then, hint) in zip(cards[:2], order):
+        money = kind == "sales"
+        _prediction_card(
+            column,
+            f"Prediksi {'sales' if money else 'QTY'} {name} · Top 50 SKU",
+            format_idr(now) if money else f"{format_number(round(now), 0)} unit",
+            _move_line(now, then, money=money),
+            tip=tip,
+            extra_html=hint,
+        )
+    if all_sku is not None and not all_sku.empty:
+        whole = running_month_parts(all_sku, orders, orders_all, today, all_items=True)
+        total = whole["actual_sales"] + whole["rest_sales"]
+        cards[3].markdown(
+            "<div class='stat-card'>"
+            f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
+            f"<div class='readable-metric-value'>{html.escape(format_idr(total))}</div>"
+            f"<div class='metric-hint'>{html.escape(running_month_hint(whole, whole['actual_sales'], whole['rest_sales'], format_idr))}"
+            " · sales produk seluruh toko</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def show_analysis_movement(
     stock: pd.DataFrame,
     current_meta: dict,
@@ -8061,6 +8110,7 @@ def show_analysis_movement(
                     "</div>",
                     unsafe_allow_html=True,
                 )
+        _running_month_cards(decision, all_sku, orders, orders_all, today, prior, day_factor, metric)
 
     st.markdown("<div class='section-title'>Pergerakan Top 50</div>", unsafe_allow_html=True)
     explain(

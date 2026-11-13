@@ -28,3 +28,17 @@ def test_running_month_without_orders_uses_whole_rest():
     table = pd.DataFrame({"item_key": ["A"], "pred_harian": [2.0]})
     total, _hint = running_month(table, None, None, date(2026, 11, 13))
     assert total == 2.0 * 18
+
+
+def test_running_month_sales_and_all_items():
+    from src.ui.dashboard import running_month_parts
+
+    orders = _orders()
+    other = orders.assign(item_key="B", sku="B", qty=1.0, sales=50_000.0)
+    both = pd.concat([orders, other], ignore_index=True)
+    table = pd.DataFrame({"item_key": ["A"], "pred_harian": [10.0], "harga_bersih": [100_000.0]})
+    top = running_month_parts(table, both, both, date(2026, 11, 13))
+    assert top["actual_qty"] == 120 and top["actual_sales"] == 12 * 1_000_000
+    assert abs(top["rest_sales"] - top["rest_qty"] * 100_000) < 1e-6
+    whole = running_month_parts(table, both, both, date(2026, 11, 13), all_items=True)
+    assert whole["actual_sales"] == 12 * 1_050_000

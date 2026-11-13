@@ -83,8 +83,14 @@ def actual_hint(predicted: float, actual: float, day: date | None, today: date) 
     return text
 
 
-def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date) -> tuple[float, str]:
-    """(prediksi QTY bulan berjalan Top 50, keterangan) = aktual tgl 1 s.d. hari penuh terakhir + laju harian × pola sisa hari."""
+MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
+
+
+def running_month_parts(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date,
+                        *, all_items: bool = False) -> dict:
+    """Bulan berjalan: aktual tgl 1 s.d. hari penuh terakhir + laju prediksi harian × jumlah pola hari sisa bulan.
+
+    Sales = sales produk (dasar prediksi). all_items=True: aktual seluruh pesanan, bukan hanya SKU di `table`."""
     import calendar
 
     from src.ui.month_track_view import month_remaining_weight
@@ -92,24 +98,42 @@ def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: 
     month_first = today.replace(day=1)
     month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
     cutoff, weight = month_remaining_weight(orders_all if orders_all is not None else orders, today)
-    actual = 0.0
+    actual_qty = actual_sales = 0.0
     if orders is not None and not orders.empty and cutoff >= month_first:
         days = pd.to_datetime(orders["order_time"], errors="coerce").dt.date
-        mask = (days >= month_first) & (days <= cutoff) & orders["item_key"].astype(str).isin(set(table["item_key"].astype(str)))
-        actual = float(orders.loc[mask, "qty"].sum())
-    rest = float(table["pred_harian"].sum()) * weight if "pred_harian" in table.columns else 0.0
-    rest_start = max(month_first, cutoff + timedelta(days=1))
-    month = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")[today.month - 1]
+        mask = (days >= month_first) & (days <= cutoff)
+        if not all_items:
+            mask &= orders["item_key"].astype(str).isin(set(table["item_key"].astype(str)))
+        actual_qty = float(orders.loc[mask, "qty"].sum())
+        actual_sales = float(orders.loc[mask, "sales"].sum()) if "sales" in orders.columns else 0.0
+    rate_qty = float(table["pred_harian"].sum()) if "pred_harian" in table.columns else 0.0
+    rate_sales = float((table["pred_harian"] * table["harga_bersih"]).sum()) if {"pred_harian", "harga_bersih"} <= set(table.columns) else 0.0
+    return {
+        "month_first": month_first, "month_end": month_end, "cutoff": cutoff, "weight": weight,
+        "rest_start": max(month_first, cutoff + timedelta(days=1)),
+        "actual_qty": actual_qty, "actual_sales": actual_sales,
+        "rest_qty": rate_qty * weight, "rest_sales": rate_sales * weight,
+    }
+
+
+def running_month_hint(parts: dict, actual: float, rest: float, fmt) -> str:
+    month = MONTHS_SHORT[parts["month_first"].month - 1]
 
     def span(lo: date, hi: date) -> str:
         return f"{lo.day} {month}" if lo == hi else f"{lo.day}–{hi.day} {month}"
 
-    parts = []
-    if cutoff >= month_first:
-        parts.append(f"aktual {span(month_first, cutoff)}: {fmt_num(actual)}")
-    if rest_start <= month_end:
-        parts.append(f"prediksi {span(rest_start, month_end)}: {fmt_num(rest)}")
-    return actual + rest, " + ".join(parts)
+    out = []
+    if parts["cutoff"] >= parts["month_first"]:
+        out.append(f"aktual {span(parts['month_first'], parts['cutoff'])}: {fmt(actual)}")
+    if parts["rest_start"] <= parts["month_end"]:
+        out.append(f"prediksi {span(parts['rest_start'], parts['month_end'])}: {fmt(rest)}")
+    return " + ".join(out)
+
+
+def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date) -> tuple[float, str]:
+    """(prediksi QTY bulan berjalan Top 50, keterangan)."""
+    parts = running_month_parts(table, orders, orders_all, today)
+    return parts["actual_qty"] + parts["rest_qty"], running_month_hint(parts, parts["actual_qty"], parts["rest_qty"], fmt_num)
 
 
 def show_priority_dashboard(
@@ -143,7 +167,7 @@ def show_priority_dashboard(
         hint=actual_hint(predicted_today, actual_qty, actual_day, today),
     )
     month_qty, month_hint = running_month(top, orders, orders_all, today)
-    month_name = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")[today.month - 1]
+    month_name = MONTHS_SHORT[today.month - 1]
     card(cols[1], f"Prediksi QTY bulan berjalan ({month_name} {today.year}) · Top 50", fmt_num(month_qty), hint=month_hint)
     fresh = " " + badge("periode baru", "info") if fresh_period else ""
     lo, hi = prediction_window("bulan", window_start)
