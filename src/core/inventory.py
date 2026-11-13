@@ -199,8 +199,11 @@ def snapshot_time(values: pd.Series) -> pd.Series:
 
 
 def stock_zero_duration(stock_snapshots: pd.DataFrame, *, sku_col: str = "sku", stock_col: str = "stock_dc_cikupa", today: date | None = None) -> pd.DataFrame:
+    """Per SKU yang stok terakhirnya 0: zero_since = unggahan pertama dalam rangkaian stok 0 terakhir.
+
+    kosong_sejak_awal = True bila semua unggahan tersimpan sudah 0, jadi stok habis pada atau sebelum zero_since."""
     if stock_snapshots is None or stock_snapshots.empty or "_submitted_at" not in stock_snapshots.columns:
-        return pd.DataFrame(columns=[sku_col, "zero_since", "lama_kosong_hari"])
+        return pd.DataFrame(columns=[sku_col, "zero_since", "lama_kosong_hari", "kosong_sejak_awal"])
     work = stock_snapshots.copy()
     work["_submitted_at"] = snapshot_time(work["_submitted_at"])
     work[stock_col] = pd.to_numeric(work[stock_col], errors="coerce").fillna(0.0)
@@ -218,6 +221,7 @@ def stock_zero_duration(stock_snapshots: pd.DataFrame, *, sku_col: str = "sku", 
         if not zero_rows:
             continue
         since = min(pd.Timestamp(row["_submitted_at"]).normalize() for row in zero_rows)
-        rows.append({sku_col: sku, "zero_since": since.date(), "lama_kosong_hari": max(int((ref - since).days), 0)})
-    return pd.DataFrame(rows)
+        rows.append({sku_col: sku, "zero_since": since.date(), "lama_kosong_hari": max(int((ref - since).days), 0),
+                     "kosong_sejak_awal": len(zero_rows) == len(group)})
+    return pd.DataFrame(rows, columns=[sku_col, "zero_since", "lama_kosong_hari", "kosong_sejak_awal"])
 

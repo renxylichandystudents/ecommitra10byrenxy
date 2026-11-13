@@ -2,6 +2,11 @@
 
 Diperbarui: 13 November 2026.
 
+## Restock prioritas: umur kosong & tanggal stok habis (13 Nov 2026)
+
+- Status SKU Kosong kini "Kosong · 8 hari (sejak 5 Nov 2026)" (dari `stock_zero_duration`: unggahan pertama dengan stok 0 di rangkaian kosong terakhir Data stok Site 10037). Bila semua unggahan tersimpan sudah 0 (`kosong_sejak_awal`), ditulis "≥ N hari" karena umur sebenarnya tidak diketahui.
+- Kolom Stok habis untuk SKU Kosong = tanggal stok mulai 0 ("Habis 5 Nov 2026" / "Habis ≤ 3 Nov 2026"), bukan hari ini. `restock.stock_out_date` dibatasi 10 tahun (overflow sama seperti tanggal habis di tabel keputusan). `status_badges` mempertahankan keterangan setelah " · ". Tes `tests/test_restock_empty_age.py`.
+
 ## Ringkasan: kartu Prediksi QTY bulan berjalan (13 Nov 2026)
 
 - Prioritas hari ini kini 5 kartu; kartu baru kedua **Prediksi QTY bulan berjalan (Nov 2026) · Top 50** = QTY aktual Top 50 tgl 1 s.d. hari penuh terakhir + laju prediksi harian Top 50 (nilai harapan, sama dengan kartu hari ini) × jumlah pola hari sisa bulan (`month_track_view.month_remaining_weight`, pola sama dengan Pantauan harian). Keterangan: "aktual 1–12 Nov: … + prediksi 13–30 Nov: …". Rumus prediksi tidak berubah. Kode `dashboard.running_month`; tes `tests/test_running_month.py`.

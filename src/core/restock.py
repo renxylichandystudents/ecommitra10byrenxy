@@ -16,7 +16,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from src.core.decision_table import stock_need
+from src.core.decision_table import MAX_COVER_DAYS, stock_need
 
 RECORD_COLUMNS = ("prioritas", "tindakan", "sku", "nama", "varian", "stok", "kebutuhan", "restock", "ambil_dc", "tenggat", "pic", "alasan")
 CANCEL_HIGH_PCT = 15.0
@@ -35,10 +35,18 @@ def _num(value, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
+def _day(value) -> date | None:
+    if value is None or (not isinstance(value, date) and pd.isna(value)):
+        return None
+    stamp = pd.Timestamp(value)
+    return stamp.date() if pd.notna(stamp) else None
+
+
 def stock_out_date(stok: float, daily: float, today: date) -> date | None:
     if daily <= 0:
         return None
-    return today + timedelta(days=int(math.floor(max(stok, 0.0) / daily)))
+    days = math.floor(max(stok, 0.0) / daily)
+    return today + timedelta(days=int(days)) if days <= MAX_COVER_DAYS else None
 
 
 def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
@@ -58,7 +66,8 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
 
 def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None) -> pd.DataFrame:
     """Tabel "Kebutuhan restock prioritas": kosong + ada stok DC dulu, lalu dampak omzet (sales value & QTY) terbesar."""
-    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi sales hilang", "Potensi QTY hilang", "_habis", "_pred_harian", "_sales_harian"]
+    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi sales hilang", "Potensi QTY hilang", "_habis", "_pred_harian", "_sales_harian",
+               "_kosong_sejak", "_lama_kosong", "_kosong_sejak_awal"]
     if table is None or table.empty:
         return pd.DataFrame(columns=columns)
     po = po or {}
@@ -105,6 +114,9 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
                 "_habis": habis or date.max,
                 "_pred_harian": daily,
                 "_sales_harian": daily * _num(row.get("harga_bersih")),
+                "_kosong_sejak": _day(row.get("zero_since")) if status == "Kosong" else None,
+                "_lama_kosong": _num(row.get("lama_kosong_hari")) if status == "Kosong" and pd.notna(row.get("lama_kosong_hari")) else None,
+                "_kosong_sejak_awal": bool(row.get("kosong_sejak_awal", False)) if status == "Kosong" else False,
             }
         )
     frame = pd.DataFrame(rows, columns=columns)

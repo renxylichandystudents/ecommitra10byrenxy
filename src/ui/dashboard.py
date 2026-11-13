@@ -24,10 +24,18 @@ RESTOCK_STEP = 5
 
 def status_badges(frame: pd.DataFrame, column: str = "Status") -> pd.DataFrame:
     """Status sebagai label berikon agar terbaca seperti badge di st.dataframe."""
-    icons = {"Kosong": "🔴 Kosong", "Kurang": "🟡 Kurang", "Aman": "🟢 Aman", "Tanpa data stok": "⚪ Tanpa data stok"}
+    icons = {"Kosong": "🔴", "Kurang": "🟡", "Aman": "🟢", "Tanpa data stok": "⚪"}
     out = frame.copy()
     if column in out.columns:
-        out[column] = out[column].map(lambda v: icons.get(status_key(v), str(v)))
+        def _badge(value) -> str:
+            text = str(value)
+            key = status_key(text)
+            if key not in icons:
+                return text
+            rest = text.split(" · ", 1)[1] if " · " in text else ""
+            return f"{icons[key]} {key}" + (f" · {rest}" if rest else "")
+
+        out[column] = out[column].map(_badge)
     return out
 
 
@@ -163,7 +171,8 @@ def show_priority_dashboard(
                 ("SKU", f"Top 50 menurut {basis} (kolom Rank)"),
                 ("Restock", "prediksi + SS − stok Site 10037 (minimal 0)"),
                 ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier"),
-                ("Stok habis", "hari ini + stok ÷ prediksi harian"),
+                ("Stok habis", "hari ini + stok ÷ prediksi harian; SKU Kosong: tanggal stok mulai 0 menurut riwayat unggahan Data stok Site 10037"),
+                ("Kosong · N hari", "lama stok 0 sejak unggahan pertama yang mencatat stok 0; \"≥\" bila semua unggahan tersimpan sudah 0 (umur sebenarnya bisa lebih lama)"),
                 ("Potensi hilang", "prediksi periode − stok Site 10037; dalam unit (QTY) dan rupiah (sales value)"),
                 ("Urutan", "🔴 Kosong & ada stok di Site 10062/10036 → 🔴 Kosong tanpa stok DC → 🟡 Kurang & ada stok DC → 🟡 Kurang tanpa stok DC → 🟢 Aman"),
                 ("Dalam tiap kelompok", "dampak omzet terbesar lebih dulu (gabungan potensi loss sales value dan QTY), lalu stok habis paling cepat"),
@@ -208,11 +217,39 @@ def show_priority_dashboard(
             )
 
 
+def empty_age(days, since, from_first: bool) -> str:
+    """'12 hari (sejak 1 Nov)'; bila semua unggahan stok tersimpan sudah 0, umur minimal: '≥ 12 hari'."""
+    if days is None or pd.isna(days):
+        return ""
+    days = int(days)
+    if days <= 0 and not from_first:
+        return "mulai hari ini"
+    prefix = "≥ " if from_first else ""
+    return f"{prefix}{days} hari" + (f" (sejak {short_date(since)})" if since and not from_first else "")
+
+
 def restock_view(priority: pd.DataFrame) -> pd.DataFrame:
     out = priority.rename(columns={"sku": "SKU"}).copy()
+    since = out["_kosong_sejak"] if "_kosong_sejak" in out.columns else pd.Series(None, index=out.index)
+    age = out["_lama_kosong"] if "_lama_kosong" in out.columns else pd.Series(None, index=out.index)
+    first = out["_kosong_sejak_awal"] if "_kosong_sejak_awal" in out.columns else pd.Series(False, index=out.index)
+    out["Status"] = [
+        f"{status} · {text}" if status == "Kosong" and (text := empty_age(a, s, bool(f))) else status
+        for status, a, s, f in zip(out["Status"], age, since, first)
+    ]
+
+    def habis_text(day, rate, status, start, from_first) -> str:
+        if status_key(status) == "Kosong":
+            if start:
+                return f"Habis {'≤ ' if from_first else ''}{short_date(start)}"
+            return "Sudah kosong"
+        if day:
+            return short_date(day)
+        return "Tidak habis · prediksi 0" if rate <= 0 else "Tidak habis > 10 tahun"
+
     out["Stok habis"] = [
-        short_date(day) if day else ("Tidak habis · prediksi 0" if rate <= 0 else "–")
-        for day, rate in zip(out["Stok habis"], out["_pred_harian"])
+        habis_text(day, rate, status, start, bool(f))
+        for day, rate, status, start, f in zip(out["Stok habis"], out["_pred_harian"], out["Status"], since, first)
     ]
     return out[["Rank", "SKU", "Produk", "Varian", "Status", "Stok Site 10037", "Stok Site 10062", "Stok Site 10036", "Potensi sales hilang", "Potensi QTY hilang", "Prediksi", "SS", "Restock", "Ambil dari DC", "Stok habis", "Inbound"]]
 

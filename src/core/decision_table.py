@@ -147,12 +147,16 @@ def build_decision_table(
     out["ada_data_stok"] = out["stok"].notna()
 
     if zero_duration is not None and not zero_duration.empty and "sku" in out.columns:
-        zero = zero_duration.rename(columns={"sku": "_sku"})[["_sku", "zero_since", "lama_kosong_hari"]]
+        keep = [c for c in ("zero_since", "lama_kosong_hari", "kosong_sejak_awal") if c in zero_duration.columns]
+        zero = zero_duration.rename(columns={"sku": "_sku"})[["_sku", *keep]]
         key = out["sku"].fillna("").astype(str).str.strip()
         out = out.assign(_sku=key).merge(zero, on="_sku", how="left").drop(columns="_sku")
     if "lama_kosong_hari" not in out.columns:
         out["zero_since"] = None
         out["lama_kosong_hari"] = np.nan
+    if "kosong_sejak_awal" not in out.columns:
+        out["kosong_sejak_awal"] = False
+    out["kosong_sejak_awal"] = out["kosong_sejak_awal"].fillna(False).astype(bool)
 
     for group in period_groups(period, today):
         p = group.prefix
