@@ -173,7 +173,7 @@ def _month_block(ctx: dict, row: pd.Series) -> str:
     mark = " style='background:#eef2ff;font-weight:700'"
     rows = [
         ("Aktual masuk (semua pesanan)", f"{actual_span}" + (f" · {_days(first, cutoff)} hari penuh" if has_actual else ""), act["qty_masuk"], act["sales_masuk"], basis == "masuk"),
-        ("Aktual terjual bersih (nett)", actual_span, act["qty_bersih"], act["sales_bersih"], basis == "bersih"),
+        ("Aktual terjual bersih", actual_span, act["qty_bersih"], act["sales_bersih"], basis == "bersih"),
         ("Prediksi sisa bulan", f"{span_text(month['rest_start'], end)} · {month['rest_days']} hari, laju harian × pola hari", month["rest_qty"], month["rest_sales"], False),
         (f"Proyeksi akhir {ID_MONTHS[first.month - 1]} (aktual {BASIS_TEXT[basis]} + prediksi sisa)", span_text(first, end), month["proj_qty"], month["proj_sales"], True),
     ]
@@ -391,7 +391,7 @@ def analysis_markup(
     other = "masuk" if basis == "bersih" else "terjual bersih"
     guide = (
         "<p class='insight-note'><b>Cara baca angka.</b> <b>Masuk</b> = semua pesanan, termasuk yang batal, Belum Bayar, dan retur (minat beli yang sebenarnya masuk). "
-        "<b>Terjual bersih</b> = masuk dikurangi batal, Belum Bayar, dan retur (yang benar-benar menjadi penjualan, nett). "
+        "<b>Terjual bersih</b> = masuk dikurangi batal, Belum Bayar, dan retur (yang benar-benar menjadi penjualan). "
         "<b>Sales produk</b> = Harga Setelah Diskon × QTY, sebelum voucher; bukan sales bersih Total Pembayaran (dasar target), karena Total Pembayaran per pesanan tidak bisa dibagi tepat per SKU. "
         f"Analisa ini memakai dasar <b>{BASIS_TEXT[basis]}</b>, sama dengan dasar prediksi (setelan Kecualikan batal & retur {'aktif' if basis == 'bersih' else 'mati'}); "
         f"angka {other} tetap ditampilkan sebagai pembanding. Setiap angka disertai tanggalnya.</p>"

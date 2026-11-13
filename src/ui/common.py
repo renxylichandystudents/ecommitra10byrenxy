@@ -457,12 +457,37 @@ def exclude_toggle_card(*, key: str, removed_orders: int, removed_units: float) 
             st.caption("Mengurangi pesanan batal & unit retur")
         with right:
             if value:
-                st.markdown(badge("AKTIF · nilai bersih", "on"), unsafe_allow_html=True)
+                st.markdown(badge("DICENTANG · dasar prediksi bersih", "on"), unsafe_allow_html=True)
                 st.caption(f"Seluruh data latih: {fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur dikeluarkan dari prediksi")
             else:
-                st.markdown(badge("NONAKTIF · termasuk batal & retur", "off"), unsafe_allow_html=True)
+                st.markdown(badge("TIDAK DICENTANG · dasar prediksi masuk", "off"), unsafe_allow_html=True)
                 st.caption(f"Seluruh data latih: {fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur ikut dihitung di prediksi")
     return bool(value)
+
+
+def basis_guide(basis: str, *, cutoff=None) -> None:
+    """Kotak cara baca di atas Ringkasan: dasar prediksi mengikuti centang Kecualikan batal & retur saat analisa dijalankan."""
+    clean = basis == "bersih"
+    upto = f" Data aktual terakhir yang lengkap: {fmt_date(cutoff)}." if cutoff else ""
+    setting = ("<b>dicentang</b> → semua prediksi di halaman ini memakai <b>dasar BERSIH</b> (tanpa pesanan batal, Belum Bayar, dan unit retur)"
+               if clean else
+               "<b>tidak dicentang</b> → semua prediksi di halaman ini memakai <b>dasar MASUK</b> (semua status pesanan, termasuk yang nanti batal atau diretur)")
+    compare = "terjual bersih" if clean else "masuk"
+    st.markdown(
+        "<div class='stat-card' style='border-left:4px solid #1b3da6;margin:.2rem 0 .8rem'>"
+        "<div class='readable-metric-label'>Cara baca Ringkasan</div>"
+        "<div style='font-size:var(--fs-sm);line-height:1.55'>"
+        f"1. Analisa ini dijalankan dengan <b>Kecualikan batal &amp; retur</b> {setting}.<br>"
+        "2. Angka aktual selalu ditampilkan dua: <b>masuk</b> = semua pesanan yang masuk ke toko (minat beli); "
+        "<b>bersih</b> = masuk − batal − Belum Bayar − retur (yang benar-benar menjadi penjualan).<br>"
+        f"3. Untuk menilai ketepatan prediksi, bandingkan prediksi dengan angka <b>{compare}</b>; angka yang menjadi dasar diberi tanda atau latar biru muda.<br>"
+        "4. Berlaku untuk QTY (unit) dan sales. Sales produk = Harga Setelah Diskon × QTY (dasar prediksi per SKU); "
+        "sales bersih toko = Total Pembayaran − batal − Belum Bayar − retur (dasar target, hanya per toko).<br>"
+        f"5. Setiap angka menyebut periodenya. Hari ini belum selesai, jadi pembanding harian memakai hari penuh terakhir.{upto}<br>"
+        "Untuk mengganti dasar: Upload data › Setelan analisa, ubah centang, lalu jalankan analisa lagi."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def exclude_status_card(active: bool, *, removed_orders: int, removed_units: float, span: str = "") -> None:
@@ -474,11 +499,11 @@ def exclude_status_card(active: bool, *, removed_orders: int, removed_units: flo
             st.caption("Setelan analisa ini. Ubah di Upload data › Setelan analisa, lalu jalankan analisa.")
         with right:
             if active:
-                st.markdown(badge("AKTIF · nilai bersih", "on"), unsafe_allow_html=True)
-                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur {span}tidak ikut dilatih; prediksi = permintaan bersih")
+                st.markdown(badge("DICENTANG · dasar prediksi bersih", "on"), unsafe_allow_html=True)
+                st.caption(f"{fmt_num(removed_orders)} pesanan batal/Belum Bayar dan {fmt_qty(removed_units)} unit retur {span}tidak ikut dilatih")
             else:
-                st.markdown(badge("NONAKTIF · termasuk batal & retur", "off"), unsafe_allow_html=True)
-                st.caption(f"{fmt_num(removed_orders)} pesanan batal dan {fmt_qty(removed_units)} unit retur {span}ikut dilatih; prediksi = permintaan masuk")
+                st.markdown(badge("TIDAK DICENTANG · dasar prediksi masuk", "off"), unsafe_allow_html=True)
+                st.caption(f"{fmt_num(removed_orders)} pesanan batal/Belum Bayar dan {fmt_qty(removed_units)} unit retur {span}ikut dilatih")
 
 
 def explain(items, *, title: str | None = None, target=None) -> None:

@@ -2,6 +2,13 @@
 
 Diperbarui: 13 November 2026.
 
+## Centang "Kecualikan batal & retur" = dasar prediksi; cara baca di Ringkasan (14 Nov 2026)
+
+- Centang tetap di Upload data › Setelan analisa (ditentukan sebelum analisa dijalankan). Dicentang = dasar BERSIH (batal, Belum Bayar, unit retur tidak dilatih; `cancelled_status_mask`), tidak dicentang = dasar MASUK (semua status). Keterangan di bawah centang ditulis ulang.
+- Kotak baru "Cara baca Ringkasan" (`common.basis_guide`) di paling atas Ringkasan: dasar analisa yang dibuka, arti masuk/bersih, pembanding prediksi, sales produk vs sales bersih toko, hari penuh terakhir.
+- Kartu Kecualikan batal & retur: "DICENTANG · dasar prediksi bersih" / "TIDAK DICENTANG · dasar prediksi masuk".
+- Istilah asing di Ringkasan diganti: "nett" dihapus, "All SKU" → "semua SKU".
+
 ## Audit halaman Ringkasan: masuk vs bersih (QTY & sales), periode, angka lengkap (14 Nov 2026)
 
 - Prioritas hari ini: kartu hari ini bertanggal + sales produk + pembanding "terjual bersih/masuk <tgl>" dengan arah selisih ("prediksi X% lebih rendah dari ..."); bulan berjalan menyebut dasar dan sales produk; Kebutuhan stok = prediksi + SS, stok, kurang (unit); Stok kurang "N dari 50 SKU" dengan periode.

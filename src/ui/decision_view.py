@@ -311,7 +311,7 @@ def decision_table_guide(meta: dict | None, metric: str) -> None:
             ("Dasar tabel ini", f"{word.upper()}, sama dengan dasar prediksi (setelan Kecualikan batal & retur {'aktif' if basis == 'bersih' else 'mati'}). "
              "Kolom yang menjadi dasar ditandai (dasar)"),
             (f"Aktual · {sold}", "data nyata pada periode penjualan yang dipilih di atas, dihitung dari semua status pesanan. "
-             "Terjual bersih = masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang retur (nett). "
+             "Terjual bersih = masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang retur. "
              "Masuk = semua pesanan yang masuk, termasuk yang kemudian batal, belum dibayar, atau diretur"),
             ("Sales", "sales produk = Harga Setelah Diskon × QTY, sebelum voucher; bukan sales bersih Total Pembayaran (dasar target), "
              "karena Total Pembayaran per pesanan tidak bisa dibagi tepat per SKU"),
@@ -588,7 +588,7 @@ def top50_matrix(
                 "Prediksi QTY": fmt_qty(round(view[f"{p}_qty_exp"].sum() if f"{p}_qty_exp" in view.columns else view[f"{p}_qty"].sum())),
                 "Prediksi sales produk": fmt_idr(pred_sales),
                 "Kontribusi aktual Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)} (sales produk bersih seluruh toko)" if share_base > 0 else "-",
-                "Kontribusi prediksi Top 50": f"{fmt_pct(pred_share)} dari {fmt_idr(pred_base)} (prediksi All SKU)" if pred_base > 0 else "-",
+                "Kontribusi prediksi Top 50": f"{fmt_pct(pred_share)} dari {fmt_idr(pred_base)} (prediksi semua SKU)" if pred_base > 0 else "-",
                 "Sales bersih seluruh toko (dasar target)": fmt_idr(float(act["store_net"])) if "store_net" in act else "-",
             }
         )
@@ -614,13 +614,13 @@ def top50_matrix(
             ("Aktual pembanding (tanggal)", "baris hari: hari penuh terakhir (data sampai ≥ 23:00; hari ini masih berjalan). Baris bulan: bulan kalender penuh terakhir, "
              "tanggal 1 s.d. akhir bulan" + (f"; {extra_text.lstrip('; ')}" if extra_text else "") + ". Periode prediksi dan aktual sengaja beda: aktual sudah terjadi, prediksi belum"),
             ("QTY / Sales produk masuk", "semua pesanan Top 50 pada tanggal itu, termasuk yang kemudian batal, belum dibayar, atau diretur. Untuk melihat minat beli yang sebenarnya masuk"),
-            ("QTY terjual / Sales produk bersih", "masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang yang diretur. Yang benar-benar menjadi penjualan (nett). "
+            ("QTY terjual / Sales produk bersih", "masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang yang diretur. Yang benar-benar menjadi penjualan. "
              "Teks abu-abu = berapa persen hilang dari masuk karena batal / belum bayar / retur"),
             ("Sales produk", "Harga Setelah Diskon × QTY per produk, belum dipotong voucher. Dasar prediksi, karena bisa dihitung per SKU"),
             ("Sales bersih seluruh toko (dasar target)", "Total Pembayaran semua pesanan toko − batal − Belum Bayar − retur, sudah dipotong voucher. "
              "Angka yang sama dengan kartu Sales bersih dan target; hanya bisa dihitung per toko, bukan per SKU"),
             ("Kontribusi aktual", "sales produk bersih Top 50 ÷ sales produk bersih seluruh toko pada tanggal pembanding yang sama"),
-            ("Kontribusi prediksi", "prediksi sales Top 50 ÷ prediksi sales All SKU (angka yang sama dengan kartu Prediksi sales · All SKU)"),
+            ("Kontribusi prediksi", "prediksi sales Top 50 ÷ prediksi sales semua SKU (angka yang sama dengan kartu Prediksi sales · semua SKU)"),
             ("Prediksi hari ini", "prediksi bulan ÷ jumlah hari × pola hari ini (hari dalam minggu, gajian, tanggal kembar seperti 11.11), sama dengan Pantauan harian dan breakdown per tanggal"),
         ]
     )

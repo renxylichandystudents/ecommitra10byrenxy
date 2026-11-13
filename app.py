@@ -104,7 +104,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
-from src.ui.common import DEFAULT_NOTE, apply_saved_period, install_plotly_locale, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter, table_toolbar
+from src.ui.common import DEFAULT_NOTE, apply_saved_period, basis_guide, install_plotly_locale, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter, table_toolbar
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
@@ -4758,7 +4758,7 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
             "<div class='qty-metric'>Periode</div>"
             f"<div class='qty-head-mid'>Prediksi QTY & sales produk (batang) vs {BASIS_WORD[basis]}</div>"
             "<div class='qty-side'>"
-            f"<div class='qty-base{' basis' if basis == 'bersih' else ''}'>Terjual bersih<small>nett</small></div>"
+            f"<div class='qty-base{' basis' if basis == 'bersih' else ''}'>Terjual bersih<small>benar-benar terjual</small></div>"
             f"<div class='qty-base{' basis' if basis == 'masuk' else ''}'>Masuk<small>semua pesanan</small></div>"
             "</div>"
         )
@@ -4940,7 +4940,7 @@ def show_qty_forecast_board(
     word = BASIS_WORD[basis]
     if basis == "bersih":
         basis_text = (
-            "Kartu ini menganalisa penjualan BERSIH (nett): prediksi dibanding barang yang benar-benar terjual, tanpa pesanan batal, "
+            "Kartu ini menganalisa penjualan BERSIH: prediksi dibanding barang yang benar-benar terjual, tanpa pesanan batal, "
             "Belum Bayar, dan barang retur. Ini karena prediksi dihitung dengan setelan Kecualikan batal & retur aktif. "
             "Kolom Masuk tetap ditampilkan (abu-abu) agar terlihat semua pesanan yang benar-benar masuk."
         )
@@ -4954,7 +4954,7 @@ def show_qty_forecast_board(
     explain(
         [
             ("Cara baca satu kartu", f"tiap baris membandingkan PREDIKSI (batang, tengah) dengan {word.upper()} (kolom kanan yang diberi latar biru muda) pada periode di kiri"),
-            ("Terjual bersih (nett)", "pesanan masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang yang diretur; yang benar-benar menjadi penjualan"),
+            ("Terjual bersih", "pesanan masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang yang diretur; yang benar-benar menjadi penjualan"),
             ("Masuk (semua pesanan)", "semua pesanan yang masuk ke toko pada tanggal itu, termasuk yang kemudian batal, belum dibayar, atau diretur; menunjukkan minat beli sebenarnya"),
             ("Angka Rupiah", "sales produk = Harga Setelah Diskon × QTY, sebelum voucher. Prediksi Rupiah = prediksi QTY × harga bersih 4 minggu terakhir. "
              "Ini bukan sales bersih Total Pembayaran (dasar target), karena Total Pembayaran per pesanan tidak bisa dibagi tepat per SKU"),
@@ -7344,8 +7344,13 @@ def filter_resume_orders(
                 st.session_state["train-exclude"] = training_exclude()
             st.checkbox("Kecualikan batal & retur", key="train-exclude", on_change=lambda: save_training_exclude(bool(st.session_state.get("train-exclude"))))
             st.markdown(
-                "<div class='field-hint'>Setelan tersimpan untuk setiap analisa baru.<br>• Aktif: pesanan batal & unit retur tidak ikut dilatih (permintaan bersih).<br>"
-                "• Membuka analisa lama tidak mengubah setelan ini.</div>",
+                "<div class='field-hint'>Centang ini menentukan <b>dasar semua prediksi</b> pada analisa yang akan dijalankan:<br>"
+                "• <b>Dicentang → dasar BERSIH</b>: pesanan batal, pesanan Belum Bayar, dan unit retur tidak ikut dilatih. "
+                "Prediksi = perkiraan barang yang benar-benar terjual.<br>"
+                "• <b>Tidak dicentang → dasar MASUK</b>: semua status pesanan ikut dilatih. "
+                "Prediksi = perkiraan semua pesanan yang masuk, termasuk yang nanti batal, tidak dibayar, atau diretur.<br>"
+                "• Angka aktual di Ringkasan selalu menampilkan keduanya (masuk dan bersih); prediksi dibandingkan dengan yang sesuai dasarnya.<br>"
+                "• Setelan tersimpan untuk analisa berikutnya. Membuka analisa lama tetap memakai setelan yang dipakai saat analisa itu dijalankan.</div>",
                 unsafe_allow_html=True,
             )
         st.session_state[years_state] = checked_years
@@ -8276,7 +8281,7 @@ def _running_month_cards(decision: pd.DataFrame, all_sku: pd.DataFrame | None, o
         total = whole["actual_sales"] + whole["rest_sales"]
         cards[3].markdown(
             "<div class='stat-card'>"
-            f"<div class='readable-metric-label'>Prediksi sales produk {html.escape(name)} · All SKU</div>"
+            f"<div class='readable-metric-label'>Prediksi sales produk {html.escape(name)} · semua SKU</div>"
             f"<div class='readable-metric-value'>{html.escape(format_idr(total))}</div>"
             f"<div class='metric-hint'>{html.escape(running_month_hint(whole, whole['actual_sales'], whole['rest_sales'], format_idr, 'aktual sales produk ' + sales_word))}"
             " · seluruh toko" + _net_month_hint(orders_all if orders_all is not None else orders) + "</div>"
@@ -8425,7 +8430,7 @@ def show_analysis_movement(
                     pattern_html = _today_pattern_hint(orders_all if orders_all is not None else orders, today, total_sales)
                 cards[3].markdown(
                     "<div class='stat-card'>"
-                    f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
+                    f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · semua SKU</div>"
                     f"<div class='readable-metric-value'>{html.escape(format_idr(total_sales))}</div>"
                     f"<div class='metric-hint'>{format_number(len(all_sku), 0)} SKU dianalisa"
                     + ("" if is_day else " · sales produk, mulai hari ini") + f"{pattern_html}</div>"
@@ -9071,7 +9076,7 @@ with PAGE_ROOT.container(key="page-root"):
         explain(
             [
                 ("Masuk", "semua pesanan yang masuk ke toko pada periode itu, termasuk yang kemudian batal, belum dibayar, atau diretur (minat beli yang sebenarnya)"),
-                ("Bersih", "masuk − batal − Belum Bayar − retur: yang benar-benar menjadi penjualan (nett). Persen di tiap kartu = bagian masuk yang menjadi bersih"),
+                ("Bersih", "masuk − batal − Belum Bayar − retur: yang benar-benar menjadi penjualan. Persen di tiap kartu = bagian masuk yang menjadi bersih"),
                 ("Sales di kartu ini", "Total Pembayaran per pesanan (sudah dipotong voucher & koin), angka yang sama dengan Seller Centre dan dasar target. "
                  "Berbeda dengan sales produk (Harga Setelah Diskon × QTY) yang dipakai prediksi dan tabel Top 50, sehingga sales produk lebih besar"),
                 ("QTY", "jumlah unit barang; QTY bersih = unit selain batal & Belum Bayar dikurangi unit retur"),
@@ -9106,6 +9111,10 @@ with PAGE_ROOT.container(key="page-root"):
     _tick("persiapan menu")
     if sheet == "Ringkasan":
         with dashboard_slot:
+            basis_guide(
+                (TABLE_META or {}).get("basis") or ("bersih" if exclude_return_cancel else "masuk"),
+                cutoff=(TABLE_META or {}).get("cutoff"),
+            )
             show_priority_dashboard(
                 enriched,
                 today=today,
