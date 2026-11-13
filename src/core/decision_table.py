@@ -210,6 +210,9 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
 
     Hari = hari penuh terakhir sebelum hari ini (hari ini masih berjalan, sama dengan kartu Dashboard);
     bulan = bulan penuh terakhir ("Aktual Okt 2026"); periode tambahan = 3/6/12 bulan terakhir s.d. kemarin.
+    `orders` sebaiknya berisi semua status: masuk = semua pesanan (termasuk batal, Belum Bayar, retur);
+    bersih (qty/sales) = tanpa batal & Belum Bayar, setelah retur; sales = Harga Setelah Diskon × QTY (sales produk);
+    store_net = sales bersih seluruh toko (Total Pembayaran − batal − Belum Bayar − retur, dasar target).
     """
     out: dict[str, dict[str, float]] = {}
     if orders is None or orders.empty:
@@ -223,7 +226,6 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
         ref = min(ref, last_stamp.normalize())
     full_days = days[days < ref]
     last_day = full_days.max() if full_days.notna().any() else ref - pd.Timedelta(days=1)
-    in_top = orders["item_key"].astype(str).isin(set(keys))
     month_lo, month_hi = last_full_month(last_day.date())
     spans = {"d": (last_day, last_day + pd.Timedelta(days=1)), "m": (pd.Timestamp(month_lo), pd.Timestamp(month_hi) + pd.Timedelta(days=1))}
     labels = {"d": format_period_label("aktual_hari", last_day.date()), "m": format_period_label("aktual_bulan", month_lo)}
@@ -233,14 +235,27 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
         prev_lo, prev_hi, prev_label = previous_calendar_period(period, ref.date())
         spans["p"] = (pd.Timestamp(prev_lo), pd.Timestamp(prev_hi) + pd.Timedelta(days=1))
         labels["p"] = f"Aktual {prev_label}"
+    from src.core.metrics import normalize_lines, order_metrics
+
+    # Semua status (batal, Belum Bayar, retur) ikut dibaca agar "masuk" dan "bersih" bisa ditampilkan berdampingan.
+    lines = normalize_lines(orders)
+    line_days = pd.to_datetime(lines["order_time"], errors="coerce").dt.normalize()
+    in_top = lines["item_key"].astype(str).isin(set(keys))
+    sold = ~lines["is_cancel"] & ~lines["is_open"]
+    net_qty = (lines["gross_qty"] - np.minimum(lines["returned_qty"], lines["gross_qty"])).where(sold, 0.0)
+    net_sales = (lines["line_value"] - lines["return_value"]).where(sold, 0.0)
     for prefix, (lo, hi) in spans.items():
-        mask = days.ge(lo) & days.lt(hi)
-        part = orders.loc[mask & in_top]
+        mask = line_days.ge(lo) & line_days.lt(hi)
+        top = mask & in_top
         out[prefix] = {
             "label": labels.get(prefix, f"{PERIOD_MONTHS.get(period, 0)} bulan terakhir"),
-            "qty": float(part["qty"].sum()),
-            "sales": float(part["sales"].sum()) if "sales" in part.columns else 0.0,
-            "store_sales": float(orders.loc[mask, "sales"].sum()) if "sales" in orders.columns else 0.0,
+            "start": lo.date(), "end": (hi - pd.Timedelta(days=1)).date(),
+            "qty": float(net_qty[top].sum()),
+            "sales": float(net_sales[top].sum()),
+            "qty_masuk": float(lines.loc[top, "gross_qty"].sum()),
+            "sales_masuk": float(lines.loc[top, "line_value"].sum()),
+            "store_sales": float(net_sales[mask].sum()),
+            "store_net": float(order_metrics(lines, lo.date(), (hi - pd.Timedelta(days=1)).date(), normalized=True)["sales_bersih"]),
         }
     return out
 

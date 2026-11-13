@@ -2,6 +2,13 @@
 
 Diperbarui: 13 November 2026.
 
+## Ringkasan total Top 50: aktual masuk vs bersih (13 Nov 2026 malam)
+
+- Masukan pengguna: "Aktual Okt 2026" tidak jelas sales apa dan tanggal berapa; perlu angka bersih (nett) sekaligus semua data real yang masuk.
+- `decision_table.period_actuals` kini membaca semua status (`orders_all`) dan mengembalikan: `qty_masuk`/`sales_masuk` (semua pesanan Top 50, termasuk batal, Belum Bayar, retur), `qty`/`sales` bersih (tanpa batal & Belum Bayar, setelah retur; tidak lagi ikut saklar), `store_sales` (sales produk bersih toko), `store_net` (sales bersih toko = Total Pembayaran − batal − Belum Bayar − retur), `start`/`end`.
+- Tabel (`decision_view.top50_matrix`): kolom Aktual pembanding (tanggal) menulis rentang lengkap ("Okt 2026 · 1 Oktober 2026 – 31 Oktober 2026 (31 hari)", "12 November 2026 (1 hari, hari penuh terakhir)"); QTY masuk, QTY terjual bersih, Sales produk masuk, Sales produk bersih (+ "x% lebih kecil dari masuk"); Prediksi sales produk; Sales bersih seluruh toko (dasar target). Penjelasan ditulis ulang untuk pembaca awam, termasuk kolom mana yang dibandingkan dengan prediksi menurut setelan Kecualikan batal & retur.
+- Tes: `test_period_actuals_gross_and_net_with_dates`.
+
 ## Pergerakan Top 50: kolom Prediksi bulan berjalan (13 Nov 2026 malam)
 
 - Grup kolom baru **Prediksi bulan berjalan (Nov 2026)** di antara Prediksi hari ini dan Prediksi 30 hari: Sales produk & QTY per SKU = aktual SKU tgl 1 s.d. hari penuh terakhir + laju prediksi harian × pola hari sisa bulan (aturan sama dengan kartu Prediksi bulan berjalan, `app._running_month_actuals`, `_daily_rate`). Sub-teks sel "aktual 1–12 Nov: …"; angka ▲/▼ = perubahan laju antara tanggal Dari–Sampai × pola sisa bulan. Excel ikut 4 kolom baru.

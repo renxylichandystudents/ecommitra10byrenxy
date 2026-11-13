@@ -388,8 +388,9 @@ def top50_matrix(
     today: date,
     resume_label: str,
     all_sku: pd.DataFrame | None = None,
+    exclude: bool | None = None,
 ) -> None:
-    """R5: baris Hari ini/Prediksi bulan/+periode, kolom actual, prediksi, kontribusi sales Top 50."""
+    """R5: baris Hari ini/Prediksi bulan/+periode; aktual masuk vs bersih, prediksi, kontribusi sales Top 50."""
     groups = period_groups(period, today)
     rows = []
     for group in groups:
@@ -399,7 +400,19 @@ def top50_matrix(
         span = fmt_date(today, short=True) if group.days == 1 else f"{fmt_date(today, short=True)} – {fmt_date(end.date(), short=True)}"
         qty_act = float(act.get("qty", 0.0))
         sales_act = float(act.get("sales", 0.0))
+        qty_in = float(act.get("qty_masuk", qty_act))
+        sales_in = float(act.get("sales_masuk", sales_act))
         share_base = float(act.get("store_sales", 0.0))
+        lo, hi = act.get("start"), act.get("end")
+        if lo is None:
+            when = act.get("label", "-")
+        elif lo == hi:
+            when = f"{fmt_date(lo)} (1 hari, hari penuh terakhir)"
+        else:
+            when = f"{act.get('label', '').removeprefix('Aktual ')} · {fmt_date(lo)} – {fmt_date(hi)} ({(hi - lo).days + 1} hari)"
+
+        def _drop(net: float, gross: float) -> str:
+            return f"<br><span style='color:#64748b;font-size:.85em'>{fmt_pct((gross - net) / gross * 100, 1)} lebih kecil dari masuk</span>" if gross > 0 else ""
         share = sales_act / share_base * 100 if share_base > 0 else np.nan
         pred_sales = float(view[f"{p}_sales_exp"].sum() if f"{p}_sales_exp" in view.columns else view[f"{p}_sales"].sum())
         pred_base = 0.0
@@ -410,14 +423,17 @@ def top50_matrix(
         pred_share = pred_sales / pred_base * 100 if pred_base > 0 else np.nan
         rows.append(
             {
-                "Periode": f"{group.label} · {span}",
-                "Aktual pembanding": act.get("label", "-"),
-                "QTY aktual": fmt_qty(qty_act),
-                "Sales value aktual": fmt_idr(sales_act),
+                "Periode prediksi": f"{group.label} · {span}",
+                "Aktual pembanding (tanggal)": when,
+                "QTY masuk": fmt_qty(qty_in),
+                "QTY terjual bersih": fmt_qty(qty_act) + _drop(qty_act, qty_in),
+                "Sales produk masuk": fmt_idr(sales_in),
+                "Sales produk bersih": fmt_idr(sales_act) + _drop(sales_act, sales_in),
                 "Prediksi QTY": fmt_qty(round(view[f"{p}_qty_exp"].sum() if f"{p}_qty_exp" in view.columns else view[f"{p}_qty"].sum())),
-                "Prediksi sales value": fmt_idr(pred_sales),
-                "Kontribusi aktual Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)} (aktual seluruh toko)" if share_base > 0 else "-",
+                "Prediksi sales produk": fmt_idr(pred_sales),
+                "Kontribusi aktual Top 50": f"{fmt_pct(share)} dari {fmt_idr(share_base)} (sales produk bersih seluruh toko)" if share_base > 0 else "-",
                 "Kontribusi prediksi Top 50": f"{fmt_pct(pred_share)} dari {fmt_idr(pred_base)} (prediksi All SKU)" if pred_base > 0 else "-",
+                "Sales bersih seluruh toko (dasar target)": fmt_idr(float(act["store_net"])) if "store_net" in act else "-",
             }
         )
     frame = pd.DataFrame(rows)
@@ -432,16 +448,24 @@ def top50_matrix(
     )
     extra = next((g.label for g in groups if g.extra), None)
     extra_text = f"; {extra} = {extra.lower()} terakhir s.d. kemarin" if extra else ""
+    basis = ("Prediksi dilatih tanpa batal & retur (setelan Kecualikan batal & retur aktif), jadi bandingkan prediksi dengan kolom bersih."
+             if exclude else "Prediksi dilatih dengan semua pesanan (setelan Kecualikan batal & retur mati), jadi bandingkan prediksi dengan kolom masuk."
+             if exclude is not None else "")
     explain(
         [
-            ("Aktual hari", "hari penuh terakhir sebelum hari ini (hari ini masih berjalan)"),
-            ("Aktual bulan", "bulan penuh terakhir" + (f"; {extra_text.lstrip('; ')}" if extra_text else "")),
-            ("Sales", "Harga setelah diskon × QTY, sesuai setelan Kecualikan batal & retur analisa ini"),
-            ("Kontribusi aktual", "sales aktual Top 50 ÷ sales aktual seluruh toko pada tanggal aktual pembanding yang sama"),
+            ("Cara baca singkat", "tiap baris = satu periode prediksi (kiri) dan periode aktual yang sudah selesai sebagai pembanding (kolom tanggal). "
+             "Aktual dibagi dua: masuk = semua pesanan yang benar-benar masuk ke toko, bersih = yang akhirnya benar-benar terjual. " + basis),
+            ("Aktual pembanding (tanggal)", "baris hari: hari penuh terakhir (data sampai ≥ 23:00; hari ini masih berjalan). Baris bulan: bulan kalender penuh terakhir, "
+             "tanggal 1 s.d. akhir bulan" + (f"; {extra_text.lstrip('; ')}" if extra_text else "") + ". Periode prediksi dan aktual sengaja beda: aktual sudah terjadi, prediksi belum"),
+            ("QTY / Sales produk masuk", "semua pesanan Top 50 pada tanggal itu, termasuk yang kemudian batal, belum dibayar, atau diretur. Untuk melihat minat beli yang sebenarnya masuk"),
+            ("QTY terjual / Sales produk bersih", "masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang yang diretur. Yang benar-benar menjadi penjualan (nett). "
+             "Teks abu-abu = berapa persen hilang dari masuk karena batal / belum bayar / retur"),
+            ("Sales produk", "Harga Setelah Diskon × QTY per produk, belum dipotong voucher. Dasar prediksi, karena bisa dihitung per SKU"),
+            ("Sales bersih seluruh toko (dasar target)", "Total Pembayaran semua pesanan toko − batal − Belum Bayar − retur, sudah dipotong voucher. "
+             "Angka yang sama dengan kartu Sales bersih dan target; hanya bisa dihitung per toko, bukan per SKU"),
+            ("Kontribusi aktual", "sales produk bersih Top 50 ÷ sales produk bersih seluruh toko pada tanggal pembanding yang sama"),
             ("Kontribusi prediksi", "prediksi sales Top 50 ÷ prediksi sales All SKU (angka yang sama dengan kartu Prediksi sales · All SKU)"),
-            ("Kenapa dasarnya berbeda", "aktual = transaksi yang sudah terjadi (kemarin / bulan lalu); prediksi = perkiraan periode berjalan. Bandingkan aktual dengan aktual, prediksi dengan prediksi"),
             ("Prediksi hari ini", "prediksi bulan ÷ jumlah hari × pola hari ini (hari dalam minggu, gajian, tanggal kembar seperti 11.11), sama dengan Pantauan harian dan breakdown per tanggal"),
-            ("Beda dengan kartu Sales bersih", "kartu itu memakai Total Pembayaran per pesanan (setelah voucher, termasuk ongkir)"),
         ]
     )
 

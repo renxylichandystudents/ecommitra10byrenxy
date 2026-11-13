@@ -267,6 +267,34 @@ def test_period_actuals_skip_partial_last_day():
     assert out["d"]["qty"] == 5.0 and "7" in out["d"]["label"]
 
 
+def test_period_actuals_gross_and_net_with_dates():
+    from datetime import date
+
+    from src.core.decision_table import period_actuals
+    from src.ingest import clean_order_frame
+
+    def row(order, status, sku, qty, day, *, returned=0, reason=""):
+        return {"No. Pesanan": order, "Status Pesanan": status, "Alasan Pembatalan": reason, "Waktu Pesanan Dibuat": day,
+                "Nomor Referensi SKU": sku, "Nama Produk": f"Produk {sku}", "Nama Variasi": "", "Harga Setelah Diskon": 10_000,
+                "Jumlah": qty, "Returned quantity": returned, "Total Pembayaran": qty * 9_000, "Username (Pembeli)": "a"}
+
+    raw = pd.DataFrame([
+        row("O1", "Selesai", "100", 4, "2026-10-05 10:00", returned=1),
+        row("O2", "Batal", "100", 2, "2026-10-06 10:00", reason="Ubah pesanan"),
+        row("O3", "Belum Bayar", "100", 1, "2026-10-07 10:00"),
+        row("O4", "Selesai", "200", 5, "2026-10-08 10:00"),
+        row("O5", "Selesai", "100", 1, "2026-11-10 23:30"),
+    ])
+    orders = clean_order_frame(raw)
+    key = str(orders.loc[orders["sku"].astype(str) == "100", "item_key"].iloc[0])
+    out = period_actuals(orders, [key], period="bulan", today=date(2026, 11, 11))["m"]
+    assert (out["start"], out["end"]) == (date(2026, 10, 1), date(2026, 10, 31))
+    assert out["qty_masuk"] == 7 and out["qty"] == 3          # 4 + 2 + 1 masuk; bersih 4 − 1 retur
+    assert out["sales_masuk"] == 70_000 and out["sales"] == 30_000
+    assert out["store_sales"] == 80_000                         # + SKU 200 (5 × 10.000)
+    assert out["store_net"] == 4 * 9_000 - 10_000 + 5 * 9_000   # Total Pembayaran − retur (batal & Belum Bayar keluar)
+
+
 def test_ads_plan_never_sells_beyond_stock():
     from src.core import ads_strategy as A
     from src.core.ads_fixed import stock_capped

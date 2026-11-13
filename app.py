@@ -8879,11 +8879,12 @@ with PAGE_ROOT.container(key="page-root"):
         else:
             top50_matrix(
                 shown,
-                period_actuals(orders, shown["item_key"].astype(str).tolist(), period=period, today=today),
+                period_actuals(orders_all if orders_all is not None else orders, shown["item_key"].astype(str).tolist(), period=period, today=today),
                 period=period,
                 today=today,
                 resume_label=resume_label,
                 all_sku=enriched,
+                exclude=exclude_return_cancel,
             )
             legacy_view = apply_horizon_slices(shown, period, today)
             show_qty_forecast_board(
