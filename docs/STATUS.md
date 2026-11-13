@@ -2,6 +2,16 @@
 
 Diperbarui: 13 November 2026.
 
+## Istilah sales tidak bermakna ganda (13 Nov 2026 malam)
+
+- Pertanyaan pengguna: "Pencapaian s.d. 12 Nov Rp 1.551.146.267" vs "aktual 1–12 Nov: Rp 1.773.338.194" di kartu bulan berjalan. Keduanya beda pengertian: **sales bersih** = Total Pembayaran − batal − Belum Bayar − retur (sudah dipotong voucher; dasar target) vs **sales produk** = Harga Setelah Diskon × QTY terjual (dasar prediksi). Rasio bulan ini ±0,87. Angka & rumus tidak diubah, hanya label dan penjelasan.
+- Pencapaian (`targets_view.achievement_line`, dipakai Ringkasan/Data/Laporan/Kalkulator): "Pencapaian · sales bersih 1 Nov 2026 – 12 Nov 2026 Rp … (hari penuh terakhir; 13 Nov 2026 belum penuh, tidak dihitung) = …% dari target … · target berjalan (pola hari) s.d. 12 Nov 2026 …".
+- Pergerakan › Prediksi bulan berjalan: "aktual sales produk 1–12 Nov" / "aktual terjual 1–12 Nov"; kartu All SKU bernama "Prediksi sales produk …" + baris **Dalam sales bersih (dasar target)**: aktual = Pencapaian kartu Sales bersih, proyeksi = Pantauan harian (`app._net_month_hint` → `month_outlook`). Penjelasan Pergerakan menambah "Sales di bagian ini = sales produk".
+- Prediksi vs aktual: kartu "Aktual omzet bersih" (padahal sales produk SKU berprediksi) → **Aktual sales produk**; kolom/legend "Prediksi omzet", "Aktual omzet", "Aktual SKU" → "Prediksi sales produk" / "Aktual sales produk".
+- Laporan: penjelasan Sales bersih kini menyebut Belum Bayar & target berpola hari (dulu "prorata hari kalender", sudah tidak berlaku); tabel produk terlaris "Sales produk"; kartu prediksi 30 hari menyebut sales produk 30 hari ke depan vs target bulan (sales bersih). "sales produk bersih" → "sales produk".
+- Exposure: "Omzet 30 hari" (prediksi × harga × 30) → **Prediksi omzet 30 hari**, karena di Kapasitas gudang "Omzet 30 hari" berarti penjualan 30 hari terakhir.
+- Tes: `test_achievement_line_names_net_sales_and_dates`.
+
 ## Restock prioritas: umur kosong & tanggal stok habis (13 Nov 2026)
 
 - Status SKU Kosong kini "Kosong · 8 hari (sejak 5 Nov 2026)" (dari `stock_zero_duration`: unggahan pertama dengan stok 0 di rangkaian kosong terakhir Data stok Site 10037). Bila semua unggahan tersimpan sudah 0 (`kosong_sejak_awal`), ditulis "≥ N hari" karena umur sebenarnya tidak diketahui.

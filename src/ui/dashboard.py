@@ -116,7 +116,7 @@ def running_month_parts(table: pd.DataFrame, orders: pd.DataFrame | None, orders
     }
 
 
-def running_month_hint(parts: dict, actual: float, rest: float, fmt) -> str:
+def running_month_hint(parts: dict, actual: float, rest: float, fmt, actual_word: str = "aktual") -> str:
     month = MONTHS_SHORT[parts["month_first"].month - 1]
 
     def span(lo: date, hi: date) -> str:
@@ -124,7 +124,7 @@ def running_month_hint(parts: dict, actual: float, rest: float, fmt) -> str:
 
     out = []
     if parts["cutoff"] >= parts["month_first"]:
-        out.append(f"aktual {span(parts['month_first'], parts['cutoff'])}: {fmt(actual)}")
+        out.append(f"{actual_word} {span(parts['month_first'], parts['cutoff'])}: {fmt(actual)}")
     if parts["rest_start"] <= parts["month_end"]:
         out.append(f"prediksi {span(parts['rest_start'], parts['month_end'])}: {fmt(rest)}")
     return " + ".join(out)
@@ -133,7 +133,7 @@ def running_month_hint(parts: dict, actual: float, rest: float, fmt) -> str:
 def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date) -> tuple[float, str]:
     """(prediksi QTY bulan berjalan Top 50, keterangan)."""
     parts = running_month_parts(table, orders, orders_all, today)
-    return parts["actual_qty"] + parts["rest_qty"], running_month_hint(parts, parts["actual_qty"], parts["rest_qty"], fmt_num)
+    return parts["actual_qty"] + parts["rest_qty"], running_month_hint(parts, parts["actual_qty"], parts["rest_qty"], fmt_num, "aktual terjual")
 
 
 def show_priority_dashboard(

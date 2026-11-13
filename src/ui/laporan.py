@@ -285,7 +285,7 @@ def _s_summary(s: dict) -> None:
         lines.append(f"Sales bersih {fmt_idr(k['sales_bersih'])} = {fmt_pct(k['target_pct'], 1)} dari target periode {fmt_idr(k['target'])}.")
     if np.isfinite(k.get("growth") or np.nan):
         lines.append(f"{'Naik' if k['growth'] >= 0 else 'Turun'} {fmt_pct(abs(k['growth']), 1)} dibanding periode sebelumnya ({s['meta']['periode_lalu']}).")
-    lines.append(f"ROAS iklan {fmt_num(ads['roas'], 1)} vs target {fmt_num(ads['target_roas'], 1)}; omzet atribusi iklan setara {fmt_pct(ads['porsi'], 1)} sales produk bersih (atribusi Shopee ikut menghitung belanja produk lain setelah klik iklan, jadi bisa di atas 100%).")
+    lines.append(f"ROAS iklan {fmt_num(ads['roas'], 1)} vs target {fmt_num(ads['target_roas'], 1)}; omzet atribusi iklan setara {fmt_pct(ads['porsi'], 1)} sales produk (atribusi Shopee ikut menghitung belanja produk lain setelah klik iklan, jadi bisa di atas 100%).")
     lines.append(f"Tingkat batal {fmt_pct(k['tingkat_batal'], 1)}; {fmt_num(k['belum_bayar'])} pesanan batal karena belum bayar bisa dikejar lewat chat.")
     lines.append(f"{fmt_num(pred['kurang'])} SKU Top 50 stoknya di bawah {pred['label']} + safety stock: prioritas restock sebelum menambah iklan.")
     st.markdown("\n".join(f"- {t}" for t in lines))
@@ -332,9 +332,11 @@ def _s_trend(s: dict) -> None:
         columns = ["Bulan", "Sales bersih", "Target", "Target s.d. data", "Pencapaian (%)", "Status"]
         show_table(view[[c for c in columns if c in view.columns]],
                    kinds={"Sales bersih": "money", "Target": "money", "Target s.d. data": "money", "Pencapaian (%)": "pct"})
-    explain([("Sales bersih", "Total Pembayaran per pesanan − batal − retur (sama dengan kartu Ringkasan)"),
-             ("Target", "dari Upload data › Target sales bulanan, diprorata bila rentang tidak sebulan penuh"),
-             ("Pencapaian", "sales bersih ÷ target s.d. data (bulan belum penuh: target bulan × hari yang sudah ada datanya ÷ hari sebulan, sama dengan kartu Sales bersih)")])
+    explain([("Sales bersih", "Total Pembayaran per pesanan − batal − Belum Bayar − retur; sudah dipotong voucher (sama dengan kartu Ringkasan, dasar target)"),
+             ("Beda dengan sales produk", "sales produk = Harga Setelah Diskon × QTY terjual (dasar prediksi, dipakai di Produk terlaris & porsi iklan); "
+              "lebih besar dari sales bersih karena belum dipotong voucher"),
+             ("Target", "dari Upload data › Target sales bulanan, dibagi per tanggal menurut pola hari bila rentang tidak sebulan penuh"),
+             ("Pencapaian", "sales bersih ÷ target s.d. data (bulan belum penuh: s.d. hari penuh terakhir, target berjalan menurut pola hari; sama dengan kartu Sales bersih)")])
 
 
 def _s_products(s: dict) -> None:
@@ -344,12 +346,13 @@ def _s_products(s: dict) -> None:
         return
     part = top.head(15).iloc[::-1]
     fig = go.Figure(go.Bar(x=part["Sales"], y=part["Produk"].str.slice(0, 45), orientation="h", marker_color="#1b3da6", text=[fmt_idr_short(v) for v in part["Sales"]], textposition="outside"))
-    fig.update_layout(title="15 produk terlaris (sales produk bersih)", xaxis_title="Rp")
+    fig.update_layout(title="15 produk terlaris (sales produk: Harga Setelah Diskon × QTY, tanpa batal, setelah retur)", xaxis_title="Rp")
     _plot(fig, f"rp-top-{id(s)}", 480)
     fig = go.Figure(go.Treemap(labels=top["Produk"].str.slice(0, 30), parents=[""] * len(top), values=top["Sales"], textinfo="label+percent root"))
     fig.update_layout(title="Porsi sales 30 produk teratas")
     _plot(fig, f"rp-tree-{id(s)}", 380)
-    show_table(top, kinds={"Sales": "money", "Sales periode lalu": "money", "Porsi (%)": "pct", "Perubahan (%)": "pct", "QTY": "count"},
+    top = top.rename(columns={"Sales": "Sales produk", "Sales periode lalu": "Sales produk periode lalu"})
+    show_table(top, kinds={"Sales produk": "money", "Sales produk periode lalu": "money", "Porsi (%)": "pct", "Perubahan (%)": "pct", "QTY": "count"},
                column_config={"Produk": st.column_config.TextColumn(width="large")})
     st.caption(f"Perubahan dibanding periode sebelumnya yang sama panjang ({s['meta']['periode_lalu']}).")
 
@@ -358,7 +361,9 @@ def _s_stock(s: dict) -> None:
     pred = s["pred"]
     st.caption(f"Bagian ini dari hasil analisa aktif (prediksi {pred['window']}), bukan dari rentang laporan.")
     cols = st.columns(4)
-    card(cols[0], pred["label"], fmt_idr(pred["month_pred"]), hint=f"target bulan {fmt_idr(pred['target'])}" if pred["target"] else "")
+    card(cols[0], pred["label"], fmt_idr(pred["month_pred"]),
+         hint="sales produk 30 hari ke depan (bukan bulan kalender, belum dipotong voucher)"
+         + (f" · target bulan (sales bersih) {fmt_idr(pred['target'])}" if pred["target"] else ""))
     for column, name in zip(cols[1:], ("Aman", "Kurang", "Kosong")):
         card(column, f"Top 50 · {name}", fmt_num(pred["status"].get(name, 0)), hint="status stok bulan ini")
     if pred["status"]:
@@ -385,7 +390,7 @@ def _s_ads(s: dict) -> None:
     metric_card(cols[0], "biaya_iklan", fmt_idr(ads["biaya"]))
     metric_card(cols[1], "omzet_iklan", fmt_idr(ads["omzet"]))
     metric_card(cols[2], "roas", fmt_num(ads["roas"], 1), hint=f"target {fmt_num(ads['target_roas'], 1)}")
-    card(cols[3], "Omzet iklan ÷ sales produk", fmt_pct(ads["porsi"]), hint=f"sales produk bersih {fmt_idr(ads['sales_produk'])} · bisa > 100% karena atribusi Shopee")
+    card(cols[3], "Omzet iklan ÷ sales produk", fmt_pct(ads["porsi"]), hint=f"sales produk (tanpa batal, setelah retur) {fmt_idr(ads['sales_produk'])} · bisa > 100% karena atribusi Shopee")
     for message in ads["catatan"]:
         st.caption(message)
     if 0 < ads["hari_iklan"] < s["meta"]["hari"]:

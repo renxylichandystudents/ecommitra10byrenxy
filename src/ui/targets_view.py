@@ -53,7 +53,9 @@ def achievement_line(actual: float, start: date | None, end: date | None, featur
         from src.core.metrics import order_metrics
 
         actual = float(order_metrics(orders, start, cutoff)["sales_bersih"])
-        end, upto = cutoff, f" s.d. {fmt_date(cutoff)} (hari penuh terakhir) {fmt_idr(actual)}"
+        upto = (f" · sales bersih {fmt_date(start)} – {fmt_date(cutoff)} {fmt_idr(actual)} "
+                f"(hari penuh terakhir; {fmt_date(cutoff + timedelta(days=1))} belum penuh, tidak dihitung) =")
+        end = cutoff
     elif cutoff is not None and end > cutoff:
         return ""
     result, missing = T.achievement(actual, start, end, targets, weight)
@@ -64,6 +66,8 @@ def achievement_line(actual: float, start: date | None, end: date | None, featur
     if result.single_month and not result.full_months:
         month_pct = f"<b style='color:{_tone(result.month_pct)}'>{fmt_pct(result.month_pct, 1)}</b>"
         basis = "target berjalan (pola hari)" if weight is not None else f"target {result.days}/{result.month_days} hari"
+        if upto:
+            basis += f" s.d. {fmt_date(end)}"
         return (
             f"Pencapaian{upto} {month_pct} dari target {T.month_label(result.single_month)} {fmt_idr(result.month_target)} · "
             f"{basis} {fmt_idr(result.target)} → {pct}"

@@ -432,6 +432,7 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
 
     from src.ui.common import card
 
+    plan = plan.rename(columns={"Omzet 30 hari": "Prediksi omzet 30 hari"})
     if plan.empty:
         st.warning("Belum ada produk yang siap dibuatkan konten di periode ini (terjual 90 hari terakhir dan stok ≥ 14 hari). Lihat daftar ditunda di bawah.")
     else:
@@ -441,7 +442,8 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
         k = st.columns(4)
         card(k[0], "Konten terjadwal", fmt_num(len(plan)), hint=f"{(end - start).days + 1} hari · {per_week} per minggu")
         card(k[1], "Produk diangkat", fmt_num(plan["SKU"].nunique()), hint="tidak diulang dalam 14 hari")
-        card(k[2], "Omzet 30 hari produknya", fmt_idr(plan.drop_duplicates("SKU")["Omzet 30 hari"].sum()), hint="prediksi analisa: yang dijaga & didorong konten")
+        card(k[2], "Prediksi omzet 30 hari produknya", fmt_idr(plan.drop_duplicates("SKU")["Prediksi omzet 30 hari"].sum()),
+             hint="laju prediksi analisa × harga × 30 (sales produk, bukan penjualan 30 hari terakhir)")
         card(k[3], "Jam ramai toko", peak, hint="dari riwayat pesanan; unggah ±1 jam sebelumnya")
         st.markdown("**Kalender konten**")
         head = st.columns(7)
@@ -466,7 +468,7 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
         shown = plan.assign(Tanggal=plan["Tanggal"].map(fmt_date)).drop(columns=["Naskah 30 dtk"])
         batched_view(
             len(shown), key=f"{key}-plan", noun="konten",
-            render=lambda lo, hi: show_table(shown.iloc[lo:hi], kinds={"Omzet 30 hari": "money", "Stok siap (hari)": "count"}, max_height=10_000,
+            render=lambda lo, hi: show_table(shown.iloc[lo:hi], kinds={"Prediksi omzet 30 hari": "money", "Stok siap (hari)": "count"}, max_height=10_000,
                                              column_config={"Produk": st.column_config.TextColumn(width="large"), "Format": st.column_config.TextColumn(width="large"),
                                                             "Hook": st.column_config.TextColumn(width="large"), "Poin jual": st.column_config.TextColumn(width="large")}),
             download=lambda: download_excel({"Brief konten": plan, "Ditunda (stok)": delayed}, f"brief_konten_{start.isoformat()}.xlsx", key=f"xl-{key}"),

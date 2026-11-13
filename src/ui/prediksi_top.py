@@ -385,7 +385,7 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     pred_sales, actual_sales = float(rows["pred_sales"].sum()), float(rows["aktual_sales"].sum())
     hit = int(rows["status"].isin(["Melebihi", "Tercapai"]).sum())
     cols = st.columns(4)
-    card(cols[0], f"Prediksi omzet {fmt_date(last)}", fmt_idr(pred_sales))
+    card(cols[0], f"Prediksi sales produk {fmt_date(last)}", fmt_idr(pred_sales), hint="SKU berprediksi · Harga Setelah Diskon × QTY")
     # Seluruh toko = sales bersih toko hari itu dan target harian berpola, sama dengan baris tanggal itu di tabel breakdown.
     from src.ui.month_track_view import _daily_series
 
@@ -398,8 +398,9 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
             pct = day_total / float(goal.iloc[0]) * 100
             reach = (f"Target harian {fmt_idr(float(goal.iloc[0]))} → "
                      f"<b style='color:{'#1d4ed8' if pct >= 100 else '#dc2626'}'>{fmt_pct(pct, 1)}</b>")
-    card(cols[1], "Aktual omzet bersih", fmt_idr(actual_sales),
-         hint=f"SKU berprediksi · sales bersih seluruh toko {fmt_idr(day_total)}" + (f"<br>{reach}" if reach else ""))
+    card(cols[1], "Aktual sales produk", fmt_idr(actual_sales),
+         hint=("SKU berprediksi · tanpa batal & Belum Bayar, setelah retur"
+               f"<br>Sales bersih seluruh toko (dasar target, setelah voucher) {fmt_idr(day_total)}") + (f"<br>{reach}" if reach else ""))
     pending = float(unpaid.loc[(unpaid["tanggal"] == last) & unpaid["sku"].isin(set(rows["sku"].astype(str))), "belum_bayar"].sum())
     pct_hint = (
         f"Masih Belum Bayar {fmt_idr(pending)}; bila dibayar semua → {fmt_pct((actual_sales + pending) / pred_sales * 100, 1)}"
@@ -428,8 +429,8 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     view["Selisih omzet"] = view["selisih"]
     view = view.sort_values("Selisih omzet", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
     view["pred_qty"] = pd.to_numeric(view["pred_qty"], errors="coerce").round(1)
-    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY (laju harian)", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi omzet", "aktual_sales": "Aktual omzet", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab", "aksi": "Saran aksi"})
-    columns = ["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "Selisih omzet", "% capaian", "Status", "Penyebab", "Saran aksi"]
+    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY (laju harian)", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi sales produk", "aktual_sales": "Aktual sales produk", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab", "aksi": "Saran aksi"})
+    columns = ["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi sales produk", "Aktual sales produk", "Selisih omzet", "% capaian", "Status", "Penyebab", "Saran aksi"]
 
     f1, f2, f3 = st.columns([1.3, 1.6, 0.8])
     status_pick = f1.multiselect("Status", options=["Tidak", "Hampir", "Tercapai", "Melebihi"], key="pva-status", placeholder="Semua")
@@ -444,9 +445,9 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     total = {c: "" for c in columns}
     total["SKU"] = "Total"
     total["Produk"] = f"{fmt_num(len(view))} SKU"
-    for c in ("Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi omzet", "Aktual omzet", "Selisih omzet"):
+    for c in ("Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi sales produk", "Aktual sales produk", "Selisih omzet"):
         total[c] = float(pd.to_numeric(view[c], errors="coerce").fillna(0).sum())
-    total["% capaian"] = total["Aktual omzet"] / total["Prediksi omzet"] * 100 if total["Prediksi omzet"] else None
+    total["% capaian"] = total["Aktual sales produk"] / total["Prediksi sales produk"] * 100 if total["Prediksi sales produk"] else None
     total_row = pd.DataFrame([total], columns=columns)
 
     sig = (tuple(status_pick), tuple(cause_pick), page_size)
@@ -466,7 +467,7 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     show_table(
         pd.concat([total_row, view.iloc[(page - 1) * page_size : page * page_size]], ignore_index=True),
         bold_label="Total",
-        kinds={"Prediksi omzet": "money", "Aktual omzet": "money", "Selisih omzet": "money", "% capaian": "pct"},
+        kinds={"Prediksi sales produk": "money", "Aktual sales produk": "money", "Selisih omzet": "money", "% capaian": "pct"},
         max_height=10_000,
     )
 
@@ -568,7 +569,7 @@ def _month_chart(month: pd.DataFrame, last: date, target: dict | None = None) ->
     fig = go.Figure()
     fig.add_bar(x=x, y=month["prediksi"], name="Prediksi", offsetgroup="p", marker_color=np.where(done, "#a5b4fc", "#e0e7ff").tolist(),
                 hovertemplate="%{x|%d/%m} · Prediksi Rp %{y:,.0f}<extra></extra>")
-    fig.add_bar(x=x, y=month["aktual"], name="Aktual SKU", offsetgroup="a", marker_color="#1b3da6",
+    fig.add_bar(x=x, y=month["aktual"], name="Aktual sales produk", offsetgroup="a", marker_color="#1b3da6",
                 text=[f"{v:.0f}%" if np.isfinite(v) and s == "Selesai" else "" for v, s in zip(month["pct"], month["status"])],
                 textposition="outside", cliponaxis=False, hovertemplate="%{x|%d/%m} · Aktual Rp %{y:,.0f}<extra></extra>")
     if month["belum_bayar"].fillna(0).sum() > 0:
@@ -615,8 +616,8 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Pola hari": [f"×{p:.2f}".replace(".", ",") if s != "uji mundur" else "pola model" for p, s in zip(month["pola"], month["sumber"])],
         "Status": month["status"],
         "Target harian": month["target"],
-        "Prediksi omzet": month["prediksi"],
-        "Aktual SKU": month["aktual"],
+        "Prediksi sales produk": month["prediksi"],
+        "Aktual sales produk": month["aktual"],
         "Sales bersih toko": month["bersih"],
         "% target": np.where(done_days & (month["target"] > 0), month["bersih"] / month["target"] * 100, np.nan),
         "Belum Bayar": month["belum_bayar"],
@@ -631,7 +632,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
     pred, act, pend = (float(month.loc[done, c].fillna(0).sum()) for c in ("prediksi", "aktual", "belum_bayar"))
     label = f"Total s.d. {fmt_date(last)}"
     total = {
-        "Tanggal": label, "Jenis hari": "", "Pola hari": "", "Status": f"{int(done.sum())} hari penuh", "Prediksi omzet": pred, "Aktual SKU": act, "Belum Bayar": pend,
+        "Tanggal": label, "Jenis hari": "", "Pola hari": "", "Status": f"{int(done.sum())} hari penuh", "Prediksi sales produk": pred, "Aktual sales produk": act, "Belum Bayar": pend,
         "Selisih": act - pred, "% capaian": act / pred * 100 if pred else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred * 100 if pred else np.nan, "Sumber prediksi": "",
     }
@@ -645,7 +646,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
     full = {
         "Tanggal": month_label, "Jenis hari": "", "Pola hari": "",
         "Status": f"Proyeksi {fmt_idr(projection)}",
-        "Prediksi omzet": pred_month, "Aktual SKU": act, "Belum Bayar": pend,
+        "Prediksi sales produk": pred_month, "Aktual sales produk": act, "Belum Bayar": pend,
         "Selisih": projection - pred_month, "% capaian": act / pred_month * 100 if pred_month else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred_month * 100 if pred_month else np.nan,
         "Sumber prediksi": f"aktual s.d. {fmt_date(last)} + prediksi sisa",
@@ -673,7 +674,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         show_table(
             pd.concat([rows, view], ignore_index=True),
             bold_label=(month_label, label),
-            kinds={"Target harian": "money", "Sales bersih toko": "money", "Prediksi omzet": "money", "Aktual SKU": "money", "Belum Bayar": "money", "Selisih": "money",
+            kinds={"Target harian": "money", "Sales bersih toko": "money", "Prediksi sales produk": "money", "Aktual sales produk": "money", "Belum Bayar": "money", "Selisih": "money",
                    "% target": "pct", "% capaian": "pct", "% bila Belum Bayar dibayar": "pct"},
             max_height=10_000,
         )

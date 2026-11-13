@@ -7950,13 +7950,14 @@ def _running_month_cards(decision: pd.DataFrame, all_sku: pd.DataFrame | None, o
         then_rate = (float(prior["d"][0]) / day_factor, float(prior["d"][1]) / day_factor)
     tip = ("Aktual tgl 1 s.d. hari penuh terakhir (data ≥ 23:00) + laju prediksi harian × pola hari sisa bulan "
            "(hari dalam minggu, gajian, tanggal kembar; sama dengan Pantauan harian). Pembanding: aktual yang sama + laju prediksi kemarin. "
-           "Sales = sales produk (dasar prediksi), belum dikali faktor sales bersih.")
+           "Sales = sales produk (Harga Setelah Diskon × QTY terjual, dasar prediksi), bukan sales bersih (Total Pembayaran, dasar target) "
+           "di kartu Sales bersih; sales bersih lebih kecil karena sudah dipotong voucher.")
     qty_now = top["actual_qty"] + top["rest_qty"]
     sales_now = top["actual_sales"] + top["rest_sales"]
     qty_then = None if then_rate is None else top["actual_qty"] + then_rate[0] * top["weight"]
     sales_then = None if then_rate is None else top["actual_sales"] + then_rate[1] * top["weight"]
-    qty_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_qty'], top['rest_qty'], lambda v: format_number(round(v), 0)))}</div>"
-    sales_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_sales'], top['rest_sales'], format_idr))}</div>"
+    qty_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_qty'], top['rest_qty'], lambda v: format_number(round(v), 0), 'aktual terjual'))}</div>"
+    sales_hint = f"<div class='metric-move flat'>{html.escape(running_month_hint(top, top['actual_sales'], top['rest_sales'], format_idr, 'aktual sales produk'))}</div>"
     st.markdown(f"<div class='field-hint' style='margin-top:.4rem'><b>Prediksi {html.escape(name)}</b></div>", unsafe_allow_html=True)
     cards = st.columns(4)
     money_first = metric == "sales"
@@ -7978,13 +7979,32 @@ def _running_month_cards(decision: pd.DataFrame, all_sku: pd.DataFrame | None, o
         total = whole["actual_sales"] + whole["rest_sales"]
         cards[3].markdown(
             "<div class='stat-card'>"
-            f"<div class='readable-metric-label'>Prediksi sales {html.escape(name)} · All SKU</div>"
+            f"<div class='readable-metric-label'>Prediksi sales produk {html.escape(name)} · All SKU</div>"
             f"<div class='readable-metric-value'>{html.escape(format_idr(total))}</div>"
-            f"<div class='metric-hint'>{html.escape(running_month_hint(whole, whole['actual_sales'], whole['rest_sales'], format_idr))}"
-            " · sales produk seluruh toko</div>"
+            f"<div class='metric-hint'>{html.escape(running_month_hint(whole, whole['actual_sales'], whole['rest_sales'], format_idr, 'aktual sales produk'))}"
+            " · seluruh toko" + _net_month_hint(orders_all if orders_all is not None else orders) + "</div>"
             "</div>",
             unsafe_allow_html=True,
         )
+
+
+def _net_month_hint(orders_all) -> str:
+    """Padanan sales bersih (dasar target) untuk kartu sales produk bulan berjalan; sama dengan kartu Sales bersih & Pantauan harian."""
+    try:
+        from src.ui.dashboard import MONTHS_SHORT
+        from src.ui.targets_view import month_outlook
+
+        out = month_outlook(orders_all, get_features())
+    except Exception:
+        return ""
+    if not out.get("running") or out.get("mtd", 0) <= 0:
+        return ""
+    last = out["last"]
+    return ("<br><b>Dalam sales bersih (dasar target)</b>: "
+            f"aktual 1–{last.day} {MONTHS_SHORT[last.month - 1]} {html.escape(format_idr(out['mtd']))} "
+            f"(= Pencapaian di kartu Sales bersih) → proyeksi akhir bulan {html.escape(format_idr(out['projection']))} "
+            f"(= Pantauan harian). Sales bersih ≈ {format_number(out['faktor'], 2)} × sales produk, "
+            "terutama karena sudah dipotong voucher & koin.")
 
 
 def show_analysis_movement(
@@ -8029,6 +8049,8 @@ def show_analysis_movement(
             ("Pembanding", f"prediksi kemarin ({format_id_date(yesterday)}) untuk {format_number(len(focus_keys))} SKU Top 50 yang sama"),
             ("Cara hitung pembanding", "data latih s.d. sehari sebelumnya, parameter sama"),
             ("Total banyak SKU", "dijumlah dari nilai harapan sebelum dibulatkan per SKU"),
+            ("Sales di bagian ini", "sales produk = Harga Setelah Diskon × QTY (dasar prediksi). Berbeda dengan kartu Sales bersih di atas "
+             "(Total Pembayaran − batal − Belum Bayar − retur, sudah dipotong voucher; dasar target), jadi angkanya lebih besar"),
         ]
     )
     if now_totals:
