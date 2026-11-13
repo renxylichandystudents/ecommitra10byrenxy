@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from datetime import date, timedelta
 
 import numpy as np
@@ -49,6 +50,48 @@ def stock_out_date(stok: float, daily: float, today: date) -> date | None:
     return today + timedelta(days=int(days)) if days <= MAX_COVER_DAYS else None
 
 
+def empty_loss(since: date | None, today: date, daily_qty: float, price: float, *, day_weight: Callable[[date], float] | None = None,
+               sold_qty: float = 0.0, sold_sales: float = 0.0, month_first: date | None = None,
+               sold_month: tuple[float, float] = (0.0, 0.0)) -> dict:
+    """Penjualan yang hilang selama stok kosong: hari `since` s.d. kemarin (hari ini masih berjalan).
+
+    Permintaan tiap hari = laju prediksi harian × pola hari (sama dengan Pantauan harian); hilang = permintaan − terjual
+    pada hari-hari itu (minimal 0). `month_first` memberi bagian yang jatuh di bulan berjalan (relevan untuk target)."""
+    out = {"hari": 0, "qty": 0.0, "sales": 0.0, "qty_bulan": 0.0, "sales_bulan": 0.0}
+    end = today - timedelta(days=1)
+    if since is None or since > end or daily_qty <= 0:
+        return out
+    days = [since + timedelta(days=i) for i in range((end - since).days + 1)]
+    weights = [float(day_weight(d)) if day_weight else 1.0 for d in days]
+    demand = daily_qty * sum(weights)
+    out["hari"] = len(days)
+    out["qty"] = max(demand - max(sold_qty, 0.0), 0.0)
+    out["sales"] = max(demand * price - max(sold_sales, 0.0), 0.0)
+    if month_first is not None:
+        month_demand = daily_qty * sum(w for d, w in zip(days, weights) if d >= month_first)
+        out["qty_bulan"] = max(month_demand - max(sold_month[0], 0.0), 0.0)
+        out["sales_bulan"] = max(month_demand * price - max(sold_month[1], 0.0), 0.0)
+    return out
+
+
+def _sold_since(orders: pd.DataFrame | None) -> pd.DataFrame | None:
+    """QTY & sales per (item_key, tanggal) untuk mengurangkan penjualan yang tetap terjadi selama status kosong."""
+    if orders is None or orders.empty or "item_key" not in orders.columns:
+        return None
+    day = pd.to_datetime(orders["order_time"], errors="coerce").dt.date
+    sales = orders["sales"] if "sales" in orders.columns else pd.Series(0.0, index=orders.index)
+    frame = pd.DataFrame({"item_key": orders["item_key"].astype(str), "day": day, "qty": pd.to_numeric(orders["qty"], errors="coerce").fillna(0.0),
+                          "sales": pd.to_numeric(sales, errors="coerce").fillna(0.0)}).dropna(subset=["day"])
+    return frame.groupby(["item_key", "day"], as_index=False)[["qty", "sales"]].sum()
+
+
+def _sold_between(sold: pd.DataFrame | None, key: str, lo: date | None, hi: date) -> tuple[float, float]:
+    if sold is None or lo is None or lo > hi:
+        return 0.0, 0.0
+    part = sold.loc[(sold["item_key"] == key) & (sold["day"] >= lo) & (sold["day"] <= hi)]
+    return float(part["qty"].sum()), float(part["sales"].sum())
+
+
 def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
     """PO impor terbuka per SKU: {sku: {"no_po", "qty", "eta"}} (status selain Diterima DC)."""
     if import_po is None or import_po.empty:
@@ -64,13 +107,20 @@ def open_po_map(import_po: pd.DataFrame | None) -> dict[str, dict]:
     return out
 
 
-def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None) -> pd.DataFrame:
-    """Tabel "Kebutuhan restock prioritas": kosong + ada stok DC dulu, lalu dampak omzet (sales value & QTY) terbesar."""
-    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi sales hilang", "Potensi QTY hilang", "_habis", "_pred_harian", "_sales_harian",
+def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | None = None, orders: pd.DataFrame | None = None,
+                     day_weight: Callable[[date], float] | None = None) -> pd.DataFrame:
+    """Tabel "Kebutuhan restock prioritas": kosong + ada stok DC dulu, lalu dampak omzet (sales value & QTY) terbesar.
+
+    SKU Kosong juga diberi penjualan yang sudah hilang sejak kosong (`empty_loss`), total dan bagian bulan berjalan."""
+    columns = ["Rank", "sku", "Produk", "Varian", "Stok Site 10037", "Prediksi", "SS", "Restock", "Stok Site 10062", "Stok Site 10036", "Ambil dari DC", "Stok habis", "Status", "Inbound", "Potensi sales hilang", "Potensi QTY hilang",
+               "Hari kosong", "QTY hilang sejak kosong", "Sales hilang sejak kosong", "Sales hilang bulan ini", "_habis", "_pred_harian", "_sales_harian",
                "_kosong_sejak", "_lama_kosong", "_kosong_sejak_awal"]
     if table is None or table.empty:
         return pd.DataFrame(columns=columns)
     po = po or {}
+    sold = _sold_since(orders)
+    month_first = today.replace(day=1)
+    yesterday = today - timedelta(days=1)
     rows = []
     for _, row in table.iterrows():
         known = bool(row.get("ada_data_stok", False))
@@ -93,6 +143,13 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
         price = _num(row.get("harga_bersih"))
         # Unit prediksi periode yang tidak tertutup stok Site 10037 = penjualan yang hilang bila tidak direstock.
         loss_qty = max(0.0, pred - max(stok, 0.0))
+        since = _day(row.get("zero_since")) if status == "Kosong" else None
+        key = str(row.get("item_key", row.get("sku", "")))
+        lost = None
+        if since:
+            sold_qty, sold_sales = _sold_between(sold, key, since, yesterday)
+            lost = empty_loss(since, today, daily, price, day_weight=day_weight, month_first=month_first, sold_qty=sold_qty, sold_sales=sold_sales,
+                              sold_month=_sold_between(sold, key, max(since, month_first), yesterday))
         rows.append(
             {
                 "Rank": row.get("peringkat"),
@@ -111,10 +168,14 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
                 "Inbound": f"{inbound['no_po']} · {inbound['eta'].strftime('%d/%m/%Y') if inbound.get('eta') else 'ETA belum ada'}" if inbound else "",
                 "Potensi sales hilang": loss_qty * price,
                 "Potensi QTY hilang": loss_qty,
+                "Hari kosong": lost["hari"] if lost else np.nan,
+                "QTY hilang sejak kosong": lost["qty"] if lost else np.nan,
+                "Sales hilang sejak kosong": lost["sales"] if lost else np.nan,
+                "Sales hilang bulan ini": lost["sales_bulan"] if lost else np.nan,
                 "_habis": habis or date.max,
                 "_pred_harian": daily,
                 "_sales_harian": daily * _num(row.get("harga_bersih")),
-                "_kosong_sejak": _day(row.get("zero_since")) if status == "Kosong" else None,
+                "_kosong_sejak": since,
                 "_lama_kosong": _num(row.get("lama_kosong_hari")) if status == "Kosong" and pd.notna(row.get("lama_kosong_hari")) else None,
                 "_kosong_sejak_awal": bool(row.get("kosong_sejak_awal", False)) if status == "Kosong" else False,
             }
@@ -136,7 +197,10 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
         top = float(values.max()) if len(values) else 0.0
         return values / top if top > 0 else values * 0.0
 
-    frame["_dampak"] = 0.5 * _scale(frame["Potensi sales hilang"].astype(float)) + 0.5 * _scale(frame["Potensi QTY hilang"].astype(float))
+    # SKU Kosong: dampak = yang akan hilang + yang sudah hilang sejak kosong, jadi Top 50 yang lama kosong naik ke atas.
+    sales_impact = frame["Potensi sales hilang"].astype(float) + frame["Sales hilang sejak kosong"].astype(float).fillna(0.0)
+    qty_impact = frame["Potensi QTY hilang"].astype(float) + frame["QTY hilang sejak kosong"].astype(float).fillna(0.0)
+    frame["_dampak"] = 0.5 * _scale(sales_impact) + 0.5 * _scale(qty_impact)
     frame = frame.sort_values(["_prioritas", "_dampak", "_habis"], ascending=[True, False, True])
     return frame.drop(columns=["_prioritas", "_dampak"]).reset_index(drop=True)
 

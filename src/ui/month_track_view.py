@@ -54,6 +54,27 @@ def day_multiplier(orders_all: pd.DataFrame | None, day: date, today: date | Non
     return value if np.isfinite(value) and value > 0 else 1.0
 
 
+def day_weight_fn(orders_all: pd.DataFrame | None, today: date | None = None):
+    """Fungsi tanggal → pengali pola hari (rata-rata tiap bulan = 1), sama dengan Pantauan harian; None bila tanpa data."""
+    if orders_all is None or orders_all.empty:
+        return None
+    net, _product, last_stamp = _daily_series(orders_all)
+    if last_stamp is None:
+        return None
+    cutoff = full_day_cutoff(last_stamp, today)
+    profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
+    shapes: dict = {}
+
+    def weight(day: date) -> float:
+        first = day.replace(day=1)
+        if first not in shapes:
+            shapes[first] = M.month_shape(profile, first)
+        value = float(shapes[first].get(day, 1.0))
+        return value if np.isfinite(value) and value > 0 else 1.0
+
+    return weight
+
+
 def month_remaining_weight(orders_all: pd.DataFrame | None, today: date) -> tuple[date, float]:
     """(hari penuh terakhir yang dihitung aktual, jumlah pengali pola hari sisa bulan berjalan).
 

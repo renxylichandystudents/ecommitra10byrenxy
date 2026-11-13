@@ -2,6 +2,14 @@
 
 Diperbarui: 13 November 2026.
 
+## Restock prioritas: sales hilang sejak kosong (13 Nov 2026 malam)
+
+- Masukan pengguna: potensi hilang terus bertambah selama stok tidak diisi; tabel harus menunjukkan berapa yang sudah hilang sejak SKU kosong dan sejak kapan, sebagai bahan menjelaskan kenapa target tidak tercapai.
+- `restock.empty_loss`: untuk SKU Kosong, hari `zero_since` s.d. kemarin; permintaan = laju prediksi harian × pola hari (`month_track_view.day_weight_fn`, pola sama dengan Pantauan harian); hilang = permintaan − yang tetap terjual hari-hari itu (min. 0). Sales = sales produk. Bagian bulan berjalan dipisah. Rumus prediksi & SS tidak berubah.
+- Tabel kolom baru: **Kosong sejak** ("≤" bila kosong sejak data stok pertama → angka minimal), **Hari kosong**, **Sales hilang sejak kosong**, **Sales hilang bulan ini**, **QTY hilang sejak kosong**. Kolom lama diganti nama **Potensi sales/QTY hilang ke depan** (prediksi periode − stok). Urutan dalam kelompok kini memakai sudah hilang + potensi ke depan.
+- Kotak merah **Sales hilang karena Top 50 kosong** di atas tabel: jumlah SKU kosong & total hilang, SKU terlama kosong, hilang bulan ini setara sales bersih (× faktor) sebagai % kekurangan target berjalan s.d. hari penuh terakhir, sisa bulan yang hilang lagi bila tidak direstock, 3 penyumbang terbesar.
+- Tes: `test_restock_empty_age.py` (kolom & angka, `empty_loss` pola hari, potong terjual, bagian bulan).
+
 ## Istilah sales tidak bermakna ganda (13 Nov 2026 malam)
 
 - Pertanyaan pengguna: "Pencapaian s.d. 12 Nov Rp 1.551.146.267" vs "aktual 1–12 Nov: Rp 1.773.338.194" di kartu bulan berjalan. Keduanya beda pengertian: **sales bersih** = Total Pembayaran − batal − Belum Bayar − retur (sudah dipotong voucher; dasar target) vs **sales produk** = Harga Setelah Diskon × QTY terjual (dasar prediksi). Rasio bulan ini ±0,87. Angka & rumus tidak diubah, hanya label dan penjelasan.
