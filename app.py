@@ -7649,6 +7649,35 @@ def _row_slices(row: pd.Series | None, horizon_days: int, month_days: int) -> tu
     return qty_day, sales_day, max(stock_day - qty_day, 0), qty_month, sales_month, max(stock_month - qty_month, 0)
 
 
+MONTHS_ID_SHORT_TEXT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
+
+
+def _daily_rate(row: pd.Series | None, horizon_days: int) -> tuple[float, float]:
+    """(laju QTY/hari, laju sales produk/hari) dari prediksi horizon analisa."""
+    if row is None or horizon_days <= 0:
+        return 0.0, 0.0
+    return float(row.get("pred_qty", 0) or 0) / horizon_days, float(row.get("pred_sales", 0) or 0) / horizon_days
+
+
+def _running_month_actuals(orders: pd.DataFrame | None, orders_all: pd.DataFrame | None, today: date) -> tuple[dict, float, date]:
+    """({item_key: (QTY, sales produk) tgl 1 s.d. hari penuh terakhir}, jumlah pola hari sisa bulan, hari penuh terakhir).
+
+    Aturan sama dengan kartu Prediksi bulan berjalan (`dashboard.running_month_parts`)."""
+    from src.ui.month_track_view import month_remaining_weight
+
+    cutoff, weight = month_remaining_weight(orders_all if orders_all is not None else orders, today)
+    first = today.replace(day=1)
+    actual: dict = {}
+    if orders is not None and not orders.empty and cutoff >= first:
+        days = pd.to_datetime(orders["order_time"], errors="coerce").dt.date
+        part = orders.loc[(days >= first) & (days <= cutoff)]
+        if not part.empty:
+            sales = part["sales"] if "sales" in part.columns else pd.Series(0.0, index=part.index)
+            grouped = pd.DataFrame({"k": part["item_key"].astype(str), "q": part["qty"].astype(float), "s": sales.astype(float)}).groupby("k")[["q", "s"]].sum()
+            actual = {k: (float(r.q), float(r.s)) for k, r in grouped.iterrows()}
+    return actual, weight, cutoff
+
+
 def _render_movement_board(
     catalog: pd.DataFrame,
     focus_keys: list[str],
@@ -7661,8 +7690,11 @@ def _render_movement_board(
     end_day: date,
     today: date,
     decision: dict | None = None,
+    orders: pd.DataFrame | None = None,
+    orders_all: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     decision = decision or {}
+    run_actual, rest_weight, run_cutoff = _running_month_actuals(orders, orders_all, today)
     names: dict[str, tuple] = {}
     if isinstance(catalog, pd.DataFrame) and {
         "item_key",
@@ -7714,6 +7746,13 @@ def _render_movement_board(
             qty_day, sales_day = int(enriched["d_qty"]), int(enriched["d_sales"])
             qty_month, sales_month = int(enriched["m_qty"]), int(enriched["m_sales"])
             safety_day = safety_month = int(enriched["ss"])
+            rate_q = float(enriched.get("pred_harian", 0) or 0)
+            rate_s = rate_q * float(enriched.get("harga_bersih", 0) or 0)
+        else:
+            rate_q, rate_s = _daily_rate(locked_row, locked_horizon)
+        from_q, from_s = _daily_rate(start_row, start_horizon)
+        to_q, to_s = _daily_rate(end_row, end_horizon)
+        act_q, act_s = run_actual.get(key, (0.0, 0.0))
         records.append(
             {
                 "key": key,
@@ -7737,6 +7776,14 @@ def _render_movement_board(
                 "qty_month_then": qty_month_from,
                 "qty_month_now": qty_month_to,
                 "safety_month": safety_month,
+                "run_qty": act_q + rate_q * rest_weight,
+                "run_sales": act_s + rate_s * rest_weight,
+                "run_qty_act": act_q,
+                "run_sales_act": act_s,
+                "run_qty_then": act_q + from_q * rest_weight,
+                "run_qty_now": act_q + to_q * rest_weight,
+                "run_sales_then": act_s + from_s * rest_weight,
+                "run_sales_now": act_s + to_s * rest_weight,
                 "move_qty": qty_to - qty_from,
             }
         )
@@ -7760,15 +7807,18 @@ def _render_movement_board(
 
     month_label = format_period_label("prediksi", today)
     g_day, g_month, g_sold = "Prediksi hari ini", month_label, "Penjualan"
+    g_run = f"Prediksi bulan berjalan ({month_year(today)})"
     g_stock = "Stok"
     columns = [
         {"id": "rank", "label": "Rank", "pin": True, "width": 76, "kind": "num", "sort": True},
         {"id": "sku", "label": "SKU", "pin": True, "width": 112, "sort": True},
         {"id": "name", "label": "Produk", "pin": True, "width": 260, "kind": "name", "sort": True},
         {"id": "variance", "label": "Varian", "width": 150, "kind": "name", "sort": True},
-        {"id": "d_sales", "label": "Sales", "group": g_day, "kind": "num", "sort": True},
+        {"id": "d_sales", "label": "Sales produk", "group": g_day, "kind": "num", "sort": True},
         {"id": "d_qty", "label": "QTY · SS", "group": g_day, "kind": "num", "sort": True},
-        {"id": "m_sales", "label": "Sales", "group": g_month, "kind": "num", "sort": True},
+        {"id": "r_sales", "label": "Sales produk", "group": g_run, "kind": "num", "sort": True},
+        {"id": "r_qty", "label": "QTY", "group": g_run, "kind": "num", "sort": True},
+        {"id": "m_sales", "label": "Sales produk", "group": g_month, "kind": "num", "sort": True},
         {"id": "m_qty", "label": "QTY · SS", "group": g_month, "kind": "num", "sort": True},
         {"id": "stok_d", "label": "Site 10037 · hari ini", "group": g_stock, "kind": "num", "sort": True},
         {"id": "stok_m", "label": f"Site 10037 · {month_year(today)}", "group": g_stock, "kind": "num", "sort": True},
@@ -7776,14 +7826,18 @@ def _render_movement_board(
         {"id": "stok_10036", "label": "Site 10036", "group": g_stock, "kind": "num", "sort": True},
         {"id": "ambil_dc", "label": "Ambil dari DC", "group": g_stock, "width": 220, "kind": "name", "sort": True},
         {"id": "kosong", "label": "Lama kosong", "group": g_stock, "width": 120, "sort": True},
-        {"id": "sold_sales", "label": "Sales", "group": g_sold, "kind": "num", "sort": True},
+        {"id": "sold_sales", "label": "Sales produk", "group": g_sold, "kind": "num", "sort": True},
         {"id": "sold_qty", "label": "QTY", "group": g_sold, "kind": "num", "sort": True},
     ]
+    month_short = MONTHS_ID_SHORT_TEXT[today.month - 1]
+    act_span = f"aktual 1–{run_cutoff.day} {month_short}" if run_cutoff >= today.replace(day=1) else "belum ada aktual"
 
-    def money_cell(value: float, now: float | None = None, then: float | None = None) -> dict:
+    def money_cell(value: float, now: float | None = None, then: float | None = None, note: str | None = None) -> dict:
         cell = {"v": float(value), "t": format_idr(value)}
         if now is not None and then is not None:
             cell["d"], cell["dc"] = _move_cell(now, then, money=True)
+        if note:
+            cell["s"] = note
         return cell
 
     def qty_cell(value: float, safety: float | None, now: float | None = None, then: float | None = None) -> dict:
@@ -7792,6 +7846,11 @@ def _render_movement_board(
             cell["s"] = f"Safety stock {format_qty(safety)}"
         if now is not None and then is not None:
             cell["d"], cell["dc"] = _move_cell(now, then, money=False)
+        return cell
+
+    def run_qty_cell(value: float, actual: float, now: float, then: float) -> dict:
+        cell = {"v": float(value), "t": format_number(round(value), 0), "s": f"{act_span}: {format_number(round(actual), 0)}"}
+        cell["d"], cell["dc"] = _move_cell(now, then, money=False)
         return cell
 
     def stock_cell(row, prefix: str) -> dict:
@@ -7820,6 +7879,8 @@ def _render_movement_board(
             "variance": {"v": item["variance"], "t": item["variance"]},
             "d_sales": money_cell(item["sales_day"], item["sales_day_now"], item["sales_day_then"]),
             "d_qty": qty_cell(item["qty_day"], item["safety_day"], item["qty_day_now"], item["qty_day_then"]),
+            "r_sales": money_cell(item["run_sales"], item["run_sales_now"], item["run_sales_then"], f"{act_span}: {format_idr(item['run_sales_act'])}"),
+            "r_qty": run_qty_cell(item["run_qty"], item["run_qty_act"], item["run_qty_now"], item["run_qty_then"]),
             "m_sales": money_cell(item["sales_month"], item["sales_month_now"], item["sales_month_then"]),
             "m_qty": qty_cell(item["qty_month"], item["safety_month"], item["qty_month_now"], item["qty_month_then"]),
             "stok_d": stock_cell(row, "d"),
@@ -7845,6 +7906,10 @@ def _render_movement_board(
                 "Safety stock hari ini": item["safety_day"],
                 "Perubahan sales hari ini": item["sales_day_now"] - item["sales_day_then"],
                 "Perubahan qty hari ini": item["qty_day_now"] - item["qty_day_then"],
+                f"Prediksi sales produk bulan berjalan ({month_year(today)})": round(item["run_sales"]),
+                f"Aktual sales produk ({act_span.removeprefix('aktual ')})": round(item["run_sales_act"]),
+                f"Prediksi qty bulan berjalan ({month_year(today)})": round(item["run_qty"]),
+                f"Aktual qty ({act_span.removeprefix('aktual ')})": round(item["run_qty_act"]),
                 "Prediksi sales bulan ini": item["sales_month"],
                 "Prediksi qty bulan ini": item["qty_month"],
                 "Safety stock bulan ini": item["safety_month"],
@@ -7863,6 +7928,9 @@ def _render_movement_board(
     def total(key: str) -> int:
         return sum(int(item[key]) for item in records)
 
+    def fsum(key: str) -> float:
+        return float(sum(float(item[key]) for item in records))
+
     stock_total = sum(float(decision[item["key"]]["stok"]) for item in records if item["key"] in decision and bool(decision[item["key"]].get("ada_data_stok", False)))
     dc_totals = {
         code: sum(float(decision[item["key"]].get(f"stok_{code}") or 0) for item in records if item["key"] in decision and pd.notna(decision[item["key"]].get(f"stok_{code}")))
@@ -7872,6 +7940,8 @@ def _render_movement_board(
         "name": {"t": "Total", "s": f"{len(records)} item bergerak"},
         "d_sales": money_cell(total("sales_day"), total("sales_day_now"), total("sales_day_then")),
         "d_qty": qty_cell(total("qty_day"), total("safety_day"), total("qty_day_now"), total("qty_day_then")),
+        "r_sales": money_cell(fsum("run_sales"), fsum("run_sales_now"), fsum("run_sales_then"), f"{act_span}: {format_idr(fsum('run_sales_act'))}"),
+        "r_qty": run_qty_cell(fsum("run_qty"), fsum("run_qty_act"), fsum("run_qty_now"), fsum("run_qty_then")),
         "m_sales": money_cell(total("sales_month"), total("sales_month_now"), total("sales_month_then")),
         "m_qty": qty_cell(total("qty_month"), total("safety_month"), total("qty_month_now"), total("qty_month_then")),
         "stok_d": {"t": format_qty(stock_total)},
@@ -8141,6 +8211,11 @@ def show_analysis_movement(
             ("Urutan", "dampak ke omzet terbesar lebih dulu: gabungan besar perubahan prediksi bulan dalam sales value (Rp) dan QTY, naik maupun turun"),
             ("Tampilan", "5 SKU teratas; Muat lebih banyak menambah 10 SKU, Tutup kembali ke 5 SKU. Unduh Excel berisi semua SKU"),
             ("Angka kecil di sel", "besar perubahan: ▲ naik, ▼ turun"),
+            ("Sales produk", "semua kolom Sales di tabel ini = Harga Setelah Diskon × QTY (dasar prediksi), bukan sales bersih (Total Pembayaran, dasar target); "
+             "sales bersih lebih kecil karena sudah dipotong voucher"),
+            ("Prediksi bulan berjalan", "aktual SKU itu tgl 1 s.d. hari penuh terakhir + laju prediksi harian × pola hari sisa bulan; aturan sama dengan kartu "
+             "Prediksi bulan berjalan di atas. Baris Total hanya menjumlah SKU yang prediksinya bergerak, jadi bisa sedikit di bawah kartu (semua Top 50)"),
+            ("Prediksi 30 hari", "30 hari mulai hari ini (melewati akhir bulan), bukan bulan kalender"),
             ("Stok Site 10062 / 10036 · Ambil dari DC", "bila stok Site 10037 kurang, cek apakah DC bisa memenuhi sebelum PO"),
             ("Kolom", "klik judul untuk mengurutkan, geser judul untuk memindah, tarik tepi judul untuk mengubah lebar"),
         ]
@@ -8180,6 +8255,8 @@ def show_analysis_movement(
         end_day=end_day,
         today=today,
         decision=decision_map,
+        orders=orders,
+        orders_all=orders_all,
     )
     if export.empty:
         st.markdown(

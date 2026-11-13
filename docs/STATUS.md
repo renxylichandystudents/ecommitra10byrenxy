@@ -2,6 +2,11 @@
 
 Diperbarui: 13 November 2026.
 
+## Pergerakan Top 50: kolom Prediksi bulan berjalan (13 Nov 2026 malam)
+
+- Grup kolom baru **Prediksi bulan berjalan (Nov 2026)** di antara Prediksi hari ini dan Prediksi 30 hari: Sales produk & QTY per SKU = aktual SKU tgl 1 s.d. hari penuh terakhir + laju prediksi harian × pola hari sisa bulan (aturan sama dengan kartu Prediksi bulan berjalan, `app._running_month_actuals`, `_daily_rate`). Sub-teks sel "aktual 1–12 Nov: …"; angka ▲/▼ = perubahan laju antara tanggal Dari–Sampai × pola sisa bulan. Excel ikut 4 kolom baru.
+- Semua kolom Sales di tabel ini diberi label **Sales produk**; penjelasan tabel menyebut beda dengan sales bersih, dan bahwa Prediksi 30 hari bukan bulan kalender. Total tabel hanya SKU yang bergerak, jadi bisa sedikit di bawah kartu (semua Top 50).
+
 ## Restock prioritas: sales hilang sejak kosong (13 Nov 2026 malam)
 
 - Masukan pengguna: potensi hilang terus bertambah selama stok tidak diisi; tabel harus menunjukkan berapa yang sudah hilang sejak SKU kosong dan sejak kapan, sebagai bahan menjelaskan kenapa target tidak tercapai.
