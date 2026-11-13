@@ -9154,7 +9154,7 @@ with PAGE_ROOT.container(key="page-root"):
                 show_sku_detail(shown, picked, key=f"top50-chart-{picked}")
             else:
                 st.info("Centang kolom Grafik pada satu SKU untuk menampilkan Grafik QTY dan Grafik Sales.")
-            safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, **_ss_params(params, applied_service))
+            safety_stock_box(shown, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, run_meta=TABLE_META, **_ss_params(params, applied_service))
 
     elif sheet == "Prediksi":
         # Ringkasan penjualan periode & status Kecualikan batal & retur langsung di atas (tidak dilipat).
@@ -9240,7 +9240,7 @@ with PAGE_ROOT.container(key="page-root"):
                 )
                 if picked:
                     show_sku_detail(page_view, picked, key=f"allpred-chart-{picked}")
-                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, scope="Semua produk sesuai saringan", **_ss_params(params, applied_service))
+                safety_stock_box(work, period=period, today=today, definition=SS_DEFINITION_TOP, used_default=lead_default, scope="Semua produk sesuai saringan", run_meta=TABLE_META, **_ss_params(params, applied_service))
 
     elif sheet == "Data":
         if source_raw.empty:

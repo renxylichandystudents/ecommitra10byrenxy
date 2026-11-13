@@ -2,6 +2,12 @@
 
 Diperbarui: 13 November 2026.
 
+## Analisa safety stock: baris Bulan berjalan (14 Nov 2026)
+
+- Baris baru "Bulan berjalan · sisa 13–30 Nov (18 hari)": kebutuhan = prediksi sisa bulan (laju harian × pola hari, unit utuh per SKU, dari `run_rest_qty`) + SS; keterangan aktual 1 s.d. hari penuh terakhir (dasar bersih/masuk) dan proyeksi bulan. Aktual tidak dihitung sebagai kebutuhan stok.
+- "Dipenuhi dari" kini dihitung untuk semua baris dengan `dc_stock.transfer_plan` (Site 10062 lalu 10036); baris 30 hari tetap sama dengan `kurang_setelah_dc` (diverifikasi).
+- Penjelasan tambahan: Prediksi QTY unit utuh vs total sebelum dibulatkan di Ringkasan, beda "SKU stok di bawah SS" (kartu) vs "SKU stok < kebutuhan" (tabel). Tidak ada rumus SS/prediksi yang diubah.
+
 ## Tabel Top 50 / Prediksi semua produk: masuk vs bersih, bulan berjalan, lama kosong (14 Nov 2026)
 
 - Masukan pengguna: kolom Terjual ambigu (bersih atau semua), tambah prediksi bulan berjalan, lama kosong mengikuti data latih seperti Restock.

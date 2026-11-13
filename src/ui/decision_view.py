@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import hashlib
@@ -408,6 +408,7 @@ def safety_stock_box(
     review_days: float = 0.0,
     class_levels: dict | None = None,
     calibration: float = 1.0,
+    run_meta: dict | None = None,
 ) -> None:
     """Analisa safety stock: parameter + angka yang tidak tergantung periode sekali saja, lalu satu tabel per periode."""
     del definition
@@ -455,26 +456,54 @@ def safety_stock_box(
             + (f" · {fmt_num(int((~known).sum()))} tanpa data stok" if int((~known).sum()) else ""),
             tone=None,
         )
+        from src.core.dc_stock import DC_SITES, transfer_plan
+
+        codes = [code for code, _n, _s in DC_SITES]
+
+        def _dc_split(gap: pd.Series) -> str:
+            if not any(f"stok_{code}" in table.columns for code in codes):
+                return "belum ada data stok DC"
+            from_dc = rest = 0.0
+            for idx in gap.index[gap > 0]:
+                available = {code: (None if f"stok_{code}" not in table.columns or pd.isna(table.at[idx, f"stok_{code}"]) else float(table.at[idx, f"stok_{code}"]))
+                             for code in codes}
+                take, remaining = transfer_plan(float(np.ceil(gap.at[idx])), available)
+                from_dc += sum(take.values())
+                rest += remaining
+            return f"{fmt_qty(from_dc)} dari DC · {fmt_qty(rest)} PO"
+
+        def _row(label: str, qty: pd.Series, *, need: pd.Series | None = None, extra: bool = False, note: str = "") -> str:
+            need = qty + ss if need is None else need
+            short = known & (stok < need)
+            gap = (need - stok).clip(lower=0).where(known, 0.0)
+            style = " style='background:#eff6ff'" if extra else ""
+            sub = f"<br><span style='color:#64748b;font-size:.85em'>{note}</span>" if note else ""
+            return (
+                f"<tr{style}><td>{label}{sub}</td><td>{fmt_qty(qty.sum())}</td><td>{fmt_qty(ss.sum())}</td>"
+                f"<td><b>{fmt_qty(need.sum())}</b></td><td>{fmt_qty(stok.where(known, 0).sum())}</td>"
+                f"<td><b>{fmt_num(int(short.sum()))}</b> SKU</td><td>{fmt_qty(gap.sum())} unit</td><td>{_dc_split(gap)}</td></tr>"
+            )
+
         rows = []
         for group in groups:
             p = group.prefix
             if f"{p}_butuh" not in table.columns:
                 continue
             qty = pd.to_numeric(table[f"{p}_qty"], errors="coerce").fillna(0.0)
-            need = pd.to_numeric(table[f"{p}_butuh"], errors="coerce").fillna(0.0)
-            short = known & (stok < need)
-            gap = (need - stok).clip(lower=0).where(known, 0.0)
-            dc_text = "–"
-            if p == "m" and "kurang_setelah_dc" in table.columns:
-                rest = pd.to_numeric(table["kurang_setelah_dc"], errors="coerce").fillna(0.0).where(known, 0.0)
-                from_dc = (gap - rest).clip(lower=0)
-                dc_text = f"{fmt_qty(from_dc.sum())} dari DC · {fmt_qty(rest.sum())} PO"
-            style = " style='background:#eff6ff'" if group.extra else ""
-            rows.append(
-                f"<tr{style}><td>{group.label}</td><td>{fmt_qty(qty.sum())}</td><td>{fmt_qty(ss.sum())}</td>"
-                f"<td><b>{fmt_qty(need.sum())}</b></td><td>{fmt_qty(stok.where(known, 0).sum())}</td>"
-                f"<td><b>{fmt_num(int(short.sum()))}</b> SKU</td><td>{fmt_qty(gap.sum())} unit</td><td>{dc_text}</td></tr>"
-            )
+            label = group.label if any(ch.isdigit() for ch in group.label) else f"{group.label} ({fmt_date(today, short=True)})"
+            rows.append(_row(label, qty, need=pd.to_numeric(table[f"{p}_butuh"], errors="coerce").fillna(0.0), extra=group.extra))
+            if p == "d" and run_meta and "run_rest_qty" in table.columns:
+                from src.ui.analysis_dialog import span_text
+
+                rest_start = max(run_meta["first"], run_meta["cutoff"] + timedelta(days=1))
+                rest_qty = np.floor(pd.to_numeric(table["run_rest_qty"], errors="coerce").fillna(0.0) + 1e-9)
+                act = pd.to_numeric(table["run_act_qty"], errors="coerce").fillna(0.0).sum()
+                word = "terjual bersih" if run_meta["basis"] == "bersih" else "masuk"
+                proj = act + rest_qty.sum()
+                note = (f"aktual {word} {span_text(run_meta['first'], run_meta['cutoff'])}: {fmt_qty(act)} unit (sudah terjual, tidak butuh stok) · "
+                        f"proyeksi bulan {fmt_qty(proj)} unit" if run_meta["cutoff"] >= run_meta["first"] else "belum ada hari penuh bulan ini")
+                rows.append(_row(f"Bulan berjalan · sisa {span_text(rest_start, run_meta['month_end'])} "
+                                 f"({(run_meta['month_end'] - rest_start).days + 1} hari)", rest_qty, note=note))
         header = (
             "<tr><th>Periode</th><th>Prediksi QTY (unit utuh)</th><th>+ SS</th><th>= Kebutuhan</th><th>Stok Site 10037</th>"
             "<th>SKU stok &lt; kebutuhan</th><th>Total kekurangan</th><th>Dipenuhi dari</th></tr>"
@@ -494,7 +523,12 @@ def safety_stock_box(
                 ("Sama di setiap periode", "SS hanya menutup risiko selama lead time, jadi tidak bertambah walau periodenya lebih panjang"),
                 ("Kebutuhan", "prediksi QTY periode + SS; SKU disebut kurang bila stok Site 10037 di bawah angka ini"),
                 ("Stok di bawah SS", "lebih mendesak dari sekadar kurang: stok bahkan tidak cukup untuk cadangan, prioritaskan transfer dari DC / PO"),
-                ("Dipenuhi dari", "kekurangan bulan dipenuhi dulu dari Site 10062, lalu Site 10036; sisanya PO ke supplier"),
+                ("Prediksi QTY (unit utuh)", "prediksi per SKU dibulatkan ke bawah lalu dijumlah; karena itu sedikit lebih kecil dari total di Ringkasan "
+                 "total Top 50 yang menjumlah nilai sebelum dibulatkan"),
+                ("Bulan berjalan", "kebutuhan untuk sisa bulan kalender (hari ini s.d. akhir bulan) = prediksi harian × pola hari tiap sisa hari + SS. "
+                 "Aktual tanggal 1 s.d. hari penuh terakhir sudah terjual, jadi tidak dihitung sebagai kebutuhan stok; proyeksi bulan = aktual + sisa"),
+                ("SKU stok < kebutuhan vs SKU stok di bawah SS", "dua ukuran berbeda: kartu atas menghitung stok < SS saja (lebih mendesak), tabel menghitung stok < prediksi periode + SS"),
+                ("Dipenuhi dari", "kekurangan tiap periode dipenuhi dulu dari Site 10062, lalu Site 10036 (stok DC saat ini); sisanya PO ke supplier"),
             ]
         )
 
