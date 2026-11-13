@@ -308,7 +308,7 @@ def decision_table_guide(meta: dict | None, metric: str) -> None:
     cutoff = span_text(meta["cutoff"], meta["cutoff"])
     explain(
         [
-            ("Dasar tabel ini", f"{word.upper()}, sama dengan dasar prediksi (setelan Kecualikan batal & retur {'aktif' if basis == 'bersih' else 'mati'}). "
+            ("Dasar tabel ini", f"{word.upper()}, sama dengan dasar prediksi (centang Kecualikan batal & retur {'dicentang' if basis == 'bersih' else 'tidak dicentang'} saat analisa dijalankan). "
              "Kolom yang menjadi dasar ditandai (dasar)"),
             (f"Aktual · {sold}", "data nyata pada periode penjualan yang dipilih di atas, dihitung dari semua status pesanan. "
              "Terjual bersih = masuk dikurangi pesanan batal, pesanan Belum Bayar, dan barang retur. "
@@ -503,8 +503,9 @@ def safety_stock_box(
                 note = (f"aktual {word} {span_text(run_meta['first'], run_meta['cutoff'])}: {fmt_qty(act)} unit (sudah terjual, tidak butuh stok) · "
                         f"proyeksi bulan {fmt_qty(proj)} unit" if run_meta["cutoff"] >= run_meta["first"] else "belum ada hari penuh bulan ini")
                 if rest_start < today:
-                    note += (f" · {span_text(rest_start, today - timedelta(days=1))} sudah lewat tetapi belum ada di data latih, "
-                             "jadi masih dihitung sebagai prediksi; unggah transaksi terbaru agar angka ini menjadi aktual")
+                    note += (f" · {span_text(rest_start, today - timedelta(days=1))} sudah lewat tetapi belum penuh di data latih "
+                             f"(hari penuh terakhir {span_text(run_meta['cutoff'], run_meta['cutoff'])}), jadi masih dihitung sebagai prediksi; "
+                             "unggah transaksi terbaru lalu jalankan analisa agar menjadi aktual")
                 rows.append(_row(f"Bulan berjalan · sisa {span_text(rest_start, run_meta['month_end'])} "
                                  f"({(run_meta['month_end'] - rest_start).days + 1} hari)", rest_qty, note=note))
         header = (
@@ -604,8 +605,8 @@ def top50_matrix(
     )
     extra = next((g.label for g in groups if g.extra), None)
     extra_text = f"; {extra} = {extra.lower()} terakhir s.d. kemarin" if extra else ""
-    basis = ("Prediksi dilatih tanpa batal & retur (setelan Kecualikan batal & retur aktif), jadi bandingkan prediksi dengan kolom bersih."
-             if exclude else "Prediksi dilatih dengan semua pesanan (setelan Kecualikan batal & retur mati), jadi bandingkan prediksi dengan kolom masuk."
+    basis = ("Prediksi dilatih tanpa batal, Belum Bayar & retur (Kecualikan batal & retur dicentang saat analisa dijalankan), jadi bandingkan prediksi dengan kolom bersih."
+             if exclude else "Prediksi dilatih dengan semua pesanan (Kecualikan batal & retur tidak dicentang saat analisa dijalankan), jadi bandingkan prediksi dengan kolom masuk."
              if exclude is not None else "")
     explain(
         [

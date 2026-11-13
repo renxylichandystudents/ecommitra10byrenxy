@@ -2,6 +2,14 @@
 
 Diperbarui: 13 November 2026.
 
+## Ringkasan: hari belum penuh & sumber data latih (14 Nov 2026)
+
+- Kartu "Kecualikan batal & retur" menghitung periode, pesanan batal/Belum Bayar, dan unit retur dari data transaksi yang tersimpan bersama analisa (bukan file pustaka yang sedang dipilih), sehingga selalu sesuai analisa yang dibuka.
+- Baris "Aktual <kemarin>" di kartu batang tidak dibandingkan bila hari itu belum penuh di laporan (data < 23:00); tertulis "laporan baru s.d. <tgl> pukul <jam>; belum penuh" dan sel angka "belum penuh".
+- Kartu periode penjualan menandai bila tanggal akhir belum penuh ("angkanya masih bertambah").
+- Istilah "setelan … aktif/mati" diganti "centang Kecualikan batal & retur dicentang/tidak dicentang saat analisa dijalankan"; "tanpa batal & retur" menyebut Belum Bayar.
+- Kotak safety stock: hari yang sudah lewat tetapi belum penuh disebut dengan hari penuh terakhirnya.
+
 ## Centang "Kecualikan batal & retur" = dasar prediksi; cara baca di Ringkasan (14 Nov 2026)
 
 - Centang tetap di Upload data › Setelan analisa (ditentukan sebelum analisa dijalankan). Dicentang = dasar BERSIH (batal, Belum Bayar, unit retur tidak dilatih; `cancelled_status_mask`), tidak dicentang = dasar MASUK (semua status). Keterangan di bawah centang ditulis ulang.

@@ -4587,6 +4587,13 @@ def _actual_of(table: pd.DataFrame | None, key: str) -> dict | None:
     return {name: 0.0 for name in table.columns}
 
 
+def _yesterday_note(actuals: dict) -> str:
+    stamp = actuals.get("last_stamp")
+    if actuals.get("yesterday") is not None or stamp is None:
+        return ""
+    return f" · laporan baru s.d. {_short_id_date(stamp.date())} pukul {stamp:%H:%M}; tanggal ini belum penuh, jadi belum dibandingkan"
+
+
 def _card_bars(brief: dict, row: pd.Series, key: str, actuals: dict, *, basis: str, metric: str, period: str, today: date) -> list[dict]:
     """Baris kartu Top 50: Prediksi periode, Aktual kemarin, Tanggal sama bulan lalu, + periode tambahan."""
     price = float(row.get("harga_bersih", 0) or 0)
@@ -4598,15 +4605,15 @@ def _card_bars(brief: dict, row: pd.Series, key: str, actuals: dict, *, basis: s
     pred_sub = brief["bars"][0]["sub"] + (f" · vs aktual {_short_id_date(month[0])} – {_short_id_date(month[1])} {month[1].year}" if month else "")
     rows = [
         (brief["bars"][0]["label"], pred_sub, brief.get("month_pred"), "month"),
-        (brief["bars"][1]["label"], f"prediksi vs {BASIS_WORD[basis]}" + (
-            f" · laporan baru s.d. {_short_id_date(actuals['last_day'])}, tanggal ini belum masuk" if actuals.get("yesterday") is None and actuals.get("last_day") else ""
-        ), brief.get("yesterday_pred"), "yesterday"),
+        (brief["bars"][1]["label"], f"prediksi vs {BASIS_WORD[basis]}" + _yesterday_note(actuals), brief.get("yesterday_pred"), "yesterday"),
         (brief["bars"][2]["label"], brief["bars"][2]["sub"], brief.get("month_ago_pred"), "month_ago"),
     ]
     bars = [
         _split_bar(label, sub, pred, money(pred), _actual_of(actuals.get(name), key), basis=basis, metric=metric)
         for label, sub, pred, name in rows
     ]
+    if _yesterday_note(actuals):
+        bars[1]["pending"] = True
     if period != "bulan" and "p_qty" in row.index and actuals.get("extra_span"):
         from src.core.periods import calendar_period
 
@@ -4634,8 +4641,14 @@ def _board_actuals(orders_all: pd.DataFrame | None, as_of: date, period: str) ->
     month_ago = _same_day_last_month(as_of)
     out = {"yesterday": sku_actuals(orders_all, yesterday, yesterday), "month_ago": sku_actuals(orders_all, month_ago, month_ago)}
     if isinstance(orders_all, pd.DataFrame) and not orders_all.empty:
+        from src.ui.month_track_view import full_day_cutoff
+
         stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max()
-        out["last_day"] = stamp.date() if pd.notna(stamp) else None
+        if pd.notna(stamp):
+            out["last_stamp"] = stamp
+            if full_day_cutoff(stamp, as_of) < yesterday:
+                # Hari yang belum penuh di laporan tidak dibandingkan: angkanya masih bertambah.
+                out["yesterday"] = None
     span = _last_month_span(orders_all, as_of)
     if span is not None:
         out["month_span"] = span
@@ -4736,7 +4749,7 @@ def _qty_card_html(row: pd.Series, brief: dict, bars: list[dict] | None = None, 
             cells = []
             for side in ("bersih", "masuk"):
                 if actual is None:
-                    body = "–<small>belum ada di laporan</small>"
+                    body = f"–<small>{'belum penuh' if bar.get('pending') else 'belum ada di laporan'}</small>"
                 else:
                     body = f"{format_qty(actual[f'qty_{side}'])} unit<small>{format_idr(actual[f'sales_{side}'])}</small>"
                 cells.append(f"<div class='qty-base{' basis' if side == basis else ''}'>{body}</div>")
@@ -4941,13 +4954,13 @@ def show_qty_forecast_board(
     if basis == "bersih":
         basis_text = (
             "Kartu ini menganalisa penjualan BERSIH: prediksi dibanding barang yang benar-benar terjual, tanpa pesanan batal, "
-            "Belum Bayar, dan barang retur. Ini karena prediksi dihitung dengan setelan Kecualikan batal & retur aktif. "
+            "Belum Bayar, dan barang retur. Ini karena analisa dijalankan dengan centang Kecualikan batal & retur dicentang. "
             "Kolom Masuk tetap ditampilkan (abu-abu) agar terlihat semua pesanan yang benar-benar masuk."
         )
     else:
         basis_text = (
             "Kartu ini menganalisa semua pesanan MASUK: prediksi dibanding semua pesanan, termasuk yang batal, Belum Bayar, dan retur. "
-            "Ini karena setelan Kecualikan batal & retur mati, jadi prediksi juga dihitung dari semua pesanan. "
+            "Ini karena analisa dijalankan dengan centang Kecualikan batal & retur tidak dicentang, jadi prediksi juga dihitung dari semua pesanan. "
             "Kolom Terjual bersih tetap ditampilkan (abu-abu) agar terlihat berapa yang akhirnya benar-benar laku."
         )
     st.markdown(f"<p class='qty-board-copy'><b>Dasar analisa:</b> {html.escape(basis_text)}</p>", unsafe_allow_html=True)
@@ -4959,7 +4972,7 @@ def show_qty_forecast_board(
             ("Angka Rupiah", "sales produk = Harga Setelah Diskon × QTY, sebelum voucher. Prediksi Rupiah = prediksi QTY × harga bersih 4 minggu terakhir. "
              "Ini bukan sales bersih Total Pembayaran (dasar target), karena Total Pembayaran per pesanan tidak bisa dibagi tepat per SKU"),
             (f"Baris {format_period_label('prediksi', as_of)}", "prediksi periode berjalan dibanding bulan kalender penuh terakhir (tanggal tertulis di bawah label); naik = permintaan diperkirakan lebih tinggi dari bulan lalu"),
-            (f"Baris {format_period_label('aktual_hari', as_of - timedelta(days=1))}", f"prediksi untuk kemarin dibanding {word} kemarin (cek ketepatan model)"),
+            (f"Baris {format_period_label('aktual_hari', as_of - timedelta(days=1))}", f"prediksi untuk kemarin dibanding {word} kemarin (cek ketepatan model); hanya dibandingkan bila hari itu sudah penuh di laporan (data ≥ 23:00)"),
             ("Baris Tanggal sama bulan lalu", "sama, untuk tanggal yang sama bulan lalu"),
             ("Warna & panjang batang", f"🔵 prediksi di atas {word} · 🔴 di bawah {word} · ⚪ sama; persen dihitung dari {unit_word}; batang penuh = prediksi ≥ {word}, batang pendek = prediksi lebih kecil"),
             ("Stok Site 10037", "stok toko dibanding kebutuhan (prediksi + SS) per periode: hijau Aman, kuning Kurang, merah Kosong"),
@@ -8509,7 +8522,9 @@ def removed_counts(raw: pd.DataFrame | None) -> tuple[int, float]:
     cancelled = cancelled_status_mask(raw["status"]) if "status" in raw.columns else pd.Series(False, index=raw.index)
     orders_count = int(raw.loc[cancelled, "order_id"].nunique()) if "order_id" in raw.columns else int(cancelled.sum())
     units = 0.0
-    if {"gross_qty", "qty"} <= set(raw.columns):
+    if {"returned_qty", "gross_qty"} <= set(raw.columns):
+        units = float(np.minimum(raw.loc[~cancelled, "returned_qty"], raw.loc[~cancelled, "gross_qty"]).clip(lower=0).sum())
+    elif {"gross_qty", "qty"} <= set(raw.columns):
         units = float((raw.loc[~cancelled, "gross_qty"] - raw.loc[~cancelled, "qty"]).clip(lower=0).sum())
     return orders_count, units
 
@@ -9028,6 +9043,13 @@ with PAGE_ROOT.container(key="page-root"):
         else:
             facts = cached_order_metrics(orders_all, start, end, exclude_return_cancel)
             coverage = cached_sku_coverage(orders_all, start, end)
+        if start is not None and isinstance(orders_all, pd.DataFrame) and not orders_all.empty:
+            from src.ui.month_track_view import full_day_cutoff
+
+            stamp = pd.to_datetime(orders_all["order_time"], errors="coerce").max()
+            if pd.notna(stamp) and stamp.date() <= end and full_day_cutoff(stamp, today) < stamp.date():
+                label = f"{label} · {format_id_date(stamp.date())} belum penuh (data s.d. pukul {stamp:%H:%M}), angkanya masih bertambah"
+
         def share(part, whole) -> str:
             return f"{format_pct_id(part / whole * 100)}" if whole else "–"
 
@@ -9054,8 +9076,9 @@ with PAGE_ROOT.container(key="page-root"):
 
 
     def show_exclude_and_cards() -> None:
-        removed_orders, removed_units = removed_counts(orders_raw)
-        raw_days = pd.to_datetime(orders_raw["order_time"], errors="coerce") if isinstance(orders_raw, pd.DataFrame) and "order_time" in orders_raw.columns else pd.Series(dtype="datetime64[ns]")
+        trained = orders_all if isinstance(orders_all, pd.DataFrame) and not orders_all.empty else orders_raw
+        removed_orders, removed_units = removed_counts(trained)
+        raw_days = pd.to_datetime(trained["order_time"], errors="coerce") if isinstance(trained, pd.DataFrame) and "order_time" in trained.columns else pd.Series(dtype="datetime64[ns]")
         raw_span = f"di seluruh data latih ({format_id_date(raw_days.min().date())} – {format_id_date(raw_days.max().date())}) " if raw_days.notna().any() else ""
         exclude_status_card(exclude_return_cancel, removed_orders=removed_orders, removed_units=removed_units, span=raw_span)
         start, end = period_bounds(sales_orders)
