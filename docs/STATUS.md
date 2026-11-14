@@ -635,3 +635,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 
 - SKU, Produk (320 px), Varian disematkan (`pinned`) sehingga tetap terlihat saat tabel digeser.
 - Nama kolom diseragamkan dengan Breakdown per tanggal: QTY · Prediksi/Aktual (dibulatkan unit utuh), Produk · Prediksi/Aktual/Selisih/Achievement/Akurasi. "Selisih omzet" → "Produk · Selisih"; teks "omzet" di ringkasan penyebab → "sales produk". Akurasi per SKU & total ditambahkan.
+
+## Top 5 tindakan segera: kolom Varian, kolom tetap, outstanding (14 Nov 2026)
+
+- `priority_actions` kini mengisi kolom **Varian** terpisah (sebelumnya digabung ke Produk); Prioritas, Jenis, SKU, Produk, Varian disematkan di kiri.
+- Tindakan restock ditambah keterangan outstanding Site 10037 (`month_track.outstanding_note`): "Outstanding PO 20 · TR 10 (sejak 05/11, 9 hari) → masih perlu 20 unit lagi" / "→ sudah menutup kebutuhan, pastikan segera diterima" / "Belum ada outstanding PO/TR/TO: segera buat TR/TO/PO".

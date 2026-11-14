@@ -321,3 +321,17 @@ def test_net_factor_single_rule():
     assert net_factor(net * 0.1, product, date(2026, 11, 1), date(2026, 11, 9)) == 0.5
     empty = product.where(product.index < pd.Timestamp("2026-11-01"), 0.0)
     assert abs(net_factor(net, empty, date(2026, 11, 1), date(2026, 10, 31), date(2026, 10, 31)) - 0.9) < 1e-9
+
+
+def test_restock_action_mentions_outstanding():
+    import pandas as pd
+
+    from src.core import month_track as M
+
+    row = pd.Series({"os_total": 30.0, "os_po": 20.0, "os_tr": 10.0, "os_to": 0.0, "os_tr_lain": 0.0,
+                     "os_sejak": pd.Timestamp("2026-11-05"), "os_umur": 9, "os_minimal": False})
+    note = M.outstanding_note(row, 50)
+    assert "Outstanding PO 20 · TR 10 (sejak 05/11, 9 hari)" in note and "masih perlu 20 unit" in note
+    assert "sudah menutup" in M.outstanding_note(row, 25)
+    assert "Belum ada outstanding" in M.outstanding_note(pd.Series({"os_total": 0.0}), 10)
+    assert M.outstanding_note(pd.Series({"stok": 1}), 10) == ""

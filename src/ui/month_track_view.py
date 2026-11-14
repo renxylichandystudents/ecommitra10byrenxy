@@ -403,4 +403,10 @@ def _top_actions(top: pd.DataFrame, summary: dict, behind: bool, missing: list[s
             note += f". Sisa {fmt_idr(gap - total)} perlu promo tambahan (flash sale/voucher toko) pada hari promo berikutnya."
     st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
     show_table(top, kinds={"Prioritas": "count", "Potensi omzet": "money"}, column_config={
+        # Identitas item tetap terlihat saat tabel digeser ke kanan.
+        "Prioritas": st.column_config.Column("Prioritas", width=80, pinned=True),
+        "Jenis": st.column_config.TextColumn("Jenis", width=110, pinned=True),
+        "SKU": st.column_config.TextColumn("SKU", width=110, pinned=True),
+        "Produk": st.column_config.TextColumn("Produk", width=320, pinned=True),
+        "Varian": st.column_config.TextColumn("Varian", width=150, pinned=True),
         "Tindakan": st.column_config.TextColumn(width="large"), "Alasan": st.column_config.TextColumn(width="large")})

@@ -278,6 +278,26 @@ def _rp(value: float) -> str:
     return "Rp " + f"{int(round(value)):,}".replace(",", ".")
 
 
+def outstanding_note(row, short: float) -> str:
+    """Keterangan outstanding PO/TR/TO Site 10037 untuk tindakan restock: jumlah, umur, dan sisa yang masih perlu diproses.
+    Kosong bila replenishment Site 10037 belum diunggah (kolom os_total tidak ada)."""
+    if row is None or "os_total" not in row:
+        return ""
+    total = _num(row.get("os_total"))
+    if total <= 0:
+        return " · Belum ada outstanding PO/TR/TO: segera buat TR/TO/PO"
+    parts = [f"{label} {_units(_num(row.get(col)))}" for col, label in (("os_po", "PO"), ("os_tr", "TR"), ("os_to", "TO"), ("os_tr_lain", "TR toko lain"))
+             if _num(row.get(col)) > 0]
+    text = " · Outstanding " + " · ".join(parts)
+    since, days = row.get("os_sejak"), row.get("os_umur")
+    if since is not None and not pd.isna(since) and days is not None and not pd.isna(days):
+        mark = "≥ " if bool(row.get("os_minimal", False)) else ""
+        text += f" (sejak {pd.Timestamp(since):%d/%m}, {mark}{int(days)} hari)"
+    rest = max(float(short) - total, 0.0)
+    text += " → sudah menutup kebutuhan, pastikan segera diterima" if rest <= 0 else f" → masih perlu {_units(rest)} unit lagi"
+    return text
+
+
 def priority_actions(
     table: pd.DataFrame,
     *,
@@ -311,7 +331,7 @@ def priority_actions(
     from src.core.dc_stock import DC_SITES, transfer_plan, transfer_text
     from src.core.restock import stock_out_date
 
-    columns = ["Prioritas", "Jenis", "SKU", "Produk", "Tindakan", "Tenggat", "Potensi omzet", "Alasan"]
+    columns = ["Prioritas", "Jenis", "SKU", "Produk", "Varian", "Tindakan", "Tenggat", "Potensi omzet", "Alasan"]
     margin_pct = margin_pct or {}
     ad_per_unit = ad_per_unit or {}
     excluded = excluded or set()
@@ -334,7 +354,8 @@ def priority_actions(
             continue
         name = str(r.get("product_name", "") or "")
         variant = str(r.get("variasi_tampil", "") or "")
-        label = name + (f" · {variant}" if variant and variant.lower() not in ("-", "nan", "tanpa variasi") else "")
+        label = name
+        variant = variant if variant and variant.lower() not in ("-", "nan") else ""
         known = bool(r.get("ada_data_stok", False))
         stok = max(_num(r.get("stok")), 0.0)
         need = daily * rest_days
@@ -349,9 +370,10 @@ def priority_actions(
                 action = "Restock: " + transfer_text(short, take, remaining, True)
             else:
                 action = f"Restock {_units(short)} unit (stok Site 10062/10036 belum diunggah: cek DC, lalu PO)"
+            action += outstanding_note(r, short)
             out_day = stock_out_date(stok, daily, today)
             rows.append({
-                "Jenis": "Stok", "SKU": sku, "Produk": label, "Tindakan": action,
+                "Jenis": "Stok", "SKU": sku, "Produk": label, "Varian": variant, "Tindakan": action,
                 "Tenggat": "Sudah kosong" if stok <= 0 else (f"Habis ±{out_day:%d/%m}" if out_day else ""),
                 "Potensi omzet": lost * price * factor,
                 "Alasan": f"Prediksi {_units(daily)} unit/hari × {rest_days} hari = {_units(need)} unit + SS {_units(ss)}, stok {_units(stok)}",
@@ -364,7 +386,7 @@ def priority_actions(
         if sold and expected >= 3 and got < 0.6 * expected and got < 0.6 * reachable * recent_days and not (known and stok <= 0):
             gain = (reachable - got / recent_days) * price * rest_days * factor
             rows.append({
-                "Jenis": "Harga & listing", "SKU": sku, "Produk": label,
+                "Jenis": "Harga & listing", "SKU": sku, "Produk": label, "Varian": variant,
                 "Tindakan": "Cek harga vs pesaing, foto & judul listing, dan status iklan; pasang voucher toko bila harga kalah",
                 "Tenggat": "Hari ini",
                 "Potensi omzet": gain,
@@ -397,7 +419,7 @@ def priority_actions(
         if gain <= 0:
             continue
         rows.append({
-            "Jenis": "Iklan", "SKU": sku, "Produk": label,
+            "Jenis": "Iklan", "SKU": sku, "Produk": label, "Varian": variant,
             "Tindakan": f"Naikkan budget iklan harian {_rp(cost)} → {_rp(cost + extra)}",
             "Tenggat": "Hari ini",
             "Potensi omzet": gain,
@@ -412,6 +434,7 @@ def priority_actions(
             "Alasan": f"Nominal menunggu bayar {_rp(unpaid)}; estimasi 30% berhasil dibayar",
         })
     frame = pd.DataFrame(rows, columns=[c for c in columns if c != "Prioritas"])
+    frame["Varian"] = frame["Varian"].fillna("")
     if frame.empty:
         return pd.DataFrame(columns=columns)
     frame = frame.sort_values("Potensi omzet", ascending=False).head(limit).reset_index(drop=True)
