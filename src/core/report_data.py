@@ -123,31 +123,38 @@ def daily_orders(frame: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
 
 
 def top_products(orders: pd.DataFrame, start: date, end: date, prev: tuple[date, date], limit: int = 30) -> pd.DataFrame:
-    """Produk terlaris di rentang (sales produk bersih) + perubahan vs rentang sebelumnya yang sama panjang."""
-    cols = ["Rank", "SKU", "Produk", "QTY", "Sales", "Porsi (%)", "Sales periode lalu", "Perubahan (%)"]
-    if orders is None or orders.empty:
-        return pd.DataFrame(columns=cols)
-    if "status" in orders.columns:
-        from src.ingest import cancelled_status_mask
+    """Produk terlaris di rentang + perubahan vs rentang pembanding.
 
-        orders = orders.loc[~cancelled_status_mask(orders["status"])]
-    day = pd.to_datetime(orders["order_time"]).dt.normalize()
+    `orders` berisi semua status (orders_all). Angka bersih, sama dengan kartu Ringkasan: QTY bersih & Sales produk bersih
+    = baris yang tidak batal / Belum Bayar, dikurangi unit & nilai retur (metrics.sold_lines). Porsi dihitung terhadap Sales
+    produk bersih seluruh produk, bukan hanya produk yang ditampilkan."""
+    from src.core.metrics import sold_lines
+
+    cols = ["Rank", "SKU", "Produk", "QTY bersih", "Sales produk bersih", "Porsi (%)", "Sales produk bersih periode lalu", "Perubahan (%)"]
+    lines = sold_lines(orders) if orders is not None and not orders.empty else None
+    if lines is None or lines.empty:
+        return pd.DataFrame(columns=cols)
+    day = pd.to_datetime(lines["order_time"], errors="coerce").dt.normalize()
+    names = lines.assign(sku=lines["sku"].astype(str)).drop_duplicates("sku", keep="last").set_index("sku")["product_name"]
 
     def grab(a, b):
-        part = orders.loc[day.between(pd.Timestamp(a), pd.Timestamp(b))]
-        return part.groupby(["sku", "product_name"], as_index=False).agg(QTY=("qty", "sum"), Sales=("sales", "sum"))
+        part = lines.loc[day.between(pd.Timestamp(a), pd.Timestamp(b))]
+        return part.assign(sku=part["sku"].astype(str)).groupby("sku").agg(QTY=("qty", "sum"), Sales=("sales", "sum"))
 
     now = grab(start, end)
+    now = now.loc[(now["QTY"] > 0) | (now["Sales"] != 0)]
     if now.empty:
         return pd.DataFrame(columns=cols)
-    before = grab(*prev).groupby("sku")["Sales"].sum()
-    now = now.sort_values("Sales", ascending=False).reset_index(drop=True)
+    before = grab(*prev)["Sales"]
+    now = now.sort_values(["Sales", "QTY"], ascending=False).reset_index()
     total = float(now["Sales"].sum()) or 1.0
-    now["Porsi (%)"] = now["Sales"] / total * 100
-    now["Sales periode lalu"] = now["sku"].map(before).fillna(0.0)
-    now["Perubahan (%)"] = np.where(now["Sales periode lalu"] > 0, (now["Sales"] - now["Sales periode lalu"]) / now["Sales periode lalu"] * 100, np.nan)
-    now.insert(0, "Rank", np.arange(1, len(now) + 1))
-    return now.rename(columns={"sku": "SKU", "product_name": "Produk"})[cols].head(limit)
+    out = pd.DataFrame({
+        "Rank": np.arange(1, len(now) + 1), "SKU": now["sku"], "Produk": now["sku"].map(names).fillna(""), "QTY bersih": now["QTY"],
+        "Sales produk bersih": now["Sales"], "Porsi (%)": now["Sales"] / total * 100,
+        "Sales produk bersih periode lalu": now["sku"].map(before).fillna(0.0)})
+    out["Perubahan (%)"] = np.where(out["Sales produk bersih periode lalu"] > 0,
+                                    (out["Sales produk bersih"] - out["Sales produk bersih periode lalu"]) / out["Sales produk bersih periode lalu"] * 100, np.nan)
+    return out[cols].head(limit)
 
 
 def performance_range(performance: pd.DataFrame | None, start: date, end: date) -> tuple[dict, pd.DataFrame]:

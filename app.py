@@ -9530,6 +9530,8 @@ with PAGE_ROOT.container(key="page-root"):
             run_id=int((st.session_state.get("active-run") or (0,))[0] or 0),
             username=AUTH_USER.username,
             can_edit=allowed_access(AUTH_USER.role, "laporan", "edit"),
+            outcome=outcome,
+            repo=run_repository(),
         )
 
     elif sheet == "Evaluasi model":

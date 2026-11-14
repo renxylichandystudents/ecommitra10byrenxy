@@ -272,28 +272,32 @@ def fishbone(cancel_reasons: pd.DataFrame) -> dict[str, list[str]]:
 
 
 def work_guide(context: dict) -> dict[str, list[tuple[str, str]]]:
-    """Panduan kerja harian/mingguan/bulanan dengan ukuran berhasil."""
+    """Panduan kerja harian/mingguan/bulanan dengan ukuran berhasil (mengacu ke menu aplikasi yang ada sekarang)."""
     target = context.get("target_sales", 0)
     target_text = context.get("target_text", "-")
     daily_target = context.get("daily_target_text", "-")
     roas_target = context.get("target_roas", 8)
     return {
         "Harian": [
-            (f"Cek sales harian terhadap target {daily_target}", "Sales kemarin ≥ target harian"),
-            ("Kirim chat pengingat ke pembeli yang belum bayar", "Pesanan batal belum bayar turun minggu ini"),
-            ("Cek SKU Top 50 berstatus Kurang/Kosong dan ajukan restock", "0 SKU Top 50 kosong"),
-            ("Pantau iklan dengan ROAS < 3 dan turunkan bid", f"ROAS harian ≥ {roas_target}"),
+            (f"Cek Sales bersih kemarin terhadap target harian {daily_target} (Ringkasan › Pantau bulan berjalan)", "Sales bersih kemarin ≥ target harian"),
+            ("Kirim chat pengingat ke pembeli yang belum bayar (Data › Belum bayar)", "Pesanan batal belum bayar turun minggu ini"),
+            ("Cek SKU Top 50 berstatus Kurang/Kosong dan ajukan restock (Tabel keputusan)", "0 SKU Top 50 kosong"),
+            ("Kejar outstanding PO/TR/TO yang lewat 7 hari (Gudang 10037 › Follow up outstanding)", "Tidak ada outstanding > 7 hari"),
+            (f"Pantau iklan dengan ROAS di bawah target dan turunkan bid (Fitur khusus › Iklan)", f"ROAS harian ≥ {roas_target}"),
         ],
         "Mingguan": [
-            ("Upload stok terbaru (snapshot Site 10037) dan jalankan analisa", "Prediksi dan lama kosong ter-update"),
+            ("Unggah stok & replenishment terbaru lalu jalankan analisa", "Prediksi, status stok, dan umur outstanding ter-update"),
+            ("Tindak lanjuti SKU rugi & margin rendah di Kalkulator margin › Ringkasan & prioritas", "SKU rugi berkurang; usulan harga dikirim ke MD"),
             ("Perbaiki 10 nama/deskripsi berskor Kurang", "Skor naik ke Cukup/Sangat baik"),
-            ("Evaluasi budget iklan per SKU terhadap stok", "Tidak ada iklan aktif pada SKU stok kurang"),
+            ("Evaluasi budget iklan per SKU terhadap stok & margin", "Tidak ada iklan aktif pada SKU stok kurang atau rugi"),
             ("Siapkan flash sale minggu depan dari tab Rekomendasi", "Kuota flash sale terjual ≥ 70%"),
         ],
         "Bulanan": [
-            (f"Review pencapaian target sales {target_text}", "Realisasi ≥ 100% target" if target else "Realisasi ≥ prediksi"),
-            ("Review akurasi prediksi di Evaluasi model (MAPE/WAPE)", "MAPE agregat ≤ 15%"),
+            (f"Review pencapaian target sales {target_text} dan simpan laporan bulan ini", "Realisasi ≥ 100% target" if target else "Realisasi ≥ prediksi"),
+            ("Unggah ranking kompetitor bulan ini (Rekomendasi › Ranking kategori)", "Kategori di Top 10 bertambah; kategori 'Dekat' naik"),
+            ("Review akurasi prediksi di Evaluasi model (MAPE agregat, bias, tingkat layanan)", "MAPE agregat ≤ 15% dan |bias| ≤ 10%"),
+            ("Tinjau SKU nonaktif yang dulu untung (Kalkulator › SKU nonaktif)", "Keputusan aktifkan kembali / tetap nonaktif tercatat"),
             ("Jadwalkan markdown SKU Slow-Moving/Dead Stock", "Nilai stok mati turun"),
-            ("Susun kalender konten media sosial 1 bulan", "10 SKU ter-expose sesuai jadwal"),
+            ("Susun kalender konten & campaign 1 bulan (tanggal kembar, gajian)", "Campaign tersimpan untuk semua tanggal kampanye"),
         ],
     }
