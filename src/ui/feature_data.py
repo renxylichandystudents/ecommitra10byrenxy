@@ -30,6 +30,7 @@ class FeatureData:
     margin_inputs: dict = field(default_factory=dict)  # sku → shopee_fee.Inputs (modal dari File margin) untuk harga flash
     replenishment: pd.DataFrame = field(default_factory=pd.DataFrame)  # replenishment Site 10037 terbaru: sku, out_po, out_tr
     replenishment_date: object = None
+    replenishment_history: pd.DataFrame = field(default_factory=pd.DataFrame)  # semua snapshot: snapshot_date, sku, out_*
 
 
 SEED_ACTION = "seed:excluded_sku"
@@ -105,7 +106,11 @@ def load_feature_data(features, table: pd.DataFrame, today: date, *, periode: st
     try:
         dates = features.snapshot_dates("warehouse_replenishment")
         if dates:
-            data.replenishment = features.read("warehouse_replenishment", {"snapshot_date": dates[0]})
+            history = features.read("warehouse_replenishment")
+            keep = [c for c in ("snapshot_date", "sku", "out_po", "out_tr", "out_to", "out_tr_lain") if c in history.columns]
+            data.replenishment_history = history[keep]
+            stamp = pd.to_datetime(history["snapshot_date"], errors="coerce").dt.date
+            data.replenishment = history.loc[stamp.eq(pd.Timestamp(dates[0]).date())]
             data.replenishment_date = dates[0]
     except Exception:
         pass

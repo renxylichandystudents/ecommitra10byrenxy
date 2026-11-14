@@ -1,6 +1,14 @@
 import pandas as pd
 
-from src.core.insight_live import month_restock, outstanding_for, outstanding_text, po_coverage, running_ads
+from src.core.insight_live import (
+    month_restock,
+    outstanding_age,
+    outstanding_for,
+    outstanding_text,
+    po_coverage,
+    running_ads,
+    stuck_outstanding,
+)
 
 
 def test_month_restock_splits_dc_and_po():
@@ -99,6 +107,47 @@ def test_outstanding_old_snapshot_without_to_columns():
     repl = pd.DataFrame({"sku": ["A"], "out_po": [3.0], "out_tr": [None]})
     info = outstanding_for(["A"], repl)
     assert info["per_sku"].loc["A", "masuk"] == 3
+
+
+def _history():
+    rows = [
+        # A: TR terus ada sejak 09/11 (sebelumnya 0); B: TR baru muncul 14/11; C: hanya TO, baru tercatat 14/11 (kolom TO belum ada sebelumnya)
+        ("2026-11-05", "A", 0, 0, None), ("2026-11-09", "A", 0, 5, None), ("2026-11-12", "A", 0, 5, None), ("2026-11-14", "A", 0, 5, 0),
+        ("2026-11-05", "B", 0, 0, None), ("2026-11-12", "B", 0, 0, None), ("2026-11-14", "B", 0, 3, 0),
+        ("2026-11-12", "C", 0, 0, None), ("2026-11-14", "C", 0, 0, 4),
+        ("2026-11-14", "D", 0, 0, 0),
+    ]
+    return pd.DataFrame(rows, columns=["snapshot_date", "sku", "out_po", "out_tr", "out_to"])
+
+
+def test_outstanding_age_runs_and_minimal():
+    age = outstanding_age(_history(), today=pd.Timestamp("2026-11-14"))
+    assert age.loc["A", "sejak"] == pd.Timestamp("2026-11-09") and age.loc["A", "umur_hari"] == 5 and not age.loc["A", "minimal"]
+    assert age.loc["B", "umur_hari"] == 0 and not age.loc["B", "minimal"]
+    assert age.loc["C", "umur_hari"] == 0 and age.loc["C", "minimal"]
+    assert "D" not in age.index
+
+
+def test_stuck_outstanding_only_short_with_dc_stock():
+    table = pd.DataFrame(
+        {
+            "sku": ["A", "B", "C", "D", "E"],
+            "product_name": list("abcde"),
+            "m_status": ["Kosong", "Kurang", "Kurang · 2 hari", "Kosong", "Aman"],
+            "stok": [0, 2, 1, 0, 50],
+            "m_butuh": [10, 4, 3, 6, 10],
+            "stok_10062": [5, 0, 1, 0, 9],
+            "stok_10036": [0, 9, 0, 0, 9],
+        }
+    )
+    hist = _history()
+    repl = hist.loc[hist["snapshot_date"] == "2026-11-14"]
+    out = stuck_outstanding(table, repl, hist, today=pd.Timestamp("2026-11-14")).set_index("SKU")
+    assert set(out.index) == {"A", "B", "C"}  # D: DC kosong; E: aman
+    assert out.loc["A", "Umur outstanding (hari)"] == 5
+    assert out.loc["A", "Keterangan"] == "Outstanding 5 hari belum diterima · kurang 5 dari kebutuhan"
+    assert "belum diketahui" in out.loc["C", "Keterangan"]
+    assert out.loc["C", "Outstanding sejak"].startswith("≤ ")
 
 
 def test_feature_store_adds_new_nullable_columns(tmp_path):

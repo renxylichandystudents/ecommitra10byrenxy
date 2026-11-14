@@ -146,6 +146,125 @@ def outstanding_text(row) -> str:
     return " · ".join(parts)
 
 
+OUT_TYPES = {"po": "out_po", "tr": "out_tr", "to": "out_to", "tr_toko_lain": "out_tr_lain"}
+
+
+def outstanding_age(history: pd.DataFrame | None, today=None) -> pd.DataFrame:
+    """Sejak kapan outstanding SKU Site 10037 terlihat terus-menerus di snapshot replenishment.
+
+    Per jenis (PO/TR/TO/TR toko lain) dicari snapshot pertama dari rangkaian terakhir yang nilainya > 0. Rangkaian berhenti di snapshot
+    bernilai 0; bila berhenti karena kolom belum tercatat (kosong di snapshot lama) atau sampai snapshot tertua, umur = minimal (≥).
+    Kolom: sejak, umur_hari, minimal, snapshot (jumlah snapshot berturut-turut), terakhir."""
+    columns = ["sejak", "umur_hari", "minimal", "snapshot", "terakhir"]
+    if history is None or history.empty or not {"sku", "snapshot_date"} <= set(history.columns):
+        return pd.DataFrame(columns=columns)
+    work = history.copy()
+    work["sku"] = _clean_sku(work["sku"].astype(str))
+    work["snapshot_date"] = pd.to_datetime(work["snapshot_date"], errors="coerce").dt.normalize()
+    work = work.dropna(subset=["snapshot_date"])
+    dates = sorted(work["snapshot_date"].unique(), reverse=True)
+    if not dates:
+        return pd.DataFrame(columns=columns)
+    latest, oldest = dates[0], dates[-1]
+    ref = pd.Timestamp(today).normalize() if today is not None else pd.Timestamp(latest)
+    values = {}
+    for name, column in OUT_TYPES.items():
+        raw = pd.to_numeric(work[column], errors="coerce") if column in work.columns else pd.Series(np.nan, index=work.index)
+        grid = work.assign(v=raw).groupby(["sku", "snapshot_date"])["v"].sum(min_count=1).unstack("snapshot_date")
+        recorded = work.assign(v=raw).groupby("snapshot_date")["v"].apply(lambda s: s.notna().any())
+        # Kolom tercatat di snapshot itu: SKU yang tidak ada / kosong = 0. Belum tercatat (snapshot lama): tetap NaN = tidak diketahui.
+        for day in grid.columns:
+            if bool(recorded.get(day, False)):
+                grid[day] = grid[day].fillna(0.0)
+        values[name] = grid
+    now = values["po"].index
+    rows = {}
+    for sku in now:
+        best, minimal, count = None, False, 0
+        for name, table in values.items():
+            row = table.loc[sku] if sku in table.index else None
+            if row is None or not (row.get(latest, 0) > 0):
+                continue
+            since, run, short = latest, 0, False
+            for day in dates:
+                value = row.get(day, np.nan)
+                if pd.isna(value):
+                    short = True
+                    break
+                if value <= 0:
+                    break
+                since, run = day, run + 1
+            else:
+                short = True
+            short = short or since == oldest
+            if best is None or since < best:
+                best, minimal, count = since, short, run
+            elif since == best:
+                minimal = minimal or short
+        if best is not None:
+            rows[sku] = {"sejak": pd.Timestamp(best), "umur_hari": int((ref - pd.Timestamp(best)).days), "minimal": minimal,
+                         "snapshot": count, "terakhir": pd.Timestamp(latest)}
+    return pd.DataFrame.from_dict(rows, orient="index", columns=columns)
+
+
+def stuck_outstanding(table: pd.DataFrame, repl: pd.DataFrame | None, history: pd.DataFrame | None, today=None, top_n: int = 50) -> pd.DataFrame:
+    """SKU yang Kosong/Kurang di Site 10037 padahal stok Site 10062/10036 ada, dengan outstanding dan umurnya."""
+    if table is None or table.empty or not {"sku", "stok", "m_butuh"} <= set(table.columns):
+        return pd.DataFrame()
+    status = table["m_status"].astype(str).str.split(" · ").str[0].replace({"Tipis": "Kurang"}) if "m_status" in table.columns else pd.Series("", index=table.index)
+    dc_cols = [c for c in ("stok_10062", "stok_10036") if c in table.columns]
+    if not dc_cols:
+        return pd.DataFrame()
+    dc = table[dc_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    work = table.loc[status.isin({"Kosong", "Kurang"}) & dc.sum(axis=1).gt(0)].copy()
+    if work.empty:
+        return pd.DataFrame()
+    keys = _clean_sku(work["sku"].astype(str))
+    pending = outstanding_10037(repl)
+    age = outstanding_age(history, today)
+    stok = pd.to_numeric(work["stok"], errors="coerce").fillna(0.0)
+    need = np.ceil((pd.to_numeric(work["m_butuh"], errors="coerce").fillna(0.0) - stok).clip(lower=0))
+    out_total = keys.map(pending["masuk"]).fillna(0.0) if not pending.empty else pd.Series(0.0, index=work.index)
+    since = keys.map(age["sejak"]) if not age.empty else pd.Series(pd.NaT, index=work.index)
+    days = keys.map(age["umur_hari"]) if not age.empty else pd.Series(np.nan, index=work.index)
+    minimal = keys.map(age["minimal"]).eq(True) if not age.empty else pd.Series(False, index=work.index)
+    rank = pd.Series(range(1, len(table) + 1), index=table.index).loc[work.index]
+
+    def process(total, need_units, day, short) -> str:
+        if total <= 0:
+            return "Belum ada outstanding · buat TR/TO dari DC"
+        if pd.notna(day) and day > 0:
+            text = f"Outstanding {'≥ ' if short else ''}{int(day)} hari belum diterima"
+        elif short:
+            text = "Outstanding mulai tercatat di unggahan ini, umur sebenarnya belum diketahui"
+        else:
+            text = "Outstanding baru muncul di unggahan terakhir"
+        if total < need_units:
+            text += f" · kurang {int(need_units - total)} dari kebutuhan"
+        return text
+
+    result = pd.DataFrame(
+        {
+            "Rank": rank.where(rank <= top_n),
+            "SKU": work["sku"].astype(str),
+            "Produk": work["product_name"].astype(str) if "product_name" in work.columns else "",
+            "Status Site 10037": status.loc[work.index],
+            "Stok Site 10037": stok,
+            "Stok Site 10062": dc["stok_10062"].loc[work.index] if "stok_10062" in dc else np.nan,
+            "Stok Site 10036": dc["stok_10036"].loc[work.index] if "stok_10036" in dc else np.nan,
+            "Kebutuhan restock": need,
+            "Outstanding": [outstanding_text(pending.loc[k]) if not pending.empty and k in pending.index else "" for k in keys],
+            "Total outstanding": out_total,
+            "Outstanding sejak": [(("≤ " if m else "") + f"{d:%d/%m/%Y}") if pd.notna(d) else "" for d, m in zip(since, minimal)],
+            "Umur outstanding (hari)": days,
+            "Keterangan": [process(t, n, d, m) for t, n, d, m in zip(out_total, need, days, minimal)],
+        }
+    )
+    result["_kosong"] = result["Status Site 10037"].eq("Kosong")
+    result = result.sort_values(["_kosong", "Umur outstanding (hari)", "Kebutuhan restock"], ascending=False, na_position="last")
+    return result.drop(columns="_kosong").reset_index(drop=True)
+
+
 def outstanding_for(skus: list[str], repl_10037: pd.DataFrame | None, repl_date=None) -> dict | None:
     """Outstanding Site 10037 untuk daftar SKU: total per jenis dan per SKU."""
     table = outstanding_10037(repl_10037)

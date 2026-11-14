@@ -332,6 +332,61 @@ def show_priority_dashboard(
                 noun="SKU",
                 download=lambda: download_excel(view, "restock_prioritas.xlsx", key="xl-dash-restock"),
             )
+    _stuck_section(table, data, today)
+
+
+STUCK_KINDS = {
+    "Rank": "count", "Stok Site 10037": "count", "Stok Site 10062": "count", "Stok Site 10036": "count", "Kebutuhan restock": "count",
+    "Total outstanding": "count", "Umur outstanding (hari)": "count",
+}
+
+
+def _stuck_section(table: pd.DataFrame, data: FeatureData, today: date) -> None:
+    """SKU kosong/kurang di Site 10037 padahal DC ada stok: outstanding dan sudah berapa lama belum diterima."""
+    from src.core.insight_live import stuck_outstanding
+
+    if data.replenishment.empty:
+        return
+    stuck = stuck_outstanding(table, data.replenishment, data.replenishment_history, today)
+    if stuck.empty:
+        return
+    has = stuck["Total outstanding"] > 0
+    days = pd.to_numeric(stuck["Umur outstanding (hari)"], errors="coerce")
+    late = has & days.ge(3)
+    hist = data.replenishment_history
+    snaps = pd.to_datetime(hist["snapshot_date"], errors="coerce").dropna().dt.date.unique() if not hist.empty else []
+    to_rows = hist.loc[hist["out_to"].notna()] if "out_to" in hist.columns else hist.iloc[0:0]
+    to_first = short_date(pd.to_datetime(to_rows["snapshot_date"]).min()) if not to_rows.empty else "unggahan berikutnya"
+    st.markdown("**Outstanding Site 10037 · SKU kosong/kurang padahal Site 10062/10036 ada stok**")
+    c = st.columns(4)
+    card(c[0], "SKU kosong/kurang, DC ada stok", fmt_num(len(stuck)),
+         hint=f"{fmt_num(int(stuck['Status Site 10037'].eq('Kosong').sum()))} kosong · {fmt_num(int(stuck['Rank'].notna().sum()))} di Top 50 · semua SKU berprediksi")
+    card(c[1], "Belum ada outstanding", f"{fmt_num(int((~has).sum()))} SKU", hint="belum dibuat TR/TO/PO sama sekali → minta gudang buat transfer dari DC")
+    card(c[2], "Outstanding ≥ 3 hari belum diterima", f"{fmt_num(int(late.sum()))} SKU",
+         hint=(f"terlama {fmt_num(days[has].max())} hari" if has.any() and days[has].notna().any() else "") + " · tanyakan ke tim gudang kenapa belum diproses")
+    covered = has & (stuck["Total outstanding"] >= stuck["Kebutuhan restock"])
+    card(c[3], "Outstanding sudah menutup kebutuhan", f"{fmt_num(int(covered.sum()))} SKU",
+         hint=f"{fmt_num(int((has & ~covered).sum()))} SKU outstanding-nya masih kurang dari kebutuhan")
+    explain(
+        [
+            ("Sumber", f"Replenishment Calculation by Date Site 10037 tanggal {short_date(data.replenishment_date)} (Setting › Kapasitas gudang); "
+             "stok Site 10037 dari Data stok Shopee, stok DC dari unggahan Site 10062/10036"),
+            ("Outstanding", "barang yang sudah dalam proses menuju Site 10037: PO, TR, TO, TR dari toko lain"),
+            ("Outstanding sejak · umur", f"unggahan replenishment pertama dari rangkaian terakhir yang mencatat outstanding SKU itu (riwayat {fmt_num(len(snaps))} unggahan). "
+             "Unggahan tidak harian, jadi outstanding bisa muncul di antara dua unggahan. \"≤\"/\"≥\" = umur minimal: TO dan TR dari toko lain baru disimpan "
+             f"mulai unggahan {to_first}, atau sudah ada sejak unggahan tertua. Unggah replenishment setiap hari agar umurnya tepat"),
+            ("Kebutuhan restock", "prediksi 30 hari + SS − stok Site 10037 (sama dengan tabel di atas)"),
+            ("Urutan", "kosong dulu, lalu outstanding terlama; yang belum punya outstanding di akhir tiap kelompok"),
+        ]
+    )
+    stamp = short_date(data.replenishment_date).replace(" ", "_") if data.replenishment_date else ""
+    batched_view(
+        len(stuck),
+        key="dash-stuck",
+        render=lambda a, b: show_table(stuck.iloc[a:b], kinds=STUCK_KINDS),
+        noun="SKU",
+        download=lambda: download_excel(stuck, f"outstanding_site_10037_{stamp}.xlsx", key="xl-dash-stuck"),
+    )
 
 
 def empty_age(days, since, from_first: bool) -> str:

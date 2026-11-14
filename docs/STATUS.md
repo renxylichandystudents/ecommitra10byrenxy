@@ -2,6 +2,14 @@
 
 Diperbarui: 13 November 2026.
 
+## Ringkasan: Outstanding Site 10037 untuk SKU kosong/kurang padahal DC ada stok (14 Nov 2026)
+
+- Masukan pengguna: barang keluar Site 10037 hanya barang terjual, jadi PO/TR/TO/TR dari toko lain semuanya barang masuk. Yang dibutuhkan: SKU kosong/kurang di Site 10037 padahal stok Site 10062/10036 ada, dan sudah berapa lama outstanding-nya belum diterima (bahan tanya tim gudang).
+- Bagian baru di bawah tabel Kebutuhan restock prioritas: kartu (jumlah SKU, belum ada outstanding, outstanding ≥ 3 hari, outstanding menutup kebutuhan) + tabel semua SKU berprediksi (Rank bila Top 50, stok 10037/10062/10036, kebutuhan restock 30 hari, outstanding per jenis, total, Outstanding sejak, Umur, Keterangan) + Excel. Urut kosong dulu lalu umur terlama.
+- Umur (`insight_live.outstanding_age`): per jenis, unggahan replenishment pertama dari rangkaian terakhir bernilai > 0; berhenti di 0. Kolom yang belum tercatat di snapshot lama (TO & TR dari toko lain sebelum 14/11) atau rangkaian sampai snapshot tertua → minimal ("≤ tanggal", "≥ N hari"). Riwayat dari semua snapshot `warehouse_replenishment` (`FeatureData.replenishment_history`). Unggahan tidak harian, jadi umur = sejak unggahan yang pertama mencatat.
+- Data 14 Nov (snapshot 23/09, 9/11, 10/11, 12/11, 14/11; analisa 16): 90 SKU kosong/kurang padahal DC ada stok (12 kosong, 31 Top 50); 65 belum ada outstanding; 7 outstanding 4–5 hari belum diterima; 15 hanya TO/TR toko lain (umur belum diketahui).
+- Tes `test_outstanding_age_runs_and_minimal`, `test_stuck_outstanding_only_short_with_dc_stock`.
+
 ## Insight Ringkasan: bulan berjalan, iklan yang sedang berjalan, outstanding PO/TR/TO (14 Nov 2026)
 
 - **Bulan berjalan**: SKU Top 50 yang perlu restock untuk sisa bulan = prediksi sisa bulan (unit utuh, `run_rest_qty`) + SS − stok Site 10037, dibagi DC (10062 → 10036) lalu PO dengan `transfer_plan` (aturan sama dengan Analisa safety stock).
