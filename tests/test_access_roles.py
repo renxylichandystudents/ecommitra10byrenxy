@@ -32,7 +32,7 @@ class RoleAccessTests(unittest.TestCase):
             self.assertNotIn("data-latih", [slug for slug, _l, _m in setting_tabs(role)])
 
     def test_super_user_gets_all_setting_tabs(self):
-        self.assertEqual(len(setting_tabs("super_user")), 6)
+        self.assertEqual(len(setting_tabs("super_user")), 5)
 
 
 class SettingRoutingTests(unittest.TestCase):

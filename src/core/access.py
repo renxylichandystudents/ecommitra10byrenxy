@@ -78,7 +78,6 @@ MENU_LABELS = {
 SETTING_TABS = (
     ("sku-dikecualikan", "SKU dikecualikan", "setting_sku_dikecualikan"),
     ("kalkulator-biaya", "Kalkulator biaya", "setting_kalkulator_biaya"),
-    ("laporan-margin", "Laporan margin", "setting_laporan_margin"),
     ("kapasitas-gudang", "Kapasitas gudang", "setting_kapasitas_gudang"),
     ("kedatangan-impor", "Kedatangan impor", "setting_kedatangan_impor"),
     ("kelola-user", "Kelola user", "kelola_user"),
