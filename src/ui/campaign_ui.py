@@ -43,9 +43,10 @@ def planning_presets(today: date, hi: date) -> list[tuple[str, date, date]]:
     return [(n, a, min(b, hi)) for n, a, b in items if a <= hi]
 
 
-def period_picker(*, key: str, today: date, default: tuple[date, date], hi: date | None = None, label: str = "Periode campaign") -> tuple[date, date]:
+def period_picker(*, key: str, today: date, default: tuple[date, date], hi: date | None = None, label: str = "Periode campaign",
+                  lo: date | None = None) -> tuple[date, date]:
     hi = hi or today + timedelta(days=90)
-    return date_range_picker(key=key, lo=today, hi=hi, default=default, label=label, presets=planning_presets(today, hi))
+    return date_range_picker(key=key, lo=lo or today, hi=hi, default=default, label=label, presets=planning_presets(today, hi))
 
 
 def _now() -> str:

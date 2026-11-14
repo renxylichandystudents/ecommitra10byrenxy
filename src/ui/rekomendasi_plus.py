@@ -459,10 +459,11 @@ def _exposure_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame
     items["terjual_iklan"] = items["sku"].map(extra["terjual_iklan"]).fillna(0.0)
     items["margin_pct"] = [_margin_of(data, s, np.nan)[0] for s in items["sku"]]
     items["poin_deskripsi"] = [features_from_description(lookup.get(s, "")) for s in items["sku"]]
+    items["deskripsi"] = [str(lookup.get(s, "") or "") for s in items["sku"]]
     return items
 
 
-SEGMENT_ICON = {expo.HERO: "⭐", expo.RISING: "📈", expo.OVERSTOCK: "📦", expo.LOW_CONV: "🎯"}
+SEGMENT_ICON = {expo.HERO: "⭐", expo.RISING: "📈", expo.OVERSTOCK: "📦", expo.VIRAL: "🚀", expo.LOW_CONV: "🎯"}
 
 
 def _brief_picker(plan: pd.DataFrame, start: date, *, key: str) -> None:
@@ -512,7 +513,11 @@ def _brief_picker(plan: pd.DataFrame, start: date, *, key: str) -> None:
         st.code(str(row["Naskah 30 dtk"]) + "\n\n" + str(row["Hashtag"]), language=None, wrap_lines=True)
 
 
-def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end: date, *, key: str, per_week: int, peak: str) -> None:
+LEWAT = "<span style='color:#64748b;font-size:var(--fs-xs)'> · lewat</span>"
+
+
+def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end: date, *, key: str, per_week: int, peak: str,
+                     today: date | None = None) -> None:
     from datetime import timedelta
 
     from src.ui.common import card
@@ -540,15 +545,20 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
             for offset, column in enumerate(cols):
                 day = monday + timedelta(days=7 * week + offset)
                 inside = start <= day <= end
+                past = today is not None and day < today
                 part = plan.loc[plan["Tanggal"] == day]
                 lines = "".join(
                     f"<div title='{html.escape(str(p))}' style='font-size:var(--fs-xs);line-height:1.3;margin-top:4px;overflow-wrap:anywhere'>"
                     f"{SEGMENT_ICON.get(s, '')} <b>{html.escape(j)}</b><br>{html.escape(_clip(str(p).split(' · ')[1] if ' · ' in str(p) else p, 44))}</div>"
                     for p, s, j in zip(part["Produk"], part["Segmen"], part["Jam tayang"]))
                 empty = "<div style='color:#cbd5e1;font-size:var(--fs-xs)'>–</div>"
-                column.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:110px;background:{'#fff' if inside else '#f8fafc'};"
-                                f"opacity:{1 if inside else .45}'><b>{day.day}/{day.month}</b>{lines or empty}</div>", unsafe_allow_html=True)
-        st.caption("⭐ produk andalan · 📈 sedang naik · 📦 stok lebih · 🎯 banyak dilihat, jarang dibeli · tanggal pudar = di luar periode")
+                column.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:110px;"
+                                f"background:{'#f1f5f9' if past and inside else '#fff' if inside else '#f8fafc'};"
+                                f"opacity:{1 if inside else .45}'><b>{day.day}/{day.month}</b>"
+                                f"{LEWAT if past and inside else ''}{lines or empty}</div>",
+                                unsafe_allow_html=True)
+        st.caption("⭐ produk andalan · 🚀 potensi viral · 📈 sedang naik · 📦 stok lebih · 🎯 banyak dilihat, jarang dibeli · "
+                   "abu-abu = tanggal sudah lewat · pudar = di luar periode")
         _brief_picker(plan, start, key=key)
         shown = plan.assign(Tanggal=plan["Tanggal"].map(fmt_date)).drop(columns=["Naskah 30 dtk"])
         batched_view(
@@ -602,6 +612,25 @@ def _exposure_describe(c: dict) -> str:
             f"{fmt_num(len({r.get('SKU') for r in rows}))} produk")
 
 
+def _exposure_history(features, today: date) -> None:
+    """Campaign konten yang sudah selesai/dihentikan: kalender & brief lengkap termasuk tanggal yang lewat."""
+    from src.ui import campaign_ui as cmp
+
+    try:
+        items = C.Store(features, "exposure").all() if features is not None else []
+    except Exception:
+        items = []
+    past = [c for c in items if C.status_of(c, today) in (C.DONE, C.STOPPED) and c.get("jadwal")]
+    if not past:
+        return
+    with st.expander(f"📅 Konten yang sudah diset sebelumnya · {fmt_num(len(past))} campaign", expanded=False):
+        pick = st.selectbox("Campaign", [c["id"] for c in reversed(past)], key="ex-hist-pick",
+                            format_func=lambda i: next(f"#{c['id']} · {c.get('nama', '')} · {C.status_of(c, today)}" for c in past if c["id"] == i))
+        chosen = next(c for c in past if c["id"] == pick)
+        _exposure_render(cmp.frame_of(chosen.get("jadwal"), ("Tanggal",)), cmp.frame_of(chosen.get("ditunda")), as_date(chosen["mulai"]),
+                         as_date(chosen["selesai"]), key="ex-hist", per_week=int((chosen.get("setelan") or {}).get("per_minggu", 5)), peak="–", today=today)
+
+
 def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: pd.DataFrame | None, frames, today: date, username: str, can_edit: bool) -> None:
     from datetime import timedelta
 
@@ -617,6 +646,7 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
     mode, cur = cmp.panel("exposure", features=features, today=today, can_edit=can_edit, username=username, describe=_exposure_describe)
     items = _exposure_items(table, data, orders, frames, today)
     cands, delayed = expo.pick(items)
+    _exposure_history(features, today)
     cat_by_sku = dict(zip(items["sku"], items["nama"].map(expo.category_of)))
     times = expo.timing(orders.assign(sku=orders["sku"].astype(str)) if orders is not None and not orders.empty and "sku" in orders.columns else None, cat_by_sku)
     dow, hours = times["*"]
@@ -637,20 +667,25 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
                        column_config={"Produk": st.column_config.TextColumn(width="large")})
             st.button("Buat campaign baru dari saran", key="ex-renew", on_click=cmp.switch_to_new, args=("exposure",), type="primary")
         plan = _with_promo(plan, items, _bottom_map(features))
-        _exposure_render(plan, saved_delayed, start, end, key="ex-saved", per_week=int((cur.get("setelan") or {}).get("per_minggu", 5)), peak=peak)
+        _exposure_render(plan, saved_delayed, start, end, key="ex-saved", per_week=int((cur.get("setelan") or {}).get("per_minggu", 5)), peak=peak,
+                         today=today)
     else:
-        next_monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
+        month_first = today.replace(day=1)
+        month_last = (pd.Timestamp(today) + pd.offsets.MonthEnd(0)).date()
         with st.container(border=True):
             c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
             with c1:
-                start, end = cmp.period_picker(key="ex-period", today=today, default=(next_monday, next_monday + timedelta(days=27)))
+                # Kalender per bulan dari tanggal 1; konten baru hanya dijadwalkan mulai hari ini (tanggal lewat tampil abu-abu).
+                start, end = cmp.period_picker(key="ex-period", today=today, default=(month_first, month_last), lo=month_first,
+                                               hi=month_last + timedelta(days=62))
             per_week = int(c2.number_input("Konten per minggu", min_value=2, max_value=14, value=5, step=1, key="ex-per-week"))
-        monday = start - timedelta(days=start.weekday())
+        first_day = max(start, today)
+        monday = first_day - timedelta(days=first_day.weekday())
         plan = expo.calendar(cands, monday, weeks=(end - monday).days // 7 + 1, per_week=per_week, times=times)
         if not plan.empty:
-            plan = plan.loc[(plan["Tanggal"] >= start) & (plan["Tanggal"] <= end)].reset_index(drop=True)
+            plan = plan.loc[(plan["Tanggal"] >= max(start, today)) & (plan["Tanggal"] <= end)].reset_index(drop=True)
         plan = _with_promo(plan, items, _bottom_map(features))
-        _exposure_render(plan, delayed, start, end, key="ex-new", per_week=per_week, peak=peak)
+        _exposure_render(plan, delayed, start, end, key="ex-new", per_week=per_week, peak=peak, today=today)
         if not plan.empty and features is not None:
             def _to_schedule(campaign: dict) -> None:
                 rows = pd.DataFrame({"periode": plan["Tanggal"].map(_periode), "tanggal": plan["Tanggal"], "sku": plan["SKU"], "label": plan["Produk"].str[:400],
