@@ -196,11 +196,17 @@ def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | 
     products = product_frame(table).drop_duplicates("sku")
     if orders is None or orders.empty or products.empty:
         return pd.DataFrame()
-    work = orders
-    if "status" in work.columns:
-        from src.ingest import cancelled_status_mask
+    # Semua angka bersih, sama dengan istilah tabel lain: QTY bersih & Sales produk bersih = baris yang tidak batal / Belum Bayar,
+    # dikurangi unit & nilai retur (metrics.sold_lines = net_sku_sales). Voucher penjual ikut dikurangi sebanding unit retur.
+    from src.core.metrics import sold_lines
 
-        work = work.loc[~cancelled_status_mask(work["status"])]
+    gross_qty = pd.to_numeric(orders["qty"], errors="coerce")
+    work = sold_lines(orders.assign(_gross_qty=gross_qty))
+    if work is None or work.empty:
+        return pd.DataFrame()
+    if "seller_voucher" in work.columns:
+        share = (pd.to_numeric(work["qty"], errors="coerce") / work["_gross_qty"].where(work["_gross_qty"] > 0)).clip(0, 1).fillna(1.0)
+        work = work.assign(seller_voucher=pd.to_numeric(work["seller_voucher"], errors="coerce").fillna(0.0) * share)
     stamp = pd.to_datetime(work["order_time"], errors="coerce")
     if start is not None and end is not None:
         work = work.loc[stamp.dt.normalize().between(pd.Timestamp(start), pd.Timestamp(end))]
@@ -329,12 +335,12 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
              if np.isfinite(proj_margin) else "butuh file margin")
         k = st.columns(4)
     card(k[2] if not running else k[0], "SKU rugi", fmt_num(len(rugi)),
-         hint=f"{html.escape(period_label)} · rugi ±{fmt_idr(float(rugi['rugi_30'].sum()) if len(rugi) else 0)} · omzet {fmt_idr(float(rugi['omzet_30'].sum()) if len(rugi) else 0)}")
+         hint=f"{html.escape(period_label)} · rugi ±{fmt_idr(float(rugi['rugi_30'].sum()) if len(rugi) else 0)} · sales produk bersih {fmt_idr(float(rugi['omzet_30'].sum()) if len(rugi) else 0)}")
     card(k[3] if not running else k[1], "SKU margin rendah", fmt_num(len(low)),
          hint=f"{html.escape(period_label)} · untung di bawah {fmt_pct(acuan, 1)} · potensi +{fmt_idr(float(low['selisih_30'].sum()) if len(low) else 0)}")
     if running and np.isfinite(overall):
         card(k[2], "Margin bersih periode terpilih", fmt_pct(overall, 1),
-             hint=f"{html.escape(period_label)} · margin kotor {fmt_pct(kotor, 1)} · {fmt_idr(float(known['bersih_30'].sum()))}")
+             hint=f"{html.escape(period_label)} · sales produk bersih {fmt_idr(omzet)} · margin kotor {fmt_pct(kotor, 1)} · {fmt_idr(float(known['bersih_30'].sum()))}")
     chips = [status_line(md), f"Batas margin rendah <b>{fmt_pct(acuan, 1)}</b> (rata-rata SKU yang untung)", (f"Prediksi sisa {rest} hari: <b>{fmt_idr(projection - mtd)}</b> (±{fmt_idr(pred_daily)}/hari)" if running else f"Bulan {month_label} sudah lewat: angka aktual, bukan proyeksi")]
     if len(known):
         chips.insert(1, f"Potongan Shopee rata-rata <b>{fmt_pct(float((known['omzet_30'] * known['shopee_pct']).sum() / omzet), 1)}</b> · iklan <b>{fmt_pct(float((known['omzet_30'] * known['iklan_pct']).sum() / omzet), 1)}</b>")
@@ -358,9 +364,9 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
         safe = port.loc[port["status"] == "Tinggi"].sort_values("omzet_30", ascending=False).head(3)
         if not safe.empty:
             names = ", ".join(html.escape(str(n)[:38]) for n in safe["nama"])
-            steps.append(f"<b>Tutup kekurangan {fmt_idr(gap)}</b> dengan mendorong SKU margin tinggi beromzet besar: {names}.")
+            steps.append(f"<b>Tutup kekurangan {fmt_idr(gap)}</b> dengan mendorong SKU margin tinggi bersales bersih besar: {names}.")
     if len(rugi):
-        steps.append("<b>Jangan menambah iklan</b> pada SKU rugi: omzet naik tetapi kerugian ikut naik.")
+        steps.append("<b>Jangan menambah iklan</b> pada SKU rugi: sales naik tetapi kerugian ikut naik.")
     if has_target and gap <= 0:
         steps.append("<b>Proyeksi sudah mencapai target</b> — fokus menjaga margin." if running else f"<b>Target {month_label} tercapai</b>.")
     if steps:
@@ -419,7 +425,9 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
             "dalam % harga akhir (harga transaksi rata-rata periode terpilih setelah diskon & voucher penjual).\n"
             f"- **Status**: 🔴 Rugi = margin bersih di bawah 0 · 🟠 Rendah = untung tetapi di bawah {fmt_pct(acuan, 1)} (rata-rata margin bersih SKU yang untung) · 🟢 Tinggi = sama/di atas batas itu · "
             "⚪ Tanpa data = tidak ada di file margin.\n"
-            "- **Urutan**: Rugi dari kerugian Rp terbesar → Rendah dari selisih Rp terbesar ke batas (omzet × selisih %) → Tinggi dari omzet terbesar.\n"
+            "- **Urutan**: Rugi dari kerugian Rp terbesar → Rendah dari selisih Rp terbesar ke batas (sales produk bersih × selisih %) → Tinggi dari sales produk bersih terbesar.\n"
+            "- **Sales produk bersih & QTY bersih**: transaksi periode terpilih selain batal & Belum Bayar, dikurangi retur (istilah sama dengan tabel Data/Prediksi). "
+            "Semua margin dihitung dari angka bersih ini.\n"
             "- **Yang perlu dikerjakan**: tuas yang bisa dikendalikan tim — iklan (ROAS minimal), komisi affiliate, program opsional, diskon/voucher, lalu harga.\n"
             "- **Usulan harga untuk MD** (setelah kolom Harga akhir = aktual): **Harga beli / modal** (file MD, belum PPN; selain itu file margin) → "
             "**Harga jual disarankan** (harga normal minimal impas setelah semua biaya & iklan) → **Promo disarankan** (sesuai kebiasaan promo transaksi SKU itu, "
@@ -436,7 +444,7 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
         view = view.loc[view["sku"] == str(query).split(" · ")[0]]
     frame = pd.DataFrame({
         "Prioritas": range(1, len(view) + 1), "Status": view["status"].map(STATUS_ICON), "SKU": view["sku"], "Nama": view["nama"],
-        "Yang perlu dikerjakan": view["perbaikan"], "Omzet periode": view["omzet_30"], "Terjual periode": view["qty_30"],
+        "Yang perlu dikerjakan": view["perbaikan"], "Sales produk bersih": view["omzet_30"], "QTY bersih": view["qty_30"],
         "Margin kotor": view["kotor_pct"], "Potongan Shopee": view["shopee_pct"], "Iklan": view["iklan_pct"], "Margin bersih": view["bersih_pct"],
         "Margin bersih/unit": view["bersih_unit"], "Margin bersih periode": view["bersih_30"],
         "Rugi / kurang periode": np.where(view["status"] == "Rugi", view["rugi_30"], view["selisih_30"]),
@@ -448,21 +456,21 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
     at = frame.columns.get_loc("Harga akhir") + 1
     frame = pd.concat([frame.iloc[:, :at], suggest, frame.iloc[:, at:]], axis=1)
     total = {c: np.nan for c in frame.columns}
-    omzet = frame["Omzet periode"].sum()
+    omzet = frame["Sales produk bersih"].sum()
     bersih = frame["Margin bersih periode"].sum(min_count=1)
     unit_after = pd.to_numeric(frame["Profit/unit setelah promo"], errors="coerce")
-    after_qty = (unit_after * frame["Terjual periode"]).sum(min_count=1)
+    after_qty = (unit_after * frame["QTY bersih"]).sum(min_count=1)
     same = frame.loc[unit_after.notna(), "Margin bersih periode"].sum()
     total.update({"Status": "Total", "SKU": f"{fmt_num(len(frame))} SKU", "Nama": "", "Yang perlu dikerjakan": "", "Sumber margin": "", "Kategori Shopee": "",
                   "Catatan harga": (f"{fmt_num(int(unit_after.notna().sum()))} SKU berusulan: bila harga & promo usulan dipakai dengan qty periode ini, "
                                     f"profit {fmt_idr(after_qty)} (aktual SKU yang sama {fmt_idr(same)})") if pd.notna(after_qty) else "",
-                  "Omzet periode": omzet, "Terjual periode": frame["Terjual periode"].sum(), "Margin bersih periode": bersih,
-                  "Margin bersih": (bersih / frame.loc[frame["Margin bersih periode"].notna(), "Omzet periode"].sum() * 100) if pd.notna(bersih) else np.nan,
+                  "Sales produk bersih": omzet, "QTY bersih": frame["QTY bersih"].sum(), "Margin bersih periode": bersih,
+                  "Margin bersih": (bersih / frame.loc[frame["Margin bersih periode"].notna(), "Sales produk bersih"].sum() * 100) if pd.notna(bersih) else np.nan,
                   "Rugi / kurang periode": frame["Rugi / kurang periode"].sum()})
     full = pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
-    kinds = {"Omzet periode": "money", "Margin bersih/unit": "money", "Margin bersih periode": "money", "Rugi / kurang periode": "money", "Harga akhir": "money",
+    kinds = {"Sales produk bersih": "money", "Margin bersih/unit": "money", "Margin bersih periode": "money", "Rugi / kurang periode": "money", "Harga akhir": "money",
              "Margin kotor": "pct", "Potongan Shopee": "pct", "Iklan": "pct", "Margin bersih": "pct", "Komisi affiliate": "pct", "ROAS": "dec",
-             "Terjual periode": "count", "Prioritas": "count",
+             "QTY bersih": "count", "Prioritas": "count",
              "Harga beli / modal": "money", "Harga jual disarankan": "money", "Harga setelah promo": "money", "Harga nett (setelah semua biaya)": "money",
              "Profit/unit setelah promo": "money", "Perubahan harga bayar vs aktual": "pct", "Promo disarankan": "pct", "Margin setelah promo": "pct"}
     batched_view(
@@ -547,7 +555,7 @@ def _price_table(all_rows: pd.DataFrame, *, programs: dict, order_fee: float, md
             "Modal/harga beli per unit": inp.hpp if known else np.nan, "Harga transaksi rata-rata": float(r.harga),
             "Harga normal (harga awal)": normal, "Voucher penjual/unit": float(r.voucher_unit), "Potongan Shopee/unit": fee.shopee_fees(inp),
             "Iklan/unit": float(r.iklan_unit or 0), "Margin bersih/unit": value, "Margin bersih (%)": pct, "Status": classify(pct, acuan),
-            "Terjual (periode)": float(r.qty_30 or 0), "Harga minimal (impas)": plan["harga_impas"],
+            "QTY bersih (periode)": float(r.qty_30 or 0), "Harga minimal (impas)": plan["harga_impas"],
             "Harga sehat (margin ≥ batas)": plan["harga_sehat"], "Harga jual disarankan": plan["harga_disarankan"],
             "Transaksi berpromo (%)": h.get("porsi_promo", np.nan), "Promo historis median (%)": h.get("diskon_median", np.nan),
             "Promo historis maks. (%)": h.get("diskon_maks", np.nan),
@@ -558,7 +566,7 @@ def _price_table(all_rows: pd.DataFrame, *, programs: dict, order_fee: float, md
     if frame.empty:
         return frame
     order = {"Rugi": 0, "Rendah": 1, "Tinggi": 2, "Tanpa data": 3}
-    return frame.assign(_o=frame["Status"].map(order)).sort_values(["_o", "Terjual (periode)"], ascending=[True, False]).drop(columns="_o").reset_index(drop=True)
+    return frame.assign(_o=frame["Status"].map(order)).sort_values(["_o", "QTY bersih (periode)"], ascending=[True, False]).drop(columns="_o").reset_index(drop=True)
 
 
 PRICE_KINDS = {c: "money" for c in ("Modal/harga beli per unit", "Harga transaksi rata-rata", "Harga normal (harga awal)", "Voucher penjual/unit",
@@ -566,7 +574,7 @@ PRICE_KINDS = {c: "money" for c in ("Modal/harga beli per unit", "Harga transaks
                                      "Harga jual disarankan", "Harga setelah promo", "Margin setelah promo/unit")}
 PRICE_KINDS.update({c: "pct" for c in ("Margin bersih (%)", "Transaksi berpromo (%)", "Promo historis median (%)", "Promo historis maks. (%)", "Promo disarankan (%)",
                                         "Margin setelah promo (%)")})
-PRICE_KINDS["Terjual (periode)"] = "count"
+PRICE_KINDS["QTY bersih (periode)"] = "count"
 
 
 def show_calculator(features, table: pd.DataFrame, data, *, username: str, today: date, user_root: Path | None, may_edit: bool, require,
@@ -713,7 +721,7 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
             with r1[0]:
                 harga = float(input_rupiah("Harga jual", int(round(harga0)), key=f"calc-price-{sku}", help="Bawaan = harga transaksi rata-rata periode terpilih di Ringkasan (sudah setelah diskon), atau harga data produk"))
             with r1[1]:
-                iklan = float(input_rupiah("Biaya iklan per unit", int(round(iklan0)), key=f"calc-ad-{sku}", help="Bawaan = biaya iklan SKU dari data iklan ÷ QTY terjual"))
+                iklan = float(input_rupiah("Biaya iklan per unit", int(round(iklan0)), key=f"calc-ad-{sku}", help="Bawaan = biaya iklan SKU dari data iklan ÷ QTY bersih"))
             r2 = st.columns(2)
             with r2[0]:
                 diskon = float(input_rupiah("Diskon tambahan per unit", 0, key=f"calc-disc-{sku}"))
