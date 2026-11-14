@@ -652,3 +652,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - "Sales value bersih" → **Sales produk bersih** (istilah sama dengan tabel Prediksi); ditambah **Kontribusi sales bersih** di samping Kontribusi invoice bersih (keduanya bisa berbeda, mis. Jawa Timur 17,1% invoice vs ±19% sales).
 - Rank baris Total kosong (sebelumnya "None").
 - **Lanjutan (14 Nov)**: Sales di tabel wilayah sebelumnya = sales produk (Harga Setelah Diskon × QTY, sebelum voucher), sehingga Total (mis. Rp 1.874.828.301) ≠ kartu Sales bersih di atasnya (Total Pembayaran − batal − Belum Bayar − retur). `region_summary` kini memakai definisi `order_metrics`: Sales bersih = Total Pembayaran sekali per pesanan (selain batal & Belum Bayar) − nilai unit retur; Invoice bersih = semua − batal − Belum Bayar − **retur penuh** (retur sebagian tetap bersih). Dicek dengan data Sep & Okt 2026: Total wilayah = kartu persis (Sales bersih, Pesanan bersih, QTY bersih). Kolom: Invoice retur penuh, % retur penuh, Sales bersih.
+
+## Pembayaran & berat paket: baris Total + cek nilai (14 Nov 2026)
+
+- Baris Total di atas tabel Per metode pembayaran dan Per berat paket (`order_ops.total_row`): % dihitung dari semua pesanan sekaligus (bukan rata-rata per baris). Dicek dengan data Okt 2026: Invoice 6.885, % batal 22,5%, Sales bersih Rp 2.848.905.957 = kartu halaman Data; AOV Rp 538.953 = Sales bersih ÷ 5.286 pesanan bersih. Invoice tanpa Total Berat disebut di atas tabel berat.

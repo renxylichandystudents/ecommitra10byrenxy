@@ -83,9 +83,14 @@ def show_ops_analysis(source_raw: pd.DataFrame, start: date | None, end: date | 
 
     st.caption("Grafik metode bayar hanya menampilkan metode dengan porsi ≥ 2% invoice; biru = di bawah rata-rata batal toko, merah = di atasnya.")
     st.markdown("**Per metode pembayaran**")
-    show_table(pay, kinds=KINDS)
+    pay_total = O.total_row(orders, "Metode pembayaran")
+    show_table(pd.concat([pay_total, pay], ignore_index=True).fillna({"AOV": 0.0}), kinds=KINDS, bold_label="Total")
     st.markdown("**Per berat paket**")
-    show_table(weight, kinds=KINDS)
+    weight_total = O.total_row(orders, "Berat paket", weight=True)
+    unknown = int(orders["weight_kg"].isna().sum())
+    if unknown:
+        st.caption(f"{fmt_num(unknown)} invoice tanpa Total Berat tidak masuk tabel ini.")
+    show_table(pd.concat([weight_total, weight], ignore_index=True).fillna({"AOV": 0.0}), kinds=KINDS, bold_label="Total")
 
     st.markdown("**Ketepatan kirim** · pesanan tidak batal, Waktu Pengiriman Diatur dibanding Pesanan Harus Dikirimkan Sebelum")
     c1, c2 = st.columns(2)

@@ -52,6 +52,17 @@ def weight_table(orders: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def total_row(orders: pd.DataFrame, label: str, *, weight: bool = False) -> pd.DataFrame:
+    """Baris Total dengan rumus yang sama (bukan rata-rata persen per baris): % dihitung dari semua pesanan sekaligus."""
+    if orders is None or orders.empty:
+        return pd.DataFrame()
+    part = orders.loc[orders["weight_kg"].notna()] if weight else orders
+    out = _group(part, pd.Series("Total", index=part.index), label)
+    if weight and not out.empty:
+        out.insert(3, "Lewat kargo (%)", float((part["layanan"] == "Hemat Kargo / Trucking").mean() * 100))
+    return out
+
+
 def shipping_summary(orders: pd.DataFrame) -> dict:
     """Pesanan tidak batal dengan batas kirim: jumlah, terlambat, porsi, median keterlambatan (jam)."""
     if orders is None or orders.empty:
