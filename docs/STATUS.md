@@ -810,3 +810,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Tabel "Kalkulator lengkap · sekarang vs rekomendasi": harga normal, promo, voucher, harga dibayar pembeli, PPN, admin kategori, tiap program Shopee, proses pesanan, affiliate, iklan, nett diterima, harga beli, profit, margin.
 - Menu Skenario cepat, Rincian biaya lengkap, Analisa lengkap dihapus; histori promo, harga impas/sehat, catatan, dan tuas tanpa ubah harga ringkas di bawah tabel.
 - Harga nett = dibayar pembeli − PPN − potongan Shopee − iklan (definisi sama di daftar prioritas).
+
+## 2026-11-14 — Simulasi per SKU: input harga dihapus, program Shopee ditata, unduhan semua komponen
+- Kolom isian Harga jual, Biaya iklan, Diskon tambahan, Voucher penjual dihapus; nilainya dari data (sama dengan Ringkasan), tampil sebagai kartu Data SKU.
+- Program Shopee: program wajib sebagai label 🔒, program opsional sebagai toggle 2 kolom (tarif & batas di tooltip); Pengaturan lain: ukuran khusus, affiliate, unit per pesanan, kategori.
+- Unduh semua SKU kini memuat semua komponen kalkulator per SKU (kolom "Sekarang · …" dan "Rekomendasi · …"), sama dengan tabel Kalkulator lengkap.
