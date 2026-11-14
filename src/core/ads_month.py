@@ -174,3 +174,31 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
         "roas_baru": sales_new / cost_new if cost_new > 0 else float("nan"),
     })
     return out
+
+
+SHOPEE_MIN_AD_PCT = 3.0  # syarat minimum biaya iklan Shopee (% sales bruto sebulan) agar mendapat benefit program
+
+
+def budget_for_ratio(project, *, pct: float, gross_ratio: float, spent: float, start: float, rounds: int = 6) -> float:
+    """Budget sebulan yang membuat biaya iklan ≈ pct% dari sales bruto proyeksi bulan itu.
+
+    project(budget) -> (proyeksi sales bersih, biaya efektif); sales bruto = sales bersih × gross_ratio (rasio bruto ÷ bersih
+    bulan berjalan). Diulang karena sales ikut berubah saat budget berubah. Tidak kurang dari biaya yang sudah terpakai."""
+    budget = max(start, spent)
+    for _ in range(rounds):
+        net, _effective = project(budget)
+        nxt = max(pct / 100 * net * gross_ratio, spent)
+        if abs(nxt - budget) < 100_000:
+            budget = nxt
+            break
+        budget = nxt
+    return float(math.ceil(budget / 1_000_000) * 1_000_000)
+
+
+def store_contribution_rate(contribution: dict, weights: dict) -> float | None:
+    """Kontribusi sebelum iklan (margin kotor − potongan Shopee, % harga) rata-rata tertimbang prediksi omzet produk; None bila tidak ada data."""
+    pairs = [(float(contribution[c]), float(weights.get(c, 0.0) or 0.0)) for c in contribution if (weights.get(c, 0.0) or 0.0) > 0]
+    total = sum(w for _r, w in pairs)
+    if not pairs or total <= 0:
+        return None
+    return sum(r * w for r, w in pairs) / total
