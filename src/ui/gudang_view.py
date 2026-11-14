@@ -385,7 +385,7 @@ def show_parameters(features, user_root, *, may_edit: bool) -> None:
     rows = [
         {"Parameter": "Lead time lokal", "Nilai": f"{fmt_num(local)} hari",
          "Sumber": "diisi tim (tidak ada di file unggahan) · ubah di bawah",
-         "Dipakai untuk": "Safety stock = Z × σ permintaan harian × √(lead time + periode tinjau); titik pesan ulang (ROP) = prediksi harian × lead time + SS; simulasi stok di Laporan"},
+         "Dipakai untuk": "Safety stock = pengali × σ permintaan harian 180 hari × √(lead time + periode tinjau); titik pesan ulang (ROP) = prediksi harian × lead time + SS; simulasi stok di Laporan"},
         {"Parameter": "Variasi lead time lokal (σ)", "Nilai": f"{fmt_num(sigma)} hari", "Sumber": "nilai tetap",
          "Dipakai untuk": "0 = lead time dianggap stabil; bila > 0 safety stock memakai rumus umum (variasi permintaan + variasi lead time)"},
         {"Parameter": "Lead time impor",
@@ -416,6 +416,18 @@ def show_parameters(features, user_root, *, may_edit: bool) -> None:
             params.setdefault("lead_time", {})["lokal_hari"] = int(new)
             save_params(params, user_root)
             st.success(f"Lead time lokal {int(new)} hari disimpan. Jalankan analisa lagi agar safety stock dan ROP memakai nilai baru.")
+        from src.models.evaluate import SS_METHODS, ss_method
+
+        now = ss_method(params)
+        m1, m2 = st.columns([2, 2], vertical_alignment="bottom")
+        pick = m1.radio("Metode safety stock", list(SS_METHODS), index=list(SS_METHODS).index(now), format_func=SS_METHODS.get, key="gudang-ss-method",
+                        help="Normal: SS = Z × r × σ (stok hemat; tingkat layanan bisa di bawah target bila permintaan berekor tebal). "
+                             "Kuantil empiris: SS = kuantil galat walk-forward per kelas ABC (tingkat layanan mendekati target, stok lebih besar). "
+                             "Perbandingan keduanya ada di Evaluasi model › Uji kesesuaian.")
+        if m2.button("Simpan metode", key="gudang-ss-save", disabled=pick == now):
+            params.setdefault("safety_stock", {})["metode"] = pick
+            save_params(params, user_root)
+            st.success(f"Metode safety stock: {SS_METHODS[pick]}. Berlaku untuk safety stock & ROP pada tabel keputusan saat analisa berikutnya dijalankan.")
 
 
 def _denah_info(features) -> tuple[str, str]:

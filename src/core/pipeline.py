@@ -64,7 +64,7 @@ def run_demand_models(
     matrix = build_demand_matrix(base_history, zero_since=zero_since)
     days = matrix.values.shape[1] if matrix.values.size else 0
     censored = int(np.isnan(matrix.values).any(axis=1).sum()) if matrix.values.size else 0
-    from src.models.evaluate import HORIZONS, SS_CALIBRATION_KEY, evaluate_all, segment_blend, walk_forward_results
+    from src.models.evaluate import HORIZONS, SS_CALIBRATION_KEY, SS_CLASS_KEY, evaluate_all, segment_blend, walk_forward_results
 
     subset = _evaluation_subset(matrix, eval_limit)
     records = evaluate_all(
@@ -79,9 +79,12 @@ def run_demand_models(
     if ready:
         closest = min(ready, key=lambda name: abs(HORIZONS[name] - horizon))
         weights = dict(ready[closest].get("weights_produksi") or ready[closest]["weights"])
-    factor = ((records.get("bulan") or {}).get("simulasi_ss") or {}).get("faktor_kalibrasi_ss")
+    sim = (records.get("bulan") or {}).get("simulasi_ss") or {}
+    factor = sim.get("faktor_kalibrasi_ss")
     if factor:
         weights[SS_CALIBRATION_KEY] = float(factor)
+    if sim.get("pengali_ss_kelas"):
+        weights[SS_CLASS_KEY] = {k: float(v) for k, v in sim["pengali_ss_kelas"].items()}
     if progress:
         progress(0.8, "Melatih model akhir dan menyusun ensemble")
     forecasts, availability = model_forecasts(matrix, horizon)

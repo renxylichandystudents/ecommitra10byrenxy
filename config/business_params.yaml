@@ -22,6 +22,12 @@ layanan_kelas:
   B: 0
   C: -7
 
+# Metode safety stock (SS = pengali × σ harian 180 hari × √(L + R)):
+#   normal  = Z(target kelas) × r (kalibrasi MAD walk-forward): stok hemat, tingkat layanan bisa di bawah target bila galat berekor tebal
+#   empiris = kuantil empiris galat per kelas (conformal walk-forward): tingkat layanan mendekati target, stok lebih besar
+safety_stock:
+  metode: normal
+
 margin:
   hpp_pct_harga: 80              # HPP diasumsikan 80% dari harga jual bersih
   margin_min_pct: 8              # batas margin minimum flash sale / markdown

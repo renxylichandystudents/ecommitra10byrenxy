@@ -50,8 +50,11 @@ MIN_TRAIN_DAYS = 35
 BIAS_FACTOR_LIMITS = (0.5, 1.5)
 SS_CALIBRATION_LIMITS = (0.5, 5.0)
 SS_CALIBRATION_KEY = "_kalibrasi_ss"
+SS_CLASS_KEY = "_pengali_ss_kelas"  # pengali SS per kelas ABC (kuantil empiris galat) untuk metode "empiris"
+SS_METHODS = {"normal": "Normal Z × r (MAD)", "empiris": "Kuantil empiris galat per kelas (conformal)"}
 MAD_TO_SIGMA = 0.6745
 SERVICE_LEAD_DAYS = 7
+SIGMA_DAYS = 180  # jendela simpangan harian untuk SS (sama dengan produksi, src.forecast.SIGMA_DAYS)
 
 
 def month_cutoffs(dates: pd.DatetimeIndex, folds: int = FOLDS) -> list[int]:
@@ -231,6 +234,7 @@ def evaluate_horizon(
     prod_label = next((info["label"] for key, info in record["models"].items() if key == prod_key), MODEL_SEGMENT)
     record["model_produksi"] = prod_key
     record["weights_produksi"] = production_weights(record["weights"], prod_label)
+    record["per_lipatan"] = _fold_totals(matrix, usable, valid, pairs, oos_preds, prod_label, days)
     if days == HORIZONS["bulan"]:
         # Prediksi luar sampel model produksi (lipatan 2 dst.); tanpa uji luar sampel, prediksi lipatan uji biasa.
         preds = {k + 1: p for k, (_a, p) in enumerate(oos_preds.get(prod_label, []))} if oos_preds.get(prod_label) else \
@@ -238,6 +242,34 @@ def evaluate_horizon(
         record["simulasi_ss"] = _service_simulation(matrix, usable, preds, days)
     record["kesimpulan"] = conclusion_text(record)
     return record
+
+
+def _fold_totals(matrix: DemandMatrix, usable: list[int], valid: list[np.ndarray], pairs: dict, oos_preds: dict, prod_label: str,
+                 days: int) -> list[dict]:
+    """Total toko per lipatan: aktual, aktual periode sebelumnya (perubahan permintaan), prediksi model produksi (luar sampel bila
+    tersedia) dan MA28. Menjelaskan dari mana MAPE agregat & bias berasal (mis. satu bulan kampanye yang melonjak)."""
+    out = []
+    oos = oos_preds.get(prod_label) or []
+    for index, cut in enumerate(usable):
+        mask = valid[index]
+        actual = float(matrix.filled[mask, cut : cut + days].sum())
+        before = float(matrix.filled[mask, max(cut - days, 0) : cut].sum())
+        if index >= 1 and len(oos) >= index:
+            pred, basis = float(np.asarray(oos[index - 1][1])[mask].sum()), "luar sampel"
+        elif prod_label in pairs:
+            pred, basis = float(np.asarray(pairs[prod_label][index][1])[mask].sum()), "lipatan uji"
+        else:
+            pred, basis = float("nan"), "–"
+        ma = pairs.get(MODEL_MA)
+        ma_pred = float(np.asarray(ma[index][1])[mask].sum()) if ma else float("nan")
+        out.append({
+            "tanggal": str(matrix.dates[cut].date()), "aktual": round(actual, 1), "aktual_sebelumnya": round(before, 1),
+            "perubahan_pct": _num((actual / before - 1) * 100) if before > 0 else None,
+            "prediksi": round(pred, 1) if np.isfinite(pred) else None, "galat_pct": _num((pred / actual - 1) * 100) if actual > 0 and np.isfinite(pred) else None,
+            "prediksi_ma28": round(ma_pred, 1) if np.isfinite(ma_pred) else None,
+            "galat_ma28_pct": _num((ma_pred / actual - 1) * 100) if actual > 0 and np.isfinite(ma_pred) else None, "dasar": basis,
+        })
+    return out
 
 
 def fit_combination(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], valid: list[np.ndarray], segments: np.ndarray,
@@ -325,6 +357,16 @@ def _nested_scores(singles: dict[str, list[tuple[np.ndarray, np.ndarray]]], vali
     }, preds
 
 
+def ss_method(params: dict | None = None) -> str:
+    """Metode SS produksi dari parameter bisnis (safety_stock.metode): "normal" (bawaan) atau "empiris"."""
+    if params is None:
+        from src.core.config import default_params
+
+        params = default_params()
+    value = str(((params or {}).get("safety_stock") or {}).get("metode", "normal")).strip().lower()
+    return value if value in SS_METHODS else "normal"
+
+
 def production_ss_settings() -> tuple[float, float, float, float]:
     """(tingkat layanan %, Z, lead time, periode tinjau) yang dipakai SS produksi: tingkat layanan rekomendasi
     periode Bulan dan lead time lokal + review dari config/business_params.yaml (SS = Z × σ × √(L + R))."""
@@ -340,9 +382,7 @@ def production_ss_settings() -> tuple[float, float, float, float]:
 
 def ss_calibration(z_scores: np.ndarray) -> float:
     """Faktor r agar σ galat L + R hari = r × σ harian × √(L + R), ditaksir robust: median |galat terstandar| ÷ 0,6745 (MAD).
-
-    Akar rata-rata kuadrat didominasi pesanan proyek sesekali (ekor tebal) dan membesarkan SS semua SKU ±4×; MAD menaksir
-    sebaran galat yang umum, ekor ditangani target layanan per kelas ABC."""
+    Dipakai sebagai pembanding (asumsi galat normal); SS produksi memakai kuantil empiris per kelas (conformal_quantiles)."""
     z_scores = np.asarray(z_scores, dtype=float)
     z_scores = z_scores[np.isfinite(z_scores)]
     if z_scores.size < 30:
@@ -350,13 +390,41 @@ def ss_calibration(z_scores: np.ndarray) -> float:
     return float(np.clip(np.median(np.abs(z_scores)) / MAD_TO_SIGMA, *SS_CALIBRATION_LIMITS))
 
 
+MIN_CONFORMAL = 30          # galat terstandar minimal per kelas; kurang dari ini memakai gabungan semua kelas
+CONFORMAL_LIMITS = (0.0, 25.0)
+
+
+def conformal_quantiles(z_scores: np.ndarray, classes: np.ndarray, levels: dict[str, float]) -> dict[str, float]:
+    """Pengali SS per kelas ABC dari kuantil empiris galat terstandar (split conformal prediction):
+    q_kelas = kuantil ke-target layanan dari (aktual − prediksi) ÷ (σ harian × √(L + R)) lipatan sebelumnya, dengan koreksi
+    sampel hingga ⌈(n + 1)·p⌉ / n. SS = q_kelas × σ harian × √(L + R). Tidak mengasumsikan galat normal, sehingga ekor tebal
+    (pesanan proyek) ikut tertutup sesuai target kelasnya."""
+    z_scores, classes = np.asarray(z_scores, dtype=float), np.asarray(classes, dtype=object)
+    ok = np.isfinite(z_scores)
+    z_scores, classes = z_scores[ok], classes[ok]
+    out = {}
+    for name, level in levels.items():
+        part = z_scores[classes == name]
+        if part.size < MIN_CONFORMAL:
+            part = z_scores
+        if part.size < MIN_CONFORMAL:
+            from src.core.inventory import service_level_to_z
+
+            out[name] = float(service_level_to_z(level))
+            continue
+        n = part.size
+        p = min(np.ceil((n + 1) * level / 100.0) / n, 1.0)
+        out[name] = float(np.clip(np.quantile(part, p, method="higher"), *CONFORMAL_LIMITS))
+    return out
+
+
 def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], preds: dict[int, np.ndarray], days: int) -> dict:
     """Cycle service level: SS melindungi permintaan selama lead time + periode tinjau, jadi diuji pada L + R hari pertama tiap
     lipatan: stok = laju harian prediksi × (L + R) + SS dibanding permintaan aktual L + R hari itu.
 
-    SS = Z(kelas ABC) × σ galat L + R hari, σ galat = r × σ harian 28 hari × √(L + R). r dikalibrasi dari galat prediksi luar
-    sampel model produksi; untuk menilai lipatan k, r dihitung dari lipatan sebelum k saja. Faktor akhir (semua lipatan) dipakai
-    SS produksi. Target layanan per kelas ABC (A lebih tinggi, C lebih rendah) sama dengan produksi."""
+    SS = q(kelas ABC) × σ harian SIGMA_DAYS hari × √(L + R). q = kuantil empiris galat terstandar (conformal) yang dihitung dari
+    lipatan sebelum lipatan yang dinilai saja; pembanding: Z normal × r (MAD). Pengali akhir (semua lipatan) dipakai SS produksi.
+    Target layanan per kelas ABC (A lebih tinggi, C lebih rendah) sama dengan produksi."""
     from src.core.config import default_params
     from src.core.inventory import service_level_to_z
     from src.core.service_level import class_service_levels
@@ -372,7 +440,7 @@ def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], preds: dict[in
         if index >= len(cutoffs):
             continue
         cut = cutoffs[index]
-        sigma = np.nan_to_num(np.nanstd(matrix.values[:, max(cut - 28, 0) : cut], axis=1))
+        sigma = np.nan_to_num(np.nanstd(matrix.values[:, max(cut - SIGMA_DAYS, 0) : cut], axis=1))
         window = matrix.values[:, cut : cut + span]
         actual = np.nan_to_num(window, nan=0.0).sum(axis=1)
         pred = np.asarray(preds[index], dtype=float) * span / days
@@ -383,35 +451,68 @@ def _service_simulation(matrix: DemandMatrix, cutoffs: list[int], preds: dict[in
         scale = sigma * root
         zs = np.where(active & (scale > 0), (actual - pred) / np.where(scale > 0, scale, 1.0), np.nan)
         z_sku = np.array([z_of.get(c, z_of["B"]) for c in classes], dtype=float)
-        folds.append((actual[active], pred[active], scale[active], zs, z_sku[active], classes[active]))
+        folds.append({"a": actual[active], "p": pred[active], "s": scale[active], "z": zs[active], "zn": z_sku[active], "c": classes[active]})
         censored_total += int(had_stockout.sum())
         censored_caught += int((had_stockout & (pred > 0)).sum())
 
-    def served(items, factors) -> np.ndarray:
-        return np.concatenate([(p + np.ceil(zk * r * s - 1e-9)) >= a for (a, p, s, _z, zk, _c), r in zip(items, factors)]) \
-            if items else np.array([], dtype=bool)
+    def run(items, mults) -> tuple[np.ndarray, float, float]:
+        """(terlayani per SKU-lipatan, Σ stok, Σ permintaan) untuk pengali SS per SKU tiap lipatan."""
+        if not items:
+            return np.array([], dtype=bool), 0.0, 0.0
+        stock = [f["p"] + np.ceil(m * f["s"] - 1e-9) for f, m in zip(items, mults)]
+        ok = np.concatenate([st >= f["a"] for st, f in zip(stock, items)])
+        return ok, float(sum(st.sum() for st in stock)), float(sum(f["a"].sum() for f in items))
 
-    raw = served(folds, [1.0] * len(folds))
-    nested = [ss_calibration(np.concatenate([f[3] for f in folds[:k]])) for k in range(1, len(folds))]
+    def normal_mult(f, r):
+        return f["zn"] * r
+
+    def conformal_mult(f, q):
+        return np.array([max(q.get(c, q.get("B", 0.0)), 0.0) for c in f["c"]], dtype=float)
+
     scored = folds[1:] if len(folds) > 1 else folds
-    cal = served(scored, nested if len(folds) > 1 else [1.0] * len(folds))
-    cal_classes = np.concatenate([f[5] for f in scored]) if scored else np.array([], dtype=object)
-    factor = ss_calibration(np.concatenate([f[3] for f in folds])) if folds else 1.0
-    per_class = {name: {"target_pct": levels[name], "tercapai_pct": _num(cal[cal_classes == name].mean() * 100) if (cal_classes == name).any() else None,
-                        "sku_lipatan": int((cal_classes == name).sum())} for name in ("A", "B", "C")}
+    raw, _, _ = run(folds, [normal_mult(f, 1.0) for f in folds])
+    mad = [ss_calibration(np.concatenate([f["z"] for f in folds[:k]])) for k in range(1, len(folds))] if len(folds) > 1 else [1.0] * len(folds)
+    old, old_stock, demand = run(scored, [normal_mult(f, r) for f, r in zip(scored, mad)])
+    conf_q = [conformal_quantiles(np.concatenate([f["z"] for f in folds[:k]]), np.concatenate([f["c"] for f in folds[:k]]), levels)
+              for k in range(1, len(folds))] if len(folds) > 1 else [dict(z_of)] * len(folds)
+    cal, cal_stock, _ = run(scored, [conformal_mult(f, q) for f, q in zip(scored, conf_q)])
+    cal_classes = np.concatenate([f["c"] for f in scored]) if scored else np.array([], dtype=object)
+    every_z = np.concatenate([f["z"] for f in folds]) if folds else np.array([])
+    every_c = np.concatenate([f["c"] for f in folds]) if folds else np.array([], dtype=object)
+    factor = ss_calibration(every_z) if folds else 1.0
+    final_q = conformal_quantiles(every_z, every_c, levels) if folds else dict(z_of)
+    method = ss_method()
+    norm_classes = cal_classes
+    chosen, chosen_stock = (cal, cal_stock) if method == "empiris" else (old, old_stock)
+    per_class = {name: {"target_pct": levels[name], "tercapai_pct": _num(chosen[cal_classes == name].mean() * 100) if (cal_classes == name).any() else None,
+                        "tercapai_empiris_pct": _num(cal[cal_classes == name].mean() * 100) if (cal_classes == name).any() else None,
+                        "tercapai_normal_pct": _num(old[norm_classes == name].mean() * 100) if (norm_classes == name).any() else None,
+                        "sku_lipatan": int((cal_classes == name).sum()), "pengali_ss": round(final_q.get(name, 0.0), 3),
+                        "z_normal": round(z_of[name], 3)} for name in ("A", "B", "C")}
     goal = float(np.mean([levels.get(c, pct) for c in cal_classes])) if cal_classes.size else pct
     return {
-        "tingkat_layanan_pct": _num(cal.mean() * 100) if cal.size else None,
+        "metode_ss": method,
+        "metode_ss_label": SS_METHODS[method],
+        "tingkat_layanan_pct": _num(chosen.mean() * 100) if chosen.size else None,
         "tingkat_layanan_tanpa_kalibrasi_pct": _num(raw.mean() * 100) if raw.size else None,
+        "tingkat_layanan_normal_mad_pct": _num(old.mean() * 100) if old.size else None,
+        "tingkat_layanan_empiris_pct": _num(cal.mean() * 100) if cal.size else None,
+        "stok_per_permintaan": round(chosen_stock / demand, 3) if demand else None,
+        "stok_per_permintaan_normal_mad": round(old_stock / demand, 3) if demand else None,
+        "stok_per_permintaan_empiris": round(cal_stock / demand, 3) if demand else None,
         "faktor_kalibrasi_ss": round(factor, 4),
+        "pengali_ss_kelas": {k: round(v, 4) for k, v in final_q.items()},
         "per_kelas": per_class,
         "sku_lipatan": int(cal.size),
         "stok_kosong_tertangkap_pct": _num(censored_caught / censored_total * 100) if censored_total else None,
         "sku_stok_kosong": censored_total,
         "target_layanan_pct": round(goal, 2),
-        "rumus_ss": (f"Z(kelas A {levels['A']:.0f}%, B {levels['B']:.0f}%, C {levels['C']:.0f}%) × r {factor:.2f} × σ 28 hari × "
-                     f"√({lead_days:g} + {review_days:g})").replace(".", ","),
+        "rumus_ss": ((f"q kelas (A {final_q.get('A', 0):.2f}, B {final_q.get('B', 0):.2f}, C {final_q.get('C', 0):.2f}; kuantil empiris galat untuk target "
+                      f"A {levels['A']:.0f}%, B {levels['B']:.0f}%, C {levels['C']:.0f}%)") if method == "empiris" else
+                     f"Z(kelas A {levels['A']:.0f}%, B {levels['B']:.0f}%, C {levels['C']:.0f}%) × r {factor:.2f}"
+                     ).replace(".", ",") + f" × σ {SIGMA_DAYS} hari × √({lead_days:g} + {review_days:g})".replace(".", ","),
         "jendela_hari": span,
+        "sigma_hari": SIGMA_DAYS,
     }
 
 

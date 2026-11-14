@@ -7,6 +7,7 @@ fungsi model yang sama lalu disimpan di folder run.
 
 from __future__ import annotations
 
+import html
 import time
 from datetime import date
 from pathlib import Path
@@ -25,7 +26,7 @@ from src.core.expert_system import action_steps, evaluate_rules, sku_facts
 from src.core.libstatus import library_status
 from src.core.optimization import optimize_restock
 from src.models.evaluate import HORIZON_LABELS, HORIZONS, MODEL_SEGMENT, PERIOD_TO_HORIZON, record_frame
-from src.ui.common import ID_MONTHS_SHORT, card, download_excel, explain, fmt_num, fmt_pct
+from src.ui.common import ID_MONTHS_SHORT, card, download_excel, explain, fmt_num, fmt_pct, html_table
 from src.utils.format import show_table
 
 UP, DOWN = "#1d4ed8", "#dc2626"
@@ -74,10 +75,10 @@ def _caption_figure(number: str, text: str) -> None:
 def _framework(outcome, table: pd.DataFrame, params: dict, today: date, record: dict | None) -> pd.DataFrame:
     """Hasil kerangka pengujian (sub-bab 4.9): forecasting, optimisasi, sistem pakar, kecepatan."""
     rows = []
-    best = (record or {}).get("models", {}).get((record or {}).get("best_model") or "", {})
+    best = (record or {}).get("models", {}).get((record or {}).get("model_produksi") or (record or {}).get("best_model") or "", {})
     agg = best.get("mape_agregat")
     mape = float(agg) if agg is not None else np.nan
-    rows.append({"No": 1, "Komponen": "Demand forecasting", "Metode": f"Walk-forward {len((record or {}).get('fold_dates') or [])} lipatan · model terbaik {best.get('label') or '-'}",
+    rows.append({"No": 1, "Komponen": "Demand forecasting", "Metode": f"Walk-forward {len((record or {}).get('fold_dates') or [])} lipatan · model produksi {best.get('label') or '-'}",
                  "Target": f"MAPE agregat toko ≤ {MAPE_TARGET_PCT:.0f}%", "Hasil": fmt_pct(mape) if np.isfinite(mape) else "belum tersedia",
                  "Status": ("Tercapai" if mape <= MAPE_TARGET_PCT else "Belum tercapai") if np.isfinite(mape) else "-"})
     if table is not None and not table.empty:
@@ -111,60 +112,137 @@ def _framework(outcome, table: pd.DataFrame, params: dict, today: date, record: 
     return pd.DataFrame(rows)
 
 
-def _summary(outcome, records: dict, history: pd.DataFrame, framework: pd.DataFrame) -> pd.DataFrame:
+def _fold_frame(record: dict) -> pd.DataFrame:
+    rows = []
+    for item in record.get("per_lipatan") or []:
+        day = pd.Timestamp(item["tanggal"])
+        rows.append({"Lipatan (uji 30 hari mulai)": f"{day.day} {ID_MONTHS_SHORT[day.month - 1]} {day.year}", "Dasar": item.get("dasar", "–"),
+                     "Aktual sebelumnya": item.get("aktual_sebelumnya"), "Aktual": item.get("aktual"),
+                     "Perubahan permintaan (%)": item.get("perubahan_pct"), "Prediksi model produksi": item.get("prediksi"),
+                     "Galat model produksi (%)": item.get("galat_pct"), "Prediksi MA28": item.get("prediksi_ma28"), "Galat MA28 (%)": item.get("galat_ma28_pct")})
+    frame = pd.DataFrame(rows)
+    for column in ("Aktual sebelumnya", "Aktual", "Prediksi model produksi", "Prediksi MA28"):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce").round(0)
+    return frame
+
+
+def _diagnosis(record: dict, checks: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
+    """(kekuatan, kelemahan beserta penyebabnya, saran tindak lanjut) dari angka record."""
+    strengths, weaknesses, actions = [], [], []
+    for _, row in checks.iterrows():
+        if str(row["Status"]).startswith("✅"):
+            strengths.append(f"{row['Uji']}: {row['Hasil']} (target {row['Target']}).")
+    folds = [f for f in record.get("per_lipatan") or [] if f.get("galat_pct") is not None]
+    shock = max(folds, key=lambda f: abs(f["galat_pct"])) if folds else None
+    sim = record.get("simulasi_ss") or {}
+    failed = {str(r["Uji"]): r for _, r in checks.iterrows() if not str(r["Status"]).startswith("✅")}
+    month = lambda f: f"{ID_MONTHS_SHORT[pd.Timestamp(f['tanggal']).month - 1]} {pd.Timestamp(f['tanggal']).year}"  # noqa: E731
+    if "Akurasi total toko" in failed or "Tidak bias sistematis" in failed:
+        text = f"{failed.get('Akurasi total toko', failed.get('Tidak bias sistematis'))['Uji']}: {failed.get('Akurasi total toko', failed.get('Tidak bias sistematis'))['Hasil']}."
+        if shock is not None and shock.get("perubahan_pct") is not None:
+            text += (f" Penyumbang terbesar: lipatan {month(shock)} — permintaan berubah {fmt_pct(shock['perubahan_pct'], 1, signed=True)} dari 30 hari sebelumnya, "
+                     f"galat model produksi {fmt_pct(shock['galat_pct'], 1, signed=True)} (MA28 {fmt_pct(shock.get('galat_ma28_pct'), 1, signed=True)}). "
+                     "Lonjakan seperti ini (kampanye tanggal kembar, pesanan proyek) tidak terlihat dari riwayat penjualan saja.")
+        weaknesses.append(text)
+        actions.append("Tambahkan pendorong permintaan yang sudah diketahui sebelum bulan berjalan (rencana budget iklan bulanan, jadwal kampanye "
+                       "Shopee, pesanan proyek yang sudah dikonfirmasi) sebagai fitur model global agar lonjakan bulan kampanye ikut terprediksi.")
+    if "Tidak bias sistematis" in failed and "Akurasi total toko" in failed:
+        weaknesses.append(f"Tidak bias sistematis: {failed['Tidak bias sistematis']['Hasil']}. Model dipilih dengan WAPE (galat mutlak) yang secara matematis "
+                          "condong ke median; untuk permintaan berekor tebal median < rata-rata sehingga prediksi cenderung kurang. Faktor koreksi bias "
+                          "disetel dari lipatan sebelumnya saja, dan satu bulan lonjakan membuatnya tertinggal.")
+        actions.append("Pantau bias per lipatan di tabel Galat total toko; bila 3 lipatan berturut-turut negatif, faktor koreksi bias otomatis mengejar.")
+    if "Mengenali produk terlaris" in failed:
+        weaknesses.append(f"Mengenali produk terlaris: {failed['Mengenali produk terlaris']['Hasil']} dari 50. Peringkat Top 50 berubah tiap bulan karena "
+                          "pesanan proyek per SKU; semua model berada di kisaran yang sama, jadi ini batas informasi data, bukan satu model yang lemah.")
+    if "Tingkat layanan simulasi" in failed:
+        text = f"Tingkat layanan simulasi: {failed['Tingkat layanan simulasi']['Hasil']} dari target {failed['Tingkat layanan simulasi']['Target']}."
+        if sim.get("tingkat_layanan_empiris_pct") is not None and sim.get("stok_per_permintaan_normal_mad") is not None:
+            text += (f" Galat berekor tebal: metode Normal (Z × r) mencapai {fmt_pct(sim.get('tingkat_layanan_normal_mad_pct'), 1)} dengan stok "
+                     f"{fmt_num(sim['stok_per_permintaan_normal_mad'], 2)}× permintaan; metode kuantil empiris mencapai "
+                     f"{fmt_pct(sim['tingkat_layanan_empiris_pct'], 1)} dengan stok {fmt_num(sim.get('stok_per_permintaan_empiris'), 2)}× permintaan.")
+        weaknesses.append(text)
+        actions.append("Pilih metode safety stock di Setting › Parameter (safety_stock.metode): 'empiris' bila ingin tingkat layanan mendekati target "
+                       "dengan konsekuensi stok lebih besar, atau turunkan target kelas C (permintaan proyek dilayani lewat PO/DC).")
+    if "Lebih baik dari metode lama (Level terkini)" in failed:
+        weaknesses.append("Lebih baik dari metode lama: pada analisa ini model dengan WAPE luar sampel terkecil adalah metode lama sendiri, "
+                          "jadi model baru belum memberi tambahan akurasi pada data ini.")
+    for name in ("Stabil antar analisa", "Model terpilih konsisten", "Unggul di luar sampel", "Mengalahkan pembanding MA28"):
+        if name in failed:
+            weaknesses.append(f"{name}: {failed[name]['Hasil']} (target {failed[name]['Target']}).")
+    actions += [
+        "Unggah snapshot stok rutin (mingguan) agar hari kosong tercatat sebagai permintaan tersensor, bukan nol.",
+        "Tambah riwayat ≥ 12 bulan agar musim tahunan (Lebaran, akhir tahun, bulan kampanye) bisa dipelajari model.",
+    ]
+    return strengths, weaknesses, actions
+
+
+def _summary(outcome, records: dict, history: pd.DataFrame, framework: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     record = records.get("bulan") or next((r for r in records.values() if r.get("models")), None)
     if not record:
         st.info("Hasil uji walk-forward belum tersedia. Jalankan analisa ulang agar evaluasi model terisi.")
         return pd.DataFrame()
-    best = record["models"].get(record.get("best_model") or "", {})
+    # Kartu, gauge, dan uji kesesuaian memakai model yang sama: model produksi (WAPE luar sampel terkecil).
+    chosen = record.get("model_produksi") or record.get("best_model") or ""
+    best = record["models"].get(chosen, {})
+    oos = ((record.get("luar_sampel") or {}).get("models") or {}).get(chosen, {})
     base = H._model(record, H.BASELINE_LABEL)
     skill = H.skill_score(best.get("wape"), base.get("wape"))
     label = HORIZON_LABELS[record["horizon"]].lower()
     k = st.columns(4)
-    card(k[0], "Model terpilih", best.get("label", "–"), hint=f"horizon {label} · {len(record.get('fold_dates') or [])} lipatan walk-forward · {fmt_num(record.get('n_sku'))} SKU")
+    card(k[0], "Model produksi", best.get("label", "–"), hint=f"horizon {label} · {len(record.get('fold_dates') or [])} lipatan walk-forward · {fmt_num(record.get('n_sku'))} SKU")
     agg = best.get("mape_agregat")
     card(k[1], "MAPE agregat toko", fmt_pct(agg, 1), hint=f"target ≤ {MAPE_TARGET_PCT:.0f}% · <b style='color:{UP if agg is not None and agg <= MAPE_TARGET_PCT else DOWN}'>"
-                                                         f"{'tercapai' if agg is not None and agg <= MAPE_TARGET_PCT else 'belum'}</b>")
-    card(k[2], "WAPE per SKU", fmt_pct(best.get("wape"), 1), hint=f"MA28 {fmt_pct(base.get('wape'), 1)} · skill <b style='color:{UP if skill > 0 else DOWN}'>{fmt_pct(skill * 100, 1, signed=True)}</b>")
-    bias = best.get("bias")
-    card(k[3], "Bias", fmt_pct(bias, 1, signed=True), hint=f"faktor koreksi {fmt_num(record.get('faktor_koreksi_bias', 1), 3)} · Top 50 tepat {fmt_num(best.get('top50_tepat'), 1)}/50")
+                                                         f"{'tercapai' if agg is not None and agg <= MAPE_TARGET_PCT else 'belum'}</b>"
+                                                         + (f" · luar sampel {fmt_pct(oos.get('mape_agregat'), 1)}" if oos.get("mape_agregat") is not None else ""))
+    card(k[2], "WAPE per SKU", fmt_pct(best.get("wape"), 1), hint=f"MA28 {fmt_pct(base.get('wape'), 1)} · skill <b style='color:{UP if skill > 0 else DOWN}'>{fmt_pct(skill * 100, 1, signed=True)}</b>"
+                                                                + (f" · luar sampel {fmt_pct(oos.get('wape'), 1)}" if oos.get("wape") is not None else ""))
+    bias = oos.get("bias") if oos.get("bias") is not None else best.get("bias")
+    card(k[3], "Bias (luar sampel)" if oos.get("bias") is not None else "Bias", fmt_pct(bias, 1, signed=True),
+         hint=f"faktor koreksi {fmt_num(record.get('faktor_koreksi_bias', 1), 3)} · Top 50 tepat {fmt_num(best.get('top50_tepat'), 1)}/50")
 
-    g1, g2 = st.columns([1, 1.4])
+    from src.models.evaluate import ss_method
+
+    checks = H.method_checks(record, history if history is not None and not history.empty else None, ss_method=ss_method(params) if params else None)
+    passed = int(checks["Status"].str.startswith("✅").sum())
+    g1, g2 = st.columns([1, 2.2], gap="large")
     with g1:
         fig = go.Figure(go.Indicator(
             mode="gauge+number+delta", value=float(agg or 0), number={"suffix": "%", "valueformat": ".1f"},
             delta={"reference": MAPE_TARGET_PCT, "increasing": {"color": DOWN}, "decreasing": {"color": UP}},
-            title={"text": "MAPE agregat vs target"},
+            title={"text": "MAPE agregat vs target", "font": {"size": 15}},
             gauge={"axis": {"range": [0, max(50, float(agg or 0) * 1.3)]}, "bar": {"color": "#ee4d2d"},
                    "steps": [{"range": [0, MAPE_TARGET_PCT], "color": "#dbeafe"}, {"range": [MAPE_TARGET_PCT, 30], "color": "#fef3c7"}],
                    "threshold": {"line": {"color": "#0f172a", "width": 3}, "value": MAPE_TARGET_PCT}}))
-        _plot(fig, "eval-gauge", height=300, legend_below=False)
+        _plot(fig, "eval-gauge", height=260, legend_below=False)
+        st.markdown(f"<div style='text-align:center;font-size:var(--fs-sm);color:#475569'><b style='font-size:var(--fs-xl);color:#0f172a'>{passed}/{len(checks)}</b>"
+                    " uji kesesuaian terpenuhi</div>", unsafe_allow_html=True)
     with g2:
-        checks = H.method_checks(record, history if history is not None and not history.empty else None)
-        passed = int(checks["Status"].str.startswith("✅").sum())
         st.markdown(f"**Uji kesesuaian algoritma & metode** · {passed} dari {len(checks)} sesuai")
-        show_table(checks, column_config={"Arti": st.column_config.TextColumn(width="large")})
+        html_table(checks, status="Status", widths={"Uji": 190, "Target": 120, "Hasil": 110, "Status": 96, "Arti": 360}, max_height=520)
+
+    folds = _fold_frame(record)
+    if not folds.empty:
+        st.markdown("**Galat total toko per lipatan** · dari mana MAPE agregat & bias berasal")
+        html_table(folds, kinds={"Aktual sebelumnya": "count", "Aktual": "count", "Prediksi model produksi": "count", "Prediksi MA28": "count",
+                                 "Perubahan permintaan (%)": "pct", "Galat model produksi (%)": "pct", "Galat MA28 (%)": "pct"})
+        st.caption("Total QTY SKU yang dinilai. Perubahan permintaan = 30 hari uji dibanding 30 hari sebelum titik potong. Lipatan pertama hanya "
+                   "dipakai menyetel (lipatan uji); lipatan berikutnya luar sampel.")
     st.markdown("**Kesimpulan per horizon**")
     for name in HORIZONS:
         rec = records.get(name)
         if rec and rec.get("kesimpulan"):
             st.markdown(f"- **{HORIZON_LABELS[name]}** · {rec['kesimpulan']}")
-    strengths, weaknesses = [], []
-    for _, row in checks.iterrows():
-        (strengths if str(row["Status"]).startswith("✅") else weaknesses).append(f"{row['Uji']}: {row['Hasil']} (target {row['Target']}).")
-    improve = [
-        "Unggah snapshot stok rutin (mingguan) agar hari kosong tercatat sebagai permintaan tersensor, bukan nol.",
-        "Tambah riwayat ≥ 12 bulan untuk menangkap musim renovasi (Lebaran, akhir tahun) pada horizon kuartal.",
-        "Pilih model per segmen dengan lipatan validasi terpisah (nested walk-forward) agar skor tidak optimistis.",
-        "Pertimbangkan model khusus permintaan jarang (Croston/SBA) untuk SKU pola intermittent & lumpy (lihat Profil data).",
-    ]
+    strengths, weaknesses, improve = _diagnosis(record, checks)
     cols = st.columns(3)
-    for column, (title, items) in zip(cols, (("Kekuatan", strengths), ("Kelemahan / keterbatasan", weaknesses), ("Saran penelitian lanjut", improve))):
-        with column.container(border=True):
-            st.markdown(f"**{title}**")
-            st.markdown("\n".join(f"- {i}" for i in items) if items else "–")
+    for column, (title, items, tone) in zip(cols, (("Kekuatan", strengths, "#047857"), ("Kelemahan & penyebabnya", weaknesses, "#b45309"),
+                                                    ("Tindak lanjut", improve, "#1d4ed8"))):
+        body = "".join(f"<li>{html.escape(i)}</li>" for i in items) or "<li>–</li>"
+        column.markdown(f"<div style='border:1px solid #e2e8f0;border-top:4px solid {tone};border-radius:12px;background:#fff;padding:.7rem .9rem;height:100%'>"
+                        f"<div style='font-weight:800;margin-bottom:.3rem'>{title}</div><ul style='margin:0 0 0 1rem;padding:0;font-size:var(--fs-sm);"
+                        f"line-height:1.55'>{body}</ul></div>", unsafe_allow_html=True)
     st.markdown("**Hasil kerangka pengujian (sub-bab 4.9)**")
-    show_table(framework)
+    html_table(framework, status="Status", widths={"Komponen": 170, "Metode": 300})
     return checks
 
 
@@ -193,7 +271,7 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
     st.graphviz_chart(PIPELINE_DOT, use_container_width=True)
     _caption_figure("1", "Alur data hingga keputusan; skor walk-forward menentukan bobot ensemble.")
     st.markdown("**Model kandidat**")
-    show_table(pd.DataFrame([
+    html_table(pd.DataFrame([
         {"Model": "Level terkini", "Peran": "metode lama (pembanding)", "Rumus / ide": "laju harian 28 hari terakhir × hari horizon"},
         {"Model": "Moving Average 28", "Peran": "pembanding baku (baseline)", "Rumus / ide": "ŷ = (1/28) Σ y(t−i), i = 1..28"},
         {"Model": "Exponential Smoothing", "Peran": "statistik", "Rumus / ide": "ℓ(t) = α·y(t) + (1−α)·ℓ(t−1), α = 0,1"},
@@ -202,7 +280,7 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
         {"Model": "Ensemble", "Peran": "gabungan", "Rumus / ide": "bobot ∝ 1/WAPE (hanya model yang mengalahkan MA28) × faktor koreksi bias"},
         {"Model": MODEL_SEGMENT, "Peran": "kandidat produksi", "Rumus / ide": "per segmen ABC-XYZ dipakai model dengan WAPE terkecil"},
         {"Model": "Model produksi", "Peran": "dipakai prediksi", "Rumus / ide": "model (tunggal, Ensemble, atau Ensemble per segmen) dengan WAPE luar sampel terkecil pada horizon terdekat"},
-    ]), column_config={"Rumus / ide": st.column_config.TextColumn(width="large")})
+    ]), widths={"Model": 170, "Peran": 170})
     st.markdown("**Metrik evaluasi**")
     c1, c2 = st.columns(2)
     with c1:
@@ -236,7 +314,8 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
         "- **Hari stok kosong** (permintaan tersensor): pasangan SKU-lipatan dengan hari stok kosong di periode uji tidak dinilai; "
         "MA28 dan Exponential Smoothing melewati hari itu saat latih; target latih GBM = rata-rata harian pada hari yang stoknya ada saja. "
         "Level terkini, fitur lag/rolling GBM, dan Prophet (total toko) masih membaca hari itu sebagai 0 (keterbatasan, cenderung sedikit kurang prediksi pada SKU yang sering kosong).\n"
-        "- **Safety stock**: SS = Z × σ permintaan × √(lead time + periode tinjau); impor memakai variasi lead time dari lead time maks. "
+        "- **Safety stock**: SS = pengali × σ permintaan harian 180 hari × √(lead time + periode tinjau); pengali = Z(target kelas ABC) × r "
+        "(kalibrasi MAD walk-forward, metode 'normal') atau kuantil empiris galat per kelas (metode 'empiris', conformal); impor memakai variasi lead time dari lead time maks. "
         "ROP = permintaan harian × lead time + SS.\n"
         "- **Tidak ada kebocoran data pada fitur**: fitur hanya dari data sebelum titik potong.\n"
         "- **Setelan vs uji**: tabel hasil utama memakai bobot ensemble, faktor koreksi bias, dan pilihan model per segmen dari semua lipatan "
@@ -247,7 +326,7 @@ def _methodology(outcome, records: dict, period: str, is_super: bool) -> None:
         rows = [{"Algoritma": name, "Status": "Aktif", "Keterangan": note} for name, note in outcome.availability.active.items()]
         rows += [{"Algoritma": name, "Status": "Dilewati", "Keterangan": note} for name, note in outcome.availability.skipped.items()]
         st.markdown("**Ketersediaan algoritma pada analisa ini**")
-        show_table(pd.DataFrame(rows), column_config={"Keterangan": st.column_config.TextColumn(width="large")})
+        html_table(pd.DataFrame(rows), status="Status", widths={"Algoritma": 180, "Status": 90})
         if outcome.censored_skus:
             st.caption(f"{fmt_num(outcome.censored_skus)} SKU punya hari stok kosong yang diperlakukan sebagai permintaan tersensor.")
     if is_super:
@@ -705,7 +784,7 @@ def show_evaluation(
     try:
         if choice == TABS[0]:
             framework = _framework(outcome, enriched, params, today, records.get("bulan"))
-            checks = _summary(outcome, records, summary, framework)
+            checks = _summary(outcome, records, summary, framework, params)
             tables.update({"Uji kesesuaian metode": checks, "Kerangka pengujian": framework})
             if isinstance(comparison, pd.DataFrame) and not comparison.empty:
                 with st.expander("Uji total toko (hold-out 7 hari, metode lama)"):
