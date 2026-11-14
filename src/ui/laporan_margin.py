@@ -136,7 +136,7 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
         unsafe_allow_html=True,
     )
     md = load_margin(features)
-    if md.lookup.empty:
+    if not md.ready:
         st.info("File margin belum diunggah. Unggah di **Upload data › Target & margin › File margin**.")
         return
     if orders is None or orders.empty:
@@ -159,7 +159,8 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
         return
     history = margin_report.sales_by_sku(orders)
     keys = sorted(set(sales["sku"]) | set(history["sku"]))
-    kwargs, names = _inputs(features, table, data, keys, dict(zip(md.lookup["sku"], md.lookup["nama"])))
+    kwargs, names = _inputs(features, table, data, keys, dict(zip(md.lookup["sku"], md.lookup["nama"])) if not md.lookup.empty else {})
+    kwargs.update(cost=md.harga_beli, cost_label=f"Harga beli {md.harga_beli_periode}".strip())
     for frame in (sales, history):
         frame["nama"] = [names.get(k) or n for k, n in zip(frame["sku"], frame["nama"])]
     is_active = (lambda k: k in active) if active else (lambda k: True)
@@ -229,6 +230,8 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
             "- **Periode** dipilih dari kalender. File margin berisi total setahun tanpa tanggal, jadi dipakai sebagai **tarif margin per SKU** "
             "(Gross Margin ÷ Sales Include Tax; sheet Shopee → bila tidak ada, Nasional). Penjualan diambil dari transaksi Shopee pada periode itu.\n"
             "- **Harga akhir** = (penjualan − voucher ditanggung penjual) ÷ QTY, sama dengan Kalkulator biaya. Margin kotor dan semua persen dihitung dari harga akhir.\n"
+            "- **Margin kotor** = dari **harga beli** (file merchandising, belum PPN) bila ada: harga akhir × (1 − PPN) − harga beli; "
+            "bila tidak ada, dari File margin (sheet Shopee → Nasional).\n"
             "- **Margin bersih** = margin kotor − potongan Shopee (administrasi kategori + program Shopee Mall + proses pesanan) "
             "− iklan (data iklan terakhir). Estimasi, bukan laporan keuangan.\n"
             f"- **Status**: 🔴 Rugi = margin bersih di bawah 0 · 🟠 Rendah = untung tetapi di bawah {fmt_pct(acuan, 1)} (rata-rata item yang untung) · "

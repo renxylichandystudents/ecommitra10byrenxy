@@ -383,7 +383,7 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir") 
     acuan = port.attrs.get("acuan_pct", float("nan"))
     with st.expander("Cara membaca daftar ini"):
         st.markdown(
-            "- **Margin bersih** = margin kotor (file margin) − potongan Shopee (administrasi kategori + program + proses pesanan) − iklan per unit, "
+            "- **Margin bersih** = margin kotor (dari harga beli bila ada — PPN dari harga jual — selain itu file margin) − potongan Shopee (administrasi kategori + program + proses pesanan) − iklan per unit, "
             "dalam % harga akhir (harga transaksi rata-rata periode terpilih setelah diskon & voucher penjual).\n"
             f"- **Status**: 🔴 Rugi = margin bersih di bawah 0 · 🟠 Rendah = untung tetapi di bawah {fmt_pct(acuan, 1)} (rata-rata margin bersih SKU yang untung) · 🟢 Tinggi = sama/di atas batas itu · "
             "⚪ Tanpa data = tidak ada di file margin.\n"

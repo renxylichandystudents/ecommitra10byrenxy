@@ -59,8 +59,11 @@ def sales_by_sku(orders: pd.DataFrame | None, start=None, end=None) -> pd.DataFr
 
 def build(sales: pd.DataFrame, lookup: pd.DataFrame, *, admin: dict[str, float] | None = None, ad_unit: dict[str, float] | None = None,
           programs: dict | None = None, order_fee: float = fee.DEFAULT_ORDER_FEE, big: set[str] | None = None,
-          acuan_pct: float | None = None) -> pd.DataFrame:
-    """Satu baris per SKU terjual. sales: sku, nama, penjualan, qty. lookup: margin_file.lookup(...)."""
+          acuan_pct: float | None = None, cost: dict[str, float] | None = None, cost_label: str = "Harga beli") -> pd.DataFrame:
+    """Satu baris per SKU terjual. sales: sku, nama, penjualan, qty. lookup: margin_file.lookup(...).
+
+    cost (sku → harga beli belum PPN, file merchandising): bila ada, margin kotor = (harga akhir × (1 − PPN) − harga beli) ÷ harga akhir;
+    selain itu dari File margin."""
     if sales is None or sales.empty:
         out = pd.DataFrame(columns=COLUMNS)
         out.attrs.update({"acuan_pct": float("nan"), "overall_pct": float("nan")})
@@ -80,6 +83,10 @@ def build(sales: pd.DataFrame, lookup: pd.DataFrame, *, admin: dict[str, float] 
         iklan_pct = float(ad_unit.get(r.sku, 0) or 0) / price * 100 if price > 0 else 0.0
         hit = look.loc[r.sku] if not look.empty and r.sku in look.index else None
         kotor = float(hit["margin_kotor_pct"]) if hit is not None else np.nan
+        source = hit["sumber"] if hit is not None else ""
+        unit_cost = (cost or {}).get(r.sku)
+        if unit_cost and price > 0:
+            kotor, source = (price * (1 - mf.DEFAULT_TAX_SHARE) - unit_cost) / price * 100, cost_label
         sales_rp = float(r.penjualan)
         kotor_rp = net_rp * kotor / 100 if np.isfinite(kotor) else np.nan
         bersih_rp = kotor_rp - net_rp * (shopee_pct + iklan_pct) / 100 if np.isfinite(kotor) else np.nan
@@ -88,10 +95,10 @@ def build(sales: pd.DataFrame, lookup: pd.DataFrame, *, admin: dict[str, float] 
             "sku": r.sku, "nama": r.nama, "penjualan": sales_rp, "penjualan_akhir": net_rp, "qty": float(r.qty), "harga": price,
             "kotor_rp": kotor_rp, "kotor_pct": kotor,
             "kotor_file_pct": float(hit["margin_file_pct"]) if hit is not None and pd.notna(hit["margin_file_pct"]) else np.nan,
-            "sumber": (hit["sumber"] if hit is not None else ""), "shopee_pct": shopee_pct, "iklan_pct": iklan_pct, "bersih_rp": bersih_rp,
+            "sumber": source, "shopee_pct": shopee_pct, "iklan_pct": iklan_pct, "bersih_rp": bersih_rp,
             "bersih_pct": bersih_rp / net_rp * 100 if np.isfinite(bersih_rp) and net_rp else np.nan,
             "nasional_pct": nas, "selisih_nasional": kotor - nas if np.isfinite(kotor) and np.isfinite(nas) else np.nan,
-            "_odd": hit is not None and not np.isfinite(kotor), "_inp": inp,
+            "_odd": hit is not None and not np.isfinite(kotor) and not unit_cost, "_inp": inp,
         })
     frame = pd.DataFrame(rows)
     valid = frame.loc[frame["bersih_rp"].notna()]
@@ -107,9 +114,10 @@ def build(sales: pd.DataFrame, lookup: pd.DataFrame, *, admin: dict[str, float] 
     frame["kurang_rp"] = (frame["penjualan_akhir"] * (acuan - frame["bersih_pct"]).clip(lower=0) / 100).where(frame["status"] == "Rendah", 0.0).fillna(0.0)
     frame["tindak_lanjut"] = [_action(row, acuan) for row in frame.to_dict("records")]
     frame["catatan"] = np.select(
-        [frame["status"] == "Data tidak wajar", frame["status"] == "Tanpa data margin", frame["sumber"] == "Nasional"],
-        ["Margin di file di luar −100%…95% (kemungkinan retur/penyesuaian); cek ke tim finance", "SKU tidak ada di File margin",
-         "Tidak ada di sheet Shopee, memakai margin nasional"], "")
+        [frame["status"] == "Data tidak wajar", frame["status"] == "Tanpa data margin", frame["sumber"] == "Nasional",
+         frame["sumber"].astype(str).str.startswith("Harga beli")],
+        ["Margin di file di luar −100%…95% (kemungkinan retur/penyesuaian); cek ke tim finance", "SKU tidak ada di harga beli maupun File margin",
+         "Tidak ada di sheet Shopee, memakai margin nasional", "Memakai harga beli (file merchandising), PPN dari harga jual"], "")
     order = {"Rugi": 0, "Rendah": 1, "Tinggi": 2, "Data tidak wajar": 3, "Tanpa data margin": 4}
     frame["_o"] = frame["status"].map(order)
     frame["_v"] = np.select([frame["status"] == "Rugi", frame["status"] == "Rendah", frame["status"] == "Tinggi"],

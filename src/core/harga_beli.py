@@ -3,8 +3,8 @@
 Kolom yang dipakai (baris judul dicari otomatis): Category Name, Item No, Item Name, Variasi, Campaign, H.Beli (JBD),
 H.Jual (10037), % Promo Offline, H.Jual NETT (10037), Bottom Price (Marketplace), ZONA / AREA BERLAKU, Keterangan.
 
-- Harga beli = modal per unit. Mengikuti rumus di file: margin = (harga jual − harga beli) ÷ harga jual (harga jual dan
-  harga beli pada dasar yang sama, tanpa memisahkan pajak). Bila harga beli kosong, aplikasi memakai estimasi dari File margin.
+- Harga beli = modal per unit, belum termasuk PPN. PPN dihitung dari harga jual Shopee (sudah termasuk PPN):
+  margin kotor = harga jual − PPN − harga beli. Bila harga beli kosong, aplikasi memakai estimasi dari File margin.
 - Bottom price = harga jual paling rendah yang boleh dipakai untuk promo; hanya dipakai untuk Flash sale toko dan Exposure
   media sosial (harga promo tidak boleh di bawahnya).
 """
@@ -129,8 +129,11 @@ def read_workbook(data: bytes) -> dict:
     raise ValueError("Kolom Item No dan H.Beli tidak ditemukan (butuh sheet Marketplace dari file Bottom Price).")
 
 
-def margin_pct(price: float, cost: float) -> float:
-    """Margin kotor % dari harga jual memakai harga beli (rumus file merchandising)."""
+def margin_pct(price: float, cost: float, tax_share: float | None = None) -> float:
+    """Margin kotor % dari harga jual Shopee (termasuk PPN) memakai harga beli (belum termasuk PPN)."""
+    from src.core.margin_file import DEFAULT_TAX_SHARE
+
     if not price or price <= 0 or cost is None or not np.isfinite(cost):
         return float("nan")
-    return (price - cost) / price * 100
+    share = DEFAULT_TAX_SHARE if tax_share is None else tax_share
+    return (price * (1 - share) - cost) / price * 100

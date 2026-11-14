@@ -56,7 +56,8 @@ class HargaBeliParseTest(unittest.TestCase):
         self.assertAlmostEqual(row["harga_beli"], 2971961.73)
         self.assertAlmostEqual(row["bottom_price"], 4184693.9)
         self.assertTrue(pd.isna(items.set_index("sku").loc["1100008724", "harga_beli"]))
-        self.assertAlmostEqual(H.margin_pct(4284693.9, 2971961.73), 30.64, places=1)
+        self.assertAlmostEqual(H.margin_pct(4284693.9, 2971961.73, tax_share=0.0), 30.64, places=1)
+        self.assertAlmostEqual(H.margin_pct(1_100_000, 700_000), 27.27, places=1)  # 1,1 jt termasuk PPN → 1 jt − 700 rb
 
 
 if __name__ == "__main__":
