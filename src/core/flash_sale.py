@@ -30,10 +30,13 @@ from src.core.promo_calendar import SLOT_HOURS, special_days
 
 DRIVER = "Pendorong omzet"
 CLEAR = "Habiskan stok lebih"
+HOOK = "Barang murah"         # produk murah & laku (≤ CHEAP_MAX) agar pembeli merasa ada harga murah
+CHEAP_MAX = 100_000
+MIN_DISC = 0.05
 SRC_SITE = "Stok toko"
 SRC_DC = "Transfer dari DC"
 SRC_THIN = "Kuota kecil (stok tipis)"
-DISCOUNTS = {DRIVER: (0.10, 0.07, 0.05), CLEAR: (0.20, 0.15, 0.10, 0.05)}
+DISCOUNTS = {DRIVER: (0.10, 0.07, 0.05), CLEAR: (0.20, 0.15, 0.10, 0.05), HOOK: (0.20, 0.15, 0.10, 0.05)}
 TRANSFER_DAYS = 3
 MIN_GAP_DAYS = 3          # bila kandidat kurang, SKU boleh diulang setelah 3 hari agar flash sale tetap jalan
 OVERSTOCK_DAYS = 90
@@ -71,7 +74,53 @@ def flash_price(price: float, discounts: tuple[float, ...], floor: float | None)
     return None
 
 
-def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_floor: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+def charm_price(value: float, *, up: bool = False) -> float:
+    """Harga "psikologis" seperti di Shopee: < Rp 100 rb → kelipatan Rp 100 berakhir 900 (mis. 61.900); < Rp 1 jt → berakhir 9.900
+    (mis. 189.900); ≥ Rp 1 jt → berakhir 99.000 (mis. 1.299.000). up=True: harga charm terkecil ≥ value, selain itu terbesar ≤ value."""
+    if not np.isfinite(value) or value <= 0:
+        return float("nan")
+    step, end = (1_000, 900) if value < 100_000 else (10_000, 9_900) if value < 1_000_000 else (100_000, 99_000)
+    base = math.floor(value / step) * step + end
+    if up:
+        while base < value:
+            base += step
+        return float(base)
+    while base > value:
+        base -= step
+    return float(base) if base > 0 else float(math.floor(value / 100) * 100)
+
+
+def band_discount(price: float, purpose: str) -> float:
+    """Target diskon flash menurut kelompok harga (makin murah barang, makin besar diskon yang terasa); habiskan stok +5 poin."""
+    base = 0.20 if price < 100_000 else 0.15 if price < 500_000 else 0.12 if price < 2_000_000 else 0.10
+    return base + (0.05 if purpose == CLEAR else 0.0)
+
+
+def flash_offer(price: float, *, purpose: str, floor: float, bottom: float, low: float = float("nan"), median: float = float("nan")) -> tuple[float, float, str] | None:
+    """(harga flash, diskon, alasan) yang menarik tetapi tidak di bawah bottom price MD maupun harga impas.
+
+    Strategi: target diskon per kelompok harga, dan harga flash harus lebih murah dari harga transaksi terendah 90 hari
+    (pembeli merasa ada harga yang belum pernah ada), lalu dibulatkan ke harga psikologis. None bila diskon < 5%."""
+    target = price * (1 - band_discount(price, purpose))
+    why = f"target diskon {band_discount(price, purpose) * 100:.0f}% untuk harga {'< 100 rb' if price < 100_000 else '< 500 rb' if price < 500_000 else '< 2 jt' if price < 2_000_000 else '≥ 2 jt'}"
+    if low == low and 0 < low < price and low * 0.98 < target:
+        target = low * 0.98
+        why = f"di bawah harga transaksi terendah 90 hari (Rp {low:,.0f})".replace(",", ".")
+    limit = max([v for v in (floor, bottom) if v == v] or [0.0])
+    offer = charm_price(target)
+    if offer < limit:
+        offer = charm_price(limit, up=True)
+        why = "dibatasi bottom price MD" if bottom == bottom and bottom >= (floor if floor == floor else 0) else "dibatasi harga impas"
+    if offer >= price * (1 - MIN_DISC) and limit > 0 and float(math.ceil(limit / 100) * 100) <= price * (1 - MIN_DISC):
+        offer = float(math.ceil(limit / 100) * 100)  # harga charm terlalu tinggi: pakai batas bawah persis
+    disc = 1 - offer / price
+    if disc < MIN_DISC - 1e-9:
+        return None
+    return offer, disc, why
+
+
+def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_floor: bool = True,
+               require_bottom: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(kandidat, tidak dijadwalkan). items: kolom INPUT_COLUMNS (lihat `rekomendasi_plus._flash_items`).
 
     below_floor=True (prioritas omzet): SKU yang harga impasnya tidak memberi ruang diskon tetap ikut dengan diskon minimal
@@ -87,24 +136,28 @@ def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_f
         ss, dc = _num(r.get("ss"), 0.0), max(_num(r.get("dc"), 0.0), 0.0)
         cancel = _num(r.get("batal_pct"))
 
-        def skip(reason: str) -> None:
-            skipped.append({"SKU · produk · varian": label, "Stok toko": stok, "Stok DC": dc, "Alasan": reason})
+        def skip(reason: str, group: str = "") -> None:
+            skipped.append({"SKU · produk · varian": label, "Stok toko": stok, "Stok DC": dc, "Kelompok": group or reason, "Alasan": reason})
 
         if sku in excluded:
-            skip("SKU jasa")
+            skip("SKU jasa", "SKU jasa")
             continue
         if price <= 0 or daily <= 0 or _num(r.get("terjual"), 0.0) <= 0:
-            skip("tidak terjual 90 hari terakhir / belum ada harga")
+            skip("tidak terjual 90 hari terakhir / belum ada harga", "Tidak terjual 90 hari")
             continue
         if cancel == cancel and cancel > limit:
-            skip(f"batal tinggi {cancel:.0f}% (batas {limit:.0f}%): flash sale memperbanyak pesanan batal")
+            skip(f"batal tinggi {cancel:.0f}% (batas {limit:.0f}%): flash sale memperbanyak pesanan batal", "Batal tinggi")
             continue
         above_ss = stok - ss if known else float("nan")
         free = above_ss - daily * 7 if known else float("nan")
         excess = above_ss - daily * 30 if known else float("nan")
         cover = above_ss / daily if known else float("nan")
-        purpose = CLEAR if known and cover >= OVERSTOCK_DAYS and excess >= 5 else DRIVER
-        if purpose == DRIVER:
+        bottom = _num(r.get("bottom"))
+        if require_bottom and bottom != bottom:
+            skip("tidak ada di file bottom price MD: flash sale hanya untuk SKU yang punya bottom price", "Tidak ada bottom price MD")
+            continue
+        purpose = CLEAR if known and cover >= OVERSTOCK_DAYS and excess >= 5 else HOOK if price <= CHEAP_MAX else DRIVER
+        if purpose in (DRIVER, HOOK):
             target = max(3, math.ceil(daily * 3))
         else:
             target = min(max(5, math.ceil(excess * 0.2)), max(5, math.ceil(daily * 30)), 100)
@@ -124,47 +177,36 @@ def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_f
             source, quota = SRC_THIN, int(min(target, pool))
             notes.append(f"stok {stok:.0f} sedikit di atas SS {ss:.0f}: kuota kecil, ajukan restock")
         else:
-            skip("data stok belum ada dan DC kosong" if not known else "stok 0 / di bawah SS dan DC kosong: restock dulu")
+            skip("data stok belum ada dan DC kosong" if not known else "stok 0 / di bawah SS dan DC kosong: restock dulu", "Stok kosong (toko & DC)")
             continue
         floor = _num(r.get("floor"))
-        bottom = _num(r.get("bottom"))
         if floor != floor:
             notes.append("margin belum diketahui (File margin/harga beli): cek harga impas sebelum dijalankan")
-        if bottom == bottom and bottom >= price:
-            skip(f"bottom price merchandising Rp {bottom:,.0f} ≥ harga normal: tidak ada ruang promo".replace(",", "."))
+        if bottom == bottom and bottom > price * (1 - MIN_DISC) + 1:
+            skip(f"bottom price MD Rp {bottom:,.0f} vs harga normal Rp {price:,.0f}: diskon < 5%".replace(",", "."), "Bottom price MD tanpa ruang diskon")
             continue
-        # Harga flash mengikuti bottom price MD (harga promo terendah yang disetujui) selama ≥ harga impas dan diskonnya ≥ 5%.
-        # Tanpa bottom price MD: diskon terbesar 10/7/5% (habiskan stok 20…5%) yang ≥ harga impas → diusulkan sebagai bottom price ke codif.
-        priced = None
-        if bottom == bottom and (floor != floor or bottom >= floor):
-            priced = bottom_price_cap(price, bottom)
-            if priced is not None and priced[1] < 0.05:
-                skip(f"bottom price MD Rp {bottom:,.0f} hanya memberi diskon {priced[1] * 100:.1f}% (< 5%): tidak layak flash sale".replace(",", "."))
-                continue
-            if priced is not None:
-                notes.append(f"harga flash = bottom price MD Rp {bottom:,.0f}".replace(",", "."))
-        if priced is None:
-            price_floor = max(v for v in (floor, bottom) if v == v) if (floor == floor or bottom == bottom) else None
-            priced = flash_price(price, DISCOUNTS[purpose], price_floor)
-            if priced is not None and bottom != bottom:
-                notes.append("belum ada bottom price MD: ajukan harga flash ini sebagai bottom price ke codif")
-            elif priced is not None:
-                notes.append(f"bottom price MD Rp {bottom:,.0f} di bawah impas: harga flash dinaikkan ke ≥ impas".replace(",", "."))
+        offer = flash_offer(price, purpose=purpose, floor=floor if floor == floor else float("nan"), bottom=bottom,
+                            low=_num(r.get("harga_terendah")), median=_num(r.get("harga_median")))
+        priced = (offer[0], offer[1]) if offer else None
+        if offer:
+            notes.append(f"harga flash {offer[2]}")
         if priced is None and not below_floor:
-            skip("harga impas / bottom price tidak memberi ruang diskon")
+            skip("harga impas (modal + potongan Shopee) tidak memberi ruang diskon ≥ 5%", "Impas tanpa ruang diskon")
             continue
         if priced is None:
-            priced = flash_price(price, (min(DISCOUNTS[purpose]),), bottom if bottom == bottom else None) or bottom_price_cap(price, bottom)
-            if priced is None:
-                skip("bottom price tidak memberi ruang diskon")
+            base = max([v for v in (bottom,) if v == v] or [0.0])
+            value = max(charm_price(price * (1 - MIN_DISC)), float(math.ceil(base / 100) * 100))
+            if value > price * (1 - MIN_DISC) + 1:
+                skip("bottom price MD tidak memberi ruang diskon ≥ 5%", "Bottom price MD tanpa ruang diskon")
                 continue
+            priced = (value, 1 - value / price)
             if floor == floor and priced[0] < floor:
-                notes.append(f"di bawah impas: rugi ±Rp {floor - priced[0]:,.0f}/unit (diskon minimal)".replace(",", "."))
+                notes.append(f"di bawah impas: rugi ±Rp {floor - priced[0]:,.0f}/unit (prioritas omzet)".replace(",", "."))
         flash, disc = priced
         momentum = _num(r.get("momentum"), 0.0)
-        if purpose == DRIVER:
+        if purpose in (DRIVER, HOOK):
             score = _num(r.get("m_sales"), price * daily * 30) * (1 + max(momentum, -0.5))
-            notes.append("laris" + (f", tren 14 hari {momentum * 100:+.0f}%" if momentum else ""))
+            notes.append(("barang murah & laku" if purpose == HOOK else "laris") + (f", tren 14 hari {momentum * 100:+.0f}%" if momentum else ""))
         else:
             score = excess * price
             notes.append(f"stok cukup {cover:.0f} hari: diskon lebih besar untuk memutar stok")
@@ -187,7 +229,7 @@ def candidates(items: pd.DataFrame, *, excluded: set[str] | None = None, below_f
         # pendorong omzet memakai prediksi omzet × tren, habiskan stok memakai nilai stok berlebih sebagai "value".
         rank = lambda s: pd.to_numeric(s, errors="coerce").rank(pct=True).fillna(0.0)  # noqa: E731
         frame["skor"] = 0.4 * rank(frame["skor"]) + 0.3 * rank(frame["qty_hari"]) + 0.3 * rank(frame["margin_pct"])
-    return frame, pd.DataFrame(skipped, columns=["SKU · produk · varian", "Stok toko", "Stok DC", "Alasan"])
+    return frame, pd.DataFrame(skipped, columns=["SKU · produk · varian", "Stok toko", "Stok DC", "Kelompok", "Alasan"])
 
 
 def cancel_limit(items: pd.DataFrame) -> float:
@@ -205,7 +247,7 @@ def cancel_limit(items: pd.DataFrame) -> float:
 
 
 def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, per_day: int = 5, special_extra: int = 3,
-             gap_days: int = 7, clear_share: float = 0.4) -> pd.DataFrame:
+             gap_days: int = 7, clear_share: float = 0.4, hook_share: float = 0.3) -> pd.DataFrame:
     """Jadwal harian flash sale toko. Selalu terisi selama ada kandidat."""
     cols = ["Tanggal", "Momen", "Jam", "Tujuan", "SKU", "Produk", "Harga normal", "Bottom price", "Harga flash", "Diskon (%)", "Kuota", "Batas beli/pembeli",
             "Sumber stok", "Kirim dari DC paling lambat", "Estimasi omzet maks.", "Margin/unit", "Margin (%)", "Peringatan stok 10037", "Alasan"]
@@ -216,7 +258,7 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
     while cursor <= start + timedelta(days=days):
         specials.update(dict(special_days(cursor.year, cursor.month)))
         cursor = (pd.Timestamp(cursor) + pd.DateOffset(months=1)).date()
-    pools = {p: cands.loc[cands["tujuan"] == p].sort_values("skor", ascending=False).to_dict("records") for p in (DRIVER, CLEAR)}
+    pools = {p: cands.loc[cands["tujuan"] == p].sort_values("skor", ascending=False).to_dict("records") for p in (DRIVER, CLEAR, HOOK)}
     used: dict[str, date] = {}
     left = {str(item["sku"]): int(item.get("stok_flash", item["kuota"]) or item["kuota"]) for pool in pools.values() for item in pool}
     rows = []
@@ -225,7 +267,8 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
         label = specials.get(day, "")
         count = per_day + (special_extra if label else 0)
         n_clear = round(count * clear_share) if pools[CLEAR] else 0
-        wanted = [(CLEAR, n_clear), (DRIVER, count - n_clear)]
+        n_hook = round(count * hook_share) if pools[HOOK] else 0
+        wanted = [(CLEAR, n_clear), (HOOK, n_hook), (DRIVER, max(count - n_clear - n_hook, 0))]
         picked: list[dict] = []
 
         def take(pool: list[dict], n: int, gap: int = gap_days) -> None:
@@ -242,9 +285,9 @@ def schedule(cands: pd.DataFrame, start: date, *, today: date, days: int = 14, p
         for purpose, n in wanted:
             take(pools[purpose], n)
         if len(picked) < count:
-            take(pools[DRIVER] + pools[CLEAR], count - len(picked))
+            take(pools[DRIVER] + pools[HOOK] + pools[CLEAR], count - len(picked))
         if len(picked) < count:
-            take(pools[DRIVER] + pools[CLEAR], count - len(picked), gap=MIN_GAP_DAYS)
+            take(pools[DRIVER] + pools[HOOK] + pools[CLEAR], count - len(picked), gap=MIN_GAP_DAYS)
         for slot, item in enumerate(picked):
             used[item["sku"]] = day
             quota = int(min(int(item["kuota"]), left.get(str(item["sku"]), int(item["kuota"]))))
