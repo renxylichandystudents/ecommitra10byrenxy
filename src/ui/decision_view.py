@@ -698,19 +698,28 @@ def _daily_path(row: pd.Series, item_orders: pd.DataFrame, weekday: np.ndarray, 
     return pd.DataFrame({"date": dates, "qty": qty, "sales": qty * price})
 
 
+def _round_label(money: bool):
+    """Label angka grafik dibulatkan tanpa desimal: QTY unit utuh, sales Rupiah utuh (5.169.500; label batang tegak)."""
+    return lambda v: fmt_num(round(float(v)), 0) if v is not None and np.isfinite(float(v)) else "-"
+
+
 def _two_panel(
     x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str,
-    past=None, past_source=None, sold_name: str = "Terjual", sold_hover=None, today_index: int | None = None,
+    past=None, past_source=None, sold_name: str = "Terjual", sold_hover=None, today_index: int | None = None, stock_past=None,
+    stock_past_hover=None,
 ) -> go.Figure:
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.16, row_heights=[0.62, 0.38], subplot_titles=(title, "Proyeksi sisa stok"))
-    fmt = fmt_idr_short if money else fmt_qty
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.2, row_heights=[0.6, 0.4], subplot_titles=(title, "Proyeksi sisa stok"))
+    fmt = _round_label(money)
+    lapsed = [today_index is None or i < today_index for i in range(len(x_labels))]
+    label_style = dict(textposition="outside", textangle=-90, textfont=dict(size=9), cliponaxis=False, constraintext="none")
     fig.add_bar(
         x=x_labels, y=sold, name=sold_name, marker_color="#1b3da6",
-        text=[fmt(v) if v else "" for v in sold], textposition="outside",
+        # Hari yang sudah lewat selalu diberi angka (termasuk 0) agar tanggal 1 s.d. kemarin terbaca lengkap.
+        text=[fmt(v) if done else "" for v, done in zip(sold, lapsed)], **label_style,
         hovertemplate="%{x}<br>%{customdata}<extra></extra>",
         customdata=list(sold_hover) if sold_hover is not None else [f"{sold_name}: {fmt(v)}" for v in sold], row=1, col=1,
     )
-    if past is not None and np.nansum(np.asarray(past, dtype=float)) > 0:
+    if past is not None and (past_source is None or any(str(src) for src in past_source)):
         # Prediksi yang dulu dibuat untuk hari yang sudah lewat: dibandingkan langsung dengan batang Terjual.
         sources = list(past_source) if past_source is not None else [""] * len(past)
         hit = [
@@ -720,18 +729,25 @@ def _two_panel(
         fig.add_bar(
             x=x_labels, y=past, name="Prediksi sebelumnya (hari lewat)", marker_color="rgba(238,77,45,0.30)",
             marker_line=dict(color="#ee4d2d", width=1.2), marker_pattern_shape="/",
-            text=[fmt(v) if src else "" for v, src in zip(past, sources)], textposition="outside",
+            text=[fmt(v) if src else "" for v, src in zip(past, sources)], **label_style,
             hovertemplate="%{x}<br>Prediksi sebelumnya: %{customdata}<extra></extra>", customdata=hit, row=1, col=1,
         )
     fig.add_bar(
         x=x_labels, y=pred, name="Prediksi", marker_color="#ee4d2d",
-        text=[fmt(v) if v else "" for v in pred], textposition="outside",
+        text=[fmt(v) if not done else "" for v, done in zip(pred, lapsed)], **label_style,
         hovertemplate="%{x}<br>Prediksi: %{customdata}<extra></extra>", customdata=[fmt(v) for v in pred], row=1, col=1,
     )
+    if stock_past is not None and np.isfinite(np.asarray(stock_past, dtype=float)).any():
+        # Tanggal 1 s.d. hari ini: stok dari riwayat unggahan Data stok Site 10037 ± terjual di antaranya.
+        fig.add_scatter(
+            x=x_labels, y=stock_past, mode="lines+markers", name="Stok tanggal lalu (unggahan ± terjual)", line=dict(color="#64748b", width=2),
+            marker=dict(size=5), hovertemplate="%{x}<br>%{customdata}<extra></extra>",
+            customdata=list(stock_past_hover) if stock_past_hover is not None else [fmt(v) for v in stock_past], row=2, col=1,
+        )
     if stock_line is not None:
         fig.add_scatter(
             x=x_labels, y=stock_line, mode="lines+markers", name="Sisa stok (stok − kumulatif prediksi)", line=dict(color="#ea580c", width=2),
-            hovertemplate="%{x}<br>Sisa stok: %{customdata}<extra></extra>", customdata=[fmt(v) for v in stock_line], row=2, col=1,
+            hovertemplate="%{x}<br>Sisa stok: %{customdata}<extra></extra>", customdata=[fmt(v) if np.isfinite(v) else "-" for v in stock_line], row=2, col=1,
         )
         fig.add_scatter(
             x=x_labels, y=[ss_value] * len(x_labels), mode="lines", name="Safety stock", line=dict(color="#a16207", dash="dash"),
@@ -744,13 +760,66 @@ def _two_panel(
                 text=["habis"], textposition="top center", hovertemplate="%{x}<br>Perkiraan stok habis<extra></extra>", row=2, col=1,
             )
     if today_index is not None and 0 < today_index < len(x_labels):
-        fig.add_shape(type="line", xref="x", yref="paper", x0=today_index - 0.5, x1=today_index - 0.5, y0=0, y1=1, line=dict(color="#64748b", width=1, dash="dot"))
-        fig.add_annotation(xref="x", yref="y domain", x=today_index - 0.5, y=1.0, yanchor="bottom", text="◀ aktual | prediksi ▶", showarrow=False, font=dict(size=10, color="#64748b"))
-    fig.update_layout(barmode="group", height=620, margin=dict(l=40, r=20, t=60, b=40), legend=dict(orientation="h", y=-0.12), font=dict(family="Plus Jakarta Sans"))
-    fig.update_xaxes(showticklabels=True, tickangle=-60, tickfont=dict(size=9), row=1, col=1)
-    fig.update_yaxes(title_text=unit, row=1, col=1)
+        # Garis batas per panel (bukan seluruh kertas) agar tidak menembus judul "Proyeksi sisa stok".
+        for axis in ("y", "y2"):
+            fig.add_shape(type="line", xref="x", yref=f"{axis} domain", x0=today_index - 0.5, x1=today_index - 0.5, y0=0, y1=1,
+                          line=dict(color="#64748b", width=1, dash="dot"))
+        # Di dalam area grafik (bukan di atasnya) agar tidak menimpa judul grafik.
+        fig.add_annotation(xref="x", yref="y domain", x=today_index - 0.5, y=0.99, yanchor="top", text="◀ aktual | prediksi ▶", showarrow=False,
+                           font=dict(size=10, color="#475569"), bgcolor="rgba(255,255,255,0.85)")
+    fig.update_layout(barmode="group", height=760, margin=dict(l=40, r=20, t=70, b=40), legend=dict(orientation="h", y=-0.1), font=dict(family="Plus Jakarta Sans"))
+    # Tanggal tegak lurus (sama di kedua panel), tidak miring.
+    fig.update_xaxes(showticklabels=True, tickangle=-90, tickfont=dict(size=9))
+    tops = [np.nanmax(np.asarray(v, dtype=float)) for v in (sold, pred, past) if v is not None and len(v) and np.isfinite(np.asarray(v, dtype=float)).any()]
+    top = max(tops) if tops else 0.0
+    # Ruang di atas batang tertinggi untuk label tegak, agar tidak menabrak judul grafik.
+    fig.update_yaxes(title_text=unit, range=[0, top * 1.35] if top > 0 else None, row=1, col=1)
     fig.update_yaxes(title_text=unit, row=2, col=1)
     return fig
+
+
+def past_stock_path(days, today: date, stock_now: float | None, sold: pd.Series, history: pd.DataFrame | None) -> tuple[np.ndarray, list[str]]:
+    """Stok akhir hari untuk tanggal 1 s.d. kemarin + stok hari ini (titik awal proyeksi).
+
+    Dasar: unggahan Data stok Site 10037 (`history`: _submitted_at, stok untuk SKU ini; unggahan terakhir per hari). Hari dengan
+    unggahan = stok tercatat; hari sesudah unggahan = stok unggahan − terjual sejak itu; hari sebelum unggahan pertama yang ada =
+    stok unggahan + terjual di antaranya (perkiraan mundur, tanpa tahu barang masuk). Tanpa riwayat: mundur dari stok sekarang."""
+    days = pd.DatetimeIndex(days)
+    ref = pd.Timestamp(today).normalize()
+    values = np.full(len(days), np.nan)
+    notes = [""] * len(days)
+    sold = pd.to_numeric(sold.reindex(days), errors="coerce").fillna(0.0)
+    snaps: dict[pd.Timestamp, float] = {}
+    if isinstance(history, pd.DataFrame) and not history.empty and {"_submitted_at", "stok"} <= set(history.columns):
+        from src.core.inventory import snapshot_time
+
+        work = history.assign(_t=snapshot_time(history["_submitted_at"])).dropna(subset=["_t"]).sort_values("_t")
+        work = work.loc[work["_t"].dt.normalize() <= ref]
+        for stamp, part in work.groupby("_t"):
+            snaps[pd.Timestamp(stamp).normalize()] = float(pd.to_numeric(part["stok"], errors="coerce").fillna(0.0).clip(lower=0).sum())
+    if stock_now is not None and np.isfinite(stock_now):
+        snaps[ref] = float(stock_now)  # titik hari ini = stok yang dipakai proyeksi
+    if not snaps:
+        return values, notes
+    snap_days = sorted(snaps)
+    for i, day in enumerate(days):
+        if day > ref:
+            break
+        if day in snaps:
+            values[i], notes[i] = snaps[day], "stok tercatat di unggahan"
+            continue
+        before = [s for s in snap_days if s < day]
+        if before:
+            base = before[-1]
+            used = float(sold.loc[(sold.index > base) & (sold.index <= day)].sum())
+            values[i] = max(snaps[base] - used, 0.0)
+            notes[i] = f"stok unggahan {fmt_date(base, short=True)} − terjual sesudahnya"
+        else:
+            base = snap_days[0]
+            added = float(sold.loc[(sold.index > day) & (sold.index <= base)].sum())
+            values[i] = snaps[base] + added
+            notes[i] = f"perkiraan mundur: stok {fmt_date(base, short=True)} + terjual di antaranya (barang masuk tidak diketahui)"
+    return values, notes
 
 
 def _bucket(frame: pd.DataFrame, grain: str) -> pd.DataFrame:
@@ -780,6 +849,7 @@ def sku_charts(
     past: pd.DataFrame | None = None,
     lines: pd.DataFrame | None = None,
     basis: str = "bersih",
+    stock_history: pd.DataFrame | None = None,
 ) -> None:
     """R9: Grafik QTY dan Grafik Sales, dua panel sumbu X bersama.
 
@@ -833,6 +903,10 @@ def sku_charts(
             past_qty.loc[back.index] = back["pred_qty"].to_numpy()
             past_sales.loc[back.index] = back["pred_sales"].to_numpy()
             past_source.loc[back.index] = "uji mundur"
+    # Tanggal lewat yang tetap tanpa prediksi (SKU belum punya riwayat penjualan sebelum tanggal itu) = prediksi 0, bukan kosong.
+    for d in lapsed:
+        if not past_source.loc[d]:
+            past_source.loc[d] = "belum ada riwayat penjualan"
     has_stock = bool(row.get("ada_data_stok", False))
     stok = float(row["stok"]) if has_stock else 0.0
     ss = float(row["ss"])
@@ -867,17 +941,21 @@ def sku_charts(
 
     qty_line, qty_out = stock_projection(pred.to_numpy(), stok) if has_stock else (None, None)
     sales_line = qty_line * price if qty_line is not None else None
+    stock_past, stock_note = past_stock_path(days, today, stok if has_stock else None, sold, stock_history)
+    fmt_hist = _round_label(False)
+    past_hover_qty = [f"Stok {fmt_hist(v)} unit · {n}" if n else "" for v, n in zip(stock_past, stock_note)]
+    past_hover_sales = [f"Nilai stok {fmt_idr(round(v * price))} · {n}" if n else "" for v, n in zip(stock_past, stock_note)]
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(
             _two_panel(labels, sold.to_numpy(), pred.to_numpy(), qty_line, ss, labels[qty_out] if qty_out is not None else None, money=False, title="Grafik QTY · Bulan ini", unit="Unit", past=past_qty.to_numpy(), past_source=past_source.to_numpy(),
-                       sold_name=basis_word, sold_hover=sold_hover(False), today_index=today_index),
+                       sold_name=basis_word, sold_hover=sold_hover(False), today_index=today_index, stock_past=stock_past, stock_past_hover=past_hover_qty),
             use_container_width=True, key=f"{key}-qty",
         )
     with c2:
         st.plotly_chart(
             _two_panel(labels, sold_sales.to_numpy(), pred_sales.to_numpy(), sales_line, ss * price, labels[qty_out] if qty_out is not None else None, money=True, title="Grafik Sales · Bulan ini", unit="Rupiah", past=past_sales.to_numpy(), past_source=past_source.to_numpy(),
-                       sold_name=basis_word, sold_hover=sold_hover(True), today_index=today_index),
+                       sold_name=basis_word, sold_hover=sold_hover(True), today_index=today_index, stock_past=stock_past * price, stock_past_hover=past_hover_sales),
             use_container_width=True, key=f"{key}-sales",
         )
     _sku_summary(

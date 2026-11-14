@@ -9225,7 +9225,14 @@ with PAGE_ROOT.container(key="page-root"):
 
                 sku_lines = normalize_lines(orders_all.loc[orders_all["item_key"].astype(str) == picked])
             basis = (TABLE_META or {}).get("basis") or ("bersih" if stored.get("exclude_return_cancel", exclude_return_cancel) else "masuk")
-            sku_charts(chosen, item_orders, period=period, today=today, window_end=window_end, weekday=weekday, key=key, past=past, lines=sku_lines, basis=basis)
+            stock_hist = None
+            stock_all = getattr(store_frames(), "stock", None)
+            if isinstance(stock_all, pd.DataFrame) and not stock_all.empty and {"sku", "stock_dc_cikupa", "_submitted_at"} <= set(stock_all.columns):
+                keys = stock_all["sku"].fillna("").astype(str).str.strip().str.replace(r"^(\d+)\.0+$", r"\1", regex=True)
+                part = stock_all.loc[keys.eq(str(chosen["sku"]).strip())]
+                stock_hist = pd.DataFrame({"_submitted_at": part["_submitted_at"], "stok": pd.to_numeric(part["stock_dc_cikupa"], errors="coerce")})
+            sku_charts(chosen, item_orders, period=period, today=today, window_end=window_end, weekday=weekday, key=key, past=past, lines=sku_lines,
+                       basis=basis, stock_history=stock_hist)
         except Exception as exc:  # grafik tidak boleh menghentikan halaman
             st.info(f"Grafik SKU belum bisa digambar: {exc}")
 
