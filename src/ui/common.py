@@ -392,8 +392,11 @@ def date_range_picker(*, key: str, lo: date, hi: date, default: tuple[date, date
             st.session_state[f"{key}-raw"] = raw
             picked = _fit((date.fromisoformat(raw[0]), date.fromisoformat(raw[1])))
             if picked != current:
-                current = picked
+                # Kalender menampilkan tanggal dari argumen render; argumen run ini masih rentang lama, jadi jalankan ulang
+                # sekali agar tampilan kalender ikut berubah bersama angka di halaman.
                 _keep(f"{key}-user", True)
+                _keep(f"{key}-range", picked)
+                st.rerun()
     _keep(f"{key}-range", current)
     return current
 
