@@ -141,6 +141,7 @@ from src.core.userspace import LOCAL_ROOT, deploy_mode, team_root
 from auth.permissions import SHEET_PERMISSIONS, allowed_sheets, can, role_label
 from auth.ui import PAGE_KEY as AUTH_PAGE_KEY, audit, get_engine, get_features, login_gate, require, require_role, show_auth_page, account_menu
 from auth.ui import logout as auth_logout
+from src.ui.routing import slug as route_slug
 from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_PASSWORD, PAGE_RESULT, PAGE_SETTING, PAGE_USERS, apply_route, route_from_state, sync_route
 from src.core.promo import drop_excluded
 from src.core.periods import last_full_month
@@ -2932,6 +2933,70 @@ def show_run_history() -> None:
     )
 
 
+def link_buttons(routes: dict[str, dict[str, str]]) -> None:
+    """Jadikan tombol navigasi (st.button) juga link sungguhan: klik kanan → Buka di tab baru, Ctrl/Cmd-klik, dan klik tengah
+    membuka halaman yang sama di tab baru (?page=…&tab=…). Klik biasa tetap memakai tombol Streamlit (tanpa memuat ulang halaman).
+
+    Caranya: lapisan <a href> transparan ditaruh di atas tombol (kunci `st-key-<key>`); klik kiri biasa diteruskan ke tombol."""
+    import json as _json
+    from urllib.parse import urlencode
+
+    links = {key: "?" + urlencode({k: v for k, v in route.items() if v}) for key, route in routes.items()}
+    components.html(
+        """
+        <script>
+        const parent = window.parent;
+        const links = __LINKS__;
+        const cls = (key) => 'st-key-' + key.replace(/[^a-zA-Z0-9_-]/g, '-');
+        const apply = () => {
+          const doc = parent.document;
+          if (!doc.getElementById('nav-link-css')) {
+            const css = doc.createElement('style');
+            css.id = 'nav-link-css';
+            // Lapisan link menutupi tombol, jadi efek hover tombol diganti bayangan tipis di lapisan ini.
+            css.textContent = '.nav-link-overlay{border-radius:999px}.nav-link-overlay:hover{background:rgba(238,77,45,0.08)!important}';
+            doc.head.appendChild(css);
+          }
+          Object.entries(links).forEach(([key, href]) => {
+            Array.from(doc.getElementsByClassName(cls(key))).forEach((box) => {
+              const button = box.querySelector('button');
+              if (!button) return;
+              let a = box.querySelector(':scope > a.nav-link-overlay');
+              if (!a) {
+                a = doc.createElement('a');
+                a.className = 'nav-link-overlay';
+                a.setAttribute('aria-hidden', 'true');
+                a.tabIndex = -1;
+                a.style.cssText = 'position:absolute;inset:0;z-index:5;display:block;background:transparent;';
+                a.addEventListener('click', (e) => {
+                  if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                    e.preventDefault();
+                    box.querySelector('button').click();
+                  }
+                });
+                if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+                box.appendChild(a);
+              }
+              a.href = parent.location.pathname + href;
+            });
+          });
+        };
+        apply();
+        if (!parent.__mitraNavObserver) {
+          parent.__mitraNavObserver = new MutationObserver(() => (parent.__mitraNavApply || (() => {}))());
+          parent.__mitraNavObserver.observe(parent.document.body, {childList: true, subtree: true});
+        }
+        parent.__mitraNavLinks = Object.assign(parent.__mitraNavLinks || {}, links);
+        parent.__mitraNavApply = () => {
+          clearTimeout(parent.__mitraNavTimer);
+          parent.__mitraNavTimer = setTimeout(() => { Object.assign(links, parent.__mitraNavLinks); apply(); }, 120);
+        };
+        </script>
+        """.replace("__LINKS__", _json.dumps(links)),
+        height=0,
+    )
+
+
 def pin_app_header() -> None:
     """Kunci bar atas, menu, dan kartu tanggal ke layar. Sticky tidak menempel di Streamlit."""
     components.html(
@@ -3128,6 +3193,8 @@ def render_header() -> None:
         """,
         unsafe_allow_html=True,
     )
+    link_buttons({"hdr-analisa": {"page": PAGE_RESULT, "tab": route_slug(st.session_state.get("active-sheet", "Ringkasan"))},
+                  "hdr-latih": {"page": PAGE_INPUT}, "hdr-setting": {"page": PAGE_SETTING}, "hdr-beranda": {"page": PAGE_HOME}})
     if show_analysis_button and columns[1].button("Hasil analisa", key="hdr-analisa", use_container_width=True):
         _go(PAGE_RESULT)
     if show_training_button and columns[2].button("Upload data", key="hdr-latih", use_container_width=True):
@@ -3602,6 +3669,7 @@ def show_app_menu() -> str:
             st.session_state["_menu_rerun"] = True
     st.markdown("<div class='app-menu-label'></div>", unsafe_allow_html=True)
     columns = st.columns(len(sheets))
+    link_buttons({f"menu-{name}": {"page": PAGE_RESULT, "tab": route_slug(name)} for name in sheets})
     for column, name in zip(columns, sheets):
         if column.button(
             name,

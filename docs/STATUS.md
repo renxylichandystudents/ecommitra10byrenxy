@@ -612,3 +612,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 
 - Pertanyaan: kartu Kemarin/Hari ini/Besok (mis. 13 Nov prediksi Rp 106.207.490) tidak sama dengan tabel (Prediksi sales produk Rp 121.131.386). Sebab: kartu berbasis **sales bersih toko** (sama dengan target) = prediksi sales produk × faktor sales bersih ÷ sales produk bulan ini (±0,88); tabel berbasis sales produk.
 - Tabel kini punya kolom **Prediksi sales bersih** (= angka kartu) dan **Achievement bersih** (Sales bersih toko ÷ Prediksi sales bersih = capaian kartu Kemarin), termasuk di baris Total. Kartu menulis jejaknya: "= prediksi sales produk Rp … × faktor 0,88".
+
+## Menu & header bisa dibuka di tab baru (14 Nov 2026)
+
+- Tombol menu (Ringkasan … Evaluasi model) dan tombol header (Hasil analisa, Upload data, Setting, Beranda) adalah `st.button`, jadi klik kanan → Buka di tab baru tidak membawa halaman tujuan (tab baru terbuka di Ringkasan). `link_buttons` (app.py) menaruh lapisan `<a href="?page=…&tab=…">` transparan di atas tombol: klik kanan/Ctrl-Cmd-klik/klik tengah membuka halaman itu di tab baru (rute dipulihkan oleh `sync_route`), klik kiri biasa diteruskan ke tombol Streamlit (tanpa muat ulang).
