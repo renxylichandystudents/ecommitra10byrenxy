@@ -73,6 +73,26 @@ def _drop_stale_src_modules() -> None:
 
 _drop_stale_src_modules()
 
+
+def _refresh_app_bytecode() -> None:
+    """fileWatcherType = "none" membuat Streamlit menyimpan bytecode app.py selamanya (ScriptCache), sehingga perubahan
+    app.py setelah push tidak terpakai sampai Reboot. Bila app.py lebih baru dari yang tercatat, cache dibersihkan lalu rerun."""
+    try:
+        from streamlit.runtime import get_instance
+
+        runtime = get_instance()
+        stamp = os.path.getmtime(__file__)
+        seen = getattr(runtime, "_mitra10_app_mtime", None)
+        runtime._mitra10_app_mtime = stamp
+        if seen is not None and stamp != seen:
+            runtime._script_cache.clear()
+            st.rerun()
+    except Exception:  # noqa: BLE001 - mode bare/tes tanpa runtime
+        return
+
+
+_refresh_app_bytecode()
+
 from src.activity import (
     activity_report,
     append_total_row,

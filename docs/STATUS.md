@@ -656,3 +656,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## Pembayaran & berat paket: baris Total + cek nilai (14 Nov 2026)
 
 - Baris Total di atas tabel Per metode pembayaran dan Per berat paket (`order_ops.total_row`): % dihitung dari semua pesanan sekaligus (bukan rata-rata per baris). Dicek dengan data Okt 2026: Invoice 6.885, % batal 22,5%, Sales bersih Rp 2.848.905.957 = kartu halaman Data; AOV Rp 538.953 = Sales bersih ÷ 5.286 pesanan bersih. Invoice tanpa Total Berat disebut di atas tabel berat.
+
+## app.py ikut terbarui tanpa Reboot (14 Nov 2026)
+
+- Ternyata perubahan di app.py (bukan src/) tidak terpakai di Cloud setelah push: dengan `fileWatcherType = "none"`, Streamlit menyimpan bytecode app.py di `Runtime._script_cache` selamanya. Contoh: tabel Pembeli batal karena belum bayar masih tinggi dan link klik kanan menu belum aktif, padahal kodenya sudah di-push. `_refresh_app_bytecode()` (app.py) membandingkan waktu ubah app.py; bila berubah, cache dibersihkan lalu rerun. Perlu **satu kali Reboot** di share.streamlit.io agar pengecek ini sendiri terpasang; sesudahnya push app.py langsung aktif.
