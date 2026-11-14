@@ -161,15 +161,6 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
         f"{fmt_num(ranked)} produk kita masuk daftar peringkat kompetitor · {fmt_num(similar)} deskripsi masih mirip produk lain (>60%).",
         help=f"Metode: {note}. Nama & deskripsi Shopee melekat pada produk, jadi varian (SKU) satu produk dinilai sekali.",
     )
-    if "Siap upload" in recs.columns:
-        ready = int(recs["Siap upload"].sum())
-        st.caption(
-            f"**Siap upload: {fmt_num(ready)} dari {fmt_num(len(recs))} produk** — nama & deskripsi rekomendasi sudah memenuhi semua kaidah SEO "
-            "setelah bagian yang kurang (kata kunci di awal judul, ukuran/material, spesifikasi, panjang deskripsi, hashtag, link/kontak) "
-            "dilengkapi otomatis dari data produk sendiri dan kata kunci judul kompetitor teratas. Sisanya ditandai ⚠️ dengan rincian di kolom "
-            "Masih kurang (mis. merek tidak ada di data produk) dan harus dilengkapi manual. Unggah ulang Produk kompetitor agar kata kunci "
-            "& rekomendasi ikut menyesuaikan peringkat terbaru."
-        )
     if "perubahan" in recs.columns and recs["tanggal_lalu"].notna().any():
         last = pd.to_datetime(recs["tanggal_lalu"]).max()
         cnt = recs["perubahan"].value_counts()
@@ -182,8 +173,13 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
     elif features is not None:
         st.caption("Riwayat penilaian mulai disimpan hari ini. Setelah deskripsi/stok diunggah ulang dan analisa dijalankan, "
                    "perubahan (mengikuti rekomendasi atau di luar rekomendasi) akan terlihat di sini.")
+    # Dua penilaian berbeda, jadi dua baris saringan:
+    # 1) Skor nama SAAT INI (8 kriteria nama yang sedang tayang) → Kurang/Cukup/Sangat baik.
+    # 2) Kelengkapan REKOMENDASI (nama + deskripsi baru lolos semua cek SEO) → Siap upload / Perlu dilengkapi.
     counts = recs["Status skor"].value_counts()
     current = st.session_state.get("name-filter", "Semua")
+    st.markdown("<div class='field-hint' style='margin-top:.4rem'><b>Skor nama yang sedang tayang</b> (8 kriteria nama saat ini, belum termasuk deskripsi)</div>",
+                unsafe_allow_html=True)
     cols = st.columns(4)
     for column, status in zip(cols, ("Semua", "Poor", "Standard", "Excellence")):
         total = len(recs) if status == "Semua" else int(counts.get(status, 0))
@@ -191,13 +187,30 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
             st.session_state["name-filter"] = status
             st.rerun()
     view = recs if current == "Semua" else recs.loc[recs["Status skor"].eq(current)]
+    ready_pick = st.session_state.get("name-ready", "Semua")
+    if "Siap upload" in recs.columns:
+        ready_all = recs["Siap upload"].astype(bool)
+        st.markdown("<div class='field-hint' style='margin-top:.4rem'><b>Kelengkapan rekomendasi</b> (nama + deskripsi baru): Siap upload = lolos semua cek SEO "
+                    "setelah dilengkapi otomatis dari data produk & kata kunci kompetitor; Perlu dilengkapi = ada data yang harus diisi manual (kolom Masih kurang)</div>",
+                    unsafe_allow_html=True)
+        rc = st.columns(3)
+        for column, (key, label, n) in zip(rc, (("Semua", "Semua", len(recs)), ("Siap", "✅ Siap upload", int(ready_all.sum())),
+                                                ("Lengkapi", "⚠️ Perlu dilengkapi", int((~ready_all).sum())))):
+            if column.button(f"{label} · {fmt_num(n)}", key=f"name-ready-{key}", type="primary" if ready_pick == key else "secondary", use_container_width=True):
+                st.session_state["name-ready"] = key
+                st.rerun()
+        if ready_pick == "Siap":
+            view = view.loc[view["Siap upload"].astype(bool)]
+        elif ready_pick == "Lengkapi":
+            view = view.loc[~view["Siap upload"].astype(bool)]
+    current = f"{current}-{ready_pick}"
     page = view.reset_index(drop=True)
     display = pd.DataFrame({
         "Kode produk": page["Kode produk"].where(page["Kode produk"].astype(str).str.len() > 0, page["SKU"]),
         "Nama produk saat ini": page["Nama produk saat ini"],
         "SKU varian": page.get("Jumlah SKU", 1),
         "Perubahan": page["perubahan"].map(lambda v: sh.ICON.get(v, "–")) if "perubahan" in page.columns else "–",
-        "Status skor": page["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v)),
+        "Skor nama saat ini": page["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v)),
         "SEO saat ini": page.get("Skor SEO saat ini"),
         "SEO rekomendasi": page.get("Skor SEO"),
         "Siap upload": page["Siap upload"].map(lambda ok: "✅ Siap" if ok else "⚠️ Lengkapi") if "Siap upload" in page.columns else "–",
@@ -228,6 +241,7 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
                                                                        help="✅ = nama & deskripsi rekomendasi memenuhi semua kaidah SEO; ⚠️ = ada bagian yang harus dilengkapi manual (kolom Masih kurang)"),
                            "Masih kurang": st.column_config.TextColumn("Masih kurang", width=300, help="Kaidah SEO yang belum terpenuhi setelah dilengkapi otomatis"),
                            "USP utama": st.column_config.TextColumn(width="medium", help="Keunggulan paling menonjol; ⭐ = jarang disebut produk pembanding"),
+                           "Skor nama saat ini": st.column_config.TextColumn("Skor nama saat ini", help="Penilaian 8 kriteria nama yang sedang tayang (Kurang/Cukup/Sangat baik); deskripsi tidak ikut dinilai di sini"),
                            "SEO saat ini": st.column_config.Column(help="% kaidah SEO yang dipenuhi nama & deskripsi yang sedang tayang"),
                            "SEO rekomendasi": st.column_config.Column(help="% kaidah SEO yang dipenuhi nama & deskripsi rekomendasi (rincian di bawah tabel)"),
                            "Keunikan deskripsi": st.column_config.Column(help="100% − kemiripan tertinggi dengan deskripsi produk lain; di bawah 40% berisiko dianggap duplikat")},
