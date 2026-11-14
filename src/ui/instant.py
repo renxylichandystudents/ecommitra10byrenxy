@@ -149,8 +149,18 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
     if products.empty:
         st.write("Belum ada produk instan yang terjual (tidak batal).")
     else:
-        show_table(products, kinds={"Invoice instan": "count", "QTY instan": "count", "Sales instan": "money", "Porsi instan dari sales SKU (%)": "pct"},
-                   column_config={"Produk": st.column_config.TextColumn(width="large")})
+        from src.ui.common import pager
+
+        total_row = I.products_total(lines, products)
+        lo, hi = pager(len(products), key="instant-products", noun="produk", default_size=5,
+                       download=lambda: download_excel(pd.concat([total_row, products], ignore_index=True), "produk_pengiriman_instan.xlsx",
+                                                       key="xl-instant-products"))
+        show_table(pd.concat([total_row, products.iloc[lo:hi]], ignore_index=True), bold_label="Total",
+                   kinds={"Invoice instan": "count", "QTY instan": "count", "Sales instan": "money", "Porsi instan dari sales SKU (%)": "pct"},
+                   column_config={"Rank": st.column_config.Column("Rank", width=60, pinned=True),
+                                  "SKU": st.column_config.TextColumn("SKU", width=110, pinned=True),
+                                  "Produk": st.column_config.TextColumn("Produk", width=360, pinned=True),
+                                  "Varian": st.column_config.TextColumn("Varian", width=150, pinned=True)})
 
     seller_fault = int(reasons.loc[reasons["Alasan batal"].str.contains("tidak mengatur pengiriman|Penjual", case=False, regex=True), "Invoice"].sum()) if not reasons.empty else 0
     notes = [f"Pesanan instan {fmt_pct(share_inv, 1)} dari invoice tetapi {fmt_pct(share_sales, 2)} dari sales bersih: kebanyakan barang kecil "
