@@ -4582,6 +4582,28 @@ def _stock_chip_row(row: pd.Series | None, period: str, today: date) -> str:
     )
 
 
+def _outstanding_chips(row: pd.Series) -> list[str]:
+    """Chip outstanding PO/TR/TO Site 10037: jumlah per jenis, umur, dan sisa kekurangan setelah outstanding."""
+    from src.core.insight_live import outstanding_plan
+
+    plan = outstanding_plan(row)
+    if plan is None:
+        return []
+    if plan["total"] <= 0:
+        return ["<span class='stock-chip bad'>Belum ada outstanding PO/TR/TO</span>"] if plan["shortfall"] > 0 else []
+    parts = " · ".join(f"{label} {format_qty(v)}" for label, v in plan["parts"].items() if v > 0)
+    age = ""
+    if plan["since"] is not None:
+        age = f" · sejak {'≤ ' if plan['minimal'] else ''}{plan['since']:%d/%m} ({'≥ ' if plan['minimal'] else ''}{plan['days']} hari)"
+    chips = [f"<span class='stock-chip {'warn' if plan['stale'] else 'info'}'>Outstanding: {html.escape(parts)}{age}</span>"]
+    if plan["shortfall"] > 0:
+        if plan["rest"] <= 0:
+            chips.append("<span class='stock-chip ok'>Outstanding menutup kekurangan · tidak perlu transfer/PO baru</span>")
+        else:
+            chips.append(f"<span class='stock-chip warn'>Setelah outstanding masih kurang {format_qty(plan['rest'])} unit</span>")
+    return chips
+
+
 def _dc_chip_row(row: pd.Series | None) -> str:
     """Baris Stok DC: Site 10062 (DC Cikupa) dan Site 10036 (DC Cipeucang) + rencana ambil bila Site 10037 kurang."""
     if row is None:
@@ -4601,6 +4623,7 @@ def _dc_chip_row(row: pd.Series | None) -> str:
     if plan:
         tone = "bad" if "PO" in plan and not plan.startswith("Ambil") else ("warn" if "PO" in plan else "info")
         chips.append(f"<span class='stock-chip {tone}'>Rencana: {html.escape(plan)}</span>")
+    chips += _outstanding_chips(row)
     return (
         "<div class='qty-line'>"
         "<div class='qty-metric'>Stok DC<small>Site 10062 · 10036</small></div>"
@@ -9102,7 +9125,8 @@ with PAGE_ROOT.container(key="page-root"):
     _tick("data fitur")
     if isinstance(enriched, pd.DataFrame) and not enriched.empty:
         # Outstanding PO/TR/TO Site 10037 per SKU → ikut tampil di kolom Ambil dari DC.
-        enriched = attach_outstanding(enriched, FEATURE_DATA.replenishment)
+        enriched = attach_outstanding(enriched, FEATURE_DATA.replenishment, FEATURE_DATA.replenishment_history, today,
+                                      FEATURE_DATA.replenishment_date)
         shown = enriched.head(TOP_N).reset_index(drop=True)
     TABLE_META = None
     if isinstance(enriched, pd.DataFrame) and not enriched.empty:

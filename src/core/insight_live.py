@@ -137,15 +137,106 @@ def outstanding_10037(repl: pd.DataFrame | None) -> pd.DataFrame:
     return out
 
 
-def attach_outstanding(table: pd.DataFrame, repl: pd.DataFrame | None) -> pd.DataFrame:
-    """Tambah kolom outstanding_10037 ("PO 10 · TR 5", kosong bila tidak ada) per SKU dari replenishment Site 10037 terbaru."""
+OS_COLUMNS = ("os_po", "os_tr", "os_to", "os_tr_lain", "os_total")
+STALE_DAYS = 7  # outstanding lebih lama dari ini perlu ditindaklanjuti
+
+
+def attach_outstanding(table: pd.DataFrame, repl: pd.DataFrame | None, history: pd.DataFrame | None = None, today=None,
+                       repl_date=None) -> pd.DataFrame:
+    """Tambah outstanding Site 10037 per SKU dari replenishment terbaru: outstanding_10037 ("PO 10 · TR 5"), os_po/os_tr/os_to/
+    os_tr_lain/os_total (unit), os_sejak/os_umur/os_minimal (umur dari riwayat snapshot), os_tanggal (tanggal replenishment)."""
     if table is None or table.empty or "sku" not in table.columns:
         return table
     pending = outstanding_10037(repl)
     if pending.empty:
-        return table.assign(outstanding_10037="")
+        return table.assign(outstanding_10037="", **{c: 0.0 for c in OS_COLUMNS}, os_sejak=pd.NaT, os_umur=np.nan, os_minimal=False, os_tanggal=None)
     keys = _clean_sku(table["sku"].fillna("").astype(str))
-    return table.assign(outstanding_10037=[outstanding_text(pending.loc[k]) if k in pending.index else "" for k in keys])
+    part = pending.reindex(keys.to_numpy()).fillna(0.0)
+    age = outstanding_age(history, today)
+    has_age = not age.empty
+    return table.assign(
+        outstanding_10037=[outstanding_text(pending.loc[k]) if k in pending.index else "" for k in keys],
+        os_po=part["po"].to_numpy(), os_tr=part["tr"].to_numpy(), os_to=part["to"].to_numpy(),
+        os_tr_lain=part["tr_toko_lain"].to_numpy(), os_total=part["masuk"].to_numpy(),
+        os_sejak=keys.map(age["sejak"]).to_numpy() if has_age else pd.NaT,
+        os_umur=keys.map(age["umur_hari"]).to_numpy() if has_age else np.nan,
+        os_minimal=keys.map(age["minimal"]).eq(True).to_numpy() if has_age else False,
+        os_tanggal=repl_date,
+    )
+
+
+def _num(row, name: str) -> float:
+    value = row.get(name) if row is not None else None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if np.isfinite(value) else 0.0
+
+
+def outstanding_plan(row) -> dict | None:
+    """Kekurangan Site 10037 (kebutuhan − stok) setelah dikurangi outstanding PO/TR/TO, lalu sisanya ke DC → PO.
+
+    None bila replenishment Site 10037 belum diunggah (kolom os_total tidak ada)."""
+    if row is None or "os_total" not in row:
+        return None
+    total = _num(row, "os_total")
+    known = bool(row.get("ada_data_stok", False))
+    stok, need = _num(row, "stok"), _num(row, "m_butuh")
+    shortfall = float(np.ceil(max(need - stok, 0.0))) if known else 0.0
+    covered = min(total, shortfall)
+    rest = max(shortfall - total, 0.0)
+    available = {}
+    for code, _n, _s in DC_SITES:
+        value = row.get(f"stok_{code}")
+        available[code] = None if value is None or pd.isna(value) else float(value)
+    take, po = transfer_plan(rest, available)
+    days = row.get("os_umur")
+    days = None if days is None or pd.isna(days) else int(days)
+    since = row.get("os_sejak")
+    since = None if since is None or pd.isna(since) else pd.Timestamp(since)
+    return {
+        "parts": {label: _num(row, name) for name, label in (("os_po", "PO"), ("os_tr", "TR"), ("os_to", "TO"), ("os_tr_lain", "TR toko lain"))},
+        "total": total, "known": known, "stok": stok, "need": need, "shortfall": shortfall, "covered": covered, "rest": rest,
+        "take": take, "po": po, "days": days, "since": since, "minimal": bool(row.get("os_minimal", False)),
+        "stale": days is not None and days > STALE_DAYS, "tanggal": row.get("os_tanggal"),
+    }
+
+
+def outstanding_verdict(plan: dict) -> str:
+    """Kesimpulan satu paragraf untuk kotak Analisa."""
+    unit = lambda v: f"{int(round(v)):,}".replace(",", ".")  # noqa: E731
+    total, shortfall = plan["total"], plan["shortfall"]
+    if not plan["known"]:
+        return "Stok Site 10037 belum ada, jadi outstanding belum bisa dibandingkan dengan kebutuhan."
+    if shortfall <= 0:
+        if total <= 0:
+            return "Stok Site 10037 menutup kebutuhan 30 hari dan tidak ada outstanding; tidak perlu transfer/PO."
+        return (f"Stok Site 10037 sudah menutup kebutuhan 30 hari; outstanding {unit(total)} unit akan menambah stok menjadi "
+                f"±{unit(plan['stok'] + total)} unit. Pertimbangkan menahan/menunda sebagian bila stok jadi berlebih.")
+    if total <= 0:
+        text = f"Site 10037 kurang {unit(shortfall)} unit dan <b>belum ada outstanding</b> PO/TR/TO sama sekali: segera buat "
+    elif total >= shortfall:
+        text = (f"Outstanding {unit(total)} unit sudah menutup seluruh kekurangan {unit(shortfall)} unit: <b>tidak perlu transfer/PO baru</b>, "
+                "cukup pastikan barangnya segera diterima Site 10037.")
+        return text + _stale_text(plan)
+    else:
+        text = (f"Outstanding {unit(total)} unit baru menutup {unit(plan['covered'])} dari kekurangan {unit(shortfall)} unit; "
+                f"sisa <b>{unit(plan['rest'])}</b> unit perlu ")
+    steps = [f"TR/TO {unit(v)} unit dari Site {code}" for code, v in plan["take"].items()]
+    if plan["po"] > 0:
+        steps.append(f"PO {unit(plan['po'])} unit ke supplier")
+    text += " lalu ".join(steps) + "."
+    return text + _stale_text(plan)
+
+
+def _stale_text(plan: dict) -> str:
+    if plan["total"] <= 0 or plan["days"] is None:
+        return ""
+    if plan["stale"]:
+        return (f" Outstanding sudah {'≥ ' if plan['minimal'] else ''}{plan['days']} hari belum diterima (lebih dari {STALE_DAYS} hari): "
+                "tindak lanjuti ke Team DC / supplier.")
+    return ""
 
 
 def outstanding_text(row) -> str:

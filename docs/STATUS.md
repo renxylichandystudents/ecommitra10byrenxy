@@ -583,3 +583,10 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 
 - Saran isi ulang (`gudang._item_action`) dan kolom "Barang dalam perjalanan" kini menghitung outstanding PO + TR + TO + TR dari toko lain (`items["di_jalan"]`, `gudang.INCOMING`); sebelumnya hanya PO + TR. Snapshot lama tanpa kolom TO/TR toko lain dibaca 0.
 - Perbaikan teks: "s.d. Max 20. 3 di jalan" → "s.d. Max 20, 3 di jalan" (koma pemisah sebelumnya ikut diganti titik). "Tunggu barang di jalan" kini menyebut jumlah unitnya.
+
+## Outstanding PO/TR/TO di kartu SKU & Analisa (14 Nov 2026)
+
+- `insight_live.attach_outstanding` kini juga menyimpan angka per SKU (`os_po`, `os_tr`, `os_to`, `os_tr_lain`, `os_total`), umur (`os_sejak`, `os_umur`, `os_minimal` dari riwayat snapshot) dan tanggal replenishment (`os_tanggal`).
+- `insight_live.outstanding_plan`: kekurangan Site 10037 (kebutuhan 30 hari − stok) dikurangi outstanding dulu, sisanya baru diambil dari DC (10062 → 10036) lalu PO. `outstanding_verdict` memberi kesimpulan: belum ada outstanding / outstanding menutup kekurangan (tidak perlu transfer/PO baru) / masih kurang X → TR/TO dari DC + PO / stok cukup dan outstanding menambah stok. Outstanding > 7 hari (`STALE_DAYS`) diberi saran tindak lanjut ke Team DC/supplier.
+- Kartu SKU (baris Stok DC): chip "Outstanding: PO · TR · TO · sejak (umur)", lalu "Outstanding menutup kekurangan" atau "Setelah outstanding masih kurang X unit"; chip merah "Belum ada outstanding PO/TR/TO" bila kurang dan tidak ada proses.
+- Analisa (bagian stok): blok baru **Outstanding PO/TR/TO menuju Site 10037** (rincian per jenis, umur, kekurangan, sisa setelah outstanding, ambil DC/PO bersih, kesimpulan) sebelum blok Stok DC. Kesimpulan Stok DC diberi catatan bahwa hitungannya belum mengurangi outstanding. Kolom Ambil dari DC tetap rencana sebelum outstanding + keterangan outstanding.

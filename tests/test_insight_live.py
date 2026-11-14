@@ -184,3 +184,30 @@ def test_dc_take_label_appends_outstanding():
     assert plan_only(labels[2]) == ""
     # Tanpa replenishment: kolom ada tapi kosong, teks tetap rencana DC saja.
     assert dc_take_label(attach_outstanding(table, None).iloc[0]) == table["sumber_restock"].iat[0]
+
+
+def test_outstanding_plan_nets_shortfall_then_dc_then_po():
+    import pandas as pd
+
+    from src.core.insight_live import attach_outstanding, outstanding_plan, outstanding_verdict
+
+    table = pd.DataFrame({
+        "sku": ["A", "B", "C", "D"], "stok": [10.0, 0.0, 5.0, 50.0], "m_butuh": [100.0, 20.0, 30.0, 40.0],
+        "ada_data_stok": [True] * 4, "stok_10062": [40.0, 5.0, 0.0, 0.0], "stok_10036": [10.0, 0.0, 0.0, 0.0],
+    })
+    repl = pd.DataFrame({"sku": ["A", "B", "D"], "out_po": [20, 0, 0], "out_tr": [10, 25, 0], "out_to": [0, 0, 5], "out_tr_lain": [0, 0, 0]})
+    hist = pd.concat([repl.assign(snapshot_date="2026-11-01"), repl.assign(snapshot_date="2026-11-13")])
+    out = attach_outstanding(table, repl, hist, today=pd.Timestamp("2026-11-14"), repl_date=pd.Timestamp("2026-11-13"))
+    a, b, c, d = (outstanding_plan(out.iloc[i]) for i in range(4))
+    # A: kurang 90, outstanding 30 → sisa 60 = 40 dari 10062 + 10 dari 10036 + PO 10; umur 13 hari (> 7) → ditindaklanjuti.
+    assert (a["shortfall"], a["total"], a["rest"], a["take"], a["po"]) == (90, 30, 60, {"10062": 40.0, "10036": 10.0}, 10)
+    assert a["days"] == 13 and a["stale"] and a["minimal"]
+    assert "tindak lanjuti" in outstanding_verdict(a)
+    # B: outstanding 25 ≥ kurang 20 → tidak perlu transfer/PO baru.
+    assert b["rest"] == 0 and "tidak perlu transfer/PO baru" in outstanding_verdict(b)
+    # C: tanpa outstanding, DC kosong → PO seluruhnya.
+    assert c["total"] == 0 and c["po"] == 25 and "belum ada outstanding" in outstanding_verdict(c)
+    # D: stok cukup, outstanding menambah stok.
+    assert d["shortfall"] == 0 and "±55" in outstanding_verdict(d)
+    # Tanpa replenishment: tetap ada kolom, rencana tidak dipakai di kartu (total 0).
+    assert outstanding_plan(attach_outstanding(table, None).iloc[0])["total"] == 0

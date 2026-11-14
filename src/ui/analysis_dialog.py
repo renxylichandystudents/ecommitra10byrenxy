@@ -72,6 +72,40 @@ def _take_text(value) -> str:
     return f"{fmt_qty(float(value))} unit"
 
 
+def _outstanding_block(row: pd.Series) -> str:
+    """Outstanding PO/TR/TO menuju Site 10037 (Replenishment Calculation by Date): rincian, umur, dan kekurangan setelah outstanding."""
+    from src.core.insight_live import STALE_DAYS, outstanding_plan, outstanding_verdict
+
+    plan = outstanding_plan(row)
+    if plan is None:
+        return ("<p class='insight-copy'><b>Outstanding PO/TR/TO</b>: belum ada data. Unggah Replenishment Calculation by Date Site 10037 "
+                "(Setting › Kapasitas gudang) agar barang yang sudah dalam proses ikut dihitung.</p>")
+    when = f" per {short_date(plan['tanggal'])}" if plan.get("tanggal") else ""
+    head = f"<p class='insight-copy'><b>Outstanding PO/TR/TO menuju Site 10037</b> (Replenishment Calculation by Date{when})</p>"
+    rows = ""
+    if plan["total"] > 0:
+        names = {"PO": "PO ke supplier", "TR": "TR (transfer dari DC)", "TO": "TO (transfer order)", "TR toko lain": "TR dari toko lain"}
+        rows = "".join(f"<tr><td>{names[label]}</td><td>{fmt_qty(v)} unit</td></tr>" for label, v in plan["parts"].items() if v > 0)
+        rows += f"<tr><td><b>Total dalam proses</b></td><td><b>{fmt_qty(plan['total'])} unit</b></td></tr>"
+        if plan["since"] is not None:
+            mark = "≥ " if plan["minimal"] else ""
+            age = f"sejak {'≤ ' if plan['minimal'] else ''}{short_date(plan['since'])} · {mark}{plan['days']} hari"
+            if plan["stale"]:
+                age += f" (lebih dari {STALE_DAYS} hari)"
+            rows += f"<tr><td>Umur outstanding</td><td>{html.escape(age)}</td></tr>"
+    if plan["known"]:
+        rows += (f"<tr><td>Kekurangan Site 10037 (kebutuhan {fmt_qty(plan['need'])} − stok {fmt_qty(plan['stok'])})</td>"
+                 f"<td>{fmt_qty(plan['shortfall'])} unit</td></tr>")
+        if plan["shortfall"] > 0:
+            rows += f"<tr><td>Sisa setelah outstanding</td><td>{fmt_qty(plan['rest'])} unit</td></tr>"
+            for code, units in plan["take"].items():
+                rows += f"<tr><td>→ ambil dari Site {code}</td><td>{fmt_qty(units)} unit</td></tr>"
+            if plan["po"] > 0:
+                rows += f"<tr><td>→ PO baru ke supplier</td><td>{fmt_qty(plan['po'])} unit</td></tr>"
+    table = f"<table class='insight-table'><tr><th>Rincian</th><th>Jumlah</th></tr>{rows}</table>" if rows else ""
+    return head + table + f"<p class='insight-copy'>{outstanding_verdict(plan)}</p>"
+
+
 def _dc_block(row: pd.Series) -> str:
     """Keberadaan stok di Site 10062 (DC Cikupa) dan 10036 (DC Cipeucang) serta rencana pemenuhan Site 10037."""
     sites = (("10062", "DC Cikupa"), ("10036", "DC Cipeucang"))
@@ -80,7 +114,7 @@ def _dc_block(row: pd.Series) -> str:
         value = row.get(f"stok_{code}")
         values[code] = None if value is None or pd.isna(value) else float(value)
     if all(value is None for value in values.values()):
-        return "<p class='insight-copy'>Stok DC belum diunggah. Unggah menu Stok DC Cikupa (Site 10062) dan Stok DC Cipeucang (Site 10036) agar rencana transfer terhitung.</p>"
+        return _outstanding_block(row) + "<p class='insight-copy'>Stok DC belum diunggah. Unggah menu Stok DC Cikupa (Site 10062) dan Stok DC Cipeucang (Site 10036) agar rencana transfer terhitung.</p>"
     body = "".join(
         f"<tr><td>Site {code} · {name}</td><td>{'belum ada data' if values[code] is None else fmt_qty(values[code]) + ' unit'}</td>"
         f"<td>{_take_text(row.get(f'ambil_{code}'))}</td></tr>"
@@ -114,6 +148,8 @@ def _dc_block(row: pd.Series) -> str:
         verdict = (
             f"Site 10037 kurang {fmt_qty(shortfall)} unit dan kedua DC kosong, jadi seluruhnya perlu PO ke supplier."
         )
+    if shortfall > 0 and float(row.get("os_total", 0) or 0) > 0:
+        verdict += " Hitungan ini belum mengurangi outstanding; kebutuhan transfer/PO bersihnya ada di bagian Outstanding di atas."
     plan = str(row.get("sumber_restock") or "").strip()
     try:
         from src.ui.gudang_view import location_text
@@ -122,7 +158,7 @@ def _dc_block(row: pd.Series) -> str:
     except Exception:
         where = ""
     where_html = f"<p class='insight-copy'><b>Gudang Site 10037</b>: {html.escape(where)}</p>" if where else ""
-    return where_html + (
+    return where_html + _outstanding_block(row) + (
         "<p class='insight-copy'><b>Stok DC</b> (urutan ambil: Site 10062 dulu karena satu kawasan dengan Site 10037, lalu Site 10036)</p>"
         + table
         + f"<p class='insight-copy'>{html.escape(verdict)}" + (f" Rencana: <b>{html.escape(plan)}</b>." if plan else "") + "</p>"
