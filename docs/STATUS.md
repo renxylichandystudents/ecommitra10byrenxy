@@ -623,3 +623,10 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Teks tidak terpotong: lebar kolom pasti dari teks terpanjang + judul (`_month_widths`), baris satu baris (tidak 68 px lagi). Status baris Total bulan = "Sebulan"; proyeksi akhir bulan ditulis di atas tabel (sebelumnya "Proyeksi bersih Rp …" terpotong).
 - Hari Berjalan/Akan datang: selisih, achievement, akurasi, % target dikosongkan (aktual belum sehari penuh). Sel kosong ditulis "" agar st.dataframe tidak menampilkan "None".
 - Keterangan kolom dipindah ke daftar penjelasan (Kelompok kolom, Achievement, Akurasi, Achievement + BB, Target, Hari, Berjalan).
+
+## Breakdown per tanggal: kembali ke format angka & lebar semula + akurasi (14 Nov 2026)
+
+- Sel kosong yang ditulis "" membuat kolom angka berubah jadi teks (angka mentah tanpa pemisah/Rp/% dan kolom sangat lebar). Dikembalikan: kolom angka tetap numerik (format Rp / % dari Styler), lebar otomatis; hanya kolom teks (Tanggal, Status, Hari, Sumber prediksi) diberi lebar pasti agar tidak terpotong.
+- Deret kolom Produk dan Bersih disamakan: Prediksi · Aktual · Selisih · Achievement · Akurasi (Bersih menambah Selisih & Akurasi), lalu Bersih · Target · % target, Belum Bayar, Achievement + BB, Sumber prediksi.
+- Kartu ringkas akurasi di atas tabel (`_accuracy_cards`): Akurasi prediksi produk & bersih (100% − Σ|selisih| ÷ Σ aktual hari penuh), Achievement s.d. hari penuh terakhir, jumlah hari tepat (achievement 90–110%).
+- Link tab baru: kode overlay kini dipasang di dokumen utama (bukan di iframe komponen yang dibuang saat rerun, yang membuat timer/observer berhenti sehingga link tidak terpasang).

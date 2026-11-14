@@ -2942,55 +2942,60 @@ def link_buttons(routes: dict[str, dict[str, str]]) -> None:
     from urllib.parse import urlencode
 
     links = {key: "?" + urlencode({k: v for k, v in route.items() if v}) for key, route in routes.items()}
+    # Kode dipasang sekali di dokumen utama (bukan di iframe komponen): iframe dibuang saat rerun/pindah halaman,
+    # dan fungsi/timer milik iframe yang sudah dibuang tidak berjalan lagi.
     components.html(
         """
         <script>
         const parent = window.parent;
         const links = __LINKS__;
-        const cls = (key) => 'st-key-' + key.replace(/[^a-zA-Z0-9_-]/g, '-');
-        const apply = () => {
-          const doc = parent.document;
-          if (!doc.getElementById('nav-link-css')) {
-            const css = doc.createElement('style');
-            css.id = 'nav-link-css';
-            // Lapisan link menutupi tombol, jadi efek hover tombol diganti bayangan tipis di lapisan ini.
-            css.textContent = '.nav-link-overlay{border-radius:999px}.nav-link-overlay:hover{background:rgba(238,77,45,0.08)!important}';
-            doc.head.appendChild(css);
-          }
-          Object.entries(links).forEach(([key, href]) => {
-            Array.from(doc.getElementsByClassName(cls(key))).forEach((box) => {
-              const button = box.querySelector('button');
-              if (!button) return;
-              let a = box.querySelector(':scope > a.nav-link-overlay');
-              if (!a) {
-                a = doc.createElement('a');
-                a.className = 'nav-link-overlay';
-                a.setAttribute('aria-hidden', 'true');
-                a.tabIndex = -1;
-                a.style.cssText = 'position:absolute;inset:0;z-index:5;display:block;background:transparent;';
-                a.addEventListener('click', (e) => {
-                  if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                    e.preventDefault();
-                    box.querySelector('button').click();
-                  }
+        if (!parent.__mitraNav) {
+          const code = `
+            (() => {
+              const nav = { links: {}, timer: null };
+              const cls = (key) => 'st-key-' + key.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+              nav.apply = () => {
+                if (!document.getElementById('nav-link-css')) {
+                  const css = document.createElement('style');
+                  css.id = 'nav-link-css';
+                  css.textContent = '.nav-link-overlay{position:absolute;inset:0;z-index:5;display:block;border-radius:999px;background:transparent}'
+                    + '.nav-link-overlay:hover{background:rgba(238,77,45,0.08)}';
+                  document.head.appendChild(css);
+                }
+                Object.entries(nav.links).forEach(([key, href]) => {
+                  Array.from(document.getElementsByClassName(cls(key))).forEach((box) => {
+                    if (!box.querySelector('button')) return;
+                    let a = box.querySelector(':scope > a.nav-link-overlay');
+                    if (!a) {
+                      a = document.createElement('a');
+                      a.className = 'nav-link-overlay';
+                      a.setAttribute('aria-hidden', 'true');
+                      a.tabIndex = -1;
+                      a.addEventListener('click', (e) => {
+                        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          e.preventDefault();
+                          const button = box.querySelector('button');
+                          if (button) button.click();
+                        }
+                      });
+                      if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+                      box.appendChild(a);
+                    }
+                    a.href = location.pathname + href;
+                  });
                 });
-                if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
-                box.appendChild(a);
-              }
-              a.href = parent.location.pathname + href;
-            });
-          });
-        };
-        apply();
-        if (!parent.__mitraNavObserver) {
-          parent.__mitraNavObserver = new MutationObserver(() => (parent.__mitraNavApply || (() => {}))());
-          parent.__mitraNavObserver.observe(parent.document.body, {childList: true, subtree: true});
+              };
+              nav.add = (links) => { Object.assign(nav.links, links); nav.apply(); };
+              new MutationObserver(() => { clearTimeout(nav.timer); nav.timer = setTimeout(nav.apply, 120); })
+                .observe(document.body, { childList: true, subtree: true });
+              window.__mitraNav = nav;
+            })();
+          `;
+          const tag = parent.document.createElement('script');
+          tag.textContent = code;
+          parent.document.head.appendChild(tag);
         }
-        parent.__mitraNavLinks = Object.assign(parent.__mitraNavLinks || {}, links);
-        parent.__mitraNavApply = () => {
-          clearTimeout(parent.__mitraNavTimer);
-          parent.__mitraNavTimer = setTimeout(() => { Object.assign(links, parent.__mitraNavLinks); apply(); }, 120);
-        };
+        parent.__mitraNav.add(links);
         </script>
         """.replace("__LINKS__", _json.dumps(links)),
         height=0,

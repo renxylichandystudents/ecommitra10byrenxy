@@ -694,7 +694,8 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         status_full = full["Status"]
         full["Status"] = "Sebulan"
         rows = pd.DataFrame([full, total])[[c for c in view.columns]]
-        table = _month_display(pd.concat([rows, view], ignore_index=True), target is not None and bool(target))
+        table = _month_display(pd.concat([rows, view], ignore_index=True), bool(target), net_projection=net_projection if target else None)
+        _accuracy_cards(table, last)
         factor_text = str(round(float(target["factor"]), 2)).replace(".", ",") if target else ""
         st.markdown(
             f"<div class='field-hint'><b>{html.escape(month_label)}</b>: {html.escape(status_full)} "
@@ -727,56 +728,94 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         )
 
 
-MONTH_MONEY = ("Produk · Prediksi", "Produk · Aktual", "Produk · Selisih", "Belum Bayar", "Bersih · Target", "Bersih · Prediksi", "Bersih · Aktual")
-MONTH_PCT = ("Produk · Achievement", "Produk · Akurasi", "Produk · Achievement + BB", "Bersih · % target", "Bersih · Achievement")
+MONTH_MONEY = ("Produk · Prediksi", "Produk · Aktual", "Produk · Selisih", "Bersih · Prediksi", "Bersih · Aktual", "Bersih · Selisih",
+               "Bersih · Target", "Belum Bayar")
+MONTH_PCT = ("Produk · Achievement", "Produk · Akurasi", "Bersih · Achievement", "Bersih · Akurasi", "Bersih · % target", "Achievement + BB")
+MONTH_TEXT = ("Tanggal", "Status", "Hari", "Sumber prediksi")
 
 
-def _month_display(frame: pd.DataFrame, has_target: bool) -> pd.DataFrame:
-    """Urutan & nama kolom Breakdown per tanggal: identitas tanggal → sales produk (model) → sales bersih (target) → sumber."""
+def _month_display(frame: pd.DataFrame, has_target: bool, net_projection: float | None = None) -> pd.DataFrame:
+    """Urutan & nama kolom Breakdown per tanggal. Kelompok Produk dan Bersih memakai deret yang sama:
+    Prediksi · Aktual · Selisih · Achievement · Akurasi, lalu Target & % target, Belum Bayar, sumber."""
     out = frame.copy()
-    hari = []
-    for kind, pola in zip(out["Jenis hari"].fillna(""), out["Pola hari"].fillna("")):
-        hari.append(" · ".join(part for part in (str(kind), str(pola)) if part))
-    out["Hari"] = hari
+    out["Hari"] = [" · ".join(p for p in (str(k), str(v)) if p and p != "nan") for k, v in zip(out["Jenis hari"].fillna(""), out["Pola hari"].fillna(""))]
+    status = out["Status"].astype(str)
+    day_done = status.eq("Selesai")
+    upto = status.str.endswith("hari penuh")
+    month_row = status.eq("Sebulan")
+    open_day = ~(day_done | upto | month_row)
+    if has_target:
+        pred_net = pd.to_numeric(out["Prediksi sales bersih"], errors="coerce")
+        act_net = pd.to_numeric(out["Sales bersih toko"], errors="coerce")
+        out["Selisih bersih"] = np.where(day_done | upto, act_net - pred_net, np.nan)
+        if net_projection is not None:
+            out.loc[month_row, "Selisih bersih"] = net_projection - pred_net[month_row]
+        out["Akurasi bersih"] = [accuracy(a, p) if d else np.nan for a, p, d in zip(act_net, pred_net, day_done)]
+        err = float((act_net[day_done] - pred_net[day_done]).abs().sum())
+        total_act = float(act_net[day_done].sum())
+        out.loc[upto, "Akurasi bersih"] = max(0.0, 100 - err / total_act * 100) if total_act else np.nan
     # Hari berjalan/mendatang: aktual belum penuh → selisih & persentase dikosongkan agar tidak terbaca anjlok.
-    open_day = ~out["Status"].isin(["Selesai", "Sebulan"]) & ~out["Status"].astype(str).str.endswith("hari penuh")
-    for column in ("Selisih", "% capaian", "Akurasi prediksi", "% bila Belum Bayar dibayar", "Achievement bersih", "% target"):
+    for column in ("Selisih", "% capaian", "Akurasi prediksi", "% bila Belum Bayar dibayar", "Achievement bersih", "% target", "Selisih bersih", "Akurasi bersih"):
         if column in out.columns:
+            out[column] = pd.to_numeric(out[column], errors="coerce")
             out.loc[open_day, column] = np.nan
     names = {
         "Prediksi sales produk": "Produk · Prediksi", "Aktual sales produk": "Produk · Aktual", "Selisih": "Produk · Selisih",
-        "% capaian": "Produk · Achievement", "Akurasi prediksi": "Produk · Akurasi", "% bila Belum Bayar dibayar": "Produk · Achievement + BB",
-        "Target harian": "Bersih · Target", "Prediksi sales bersih": "Bersih · Prediksi", "Sales bersih toko": "Bersih · Aktual",
-        "% target": "Bersih · % target", "Achievement bersih": "Bersih · Achievement",
+        "% capaian": "Produk · Achievement", "Akurasi prediksi": "Produk · Akurasi",
+        "Prediksi sales bersih": "Bersih · Prediksi", "Sales bersih toko": "Bersih · Aktual", "Selisih bersih": "Bersih · Selisih",
+        "Achievement bersih": "Bersih · Achievement", "Akurasi bersih": "Bersih · Akurasi",
+        "Target harian": "Bersih · Target", "% target": "Bersih · % target", "% bila Belum Bayar dibayar": "Achievement + BB",
     }
     out = out.rename(columns=names)
-    order = ["Tanggal", "Status", "Hari", "Produk · Prediksi", "Produk · Aktual", "Produk · Selisih", "Produk · Achievement", "Produk · Akurasi",
-             "Belum Bayar", "Produk · Achievement + BB"]
+    order = ["Tanggal", "Status", "Hari",
+             "Produk · Prediksi", "Produk · Aktual", "Produk · Selisih", "Produk · Achievement", "Produk · Akurasi"]
     if has_target:
-        order += ["Bersih · Target", "Bersih · Prediksi", "Bersih · Aktual", "Bersih · % target", "Bersih · Achievement"]
-    order += ["Sumber prediksi"]
+        order += ["Bersih · Prediksi", "Bersih · Aktual", "Bersih · Selisih", "Bersih · Achievement", "Bersih · Akurasi",
+                  "Bersih · Target", "Bersih · % target"]
+    order += ["Belum Bayar", "Achievement + BB", "Sumber prediksi"]
     out = out[[c for c in order if c in out.columns]]
-    # Angka kosong ditulis "" (bukan NaN): st.dataframe menampilkan NaN sebagai "None" walau Styler memberi "–".
     for column in out.columns:
-        if column in MONTH_MONEY or column in MONTH_PCT:
-            values = pd.to_numeric(out[column], errors="coerce")
-            out[column] = values.astype(object).where(values.notna(), "")
+        if column not in MONTH_TEXT:
+            out[column] = pd.to_numeric(out[column], errors="coerce").astype(float)
     return out
 
 
-def _month_widths(table: pd.DataFrame) -> dict:
-    """Lebar kolom pasti (px) dari teks terpanjang + judul, agar teks & judul tidak terpotong dan baris tetap satu baris."""
+def _accuracy_cards(table: pd.DataFrame, last: date) -> None:
+    """Ringkasan akurasi prediksi untuk hari yang sudah penuh (s.d. hari penuh terakhir)."""
     import streamlit as st
 
+    days = table.loc[table["Status"].eq("Selesai")]
+    if days.empty:
+        return
+    upto = table.loc[table["Status"].astype(str).str.endswith("hari penuh")]
+    first = upto.iloc[0] if not upto.empty else None
+    ach = pd.to_numeric(days["Produk · Achievement"], errors="coerce")
+    within = int(((ach - 100).abs() <= 10).sum())
+    cols = st.columns(4)
+    if first is not None:
+        card(cols[0], f"Akurasi prediksi · produk", fmt_pct(first.get("Produk · Akurasi"), 1),
+             hint=f"{len(days)} hari penuh s.d. {fmt_date(last)} · 100% − Σ|selisih| ÷ Σ aktual")
+        if "Bersih · Akurasi" in table.columns:
+            card(cols[1], "Akurasi prediksi · bersih", fmt_pct(first.get("Bersih · Akurasi"), 1),
+                 hint="basis sales bersih toko (kartu Pantauan harian)")
+        card(cols[2], "Achievement s.d. kemarin", fmt_pct(first.get("Produk · Achievement"), 1),
+             hint="aktual ÷ prediksi sales produk; 100% = sesuai prediksi")
+    card(cols[3], "Hari tepat (±10%)", f"{within} dari {len(days)} hari",
+         hint=f"achievement 90–110%; terendah {fmt_pct(ach.min(), 0)}, tertinggi {fmt_pct(ach.max(), 0)}")
+
+
+def _month_widths(table: pd.DataFrame) -> dict:
+    """Hanya kolom teks diberi lebar pasti (agar tidak terpotong); kolom angka memakai lebar otomatis seperti tabel lain."""
+    import streamlit as st
+
+    from src.utils.format import CELL_PAD_PX, CHAR_PX
+
     config = {}
-    for column in table.columns:
-        texts = [str(column)] + [str(v) for v in table[column].tolist()]
-        if column in MONTH_MONEY:
-            texts = [str(column), "Rp 9.999.999.999"]
-        elif column in MONTH_PCT:
-            texts = [str(column), "999,9%"]
-        width = int(max(len(t) for t in texts) * 8.2 + 26)
-        config[column] = st.column_config.Column(width=width, pinned=column == "Tanggal")
+    for column in MONTH_TEXT:
+        if column not in table.columns:
+            continue
+        longest = max([len(str(column))] + [len(str(v)) for v in table[column].fillna("").tolist()])
+        config[column] = st.column_config.TextColumn(str(column), width=int(longest * CHAR_PX + CELL_PAD_PX + 6), pinned=column == "Tanggal")
     return config
 
 
