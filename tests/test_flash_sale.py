@@ -32,7 +32,7 @@ class CandidatesTest(unittest.TestCase):
         cands, _ = F.candidates(pd.DataFrame([item("slow", stok=300, harian=1.0)]))
         row = cands.iloc[0]
         self.assertEqual(row["tujuan"], F.CLEAR)
-        self.assertEqual(row["diskon"], 20)
+        self.assertGreaterEqual(row["diskon"], 19.9)
         self.assertLessEqual(row["kuota"], 30)
 
     def test_price_never_below_break_even(self):
@@ -40,14 +40,14 @@ class CandidatesTest(unittest.TestCase):
                                                     item("none", stok=100, harga=100_000, floor=99_000)]), below_floor=False)
         row = cands.set_index("sku").loc["tight"]
         self.assertGreaterEqual(row["harga_flash"], 94_000)
-        self.assertEqual(row["diskon"], 5)
+        self.assertGreaterEqual(row["diskon"], 5)
         self.assertIn("none", set(skipped["SKU · produk · varian"]))
 
     def test_sales_priority_keeps_item_below_break_even_with_loss_noted(self):
         cands, skipped = F.candidates(pd.DataFrame([item("rugi", stok=100, harga=100_000, floor=120_000)]))
         row = cands.set_index("sku").loc["rugi"]
-        self.assertEqual(row["diskon"], 5)
-        self.assertEqual(row["margin_unit"], 95_000 - 120_000)
+        self.assertGreaterEqual(row["diskon"], 5)
+        self.assertEqual(row["margin_unit"], row["harga_flash"] - 120_000)
         self.assertIn("di bawah impas", row["alasan"])
         self.assertTrue(skipped.empty)
 
@@ -105,3 +105,29 @@ class BottomPriceTest(unittest.TestCase):
         self.assertGreaterEqual(row["harga_flash"], 950_000)
         self.assertNotIn("2", set(cands["sku"]))
         self.assertTrue(skipped["Alasan"].str.contains("bottom price").any())
+
+
+class FlashOfferTest(unittest.TestCase):
+    def test_charm_and_strategy(self):
+        from src.core import flash_sale as F
+        self.assertEqual(F.charm_price(61_234), 60_900)
+        self.assertEqual(F.charm_price(189_000, up=True), 189_900)
+        self.assertEqual(F.charm_price(1_250_000), 1_199_000)
+        # harga 1 jt, transaksi terendah 880 rb → flash di bawahnya, tidak di bawah bottom 800 rb
+        price, disc, why = F.flash_offer(1_000_000, purpose=F.DRIVER, floor=700_000, bottom=800_000, low=880_000)
+        self.assertLess(price, 880_000)
+        self.assertGreaterEqual(price, 800_000)
+        self.assertIn("terendah", why)
+        # bottom mengikat
+        price, disc, why = F.flash_offer(1_000_000, purpose=F.DRIVER, floor=700_000, bottom=930_000)
+        self.assertGreaterEqual(price, 930_000)
+        self.assertIn("bottom", why)
+        self.assertIsNone(F.flash_offer(100_000, purpose=F.DRIVER, floor=99_000, bottom=float("nan")))
+
+    def test_cheap_items_become_hook_and_require_bottom(self):
+        from src.core import flash_sale as F
+        items = pd.DataFrame([item("murah", stok=100, harga=50_000, floor=30_000), item("nobottom", stok=100)])
+        items["bottom"] = [40_000, float("nan")]
+        cands, skipped = F.candidates(items, require_bottom=True)
+        self.assertEqual(cands.set_index("sku").loc["murah", "tujuan"], F.HOOK)
+        self.assertIn("Tidak ada bottom price MD", set(skipped["Kelompok"]))

@@ -169,9 +169,14 @@ def _bottom_map(features) -> dict[str, float]:
 
 
 def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | None, today: date, bottom: dict | None = None) -> pd.DataFrame:
+    from src.core import pricing
     from src.core.margin_file import sku_key
 
     bottom = bottom or {}
+    hist = {}
+    if orders is not None and not orders.empty:
+        h = pricing.price_history(orders, ref=today)
+        hist = {str(r["sku"]): r for r in h.to_dict("records")}
     momentum = momentum_14d(orders.assign(sku=orders["sku"].astype(str)) if orders is not None and not orders.empty and "sku" in orders.columns else None, today)
     recent = pd.Timestamp(today) - pd.Timedelta(days=90)
     rows = []
@@ -182,7 +187,11 @@ def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | 
         sold = float(r.get("qty_total", 0) or 0) or (1.0 if pd.notna(last) and last >= recent else 0.0)
         rows.append({
             "sku": sku, "label": product_label(sku, r.get("product_name", ""), r.get("variasi_tampil", "")), "nama": str(r.get("product_name", "")),
-            "harga": float(r.get("harga_bersih", 0) or 0), "stok": r.get("stok"), "ada_stok": bool(r.get("ada_data_stok", False)),
+            # Harga normal = harga awal (list price) transaksi terakhir; diskon flash dihitung dari harga ini seperti di Shopee.
+            "harga": float((hist.get(sku) or {}).get("harga_awal") or r.get("harga_bersih", 0) or 0),
+            "harga_terendah": (hist.get(sku) or {}).get("harga_terendah", float("nan")),
+            "harga_median": (hist.get(sku) or {}).get("harga_median", float("nan")),
+            "stok": r.get("stok"), "ada_stok": bool(r.get("ada_data_stok", False)),
             "ss": float(r.get("ss", 0) or 0), "harian": float(r.get("pred_harian", 0) or 0), "dc": dc, "terjual": sold,
             "m_sales": float(r.get("m_sales", 0) or 0), "batal_pct": r.get("batal_pct"), "floor": _flash_floor(data, sku, today),
             "momentum": momentum.get(sku, 0.0), "bottom": bottom.get(sku_key(sku), float("nan")),
@@ -190,7 +199,7 @@ def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | 
     return pd.DataFrame(rows)
 
 
-FLASH_ICON = {flash.DRIVER: "🔥", flash.CLEAR: "📦"}
+FLASH_ICON = {flash.DRIVER: "🔥", flash.CLEAR: "📦", flash.HOOK: "🏷️"}
 def _clip(text: str, limit: int) -> str:
     text = str(text)
     if len(text) <= limit:
@@ -235,7 +244,8 @@ def _flash_render(plan: pd.DataFrame, skipped: pd.DataFrame, start: date, end: d
              hint="bila semua kuota terjual di harga flash" + (f" · <b style='color:#dc2626'>{fmt_num(below)} slot di bawah impas, rugi maks. {fmt_idr(-loss.sum())}</b>"
                                                               if below else ""))
         mix = plan["Tujuan"].value_counts().to_dict()
-        card(k[2], "Komposisi", f"🔥 {fmt_num(mix.get(flash.DRIVER, 0))} · 📦 {fmt_num(mix.get(flash.CLEAR, 0))}", hint="pendorong omzet · habiskan stok lebih")
+        card(k[2], "Komposisi", f"🔥 {fmt_num(mix.get(flash.DRIVER, 0))} · 🏷️ {fmt_num(mix.get(flash.HOOK, 0))} · 📦 {fmt_num(mix.get(flash.CLEAR, 0))}",
+             hint="pendorong omzet · barang murah · habiskan stok lebih")
         card(k[3], "Transfer dari DC", f"{fmt_num(moves['Unit transfer'].sum() if not moves.empty else 0)} unit",
              hint=f"{fmt_num(len(moves))} SKU · kirim paling lambat {fmt_date(moves['Kirim paling lambat'].min())}" if not moves.empty else "tidak perlu transfer")
         st.markdown("**Kalender**")
@@ -257,9 +267,9 @@ def _flash_render(plan: pd.DataFrame, skipped: pd.DataFrame, start: date, end: d
                     f"{' · sudah lewat' if past else ''}</span>"
                     + (f"<div style='font-size:var(--fs-xs);color:#b45309;font-weight:700'>{html.escape(moment)}</div>" if moment else "")
                     + items + "</div>", unsafe_allow_html=True)
-        st.caption("🔥 pendorong omzet · 📦 habiskan stok lebih · 🚚 stok ditransfer dari DC · kotak abu-abu = tanggal sudah lewat")
+        st.caption("🔥 pendorong omzet · 🏷️ barang murah · 📦 habiskan stok lebih · 🚚 stok ditransfer dari DC · kotak abu-abu = tanggal sudah lewat")
         f1, f2 = st.columns(2)
-        goal_pick = f1.multiselect("Tujuan", [flash.DRIVER, flash.CLEAR], key=f"{key}-goal", placeholder="Semua tujuan")
+        goal_pick = f1.multiselect("Tujuan", [flash.DRIVER, flash.HOOK, flash.CLEAR], key=f"{key}-goal", placeholder="Semua tujuan")
         src_pick = f2.multiselect("Sumber stok", [flash.SRC_SITE, flash.SRC_DC, flash.SRC_THIN], key=f"{key}-src", placeholder="Semua sumber")
         view = plan
         if goal_pick:
@@ -301,8 +311,10 @@ def _flash_render(plan: pd.DataFrame, skipped: pd.DataFrame, start: date, end: d
             st.caption(f"Ajukan transfer dari DC 10062/10036 paling lambat {flash.TRANSFER_DAYS} hari sebelum slot; SKU dari DC tidak dijadwalkan di {flash.TRANSFER_DAYS} hari pertama.")
     if skipped is not None and not skipped.empty:
         with st.expander(f"Tidak dijadwalkan · {fmt_num(len(skipped))} SKU"):
-            counts = skipped["Alasan"].astype(str).str.split(":").str[0].value_counts()
-            st.caption(" · ".join(f"{name}: {fmt_num(n)}" for name, n in counts.items()))
+            group = skipped["Kelompok"] if "Kelompok" in skipped.columns else skipped["Alasan"].astype(str).str.split(":").str[0]
+            counts = group.astype(str).value_counts()
+            st.caption(" · ".join(f"{name}: {fmt_num(n)}" for name, n in counts.head(8).items()) + (" · lainnya" if len(counts) > 8 else "")
+                       + ". Rincian per SKU di kolom Alasan.")
             batched_view(
                 len(skipped), key=f"{key}-skip", noun="SKU",
                 render=lambda lo, hi: show_table(skipped.iloc[lo:hi], kinds={"Stok toko": "count", "Stok DC": "count"}, max_height=10_000,
@@ -366,7 +378,8 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
         plan = cmp.frame_of(cur.get("jadwal"), ("Tanggal", "Kirim dari DC paling lambat"))
         skipped = cmp.frame_of(cur.get("tidak_dijadwalkan"))
         s = cur.get("setelan", {}) or {}
-        cands, fresh_skipped = flash.candidates(items, excluded=data.excluded, below_floor=s.get("aturan", FLASH_RULES[0]) == FLASH_RULES[0])
+        cands, fresh_skipped = flash.candidates(items, excluded=data.excluded, below_floor=s.get("aturan", FLASH_RULES[0]) == FLASH_RULES[0],
+                                                require_bottom=items["bottom"].notna().any())
         reasons = dict(zip(fresh_skipped["SKU · produk · varian"].astype(str).str.split(" · ").str[0], fresh_skipped["Alasan"])) if not fresh_skipped.empty else {}
         upcoming = plan.loc[plan["Tanggal"] >= today] if not plan.empty else plan
         bad = upcoming.loc[~upcoming["SKU"].astype(str).isin(set(cands["sku"].astype(str)))] if not upcoming.empty else upcoming
@@ -385,21 +398,23 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
         tomorrow = today + timedelta(days=1)
         with st.container(border=True):
             start, end = cmp.period_picker(key="fs-period", today=today, default=(tomorrow, tomorrow + timedelta(days=13)))
-            c2, c3, c4 = st.columns([1, 1.2, 1.4])
-            per_day = int(c2.number_input("SKU per hari", min_value=2, max_value=20, value=5, step=1, key="fs-per-day",
+            c2, c3, c5, c4 = st.columns([0.9, 1.1, 1.1, 1.4])
+            hook = c5.slider("Porsi slot barang murah", 0, 60, 30, step=10, key="fs-hook", format="%d%%",
+                             help=f"Produk ≤ Rp {flash.CHEAP_MAX:,.0f} yang laku, diskon lebih besar agar pembeli merasa ada barang murah.".replace(",", ".")) / 100
+            per_day = int(c2.number_input("SKU per hari", min_value=2, max_value=20, value=8, step=1, key="fs-per-day",
                                           help="Tanggal kembar, gajian (25), dan Harbolnas mendapat +3 SKU."))
             share = c3.slider("Porsi slot untuk stok berlebih", 0, 70, 40, step=10, key="fs-share", format="%d%%",
                               help="Sisa slot diisi produk pendorong omzet (laris). Bila kandidat salah satu habis, slot diisi yang lain.") / 100
             rule = c4.radio("Aturan harga flash", FLASH_RULES, index=1, horizontal=True, key="fs-rule",
                             help="Tidak di bawah impas (bawaan): produk yang tidak punya ruang diskon ≥ 5% di atas harga impas tidak dijadwalkan. "
                                  "Prioritas omzet: produk itu tetap ikut dengan diskon minimal 5% dan rugi per unit dicatat di kolom Margin/unit.")
-        cands, skipped = flash.candidates(items, excluded=data.excluded, below_floor=rule == FLASH_RULES[0])
-        plan = flash.schedule(cands, start, today=today, days=(end - start).days + 1, per_day=per_day, clear_share=share)
+        cands, skipped = flash.candidates(items, excluded=data.excluded, below_floor=rule == FLASH_RULES[0], require_bottom=items["bottom"].notna().any())
+        plan = flash.schedule(cands, start, today=today, days=(end - start).days + 1, per_day=per_day, clear_share=share, hook_share=hook)
         _flash_render(plan, skipped, start, end, key="fs-new", today=today, md_items=md_items)
         if not plan.empty and features is not None:
             cmp.save_controls("flash", features=features, today=today, start=start, end=end, cur=cur, can_edit=can_edit, username=username,
                               default_name=f"Flash sale {fmt_date(start)} – {fmt_date(end)}",
-                              payload={"setelan": {"per_hari": per_day, "porsi": share, "aturan": rule},
+                              payload={"setelan": {"per_hari": per_day, "porsi": share, "porsi_murah": hook, "aturan": rule},
                                        "jadwal": cmp.records_of(plan), "tidak_dijadwalkan": cmp.records_of(skipped)})
     with st.expander("Cara jadwal disusun"):
         explain([
@@ -408,12 +423,13 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
             ("Tujuan", f"habiskan stok lebih bila stok di atas SS cukup ≥ {flash.OVERSTOCK_DAYS} hari; selain itu pendorong omzet (urut prediksi omzet × tren 14 hari)"),
             ("Kuota", "pendorong: maks(3, 3 × prediksi harian); habiskan stok: 20% kelebihan stok 30 hari (5–100 unit)"),
             ("Sumber stok", "stok toko di atas SS + kebutuhan 7 hari → transfer DC 10062/10036 (H-3) → kuota kecil maks. separuh stok di atas SS"),
-            ("Pemilihan produk", "skor gabungan: volume value 40% (prediksi omzet × tren; habiskan stok: nilai stok berlebih), volume qty 30% "
-                                 "(prediksi unit/hari), margin di harga flash 30% — mendorong sales, invoice, dan untung sekaligus"),
-            ("Harga", "mengikuti bottom price MD (file Bottom Price) bila ≥ harga impas dan diskonnya ≥ 5%; bila belum ada bottom price, diskon terbesar "
-                      "10/7/5% (habiskan stok 20/15/10/5%) yang ≥ harga impas, diusulkan sebagai bottom price baru di file pengajuan codif. "
-                      "SKU yang bottom price-nya ≥ harga normal atau diskonnya < 5% tidak dijadwalkan. Prioritas omzet: bila impas tidak memberi ruang, "
-                      "diskon minimal 5% dan rugi per unit tampil di kolom Margin/unit"),
+            ("Pemilihan produk", "hanya SKU yang ada di file bottom price MD (bila file sudah diunggah). Skor gabungan: volume value 40%, qty/hari 30%, "
+                                 "margin di harga flash 30%. Tiga kelompok: 🔥 pendorong omzet, 🏷️ barang murah (≤ Rp 100 rb & laku, porsi slot bisa diatur, "
+                                 "agar pembeli merasa ada harga murah), 📦 habiskan stok lebih"),
+            ("Harga", "harga normal = harga awal transaksi terakhir. Target diskon per kelompok harga (< 100 rb 20%, < 500 rb 15%, < 2 jt 12%, ≥ 2 jt 10%; "
+                      "habiskan stok +5 poin) dan harus lebih murah dari harga transaksi terendah 90 hari, lalu dibulatkan ke harga psikologis "
+                      "(…900 / …9.900 / …99.000). Tidak pernah di bawah bottom price MD maupun harga impas; diskon < 5% tidak dijadwalkan. "
+                      "Prioritas omzet: bila impas tidak memberi ruang, diskon 5% dan rugi per unit tampil di Margin/unit"),
             ("Stok", "boleh dari stok toko 10037 maupun DC 10062/10036; bila stok 10037 kosong/tipis, kolom Peringatan stok 10037 mengingatkan untuk "
                      "menambah/transfer stok dulu"),
             ("Unduhan", "Unduh format Bottom Price = format baku file MD (sheet Marketplace) untuk diajukan ke codif: Campaign diisi tanggal flash sale, "

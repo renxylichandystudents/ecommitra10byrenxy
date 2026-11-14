@@ -759,3 +759,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Harga flash = bottom price MD bila ≥ impas & diskon ≥ 5%; tanpa bottom MD → diskon 10/7/5% (≥ impas) dan dicatat sebagai usulan bottom price baru.
 - Skor kandidat = 0,4 peringkat value + 0,3 peringkat qty/hari + 0,3 peringkat margin di harga flash. Kolom baru Margin (%) & Peringatan stok 10037 (stok toko kosong/tipis → tambah/transfer stok dulu).
 - `harga_beli.codif_frame/codif_xlsx`: unduhan format Bottom Price (sheet Marketplace, judul & kolom sama) per SKU: Campaign = tanggal flash sale, Bottom Price = bottom MD atau usulan, Keterangan = peringatan stok/usulan baru, + kolom "Harga Flash Sale (Seller Centre)". Data: 39 SKU (17 bottom MD, 22 usulan baru), 14 SKU stok 10037 kosong/tipis.
+
+## 2026-11-14 — Flash sale: hanya SKU ber-bottom price MD, strategi harga, barang murah
+- Bila file bottom price sudah diunggah, kandidat flash sale hanya SKU yang ada di file itu (`candidates(require_bottom=True)`); unduhan codif tidak lagi berisi usulan baru, Category Name dari file MD.
+- Harga normal = harga awal transaksi terakhir (bukan harga bersih rata-rata). `flash_offer`: target diskon per kelompok harga (<100 rb 20%, <500 rb 15%, <2 jt 12%, ≥2 jt 10%, habiskan stok +5), lebih murah dari harga transaksi terendah 90 hari, dibulatkan ke harga psikologis (`charm_price`), tidak di bawah bottom MD/impas, min. diskon 5%.
+- Kelompok baru 🏷️ Barang murah (≤ Rp 100 rb & laku) dengan porsi slot (bawaan 30%); SKU per hari bawaan 8. Data: 59 SKU / 115 slot (sebelumnya 38 SKU).
+- Tidak dijadwalkan diringkas per kelompok (kolom Kelompok), rincian tetap di kolom Alasan.
