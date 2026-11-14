@@ -148,7 +148,7 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
     mtd0, spent0 = float(s.get("mtd") or 0), float(s.get("terpakai") or 0)
     final = float(s.get("proyeksi") or 0)
     base = float(s.get("proyeksi_tanpa") or final)
-    daily_budget = float(s.get("budget_harian") or 0)
+    daily_budget = float(s.get("biaya_harian_rencana") or s.get("budget_harian") or 0)
     out = {"hari": max(days, 0), "hari_sisa": left, "mulai": start, "mtd_awal": mtd0, "terpakai_awal": spent0, "proyeksi_rencana": final}
     if days <= 0:
         out.update({"status": "Menunggu data", "jalur_sales": mtd0, "jalur_biaya": spent0, "sales": mtd, "biaya": spent})

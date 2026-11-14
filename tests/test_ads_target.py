@@ -314,3 +314,14 @@ class ExcludeAndEfficiencyTest(unittest.TestCase):
                       a=300_000, b=100_000, spread=0.2, members=["9"])
         plan = A.allocate_target([poor], gap_daily=1_000_000, target_roas=1.5, budget_daily=None)
         self.assertEqual(plan.cost["produk:9"], 0.0)
+
+
+class StrictEfficiencySpendsLessTest(unittest.TestCase):
+    def test_higher_floor_never_spends_more(self):
+        u = A.Unit(key="produk:1", nama="X", jenis="Produk tunggal", status="Berjalan", mode="GMV Max", daily_cost=200_000, daily_sales=2_400_000,
+                   a=2_000_000, b=150_000, spread=0.2, members=["1"])
+        loose = A.allocate_target([u], gap_daily=5_000_000, target_roas=2, budget_daily=None, min_marginal=2)
+        strict = A.allocate_target([u], gap_daily=5_000_000, target_roas=2, budget_daily=None, min_marginal=10)
+        self.assertLessEqual(strict.cost["produk:1"], loose.cost["produk:1"])
+        for v in (loose.cost["produk:1"], strict.cost["produk:1"]):
+            self.assertEqual(v % A.BUDGET_STEP, 0)
