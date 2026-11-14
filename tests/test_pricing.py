@@ -62,3 +62,34 @@ class HargaBeliParseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodifExportTest(unittest.TestCase):
+    def test_codif_frame_and_workbook(self):
+        import io
+        from datetime import date as d
+
+        import openpyxl
+
+        md = pd.DataFrame([{"kategori": "APPLIANCES", "sku": "1100008723", "nama": "Air Purifier", "variasi": "", "campaign": "", "harga_beli": 2_971_961.73,
+                            "harga_jual_offline": 6_187_000, "promo_offline_pct": 30.7, "harga_jual_nett": 4_284_693.88, "bottom_price": 4_184_693.88,
+                            "zona": "NASIONAL", "keterangan": ""}])
+        plan = pd.DataFrame([
+            {"Tanggal": d(2026, 11, 15), "SKU": "1100008723", "Produk": "1100008723 · Air Purifier", "Harga flash": 4_184_700.0, "Peringatan stok 10037": ""},
+            {"Tanggal": d(2026, 11, 22), "SKU": "1100008723", "Produk": "1100008723 · Air Purifier", "Harga flash": 4_184_700.0, "Peringatan stok 10037": ""},
+            {"Tanggal": d(2026, 11, 16), "SKU": "200013904", "Produk": "200013904 · Jet Shower · Putih", "Harga flash": 106_200.0,
+             "Peringatan stok 10037": "stok 10037 kosong: tambah/transfer stok dulu sebelum flash sale"},
+        ])
+        out = H.codif_frame(plan, md).set_index("Item No")
+        self.assertEqual(list(H.codif_frame(plan, md).columns), H.CODIF_COLUMNS)
+        self.assertEqual(out.loc["1100008723", "Campaign"], "Flash Sale 15 Nov, 22 Nov 2026")
+        self.assertAlmostEqual(out.loc["1100008723", "Bottom Price (Marketplace)"], 4_184_693.88)
+        self.assertAlmostEqual(out.loc["1100008723", "Tambahan Disc Amount "], 100_000, places=0)
+        self.assertEqual(out.loc["200013904", "Bottom Price (Marketplace)"], 106_200.0)
+        self.assertIn("usulan bottom price baru", out.loc["200013904", "Keterangan"])
+        self.assertIn("stok 10037 kosong", out.loc["200013904", "Keterangan"])
+        wb = openpyxl.load_workbook(io.BytesIO(H.codif_xlsx(out.reset_index()[H.CODIF_COLUMNS], "Flash sale 15–28 Nov")))
+        ws = wb["Marketplace"]
+        self.assertEqual(ws.cell(row=6, column=2).value, "Item No")
+        self.assertEqual(ws.cell(row=6, column=len(H.CODIF_COLUMNS)).value, "Harga Flash Sale (Seller Centre)")
+        self.assertEqual(ws.cell(row=2, column=2).value, "Flash sale 15–28 Nov")

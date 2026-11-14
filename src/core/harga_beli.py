@@ -137,3 +137,96 @@ def margin_pct(price: float, cost: float, tax_share: float | None = None) -> flo
         return float("nan")
     share = DEFAULT_TAX_SHARE if tax_share is None else tax_share
     return (price * (1 - share) - cost) / price * 100
+
+
+# --------------------------------------------------------------------------- unduhan format Bottom Price (pengajuan ke codif)
+
+CODIF_COLUMNS = ["Category Name", "Item No", "Item Name", "Variasi", "Campaign", "H.Beli (JBD)", "H.Jual (10037)", "% Promo Offline (JBD/NAS)",
+                 "H.Jual NETT (10037)", "Margin Promo (10037)", " Tambahan Disc%", "Tambahan Disc Amount ", "Bottom Price (Marketplace)", "Margin Promo",
+                 "cek offline vs online", "ZONA / AREA BERLAKU", "Keterangan", "Harga Flash Sale (Seller Centre)"]
+ID_MONTH_SHORT = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
+
+
+def _dates_text(days) -> str:
+    days = sorted({pd.Timestamp(d).date() for d in days if pd.notna(d)})
+    if not days:
+        return ""
+    parts = [f"{d.day} {ID_MONTH_SHORT[d.month - 1]}" for d in days]
+    return "Flash Sale " + ", ".join(parts) + f" {days[-1].year}"
+
+
+def codif_frame(plan: pd.DataFrame, md_items: pd.DataFrame | None, names: dict | None = None, categories: dict | None = None) -> pd.DataFrame:
+    """Satu baris per SKU flash sale dalam format file Bottom Price (sheet Marketplace) + kolom harga yang diset di Seller Centre.
+
+    plan: jadwal flash sale (kolom Tanggal, SKU, Produk, Harga normal, Bottom price, Harga flash, Peringatan stok 10037, Alasan).
+    Bottom Price (Marketplace) = bottom price MD bila ada; bila belum ada = harga flash usulan (perlu persetujuan codif).
+    Margin mengikuti rumus file: (harga − H.Beli) ÷ harga."""
+    if plan is None or plan.empty:
+        return pd.DataFrame(columns=CODIF_COLUMNS)
+    md = md_items.set_index("sku") if md_items is not None and not md_items.empty else pd.DataFrame()
+    names, categories = names or {}, categories or {}
+    rows = []
+    for sku, part in plan.groupby(plan["SKU"].astype(str), sort=False):
+        key = sku_key(sku)
+        m = md.loc[key] if not md.empty and key in md.index else None
+        get = (lambda col: m[col] if m is not None and pd.notna(m[col]) and m[col] != "" else np.nan)  # noqa: E731
+        flash = float(pd.to_numeric(part["Harga flash"], errors="coerce").min())
+        md_bottom = get("bottom_price")
+        bottom = float(md_bottom) if md_bottom == md_bottom else flash
+        cost, nett = get("harga_beli"), get("harga_jual_nett")
+        label = str(part["Produk"].iloc[0])
+        name = (m["nama"] if m is not None and m["nama"] else names.get(sku) or (label.split(" · ")[1] if " · " in label else label))
+        notes = []
+        alert = str(part.get("Peringatan stok 10037", pd.Series([""])).iloc[0] or "")
+        if alert:
+            notes.append(alert)
+        if md_bottom != md_bottom:
+            notes.append("usulan bottom price baru (belum ada di file MD)")
+        rows.append({
+            "Category Name": (m["kategori"] if m is not None and m["kategori"] else categories.get(sku, "")), "Item No": key, "Item Name": name,
+            "Variasi": (m["variasi"] if m is not None else "") or (label.split(" · ")[2] if label.count(" · ") >= 2 else ""),
+            "Campaign": _dates_text(part["Tanggal"]), "H.Beli (JBD)": cost, "H.Jual (10037)": get("harga_jual_offline"),
+            "% Promo Offline (JBD/NAS)": get("promo_offline_pct"), "H.Jual NETT (10037)": nett,
+            "Margin Promo (10037)": (nett - cost) / nett if nett == nett and cost == cost and nett else np.nan,
+            " Tambahan Disc%": (nett - bottom) / nett if nett == nett and nett else np.nan,
+            "Tambahan Disc Amount ": nett - bottom if nett == nett else np.nan,
+            "Bottom Price (Marketplace)": bottom, "Margin Promo": (bottom - cost) / bottom if cost == cost and bottom else np.nan,
+            "cek offline vs online": "", "ZONA / AREA BERLAKU": (m["zona"] if m is not None and m["zona"] else "NASIONAL"),
+            "Keterangan": "; ".join(notes), "Harga Flash Sale (Seller Centre)": flash,
+        })
+    return pd.DataFrame(rows, columns=CODIF_COLUMNS)
+
+
+def codif_xlsx(frame: pd.DataFrame, periode: str) -> bytes:
+    """Workbook dengan judul & baris kelompok seperti file Bottom Price asli (sheet Marketplace)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Marketplace"
+    ws.append(["Promo On Line  (MarketPlace)"])
+    ws.append(["Periode : ", periode])
+    ws.append([])
+    ws.append([])
+    group = [None] * len(CODIF_COLUMNS)
+    group[5], group[10], group[15] = "OFFLINE (10037)", "ONLINE (MARKETPLACE : SHOPEE, TIKTOK, LAZADA, BLIBLI)", "*wajib isi*"
+    group[17] = "SELLER CENTRE"
+    ws.append(group)
+    ws.append(CODIF_COLUMNS)
+    for cell in ws[6]:
+        cell.font = Font(bold=True)
+    ws.cell(row=6, column=len(CODIF_COLUMNS)).fill = PatternFill("solid", fgColor="FFE699")
+    for row in frame.itertuples(index=False):
+        ws.append([None if (isinstance(v, float) and np.isnan(v)) else v for v in row])
+    money = {"H.Beli (JBD)", "H.Jual (10037)", "H.Jual NETT (10037)", "Tambahan Disc Amount ", "Bottom Price (Marketplace)", "Harga Flash Sale (Seller Centre)"}
+    ratio = {"Margin Promo (10037)", " Tambahan Disc%", "Margin Promo"}
+    for idx, name in enumerate(CODIF_COLUMNS, start=1):
+        fmt = "#,##0" if name in money else "0.0%" if name in ratio else None
+        if fmt:
+            for r in range(7, ws.max_row + 1):
+                ws.cell(row=r, column=idx).number_format = fmt
+        ws.column_dimensions[ws.cell(row=6, column=idx).column_letter].width = 40 if name in ("Item Name", "Keterangan", "Campaign") else 16
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()

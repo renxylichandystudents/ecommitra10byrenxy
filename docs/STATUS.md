@@ -753,3 +753,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Nama & deskripsi: "Siap upload/Lengkapi" diganti Saran tindakan
 - Tindakan per produk (`rekomendasi._action_of`): ✅ Sudah baik, pertahankan (SEO saat ini ≥ 90, atau nama Sangat baik dan rekomendasi menambah < 10 poin) · 🔁 Ganti dengan rekomendasi (rekomendasi lengkap) · ⚠️ Perbaiki, lengkapi data dulu (rekomendasi masih butuh data manual). Teks tindakan menyebut bagian yang diganti: nama, deskripsi saja (nama sudah baik), atau keduanya (dari kekurangan listing saat ini).
 - Kolom baru "Yang diperbaiki" (kekurangan listing saat ini yang ditutup rekomendasi) dan "Masih kurang (isi manual)"; saringan & unduhan Excel ikut. Data: 5 pertahankan, 233 ganti (97 deskripsi saja), 215 lengkapi dulu.
+
+## 2026-11-14 — Flash sale: riwayat tersimpan, ikut bottom price MD, skor volume & margin, unduhan format codif
+- Campaign flash sale tersimpan menampilkan seluruh periodenya termasuk tanggal yang sudah lewat (kotak abu-abu "sudah lewat"); campaign yang sudah selesai/dihentikan bisa dibuka di expander "📅 Flash sale yang sudah diset sebelumnya" (kalender + tabel + unduhan).
+- Harga flash = bottom price MD bila ≥ impas & diskon ≥ 5%; tanpa bottom MD → diskon 10/7/5% (≥ impas) dan dicatat sebagai usulan bottom price baru.
+- Skor kandidat = 0,4 peringkat value + 0,3 peringkat qty/hari + 0,3 peringkat margin di harga flash. Kolom baru Margin (%) & Peringatan stok 10037 (stok toko kosong/tipis → tambah/transfer stok dulu).
+- `harga_beli.codif_frame/codif_xlsx`: unduhan format Bottom Price (sheet Marketplace, judul & kolom sama) per SKU: Campaign = tanggal flash sale, Bottom Price = bottom MD atau usulan, Keterangan = peringatan stok/usulan baru, + kolom "Harga Flash Sale (Seller Centre)". Data: 39 SKU (17 bottom MD, 22 usulan baru), 14 SKU stok 10037 kosong/tipis.
