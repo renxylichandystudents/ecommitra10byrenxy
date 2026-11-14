@@ -1,4 +1,4 @@
-"""Rekomendasi › Iklan (target & strategi), Flash sale toko, Exposure media sosial, Ranking kategori (4C–4E)."""
+"""Rekomendasi › Iklan (target & strategi), Flash sale toko, Exposure media sosial, Ranking kategori (KPI per periode & peluang Top 10)."""
 
 from __future__ import annotations
 
@@ -755,24 +755,65 @@ def _rank_catalog(table: pd.DataFrame) -> pd.DataFrame:
 TIER_COLOR = {"Sudah Top 10": "#1d4ed8", "Dekat": "#15803d", "Menengah": "#b45309", "Jauh": "#dc2626"}
 
 
+RANK_VIEWS = (("rekap", "Rekap KPI ranking"), ("peluang", "Peluang Top 10 per produk"), ("unggah", "Unggah & periode"))
+
+
 def show_ranking(table: pd.DataFrame, *, features, frames, username: str, can_edit: bool) -> None:
+    from src.ui import ranking_kpi_ui as rku
+    from src.ui.common import button_tabs
+
+    st.markdown("<div class='section-title'>Ranking kategori · KPI per periode & target Top 10</div>", unsafe_allow_html=True)
+    slugs = [slug for slug, _label in RANK_VIEWS]
+    view = st.session_state.get("rk-view") if st.session_state.get("rk-view") in slugs else slugs[0]
+    clicked = button_tabs(list(RANK_VIEWS), view, key="rk-view-btn")
+    if clicked and clicked != view:
+        st.session_state["rk-view"] = clicked
+        st.rerun()
+    if view == "rekap":
+        rku.show_recap(features, frames=frames)
+    elif view == "unggah":
+        rku.show_upload(features, frames=frames, username=username, can_edit=can_edit)
+    else:
+        _ranking_opportunity(table, features=features, frames=frames)
+        with st.expander("Data lain: Brand Portal & skor kesiapan listing"):
+            _brand_portal_and_readiness(table, features=features, frames=frames, username=username, can_edit=can_edit)
+
+
+def _ranking_opportunity(table: pd.DataFrame, *, features, frames) -> None:
     from src.core import category_rank as rk
+    from src.core import ranking_kpi as K
+    from src.ui import ranking_kpi_ui as rku
     from src.ui.common import card
 
-    st.markdown("<div class='section-title'>Ranking kategori · target Top 10</div>", unsafe_allow_html=True)
-    competitors = getattr(frames, "competitors", pd.DataFrame())
-    if competitors is None or competitors.empty:
-        st.info("Data ranking kategori belum diunggah (Upload data › Kompetitor). Isinya: daftar ranking kategori Shopee, peringkat, toko, nama produk, dan baris toko sendiri.")
-    elif table is not None and not table.empty:
-        stamp = pd.to_datetime(competitors.get("_submitted_at"), errors="coerce").max() if "_submitted_at" in competitors.columns else None
+    legacy = getattr(frames, "competitors", pd.DataFrame())
+    has_legacy = legacy is not None and not legacy.empty
+    saved = rku.periods(features)
+    sources = list(reversed(saved)) + ([rku.LEGACY] if has_legacy else [])
+    if not sources:
+        st.info("Data ranking kategori belum ada. Unggah di **Unggah & periode** (ranking kategori Shopee per periode: peringkat, toko, nama produk, "
+                "baris toko sendiri, dan Sales/Qty/Views).")
+        return
+    if table is None or table.empty:
+        return
+    source = st.selectbox("Data ranking", sources, key="rk-opp-src",
+                          format_func=lambda p: "Data Kompetitor lama (menu Upload data, belum berperiode)" if p == rku.LEGACY else K.period_label(p))
+    labels, groups = {}, {}
+    if source == rku.LEGACY:
+        competitors = legacy
+        stamp = pd.to_datetime(legacy.get("_submitted_at"), errors="coerce").max() if "_submitted_at" in legacy.columns else None
+        origin = f"unggahan {fmt_date(stamp)}" if stamp is not None and pd.notna(stamp) else "data Kompetitor"
+    else:
+        rows = rku.load_all(features)
+        competitors, labels, groups = rku.opportunity_input(rows.loc[rows["periode"] == source])
+        origin = K.period_label(source)
+    if competitors is not None and not competitors.empty:
         catalog = _rank_catalog(table)
-        summary, opp = rk.analyze(competitors, catalog)
-        products, missing = rk.by_product(competitors, catalog, summary, opp)
+        summary, opp = rk.analyze(competitors, catalog, labels=labels, groups=groups)
+        products, missing = rk.by_product(competitors, catalog, summary, opp, groups=groups)
         n_sku = int(table["sku"].astype(str).nunique())
         in_rank = products.loc[products["Status"] != rk.UNRANKED]
         st.caption(f"Katalog saat ini {fmt_num(len(products))} produk ({fmt_num(n_sku)} SKU). {fmt_num(len(in_rank))} produk "
-                   f"({fmt_num(int(in_rank['Jumlah SKU'].sum()))} SKU) muncul di {fmt_num(len(summary))} daftar ranking kategori Shopee"
-                   + (f" (unggahan {fmt_date(stamp)})" if stamp is not None and pd.notna(stamp) else "") + ".")
+                   f"({fmt_num(int(in_rank['Jumlah SKU'].sum()))} SKU) muncul di {fmt_num(len(summary))} daftar ranking kategori Shopee ({origin}).")
         counts = products["Status"].value_counts().to_dict()
         skus = products.groupby("Status")["Jumlah SKU"].sum().to_dict()
         k = st.columns(5)
@@ -855,17 +896,16 @@ def show_ranking(table: pd.DataFrame, *, features, frames, username: str, can_ed
                        column_config={"Produk": st.column_config.TextColumn(width="medium"), "Langkah": st.column_config.TextColumn(width="large")})
         with st.expander("Cara membaca"):
             explain([
-                ("Sumber", "unggahan Kompetitor: tiap Daftar = satu ranking kategori Shopee (±20 teratas + produk toko sendiri)"),
+                ("Sumber", "data ranking periode yang dipilih (atau data Kompetitor lama): tiap Daftar = satu ranking kategori Shopee (±20 teratas + produk toko sendiri)"),
                 ("Jumlah produk", "satu baris per produk katalog analisa saat ini (varian digabung; kolom Jumlah SKU). Produk di beberapa daftar memakai peringkat terbaiknya"),
-                ("Kelompok & kategori", "kelompok = jenis bahan bangunan dari nama produk; kategori = kata yang paling sering muncul di nama produk daftar itu "
-                                        "(data tidak memuat nama kategori). Produk belum masuk ranking diberi kategori perkiraan dari kata kunci Top 10 yang paling cocok"),
+                ("Kelompok & kategori", "data berperiode: kelompok = Home & Living / Elektronik dan kategori = kategori Shopee hasil pemetaan. Data lama: "
+                                        "kelompok = jenis bahan bangunan dan kategori = kata yang paling sering muncul di nama produk daftar itu. "
+                                        "Produk belum masuk ranking diberi kategori perkiraan dari kata kunci Top 10 yang paling cocok"),
                 ("Status", "Sudah Top 10 (≤ 10) · Dekat (11–50) · Menengah (51–500) · Jauh (> 500) · Belum masuk ranking (tidak ada di daftar yang diunggah)"),
                 ("Perlu/bulan", "perkiraan penjualan di peringkat 10 dengan pola penjualan ≈ 1/peringkat; bila ada produk kita yang sudah Top 10 di daftar itu, "
                                 "penjualannya dipakai sebagai patokan. Angka perkiraan, bukan data Shopee"),
                 ("Langkah", "urut: stok → iklan → flash sale → kata kunci judul yang dipakai ≥ 50% Top 10 → tag promo pesaing → konten"),
             ])
-    with st.expander("Data lain: Brand Portal & skor kesiapan listing"):
-        _brand_portal_and_readiness(table, features=features, frames=frames, username=username, can_edit=can_edit)
 
 
 def _brand_portal_and_readiness(table: pd.DataFrame, *, features, frames, username: str, can_edit: bool) -> None:
