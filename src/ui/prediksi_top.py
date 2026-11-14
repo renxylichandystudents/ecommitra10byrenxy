@@ -25,7 +25,7 @@ from src.core.pred_actual import (
 )
 from src.core.periods import format_period_label, last_full_month, same_day_last_month
 from src.core.restock import stock_out_date
-from src.ui.common import batched_view, card, page_navigator, download_excel, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
+from src.ui.common import batched_view, card, page_navigator, download_excel, explain, fmt_idr, fmt_num, fmt_pct, reset_batches, sku_cards, status_key
 from src.ui.dashboard import status_badges
 from src.ui.feature_data import FeatureData
 from src.utils.format import show_table, table_height, wrap_layout
@@ -676,7 +676,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Selisih": projection - pred_month, "% capaian": act / pred_month * 100 if pred_month else np.nan,
         "Akurasi prediksi": np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred_month * 100 if pred_month else np.nan,
-        "Sumber prediksi": f"aktual s.d. {fmt_date(last)} + prediksi sisa",
+        "Sumber prediksi": "aktual + prediksi sisa",
     }
     goal_month = float(month["target"].fillna(0).sum())
     factor = float(target["factor"]) if target else 1.0
@@ -691,34 +691,93 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         full["Status"] = f"Proyeksi bersih {fmt_idr(net_projection)}"
     rows = pd.DataFrame([full, total])[[c for c in view.columns]]
     with st.expander("Breakdown per tanggal (tgl 1 s.d. akhir bulan)", expanded=True):
-        target_note = (
-            f" Target harian = target bulan ini ({fmt_idr(target['target'])}) dibagi per tanggal; totalnya sama dengan target. "
-            "% target = Sales bersih toko ÷ target (basis sama dengan target). Baris Total bulan: % target = proyeksi sales bersih akhir bulan "
-            f"(sales bersih s.d. kemarin + prediksi sisa × faktor {target['factor']:.2f} sales bersih ÷ sales produk, sama dengan Pantauan harian) ÷ target."
-            if target else "")
-        st.caption(
-            f"Baris **{month_label}**: Prediksi = jumlah prediksi semua tanggal; Aktual = terkumpul s.d. {fmt_date(last)}; "
-            "% capaian = progres terhadap prediksi sebulan; Status = proyeksi akhir bulan (aktual + prediksi hari tersisa), "
-            "Selisih = proyeksi − prediksi sebulan." + target_note)
-        st.caption(
-            "**Achievement (% capaian)** = aktual sales produk ÷ prediksi (100% = sesuai prediksi, >100% melebihi). "
-            "**Akurasi prediksi** = 100% − |aktual − prediksi| ÷ aktual, hanya hari penuh; baris Total s.d. = 100% − Σ|selisih harian| ÷ Σ aktual "
-            "(meleset ke atas maupun ke bawah sama-sama mengurangi akurasi). "
-            + (f"**Prediksi sales bersih** = Prediksi sales produk × faktor {str(round(float(target['factor']), 2)).replace('.', ',')} (sales bersih ÷ sales produk) — angka yang dipakai kartu "
-               "Pantauan harian (Kemarin/Hari ini/Besok); **Achievement bersih** = Sales bersih toko ÷ Prediksi sales bersih = capaian di kartu Kemarin. "
-               if target else "")
-            + "Judul kolom dan kolom Tanggal tetap terlihat saat tabel digulir.")
-        table = pd.concat([rows, view], ignore_index=True).rename(columns={"% capaian": "Achievement (% capaian)"})
+        status_full = full["Status"]
+        full["Status"] = "Sebulan"
+        rows = pd.DataFrame([full, total])[[c for c in view.columns]]
+        table = _month_display(pd.concat([rows, view], ignore_index=True), target is not None and bool(target))
+        factor_text = str(round(float(target["factor"]), 2)).replace(".", ",") if target else ""
+        st.markdown(
+            f"<div class='field-hint'><b>{html.escape(month_label)}</b>: {html.escape(status_full)} "
+            f"(aktual s.d. {fmt_date(last)} + prediksi hari tersisa).</div>",
+            unsafe_allow_html=True,
+        )
+        explain(
+            [
+                ("Kelompok kolom", "Produk = sales produk (Harga Setelah Diskon × QTY), dasar model prediksi. "
+                 + ("Bersih = sales bersih toko (Total Pembayaran − batal − Belum Bayar − retur), dasar target dan kartu Pantauan harian. "
+                    f"Prediksi bersih = prediksi produk × faktor {factor_text} (sales bersih ÷ sales produk bulan ini)." if target else "")),
+                ("Achievement", "aktual ÷ prediksi. 100% = sesuai prediksi, di atas 100% = melebihi. Hanya hari yang sudah penuh (Selesai); "
+                 "baris Sebulan = progres aktual terhadap prediksi sebulan"),
+                ("Akurasi", "100% − |aktual − prediksi| ÷ aktual, hanya hari penuh. Meleset ke atas maupun ke bawah sama-sama mengurangi akurasi. "
+                 "Baris Total s.d. = 100% − Σ|selisih harian| ÷ Σ aktual"),
+                ("Achievement + BB", "achievement bila pesanan yang masih Belum Bayar ikut dibayar"),
+                *([("Target · % target", f"target bulan ({fmt_idr(target['target'])}) dibagi per tanggal mengikuti pola hari; % target = aktual bersih ÷ target. "
+                    "Baris Sebulan: % target = proyeksi bersih akhir bulan ÷ target bulan")] if target else []),
+                ("Hari", "jenis hari (gajian, tanggal kembar) dan pola pengali prediksi hari itu; \"pola model\" = tanggal uji mundur memakai pola Senin–Minggu model"),
+                ("Tanggal hari ini (Berjalan)", "aktual belum sehari penuh, jadi selisih, achievement, dan akurasi belum dihitung"),
+            ]
+        )
         show_table(
             table,
             bold_label=(month_label, label),
-            kinds={"Target harian": "money", "Sales bersih toko": "money", "Prediksi sales produk": "money", "Aktual sales produk": "money", "Belum Bayar": "money", "Selisih": "money",
-                   "% target": "pct", "Achievement (% capaian)": "pct", "Akurasi prediksi": "pct", "% bila Belum Bayar dibayar": "pct",
-                   "Prediksi sales bersih": "money", "Achievement bersih": "pct"},
+            kinds={**{c: "money" for c in MONTH_MONEY if c in table.columns}, **{c: "pct" for c in MONTH_PCT if c in table.columns}},
             # Tinggi dibatasi agar tabel bergulir di dalam: judul kolom (header) tetap terlihat; kolom Tanggal disematkan di kiri.
             max_height=640,
-            column_config={"Tanggal": st.column_config.TextColumn("Tanggal", pinned=True)},
+            column_config=_month_widths(table),
         )
+
+
+MONTH_MONEY = ("Produk · Prediksi", "Produk · Aktual", "Produk · Selisih", "Belum Bayar", "Bersih · Target", "Bersih · Prediksi", "Bersih · Aktual")
+MONTH_PCT = ("Produk · Achievement", "Produk · Akurasi", "Produk · Achievement + BB", "Bersih · % target", "Bersih · Achievement")
+
+
+def _month_display(frame: pd.DataFrame, has_target: bool) -> pd.DataFrame:
+    """Urutan & nama kolom Breakdown per tanggal: identitas tanggal → sales produk (model) → sales bersih (target) → sumber."""
+    out = frame.copy()
+    hari = []
+    for kind, pola in zip(out["Jenis hari"].fillna(""), out["Pola hari"].fillna("")):
+        hari.append(" · ".join(part for part in (str(kind), str(pola)) if part))
+    out["Hari"] = hari
+    # Hari berjalan/mendatang: aktual belum penuh → selisih & persentase dikosongkan agar tidak terbaca anjlok.
+    open_day = ~out["Status"].isin(["Selesai", "Sebulan"]) & ~out["Status"].astype(str).str.endswith("hari penuh")
+    for column in ("Selisih", "% capaian", "Akurasi prediksi", "% bila Belum Bayar dibayar", "Achievement bersih", "% target"):
+        if column in out.columns:
+            out.loc[open_day, column] = np.nan
+    names = {
+        "Prediksi sales produk": "Produk · Prediksi", "Aktual sales produk": "Produk · Aktual", "Selisih": "Produk · Selisih",
+        "% capaian": "Produk · Achievement", "Akurasi prediksi": "Produk · Akurasi", "% bila Belum Bayar dibayar": "Produk · Achievement + BB",
+        "Target harian": "Bersih · Target", "Prediksi sales bersih": "Bersih · Prediksi", "Sales bersih toko": "Bersih · Aktual",
+        "% target": "Bersih · % target", "Achievement bersih": "Bersih · Achievement",
+    }
+    out = out.rename(columns=names)
+    order = ["Tanggal", "Status", "Hari", "Produk · Prediksi", "Produk · Aktual", "Produk · Selisih", "Produk · Achievement", "Produk · Akurasi",
+             "Belum Bayar", "Produk · Achievement + BB"]
+    if has_target:
+        order += ["Bersih · Target", "Bersih · Prediksi", "Bersih · Aktual", "Bersih · % target", "Bersih · Achievement"]
+    order += ["Sumber prediksi"]
+    out = out[[c for c in order if c in out.columns]]
+    # Angka kosong ditulis "" (bukan NaN): st.dataframe menampilkan NaN sebagai "None" walau Styler memberi "–".
+    for column in out.columns:
+        if column in MONTH_MONEY or column in MONTH_PCT:
+            values = pd.to_numeric(out[column], errors="coerce")
+            out[column] = values.astype(object).where(values.notna(), "")
+    return out
+
+
+def _month_widths(table: pd.DataFrame) -> dict:
+    """Lebar kolom pasti (px) dari teks terpanjang + judul, agar teks & judul tidak terpotong dan baris tetap satu baris."""
+    import streamlit as st
+
+    config = {}
+    for column in table.columns:
+        texts = [str(column)] + [str(v) for v in table[column].tolist()]
+        if column in MONTH_MONEY:
+            texts = [str(column), "Rp 9.999.999.999"]
+        elif column in MONTH_PCT:
+            texts = [str(column), "999,9%"]
+        width = int(max(len(t) for t in texts) * 8.2 + 26)
+        config[column] = st.column_config.Column(width=width, pinned=column == "Tanggal")
+    return config
 
 
 def _cause_summary(rows: pd.DataFrame, day: date, support: tuple[float, float] = (np.nan, np.nan)) -> None:

@@ -616,3 +616,10 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## Menu & header bisa dibuka di tab baru (14 Nov 2026)
 
 - Tombol menu (Ringkasan … Evaluasi model) dan tombol header (Hasil analisa, Upload data, Setting, Beranda) adalah `st.button`, jadi klik kanan → Buka di tab baru tidak membawa halaman tujuan (tab baru terbuka di Ringkasan). `link_buttons` (app.py) menaruh lapisan `<a href="?page=…&tab=…">` transparan di atas tombol: klik kanan/Ctrl-Cmd-klik/klik tengah membuka halaman itu di tab baru (rute dipulihkan oleh `sync_route`), klik kiri biasa diteruskan ke tombol Streamlit (tanpa muat ulang).
+
+## Breakdown per tanggal ditata ulang (14 Nov 2026)
+
+- Urutan & nama kolom (`prediksi_top._month_display`): Tanggal · Status · Hari (jenis hari + pola) → kelompok **Produk** (sales produk, dasar model): Prediksi, Aktual, Selisih, Achievement, Akurasi, Belum Bayar, Achievement + BB → kelompok **Bersih** (sales bersih toko, dasar target & kartu Pantauan harian): Target, Prediksi, Aktual, % target, Achievement → Sumber prediksi.
+- Teks tidak terpotong: lebar kolom pasti dari teks terpanjang + judul (`_month_widths`), baris satu baris (tidak 68 px lagi). Status baris Total bulan = "Sebulan"; proyeksi akhir bulan ditulis di atas tabel (sebelumnya "Proyeksi bersih Rp …" terpotong).
+- Hari Berjalan/Akan datang: selisih, achievement, akurasi, % target dikosongkan (aktual belum sehari penuh). Sel kosong ditulis "" agar st.dataframe tidak menampilkan "None".
+- Keterangan kolom dipindah ke daftar penjelasan (Kelompok kolom, Achievement, Akurasi, Achievement + BB, Target, Hari, Berjalan).
