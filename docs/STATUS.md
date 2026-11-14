@@ -630,3 +630,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Deret kolom Produk dan Bersih disamakan: Prediksi · Aktual · Selisih · Achievement · Akurasi (Bersih menambah Selisih & Akurasi), lalu Bersih · Target · % target, Belum Bayar, Achievement + BB, Sumber prediksi.
 - Kartu ringkas akurasi di atas tabel (`_accuracy_cards`): Akurasi prediksi produk & bersih (100% − Σ|selisih| ÷ Σ aktual hari penuh), Achievement s.d. hari penuh terakhir, jumlah hari tepat (achievement 90–110%).
 - Link tab baru: kode overlay kini dipasang di dokumen utama (bukan di iframe komponen yang dibuang saat rerun, yang membuat timer/observer berhenti sehingga link tidak terpasang).
+
+## Tabel Prediksi vs aktual per SKU: kolom tetap & istilah seragam (14 Nov 2026)
+
+- SKU, Produk (320 px), Varian disematkan (`pinned`) sehingga tetap terlihat saat tabel digeser.
+- Nama kolom diseragamkan dengan Breakdown per tanggal: QTY · Prediksi/Aktual (dibulatkan unit utuh), Produk · Prediksi/Aktual/Selisih/Achievement/Akurasi. "Selisih omzet" → "Produk · Selisih"; teks "omzet" di ringkasan penyebab → "sales produk". Akurasi per SKU & total ditambahkan.

@@ -428,12 +428,17 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
 
     names = table.drop_duplicates("sku").set_index(table["sku"].astype(str).drop_duplicates())["product_name"].to_dict() if table is not None and not table.empty else {}
     view = rows.assign(Produk=rows["sku"].map(names).fillna(""))
-    # Prioritas dampak: selisih omzet aktual vs prediksi terbesar (meleset atau melebihi) lebih dulu.
-    view["Selisih omzet"] = view["selisih"]
-    view = view.sort_values("Selisih omzet", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
-    view["pred_qty"] = pd.to_numeric(view["pred_qty"], errors="coerce").round(1)
-    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "Prediksi QTY (laju harian)", "aktual_qty": "Aktual QTY", "pred_sales": "Prediksi sales produk", "aktual_sales": "Aktual sales produk", "pct": "% capaian", "status": "Status", "penyebab": "Penyebab", "aksi": "Saran aksi"})
-    columns = ["SKU", "Produk", "Varian", "Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi sales produk", "Aktual sales produk", "Selisih omzet", "% capaian", "Status", "Penyebab", "Saran aksi"]
+    # Prioritas dampak: selisih sales produk aktual vs prediksi terbesar (meleset atau melebihi) lebih dulu.
+    view["Produk · Selisih"] = view["selisih"]
+    view = view.sort_values("Produk · Selisih", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
+    # QTY selalu unit utuh.
+    view["pred_qty"] = pd.to_numeric(view["pred_qty"], errors="coerce").round(0)
+    view["Produk · Akurasi"] = [accuracy(a, p) for a, p in zip(view["aktual_sales"], view["pred_sales"])]
+    view = view.rename(columns={"sku": "SKU", "varian": "Varian", "pred_qty": "QTY · Prediksi", "aktual_qty": "QTY · Aktual",
+                                "pred_sales": "Produk · Prediksi", "aktual_sales": "Produk · Aktual", "pct": "Produk · Achievement",
+                                "status": "Status", "penyebab": "Penyebab", "aksi": "Saran aksi"})
+    columns = ["SKU", "Produk", "Varian", "QTY · Prediksi", "QTY · Aktual", "Produk · Prediksi", "Produk · Aktual", "Produk · Selisih",
+               "Produk · Achievement", "Produk · Akurasi", "Status", "Penyebab", "Saran aksi"]
 
     f1, f2, f3 = st.columns([1.3, 1.6, 0.8])
     status_pick = f1.multiselect("Status", options=["Tidak", "Hampir", "Tercapai", "Melebihi"], key="pva-status", placeholder="Semua")
@@ -448,9 +453,11 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     total = {c: "" for c in columns}
     total["SKU"] = "Total"
     total["Produk"] = f"{fmt_num(len(view))} SKU"
-    for c in ("Prediksi QTY (laju harian)", "Aktual QTY", "Prediksi sales produk", "Aktual sales produk", "Selisih omzet"):
+    for c in ("QTY · Prediksi", "QTY · Aktual", "Produk · Prediksi", "Produk · Aktual", "Produk · Selisih"):
         total[c] = float(pd.to_numeric(view[c], errors="coerce").fillna(0).sum())
-    total["% capaian"] = total["Aktual sales produk"] / total["Prediksi sales produk"] * 100 if total["Prediksi sales produk"] else None
+    total["Produk · Achievement"] = total["Produk · Aktual"] / total["Produk · Prediksi"] * 100 if total["Produk · Prediksi"] else None
+    abs_err = float((pd.to_numeric(view["Produk · Aktual"], errors="coerce").fillna(0) - pd.to_numeric(view["Produk · Prediksi"], errors="coerce").fillna(0)).abs().sum())
+    total["Produk · Akurasi"] = max(0.0, 100 - abs_err / total["Produk · Aktual"] * 100) if total["Produk · Aktual"] else None
     total_row = pd.DataFrame([total], columns=columns)
 
     sig = (tuple(status_pick), tuple(cause_pick), page_size)
@@ -463,15 +470,24 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         page, pages, key="pva-page", total=len(view), page_size=page_size, noun="SKU",
         download=lambda: download_excel(pd.concat([total_row, view], ignore_index=True), f"prediksi_vs_aktual_{last:%Y%m%d}.xlsx", key="xl-pva"),
     )
-    st.markdown(
-        "<div class='field-hint'>Urutan: selisih omzet aktual vs prediksi terbesar (paling berdampak) lebih dulu. Baris Total (sesuai filter) di atas.</div>",
-        unsafe_allow_html=True,
-    )
+    explain([
+        ("Urutan", "selisih sales produk aktual vs prediksi terbesar (paling berdampak) lebih dulu; baris Total (sesuai filter) di atas"),
+        ("QTY", "unit terjual bersih vs prediksi laju harian, dibulatkan ke unit utuh"),
+        ("Produk", "sales produk = Harga Setelah Diskon × QTY (sama dengan tabel Breakdown per tanggal); Achievement = aktual ÷ prediksi; "
+         "Akurasi = 100% − |aktual − prediksi| ÷ aktual (baris Total: 100% − Σ|selisih| ÷ Σ aktual)"),
+        ("Kolom tetap", "SKU, Produk, dan Varian tetap terlihat saat tabel digeser ke kanan"),
+    ])
     show_table(
         pd.concat([total_row, view.iloc[(page - 1) * page_size : page * page_size]], ignore_index=True),
         bold_label="Total",
-        kinds={"Prediksi sales produk": "money", "Aktual sales produk": "money", "Selisih omzet": "money", "% capaian": "pct"},
+        kinds={"QTY · Prediksi": "count", "QTY · Aktual": "count", "Produk · Prediksi": "money", "Produk · Aktual": "money", "Produk · Selisih": "money",
+               "Produk · Achievement": "pct", "Produk · Akurasi": "pct"},
         max_height=10_000,
+        column_config={
+            "SKU": st.column_config.TextColumn("SKU", width=110, pinned=True),
+            "Produk": st.column_config.TextColumn("Produk", width=320, pinned=True),
+            "Varian": st.column_config.TextColumn("Varian", width=150, pinned=True),
+        },
     )
 
 
@@ -848,7 +864,7 @@ def _cause_summary(rows: pd.DataFrame, day: date, support: tuple[float, float] =
                         f"{fmt_date(d)} ({fmt_num(int(n))} SKU)" for d, n in dates.items()
                     ) + " — cek promo/diskon apa yang berakhir pada tanggal itu.</span>"
             items.append(
-                f"<li><b>{html.escape(name)}</b> — {fmt_num(int(row['n']))} SKU, omzet kurang {fmt_idr(abs(row['gap']))}"
+                f"<li><b>{html.escape(name)}</b> — {fmt_num(int(row['n']))} SKU, sales produk kurang {fmt_idr(abs(row['gap']))}"
                 f" → <i>{html.escape(actions.get(name, 'pantau'))}</i>{extra}</li>"
             )
     up = ""
@@ -866,7 +882,7 @@ def _cause_summary(rows: pd.DataFrame, day: date, support: tuple[float, float] =
             f"{fmt_pct(before, 1)} dari omzet (14 hari sebelumnya) → {fmt_pct(after, 1)} (7 hari terakhir), <b>{tone}</b>.</div>"
         )
     lost = lost_sales_from_stock(rows)
-    lost_text = f" Potensi omzet hilang karena stok: <b>{fmt_idr(lost)}</b>." if lost > 0 else ""
+    lost_text = f" Potensi sales produk hilang karena stok: <b>{fmt_idr(lost)}</b>." if lost > 0 else ""
     st.markdown(
         f"<div class='tip-box' style='background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:.7rem .9rem;margin:.4rem 0 .6rem'>"
         f"<div style='font-weight:700;margin-bottom:.25rem'>Kenapa meleset pada {fmt_date(day)} &amp; apa yang dilakukan</div>"
