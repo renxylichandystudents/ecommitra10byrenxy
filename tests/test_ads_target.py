@@ -325,3 +325,17 @@ class StrictEfficiencySpendsLessTest(unittest.TestCase):
         self.assertLessEqual(strict.cost["produk:1"], loose.cost["produk:1"])
         for v in (loose.cost["produk:1"], strict.cost["produk:1"]):
             self.assertEqual(v % A.BUDGET_STEP, 0)
+
+
+class MarginPriorityTest(unittest.TestCase):
+    def test_positive_margin_gets_budget_first(self):
+        def mk(key, contrib, fast=False):
+            u = A.Unit(key=key, nama=key, jenis="Produk tunggal", status="Berjalan", mode="GMV Max", daily_cost=100_000, daily_sales=1_500_000,
+                       a=2_000_000, b=100_000, spread=0.2, members=[key], contribution=contrib)
+            u.fast = fast
+            return u
+        good, bad, fast_bad = mk("good", 0.15), mk("bad", -0.1), mk("fastbad", -0.1, fast=True)
+        self.assertGreater(A.priority(good), A.priority(fast_bad))
+        self.assertGreater(A.priority(fast_bad), A.priority(bad))
+        plan = A.allocate_target([good, bad], gap_daily=10_000_000, target_roas=2, budget_daily=250_000)
+        self.assertGreater(plan.cost["good"], plan.cost["bad"])

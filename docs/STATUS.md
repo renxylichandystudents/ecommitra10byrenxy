@@ -727,3 +727,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Tiap opsi & Fitur khusus menampilkan biaya iklan % sales bruto proyeksi (✓/⚠️ syarat 3%) dan estimasi kontribusi sesudah iklan (sales bersih × kontribusi sebelum iklan dari file margin − biaya iklan). Peringatan bila laju biaya di luar riwayat kurva toko.
 - Kotak 💰 Titik impas iklan: marginal kurva toko (data 12 Nov ±Rp 2,8 sales bersih per Rp 1) → kontribusi impas ≥ 35%, kontribusi produk terprediksi −8,5%.
 - Opsi utama: sales tertinggi, kecuali opsi lain kalah ≤ 0,5% target dengan biaya lebih kecil.
+
+## 2026-11-14 — Iklan: prioritas budget menurut margin
+- `ads_strategy.priority(unit)`: bobot margin (positif 1+2×min(c,0,3); tak diketahui 1; minus 0,85 bila laku banyak, 0,6 bila tidak). Dipakai `allocate_target` di semua fase (pindah budget, pangkas, efisiensi = MIN_MARGINAL ÷ bobot, tambah budget).
+- `restructure` menghitung ulang kontribusi, qty/hari, dan status laku banyak dari produk yang tinggal di tiap iklan.
+- Data 12 Nov, budget Rp 10 jt/hari: biaya ke produk margin positif Rp 1,8 → 2,8 jt/hari, (kontribusi omzet iklan − biaya) membaik ±Rp 3,2 jt/hari, ROAS 21,6 → 21,2.
+- Syarat 3% Shopee dikonfirmasi terhadap sales bruto.

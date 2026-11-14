@@ -83,6 +83,8 @@ class Unit:
     origin: str = ""                     # keterangan asal (mis. grup asal iklan tunggal hasil pisah)
     lift: float = DEMAND_LIFT            # batas tambahan omzet iklan sebagai pecahan prediksi omzet anggota
     last_days: int = 0                   # jumlah hari laporan periode terakhir (laporan bulan berjalan = s.d. tanggal laporan)
+    qty: float = 0.0                     # prediksi qty terjual per hari produk anggota
+    fast: bool = False                   # produk laku banyak (qty ≥ batas qty layak iklan): penting untuk invoice/performa toko
 
     @property
     def roas(self) -> float:
@@ -347,6 +349,18 @@ def round_budget(value: float, *, lo: float = 0.0, hi: float = float("inf"), ste
     return float(out)
 
 
+def priority(u: Unit) -> float:
+    """Bobot prioritas budget menurut margin: margin positif didahulukan (mendorong profit), margin minus tetap boleh
+    (mengejar sales/target) tetapi di belakang, kecuali produknya laku banyak (penting untuk invoice/performa toko).
+    Tambahan Rp 1 dinilai dari omzet × bobot; batas efisiensi per iklan = MIN_MARGINAL ÷ bobot."""
+    c = u.contribution
+    if c != c:  # margin tidak diketahui
+        return 1.0
+    if c > 0:
+        return 1.0 + 2.0 * min(c, 0.3)
+    return 0.85 if u.fast else 0.6
+
+
 MIN_MARGINAL = 5.0  # tiap tambahan Rp 1 biaya iklan minimal kembali Rp 5 omzet iklan (biaya ≤ 20% omzet tambahan)
 
 
@@ -385,9 +399,12 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
     def loss(u: Unit, step: float) -> float:
         return sales[u.key] - ad_sales(u, cost[u.key] - step)
 
+    weight = {u.key: priority(u) for u in units}
+
     def loss_rate(u: Unit) -> float:
+        """Omzet hilang per Rp yang dipangkas, dikali bobot margin (margin minus dipangkas lebih dulu)."""
         step = cut_step(u)
-        return loss(u, step) / step if step > 0 else float("inf")
+        return loss(u, step) / step * weight[u.key] if step > 0 else float("inf")
 
     def move(u: Unit, delta: float) -> None:
         nonlocal total_cost, total_sales, target_left
@@ -409,10 +426,10 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
         for u in units:
             step = add_step(u, freed)
             if u.key != donor.key and step <= freed + 1e-6 and cost[u.key] + step <= caps[u.key] + 1e-6:
-                g = gain(u, step)
+                g = gain(u, step) * weight[u.key]
                 if g > best_gain:
                     best, best_gain, best_step = u, g, step
-        if best is None or best_gain <= lost + 1.0:
+        if best is None or best_gain <= lost * weight[donor.key] + 1.0:
             break
         move(donor, -freed)
         move(best, best_step)
@@ -449,9 +466,9 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
             step = add_step(u, base_step)
             if (room is None or step <= room + 1e-6) and cost[u.key] + step <= caps[u.key] + 1e-6:
                 g = gain(u, step)
-                if g / step > (best_gain / best_step if best_step else 0.0):
+                if g * weight[u.key] / step > (best_gain * weight[best.key] / best_step if best is not None and best_step else 0.0):
                     best, best_gain, best_step = u, g, step
-        if best is None or (total_sales + best_gain) < target_roas * (total_cost + best_step) or best_gain < min_marginal * best_step:
+        if best is None or (total_sales + best_gain) < target_roas * (total_cost + best_step) or best_gain * weight[best.key] < min_marginal * best_step:
             break
         move(best, best_step)
     return Plan("Kejar target", {u.key: round_budget(cost[u.key], lo=lower[u.key], hi=caps[u.key]) for u in units}, floor)
@@ -917,6 +934,18 @@ def restructure(units: list[Unit], selection: pd.DataFrame, products: pd.DataFra
     prod = products.set_index("product_code") if not products.empty else pd.DataFrame(columns=["nama", "omzet_harian", "stok_room"])
     pred = prod["omzet_harian"].fillna(0.0).astype(float).to_dict() if "omzet_harian" in prod.columns else {}
     room = prod["stok_room"].to_dict() if "stok_room" in prod.columns else {}
+    qty = prod["qty_harian"].fillna(0.0).astype(float).to_dict() if "qty_harian" in prod.columns else {}
+    _sales_floor, qty_floor = potential_floors(products)
+
+    def econ(unit: Unit, codes: list[str]) -> Unit:
+        """Qty, status laku banyak, dan kontribusi (tertimbang prediksi omzet) dari produk yang tinggal di iklan ini."""
+        unit.qty = float(sum(qty.get(c, 0.0) for c in codes))
+        unit.fast = any(qty.get(c, 0.0) >= qty_floor for c in codes)
+        vals = [(contribution_by_code[c], max(pred.get(c, 0.0), 1.0)) for c in codes if contribution_by_code.get(c) is not None]
+        if vals:
+            unit.contribution = float(sum(v * w for v, w in vals) / sum(w for _v, w in vals))
+        return unit
+
     sel = selection if not selection.empty else pd.DataFrame(columns=["Saran", "Kode produk", "Biaya iklan/hari", "Omzet iklan/hari", "_unit", "Produk"])
     claimed = set(sel["Kode produk"].astype(str))
     out: list[Unit] = []
@@ -954,6 +983,7 @@ def restructure(units: list[Unit], selection: pd.DataFrame, products: pd.DataFra
                     parts.append(f"keluarkan {dup} produk yang sudah diiklankan di iklan lain sebelum mengaktifkan")
                 nu.origin = "; ".join(parts)
         nu.demand = float(sum(pred.get(c, 0.0) for c in codes))
+        econ(nu, codes)
         rooms = [room[c] for c in codes if c in room and pd.notna(room[c])]
         if rooms:
             nu.stock_room = float(sum(rooms))
@@ -975,6 +1005,7 @@ def restructure(units: list[Unit], selection: pd.DataFrame, products: pd.DataFra
                         cost, sales, a, b, 0.35, [code], [], float(contrib) if contrib is not None else float("nan"),
                         float(room[code]) if code in room and pd.notna(room[code]) else float("inf"),
                         demand=pred.get(code, 0.0), origin=parent.nama if parent else ""))
+        econ(out[-1], [code])
     roas0 = max(_store_roas(units) * 0.7, 1.0)
     for r in sel.loc[sel["Saran"] == "Buat iklan tunggal"].itertuples(index=False):
         code = str(r[sel.columns.get_loc("Kode produk")])
@@ -982,6 +1013,7 @@ def restructure(units: list[Unit], selection: pd.DataFrame, products: pd.DataFra
         out.append(Unit(f"baru:{code}", str(r[sel.columns.get_loc("Produk")]), "Produk tunggal (baru)", "Usulan", "GMV Max ROAS", 0.0, 0.0,
                         roas0 * NEW_DAILY / math.log(2), NEW_DAILY, 0.5, [code], [], float(contrib) if contrib is not None else float("nan"),
                         float(room[code]) if code in room and pd.notna(room[code]) else float("inf"), demand=pred.get(code, 0.0)))
+        econ(out[-1], [code])
     return out
 
 
