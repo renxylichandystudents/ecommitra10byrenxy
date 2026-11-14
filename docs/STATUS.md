@@ -769,3 +769,11 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Exposure media sosial: kalender per bulan, riwayat, potensi viral
 - Periode bawaan = bulan berjalan dari tanggal 1 s.d. akhir bulan (picker boleh mulai tanggal 1); konten baru dijadwalkan mulai hari ini, tanggal lewat tampil abu-abu "lewat". Campaign tersimpan menampilkan kalendernya sendiri; campaign selesai/dihentikan bisa dibuka di expander "📅 Konten yang sudah diset sebelumnya".
 - Segmen baru 🚀 Potensi viral (`exposure.viral_score`: demo visual, before–after, masalah→solusi, fitur unik dari nama+deskripsi, + harga terjangkau). Skor: 30% prediksi omzet, 15% nilai produk (harga, video di-crawl jangka panjang), 15% viral, 15% margin, 15% tren, 5% stok, 5% bonus naik/stok lebih/viral.
+
+## 2026-11-14 — Ranking kategori: KPI per periode (bulan/kuartal/semester/tahun), Home & Living + Elektronik
+- Menu Rekomendasi › Ranking kategori kini 3 bagian: **Rekap KPI ranking**, **Peluang Top 10 per produk**, **Unggah & periode**.
+- `src/core/ranking_kpi.py`: periode (`2026-07`, `2026-Q3`, `2026-S2`, `2026`), baca file ranking (ekspor Shopee 2 baris per produk atau tabel biasa, satu/banyak sheet; kolom Kategori, Dasar Ranking, Sales, Qty, Views, Periode opsional), ringkasan per kategori, rekap, catatan analisa.
+- Simpan per periode di kv `ranking-kompetitor:data:<periode>` + indeks `ranking-kompetitor:index`; daftar kategori dipantau di `ranking-kompetitor:kategori` (bisa diubah). Unggahan ke periode yang sudah ada: tambah (kategori lain) atau ganti.
+- Data Kompetitor lama (belum berperiode) bisa disimpan sebagai periode (bawaan Q3) dengan pemetaan daftar → kategori Shopee (tebakan dari kata kunci).
+- Rekap: Home & Living semua kategori (yang belum ada data tampil "–"), Elektronik hanya kategori yang memuat produk kita. Periode tanpa unggahan langsung disusun dari periode di dalamnya (peringkat terakhir, terbaik, rata-rata, cakupan bulan). Sales/Qty/Views kita dibanding peringkat #10.
+- Peluang Top 10 bisa memakai periode mana pun (atau data lama); kategori & kelompok mengikuti pemetaan.
