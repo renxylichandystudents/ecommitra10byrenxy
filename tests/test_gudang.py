@@ -116,7 +116,7 @@ def test_restock_advice_counts_to_and_tr_from_other_store():
     repl.loc[repl["sku"] == "300002038", ["out_po", "out_tr", "out_to", "out_tr_lain"]] = [2, 1, 3, 1]
     items = gudang.build_view(_locations(), repl, stock={"300002038": 0.0})["items"].set_index("sku")
     assert items.loc["300002038", "di_jalan"] == 7
-    assert "Isi ulang ±3 unit (s.d. Max 10, 7 di jalan)" in items.loc["300002038", "saran"]
+    assert "Isi ulang ±3 unit (s.d. Max 10, dikurangi outstanding 7)" in items.loc["300002038", "saran"]
     # Snapshot lama tanpa kolom TO & TR toko lain tetap terbaca (dihitung 0).
     old = repl.drop(columns=["out_to", "out_tr_lain"])
     items = gudang.build_view(_locations(), old, stock={"300002038": 0.0})["items"].set_index("sku")
