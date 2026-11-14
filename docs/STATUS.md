@@ -720,3 +720,10 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Rekomendasi sistem: opsi A (laju sekarang), B (maksimal yang efisien, bila beda), H (hemat biaya, tiap Rp 1 kembali ≥ Rp 10), C (100% target, hanya bila masih efisien). Bila 100% target melebihi batas efisien, tampil kotak 🎯 dengan kekurangan dan cara lain menutupnya. Kolom Biaya efektif & Hemat.
 - `min_marginal` diteruskan ke build_plan/ramp/_option_plan/_fixed_plan; rencana tersimpan menyimpan `biaya_harian_rencana` (jalur biaya pantauan) dan `efisiensi_min`; Pantau rencana menghitung proyeksi dengan cara yang sama seperti saat disimpan.
 - Data 12 Nov: batas efisien ±Rp 425 jt/bulan (±Rp 17 jt/hari); 100% target menurut kurva toko butuh ±Rp 1,22 M → tidak efisien lewat iklan saja.
+
+## 2026-11-14 — Iklan: syarat minimum Shopee 3% & ekonomi opsi
+- Pemilihan produk tetap ATAU (sales besar → kejar target; qty laku banyak → kejar invoice/performa toko).
+- `ads_month.SHOPEE_MIN_AD_PCT = 3` (% sales bruto). Opsi baru **M · Minimum 3% sales bruto** = 3% × proyeksi tanpa perubahan × rasio bruto/bersih (≥ yang sudah terpakai).
+- Tiap opsi & Fitur khusus menampilkan biaya iklan % sales bruto proyeksi (✓/⚠️ syarat 3%) dan estimasi kontribusi sesudah iklan (sales bersih × kontribusi sebelum iklan dari file margin − biaya iklan). Peringatan bila laju biaya di luar riwayat kurva toko.
+- Kotak 💰 Titik impas iklan: marginal kurva toko (data 12 Nov ±Rp 2,8 sales bersih per Rp 1) → kontribusi impas ≥ 35%, kontribusi produk terprediksi −8,5%.
+- Opsi utama: sales tertinggi, kecuali opsi lain kalah ≤ 0,5% target dengan biaya lebih kecil.

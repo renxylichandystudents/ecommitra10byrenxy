@@ -63,3 +63,15 @@ class PlanTrackTest(unittest.TestCase):
     def test_waiting_for_new_data(self):
         from src.core.ads_month import plan_track
         self.assertEqual(plan_track(self.s, mtd=1_600.0, last=date(2026, 11, 13), spent=130.0, periode="2026-11")["status"], "Menunggu data")
+
+
+class RatioBudgetTest(unittest.TestCase):
+    def test_budget_hits_three_percent_of_gross(self):
+        from src.core.ads_month import budget_for_ratio, store_contribution_rate
+        project = lambda b: (1_000_000_000 + 2 * b, b)  # noqa: E731
+        b = budget_for_ratio(project, pct=3.0, gross_ratio=1.5, spent=10_000_000, start=100_000_000)
+        net, _ = project(b)
+        self.assertAlmostEqual(b / (net * 1.5) * 100, 3.0, delta=0.05)
+        self.assertEqual(budget_for_ratio(project, pct=3.0, gross_ratio=1.5, spent=90_000_000, start=1), 90_000_000)
+        self.assertAlmostEqual(store_contribution_rate({"a": 0.1, "b": -0.2}, {"a": 3, "b": 1}), 0.025)
+        self.assertIsNone(store_contribution_rate({}, {}))

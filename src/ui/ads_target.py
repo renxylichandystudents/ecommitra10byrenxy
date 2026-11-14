@@ -650,7 +650,8 @@ def _round_m(value: float) -> float:
 
 
 def _rec_options(*, target: float, projection: float, spent: float, cost_now: float, days_left: int, month_days: int, run_days: int, pace_total: float,
-                 curve, spent_daily: float, best_roas, option, project, units, factor: float, month_name: str) -> tuple[list[dict], dict]:
+                 curve, spent_daily: float, best_roas, option, project, units, factor: float, month_name: str,
+                 economics, ratio_budget) -> tuple[list[dict], dict]:
     """Opsi rekomendasi sistem (semua memakai biaya yang benar-benar bisa dibelanjakan efisien):
     A laju sekarang, B maksimal yang efisien, H hemat biaya (tiap Rp 1 kembali ≥ Rp 10), C budget 100% target bila masih efisien.
     Mengembalikan (opsi, info kebutuhan 100% target)."""
@@ -659,6 +660,7 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
     gap = target - projection
     out: list[dict] = []
     strict = 2 * A.MIN_MARGINAL
+    res_share = max(days_left, 0) / max(month_days, 1)
 
     def make(name: str, budget: float, action: str, extra_lines: list[str] | None = None, *, mm: float = A.MIN_MARGINAL) -> dict:
         daily = max(budget - spent, 0.0) / max(days_left, 1)
@@ -675,8 +677,23 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
                  f"Hasil: proyeksi sales bersih akhir bulan <b>{fmt_idr(final)}</b> ({fmt_pct(reach, 1)} target), efek budget iklan {_signed(extra)} "
                  "dibanding iklan berjalan dengan laju rata-rata bulan ini" + (" (kurva respons toko)." if by_curve else " (rencana per iklan)."),
                  f"Yang dilakukan: {action}", *(extra_lines or [])]
+        if curve is not None and by_curve:
+            pace = max(effective - spent, 0.0) / max(res_share, 1e-9)
+            lo_c, hi_c = min(p_[1] for p_ in curve.points), max(p_[1] for p_ in curve.points)
+            if pace < lo_c * 0.8 or pace > hi_c * 1.3:
+                lines.append(f"⚠️ Laju biaya ±{fmt_idr(pace)}/bulan di luar riwayat ({fmt_idr(lo_c)}–{fmt_idr(hi_c)}): proyeksi kurva kurang andal, "
+                             "ubah bertahap dan pantau tiap Senin.")
+        ratio, profit = economics(final, effective)
+        econ = []
+        if ratio == ratio:
+            econ.append(f"biaya iklan ≈ <b>{fmt_pct(ratio, 1)}</b> sales bruto sebulan "
+                        + ("(✓ memenuhi syarat minimum Shopee 3%)" if ratio >= M.SHOPEE_MIN_AD_PCT - 0.05 else "(⚠️ di bawah syarat minimum Shopee 3%)"))
+        if profit is not None:
+            econ.append(f"estimasi kontribusi sesudah iklan {_signed(profit)}")
+        if econ:
+            lines.insert(3, "Ekonomi: " + " · ".join(econ) + ".")
         return {"nama": name, "budget": budget, "harian": daily, "roas": roas, "proyeksi": final, "tambahan": extra, "aksi": action, "rincian": lines,
-                "utama": False, "efektif": effective, "mm": mm}
+                "utama": False, "efektif": effective, "mm": mm, "rasio": ratio, "laba": profit}
 
     out.append(make(f"A · Pertahankan iklan berjalan sekarang ({fmt_idr(cost_now)}/hari)", max(pace_total, spent),
                     "budget harian iklan tetap seperti sekarang; rapikan pemilihan produk & Target ROAS sesuai tabel di bawah."))
@@ -697,6 +714,11 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
         out.append(make(f"H · Hemat biaya (tiap Rp 1 kembali ≥ Rp {fmt_num(strict, 0)})", lean_total,
                         "pangkas/jeda iklan dan produk yang hasilnya rendah, pertahankan hanya iklan paling produktif.",
                         ["Opsi ini mengutamakan penghematan: biaya turun, sales sedikit berkurang dibanding opsi lain."], mm=strict))
+    min_total = ratio_budget()
+    if min_total is not None and min_total < min(o["efektif"] for o in out) * 0.98:
+        out.append(make(f"M · Minimum {fmt_num(M.SHOPEE_MIN_AD_PCT, 0)}% sales bruto (syarat Shopee)", min_total,
+                        "turunkan budget iklan ke batas minimum agar benefit Shopee tetap didapat; budget hanya untuk iklan dengan ROAS tertinggi.",
+                        ["Opsi paling hemat yang masih memenuhi syarat minimum biaya iklan Shopee: biaya turun paling banyak, sales ikut turun sesuai kurva toko."]))
     info = {"need": need_total, "max_efisien": max(max(o["efektif"] for o in out), spent + absorbed * days_left), "gap": gap, "absorbed": absorbed}
     if need_total is not None and gap > 0 and need_total <= info["max_efisien"] * 1.02:
         lines = []
@@ -711,8 +733,9 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
         ok = [o for o in out if o["proyeksi"] >= target - 1]
         pick = min(ok, key=lambda o: o["efektif"]) if ok else max(out, key=lambda o: o["proyeksi"])
     else:
+        # Sales tertinggi, tapi bila opsi lain hanya kalah ≤ 0,5% target dengan biaya lebih kecil, pilih yang lebih hemat.
         best = max(o["proyeksi"] for o in out)
-        pick = min((o for o in out if o["proyeksi"] >= best - max(0.002 * target, 1.0)), key=lambda o: o["efektif"])
+        pick = min((o for o in out if o["proyeksi"] >= best - max(0.005 * target, 1.0)), key=lambda o: o["efektif"])
     pick["utama"] = True
     return out, info
 
@@ -1000,6 +1023,23 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         daily = max(month_budget - spent, 0.0) / days_left
         extra = option(roas, daily, target - projection, mm)["omzet_tambahan"] * factor if base_units and daily > 0 else 0.0
         return projection + extra, extra, False, effective
+
+    gross = float(outlook.get("mtd_bruto") or 0.0)
+    gross_ratio = gross / mtd if mtd > 0 and gross > 0 else None
+    weights = products.set_index("product_code")["omzet_harian"].to_dict() if isinstance(products, pd.DataFrame) and not products.empty else {}
+    contrib_rate = M.store_contribution_rate(contribution or {}, weights)
+
+    def economics(final: float, effective: float) -> tuple[float, float | None]:
+        """(biaya iklan sebulan % sales bruto proyeksi, estimasi kontribusi sesudah iklan = sales bersih × kontribusi sebelum iklan − biaya iklan)."""
+        ratio = effective / (final * gross_ratio) * 100 if gross_ratio and final > 0 else float("nan")
+        profit = final * contrib_rate - effective if contrib_rate is not None else None
+        return ratio, profit
+
+    def ratio_budget() -> float | None:
+        """Budget sebulan = 3% sales bruto proyeksi tanpa perubahan (syarat minimum Shopee), tidak kurang dari yang sudah terpakai."""
+        if not gross_ratio or not base_units:
+            return None
+        return float(math.ceil(max(M.SHOPEE_MIN_AD_PCT / 100 * projection * gross_ratio, spent) / 1_000_000) * 1_000_000)
 
     if view == VIEW_TRACK and cur is not None:
         _track_detail(cur, track, today=today)
@@ -1319,6 +1359,17 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             st.markdown(f"<div style='background:{UP if ok else DOWN};color:#fff;border-radius:10px;padding:.5rem .8rem;font-weight:700;margin-top:.4rem'>"
                         + (f"Dengan setelan ini target {month_name} tercapai ({fmt_pct(reach, 1)})." if ok else
                            f"Dengan setelan ini proyeksi {fmt_pct(reach, 1)} target · kurang {fmt_idr(target - final)}.") + "</div>", unsafe_allow_html=True)
+            ratio, profit = economics(final, effective)
+            econ = []
+            if ratio == ratio:
+                okr = ratio >= M.SHOPEE_MIN_AD_PCT - 0.05
+                econ.append(f"Biaya iklan sebulan ≈ <b style='color:{UP if okr else DOWN}'>{fmt_pct(ratio, 1)}</b> sales bruto proyeksi "
+                            + ("(✓ memenuhi syarat minimum Shopee 3%)" if okr else "(⚠️ di bawah syarat minimum Shopee 3%: benefit program bisa hilang)"))
+            if profit is not None:
+                econ.append(f"estimasi kontribusi sesudah iklan <b style='color:{_tone(profit >= 0)}'>{_signed(profit)}</b> "
+                            f"(kontribusi sebelum iklan {fmt_pct(contrib_rate * 100, 1)} dari file margin)")
+            if econ:
+                st.markdown("<div class='field-hint' style='margin-top:.4rem'>" + " · ".join(econ) + "</div>", unsafe_allow_html=True)
 
         _step(1, "Evaluasi budget Anda", f"· budget sebulan vs biaya iklan yang sudah keluar 1–{last.day} {month_label(periode)}")
         k = st.columns(4)
@@ -1397,6 +1448,16 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         notes.append("Riwayat iklan bulanan belum cukup (minimal 3 bulan penuh) untuk kurva respons toko: proyeksi opsi memakai rencana per iklan.")
     notes.append(f"Kesimpulan: {'target sudah terkejar dengan laju sekarang — opsi di bawah mencari budget paling hemat' if gap <= 0 else f'perlu tambahan {fmt_idr(gap)} sales bersih dalam {days_left} hari ({fmt_idr(gap / days_left)}/hari)'}.")
     st.markdown("<div class='field-hint'>" + "<br>".join(notes) + "</div>", unsafe_allow_html=True)
+    if curve is not None and contrib_rate is not None:
+        m_now = curve.marginal(cost_now * month_days)
+        need_rate = 1 / m_now if m_now > 0 else float("inf")
+        if contrib_rate < need_rate:
+            _box("💰 Titik impas iklan",
+                 f"Pada laju sekarang, tambahan Rp 1 iklan menambah ±Rp {fmt_num(m_now, 1)} sales bersih. Agar tambahan itu tidak menambah rugi, kontribusi "
+                 f"produk (margin kotor − potongan Shopee, sebelum iklan) perlu ≥ <b>{fmt_pct(need_rate * 100, 0)}</b>; rata-rata produk yang diprediksi "
+                 f"terjual sekarang <b>{fmt_pct(contrib_rate * 100, 1)}</b>. Artinya menaikkan budget mengejar target menambah sales sekaligus menambah rugi, "
+                 "dan menurunkan budget mengurangi rugi sekaligus sales. Pilih opsi sesuai prioritas bulan ini, iklankan produk bermargin positif lebih dulu, "
+                 "dan perbaiki harga produk yang marginnya minus (lihat catatan 'margin minus' di tabel).", "#b45309")
     if not has_ads or not units:
         st.info("Laporan iklan (grup / keseluruhan) belum diunggah atau tidak ada iklan produk tunggal & grup: opsi iklan butuh riwayat biaya & omzet per iklan.")
         return
@@ -1405,13 +1466,14 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     with st.spinner("Menghitung opsi..."):
         opts, need_info = _rec_options(target=target, projection=projection, spent=spent, cost_now=cost_now, days_left=days_left, month_days=month_days, run_days=run_days,
                             pace_total=pace_total, curve=curve, spent_daily=spent_daily, best_roas=best_roas, option=option, project=project, units=base_units,
-                            factor=factor, month_name=month_name)
+                            factor=factor, month_name=month_name, economics=economics, ratio_budget=ratio_budget)
     table_opts = pd.DataFrame([{"Opsi": o["nama"], "Budget sebulan": o["budget"], "Biaya efektif sebulan": o["efektif"], "Hemat": max(o["budget"] - o["efektif"], 0.0),
                                 "Sisa/hari": o["harian"], "Target ROAS": o["roas"],
                                 "Proyeksi sales bersih akhir bulan": o["proyeksi"], "% target": o["proyeksi"] / target * 100, "Efek budget iklan": o["tambahan"],
+                                "Biaya iklan % sales bruto": o["rasio"], "Estimasi kontribusi": o["laba"],
                                 "Yang dilakukan": o["aksi"]} for o in opts])
     show_table(table_opts, kinds={"Budget sebulan": "money", "Biaya efektif sebulan": "money", "Hemat": "money", "Sisa/hari": "money", "Target ROAS": "dec", "Proyeksi sales bersih akhir bulan": "money", "% target": "pct",
-                                  "Efek budget iklan": "money"},
+                                  "Efek budget iklan": "money", "Biaya iklan % sales bruto": "pct", "Estimasi kontribusi": "money"},
                column_config={"Opsi": st.column_config.TextColumn(width="medium"), "Yang dilakukan": st.column_config.TextColumn(width="large")})
     top = max(opts, key=lambda o: o["proyeksi"])
     if need_info["gap"] > 0 and top["proyeksi"] < target - 1:
