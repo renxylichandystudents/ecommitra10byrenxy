@@ -702,3 +702,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Iklan: budget kelipatan Rp 25 rb & sel kosong "–"
 - `ads_strategy.round_budget`: budget harian usulan per iklan (setiap rencana mingguan) dibulatkan ke kelipatan Rp 25.000 terdekat (min. Rp 25 rb), tetap dalam batas naik 2× / turun ½.
 - `show_table(dash_missing=True)`: kolom angka yang punya sel kosong ditampilkan sebagai teks berformat dengan "–" (Streamlit 1.50 menampilkan NaN angka sebagai "None" walau Styler na_rep). Dipakai semua tabel halaman Iklan.
+
+## 2026-11-14 — Iklan: biaya iklan % sales bruto, tabel rincian proyeksi dirapikan
+- `month_outlook` mengembalikan `mtd_bruto` (sales bruto `order_metrics`). Kartu Fitur khusus "Biaya iklan % sales bersih · bruto" (data 12 Nov: 7,9% · 5,3%); Rekomendasi › kartu Biaya iklan terpakai juga menampilkan keduanya.
+- Tabel rincian proyeksi: row_height 35, lebar kolom tetap, keterangan dipersingkat.

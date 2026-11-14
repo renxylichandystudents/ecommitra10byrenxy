@@ -1182,8 +1182,11 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         card(k[2], "Sisa per hari", fmt_idr(budget_daily), hint=f"{days_left} hari tersisa · iklan berjalan sekarang {fmt_idr(cost_now)}/hari "
              + (f"(<b style='color:{UP}'>+{fmt_pct((budget_daily / cost_now - 1) * 100, 0)}</b>)" if cost_now and budget_daily > cost_now * 1.01 else
                 f"(<b style='color:{DOWN}'>−{fmt_pct((1 - budget_daily / cost_now) * 100, 0)}</b>)" if cost_now and budget_daily < cost_now * 0.99 else ""))
-        card(k[3], "Biaya iklan % sales bersih", fmt_pct(spent / mtd * 100, 1) if mtd > 0 else "–",
-             hint=f"biaya iklan terpakai ÷ sales bersih toko s.d. {fmt_date(last)} {fmt_idr(mtd)} (TACoS: termasuk penjualan non-iklan; makin kecil makin hemat)")
+        gross = float(outlook.get("mtd_bruto") or 0.0)
+        card(k[3], "Biaya iklan % sales bersih · bruto",
+             (fmt_pct(spent / mtd * 100, 1) if mtd > 0 else "–") + " · " + (fmt_pct(spent / gross * 100, 1) if gross > 0 else "–"),
+             hint=f"s.d. {fmt_date(last)}: sales bersih {fmt_idr(mtd)} · sales bruto {fmt_idr(gross)}. Bruto = semua pesanan masuk (termasuk batal, Belum Bayar, retur) "
+                    "yang sudah ikut menyerap biaya iklan; % bersih lebih tinggi karena sebagian pesanan itu tidak jadi uang.")
         if spent > month_budget:
             _box("Budget sebulan sudah terlampaui", f"Biaya iklan yang sudah keluar {fmt_idr(spent)} melebihi setelan {fmt_idr(month_budget)} "
                  f"({fmt_idr(spent - month_budget)}). Sisa budget dihitung 0: rencana di bawah menjeda iklan dan proyeksi turun. Naikkan budget sebulan bila iklan tetap ingin berjalan.", DOWN)
@@ -1196,17 +1199,16 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             {"Komponen": f"Aktual sales bersih 1–{last.day} {month_label(periode)}", "Nilai": mtd,
              "Keterangan": "sudah terjadi (data pesanan)"},
             {"Komponen": f"Prediksi sales bersih {rest_from} – {fmt_date(month_end)}", "Nilai": projection - mtd,
-             "Keterangan": f"{days_left} hari, bila iklan tetap jalan dengan laju rata-rata 1–{last.day} ({fmt_idr(base_daily)}/hari); dari model prediksi"},
+             "Keterangan": f"{days_left} hari, iklan tetap {fmt_idr(base_daily)}/hari (rata-rata 1–{last.day}); model prediksi"},
             {"Komponen": "Efek budget iklan setelan", "Nilai": extra,
-             "Keterangan": (f"sisa budget {fmt_idr(budget_daily)}/hari dibanding {fmt_idr(base_daily)}/hari; "
-                            + ("kurva respons toko: tambahan biaya iklan → tambahan sales bersih toko, makin kecil saat budget makin besar"
-                               if by_curve else "dari rencana per iklan"))},
+             "Keterangan": f"sisa budget {fmt_idr(budget_daily)}/hari vs {fmt_idr(base_daily)}/hari · " + ("kurva respons toko" if by_curve else "rencana per iklan")},
             {"Komponen": "Proyeksi sales bersih akhir bulan", "Nilai": final, "Keterangan": f"{fmt_pct(reach, 1)} target"},
             {"Komponen": f"Target {month_label(periode)}", "Nilai": target, "Keterangan": "Upload data › Target sales bulanan" if target == goals.target_sales else "diisi di setelan"},
             {"Komponen": "Kurang dari target" if final < target else "Lebih dari target", "Nilai": abs(target - final), "Keterangan": ""},
         ])
-        show_table(steps_tbl, kinds={"Nilai": "money"}, bold_label=("Proyeksi sales bersih akhir bulan",),
-                   column_config={"Komponen": st.column_config.TextColumn(width="medium"), "Keterangan": st.column_config.TextColumn(width="large")})
+        show_table(steps_tbl, kinds={"Nilai": "money"}, bold_label=("Proyeksi sales bersih akhir bulan",), row_height=35,
+                   column_config={"Komponen": st.column_config.TextColumn(width=300), "Nilai": st.column_config.Column(width=160),
+                                  "Keterangan": st.column_config.TextColumn(width=760)})
         st.caption("Cara membaca: proyeksi = aktual + prediksi sisa bulan + efek budget iklan. Prediksi sisa bulan sudah memuat iklan pada laju rata-rata bulan ini, "
                    "jadi efek budget hanya mengukur selisihnya: positif bila sisa budget per hari lebih besar dari laju itu (sales bertambah), "
                    "negatif bila lebih kecil (iklan dikurangi, sebagian sales yang biasa datang dari iklan hilang).")
@@ -1228,7 +1230,9 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                                                         f"pada {fmt_pct(last.day / month_days * 100, 0)} hari")
     card(k[2], "Proyeksi tanpa perubahan", fmt_idr(projection), hint=f"aktual + prediksi sisa bulan dengan laju iklan rata-rata {fmt_idr(spent_daily)}/hari · <b style='color:{_tone(gap <= 0)}'>{fmt_pct(projection / target * 100, 1)}</b> target · "
                                                                       + (f"kurang {fmt_idr(gap)}" if gap > 0 else f"lebih {fmt_idr(-gap)}"))
-    card(k[3], "Biaya iklan terpakai", fmt_idr(spent), hint=(f"{fmt_idr(spent_daily)}/hari · omzet diklaim iklan {fmt_idr(spend['omzet'])} "
+    gross = float(outlook.get("mtd_bruto") or 0.0)
+    card(k[3], "Biaya iklan terpakai", fmt_idr(spent), hint=(f"{fmt_idr(spent_daily)}/hari · {fmt_pct(spent / mtd * 100 if mtd else 0, 1)} sales bersih · "
+                                                             f"{fmt_pct(spent / gross * 100 if gross else 0, 1)} sales bruto · omzet diklaim iklan {fmt_idr(spend['omzet'])} "
                                                              f"(ROAS {fmt_num(spend['omzet'] / spent if spent else 0, 1)})" if spent_days else "laporan iklan bulan ini belum ada"))
     notes = [f"Iklan berjalan sekarang {fmt_num(len(running))} iklan, {fmt_idr(cost_now)}/hari, ROAS {fmt_num(sales_now / cost_now if cost_now else 0, 1)}; "
              f"bila diteruskan, biaya iklan sebulan ≈ {fmt_idr(pace_total)}."]

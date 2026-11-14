@@ -103,15 +103,16 @@ def month_outlook(orders: pd.DataFrame | None, features, ref: date | None = None
     else:
         done = month_days
     last = first + timedelta(days=max(done, 1) - 1)
-    mtd, product, factor = 0.0, 0.0, 1.0
+    mtd, product, factor, mtd_gross = 0.0, 0.0, 1.0, 0.0
     if orders is not None and not orders.empty and done > 0:
         lines = normalize_lines(orders)
-        mtd = float(order_metrics(lines, first, last, normalized=True)["sales_bersih"])
+        _m = order_metrics(lines, first, last, normalized=True)
+        mtd, mtd_gross = float(_m["sales_bersih"]), float(_m["sales_bruto"])
         product = float(net_sku_sales(lines, first, last, normalized=True)["sales"].sum())
         if product > 0 and mtd > 0:
             factor = float(min(max(mtd / product, 0.5), 1.2))
     if not running:
-        return {"last": last, "running": False, "mtd": mtd, "mtd_produk": product, "faktor": factor, "rest": 0, "month_days": month_days,
+        return {"last": last, "running": False, "mtd": mtd, "mtd_bruto": mtd_gross, "mtd_produk": product, "faktor": factor, "rest": 0, "month_days": month_days,
                 "pred_daily": 0.0, "projection": mtd, "periode": T.month_key(first)}
 
     rest = month_days - done
@@ -144,7 +145,7 @@ def month_outlook(orders: pd.DataFrame | None, features, ref: date | None = None
             pred_daily = mtd / done
         projection = mtd + pred_daily * rest
     return {
-        "last": last, "running": True, "mtd": mtd, "mtd_produk": product, "faktor": factor, "rest": rest, "month_days": month_days,
+        "last": last, "running": True, "mtd": mtd, "mtd_bruto": mtd_gross, "mtd_produk": product, "faktor": factor, "rest": rest, "month_days": month_days,
         "pred_daily": pred_daily, "projection": projection, "periode": T.month_key(first),
     }
 
