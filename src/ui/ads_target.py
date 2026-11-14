@@ -1226,7 +1226,9 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 ("Rencana per iklan", "sisa budget dibagi ke iklan dengan kurva tiap iklan (omzet diklaim Shopee), dibatasi stok dan batas naik 2× per minggu; "
                                       "dipakai untuk Target ROAS Shopee dan budget per iklan, bukan untuk proyeksi target"),
                 ("Stok", "tambahan omzet tiap iklan maks. ruang stok produknya sampai akhir bulan (stok − prediksi − SS); iklan yang tertahan stok ditandai untuk restock"),
-                ("Margin", "tidak membatasi rencana; tampil sebagai catatan per iklan"),
+                ("Margin", "ikut menentukan prioritas budget: tambahan omzet dinilai × bobot margin (margin positif 1,0–1,6; margin tidak diketahui 1,0; "
+                       "margin minus 0,85 bila produk laku banyak, 0,6 bila tidak). Iklan margin minus tetap boleh untuk mengejar sales/qty, tetapi dipangkas "
+                       "lebih dulu dan butuh hasil lebih tinggi (batas efisiensi Rp 5 ÷ bobot)"),
                 ("Proyeksi tanpa perubahan", "sales bersih aktual s.d. hari penuh terakhir + prediksi per tanggal berpola untuk sisa bulan "
                                              "(sama dengan Pantauan harian dan Kalkulator biaya)"),
             ])
