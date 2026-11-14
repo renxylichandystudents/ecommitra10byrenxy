@@ -711,3 +711,6 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Daftar pengecualian (`kv_setting` kunci `iklan-kecualikan`: kode produk + kata kunci nama/merek), diedit di langkah Pemilihan produk. Produk di daftar → saran "Dikecualikan pengguna" (keluar dari grup / iklan tunggal dijeda) dan tidak diusulkan iklan baru. Kata kunci "dextone" = 17 produk.
 - `allocate_target(min_marginal=5)`: iklan yang Rp terakhirnya kembali < Rp 5 omzet iklan dipangkas/dijeda; tambahan budget hanya bila tiap Rp 1 kembali ≥ Rp 5. Data 12 Nov, sisa ±Rp 21 jt/hari: biaya rencana −Rp 63 jt, ROAS 13,7 → 15,7 (sisa budget yang tidak efisien tidak dibelanjakan).
 - Tabel Pemilihan produk & Budget per iklan: tinggi baris 35 px.
+
+## 2026-11-14 — Pengecualian produk: centang + pencarian tepat
+- Multiselect diganti kotak Cari (semua kata harus ada di nama/kode; "lem dextone silicon" → 8 produk) + tabel centang (data_editor CheckboxColumn), tombol Centang semua hasil / Hapus centang hasil, kata kunci otomatis opsional, tombol Simpan aktif hanya bila ada perubahan.
