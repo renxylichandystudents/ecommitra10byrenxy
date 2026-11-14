@@ -486,7 +486,8 @@ def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.D
         if u.locked:
             notes.append({"Jeda sampai restock": "stok 0: jeda sampai barang masuk (lihat Pemilihan produk)",
                           "Pindahkan ke grup": "produk dipindah ke grup (lihat Pemilihan produk)",
-                          "Keluarkan dari grup": "produk sudah diiklankan di iklan lain (lihat Pemilihan produk)"}.get(u.origin, f"{u.origin} (lihat Pemilihan produk)"))
+                          "Keluarkan dari grup": "produk sudah diiklankan di iklan lain (lihat Pemilihan produk)",
+                          SMALL_SALES: "sales produk kecil: iklan dihentikan, budget dipindah ke produk penghasil sales besar (lihat Pemilihan produk)"}.get(u.origin, f"{u.origin} (lihat Pemilihan produk)"))
         elif act in {"Turunkan budget", "Jeda"}:
             notes.append(f"tiap Rp 1 terakhir hanya kembali Rp {u.marginal(new):.1f}: dananya dipindah ke iklan yang lebih efektif".replace(".", ","))
         elif act in {"Naikkan budget", "Aktifkan kembali", "Buat iklan baru", "Pisahkan jadi iklan tunggal"}:
@@ -666,15 +667,40 @@ def group_hygiene(members: pd.DataFrame, units: list[Unit], contribution_by_code
     return frame.sort_values("Biaya/hari", ascending=False).reset_index(drop=True)
 
 
+SMALL_SALES = "Stop iklan · sales kecil"
 SELECTION_ORDER = ("Buat iklan tunggal", "Jadikan iklan tunggal", "Pertahankan iklan tunggal", "Tambahkan ke grup", "Pertahankan di grup",
-                   "Pindahkan ke grup", "Keluarkan dari grup", "Jeda sampai restock", "Sudah di iklan lain")
-MOVE_OUT = ("Keluarkan dari grup", "Jadikan iklan tunggal", "Jeda sampai restock", "Pindahkan ke grup", "Sudah di iklan lain")
+                   "Pindahkan ke grup", "Keluarkan dari grup", SMALL_SALES, "Jeda sampai restock", "Sudah di iklan lain")
+MOVE_OUT = ("Keluarkan dari grup", "Jadikan iklan tunggal", "Jeda sampai restock", "Pindahkan ke grup", "Sudah di iklan lain", SMALL_SALES)
+SALES_PARETO = 0.95  # produk "sales besar" = produk teratas yang bersama-sama membentuk 95% prediksi sales toko
+MIN_QTY_DAY = 1.0    # produk "qty laku banyak" = prediksi ≥ 1 unit/hari (atau persentil 90 bila lebih tinggi)
+
+
+def potential_floors(products: pd.DataFrame, *, pareto: float = SALES_PARETO, min_qty: float = MIN_QTY_DAY) -> tuple[float, float]:
+    """(batas sales Rp/hari, batas qty unit/hari) untuk layak diiklankan.
+
+    Sales: urutkan prediksi omzet harian per produk dari terbesar; batas = omzet produk terakhir yang masih termasuk
+    `pareto` (mis. 95%) total prediksi omzet toko. Qty: maks(min_qty, persentil 90 prediksi qty harian produk yang laku)."""
+    if products is None or products.empty or "omzet_harian" not in products.columns:
+        return 0.0, float("inf")
+    d = pd.to_numeric(products["omzet_harian"], errors="coerce").fillna(0.0)
+    d = d[d > 0].sort_values(ascending=False)
+    sales_floor = 0.0
+    if not d.empty:
+        cum = d.cumsum() / d.sum()
+        inside = d[cum.shift(fill_value=0.0) < pareto]
+        sales_floor = float(inside.min()) if not inside.empty else 0.0
+    qty_floor = float("inf")
+    if "qty_harian" in products.columns:
+        q = pd.to_numeric(products["qty_harian"], errors="coerce").fillna(0.0)
+        q = q[q > 0]
+        qty_floor = max(min_qty, float(q.quantile(0.9))) if not q.empty else min_qty
+    return sales_floor, qty_floor
 NEW_KINDS = ("Produk tunggal (baru)", "Produk tunggal (dari grup)")
 
 
 def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                       target_roas: float, plan: Plan | None = None, top_single: int = 15, top_group: int = 60,
-                      max_promote: int = 10) -> pd.DataFrame:
+                      max_promote: int = 10, focus: bool = True) -> pd.DataFrame:
     """Pemilihan produk untuk iklan produk tunggal vs iklan grup, per Kode Produk (satu produk = satu iklan).
 
     Dasar: hasil iklan 2 bulan terakhir per produk (biaya, omzet, ROAS, porsi omzet di grup), prediksi omzet harian dari
@@ -687,14 +713,30 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
     - Buat iklan tunggal / Tambahkan ke grup: produk belum diiklankan & stok ada, urut prediksi omzet tertinggi
       (urutan 1..top_single / berikutnya sampai top_group).
     - Jeda sampai restock: produk diiklankan yang stoknya 0.
+    - Stop iklan · sales kecil (focus=True): potensi sales (maks. omzet iklan/hari, prediksi omzet/hari) di bawah batas produk
+      pembentuk 95% sales toko DAN prediksi qty di bawah batas laku banyak (`potential_floors`). Produk belum diiklankan yang
+      tidak lolos batas ini juga tidak diusulkan.
     Kolom `_unit` = kunci iklan asal (kosong untuk produk belum diiklankan); dipakai `restructure`.
     """
     cols = ["Saran", "Produk", "Kode produk", "Iklan sekarang", "Biaya iklan/hari", "Omzet iklan/hari", "ROAS 2 bulan", "Porsi omzet grup",
-            "Prediksi omzet/hari", "Stok", "Alasan", "_unit"]
+            "Prediksi omzet/hari", "Prediksi qty/hari", "Stok", "Alasan", "_unit"]
     target = min(float(target_roas), MAX_SHOPEE_ROAS)
     by_key = {u.key: u for u in units}
     prod = products.set_index("product_code") if not products.empty else pd.DataFrame(columns=["nama", "omzet_harian", "stok_room", "stok"])
     demand = prod["omzet_harian"].fillna(0.0) if "omzet_harian" in prod.columns else pd.Series(dtype=float)
+    qty = prod["qty_harian"].fillna(0.0) if "qty_harian" in prod.columns else pd.Series(dtype=float)
+    sales_floor, qty_floor = potential_floors(products) if focus else (0.0, float("inf"))
+
+    def potential(code: str, ad_omzet: float) -> tuple[bool, float, float]:
+        """(layak diiklankan?, potensi sales Rp/hari, prediksi qty/hari)."""
+        value = max(float(ad_omzet or 0.0), float(demand.get(code, 0.0)) if code in demand.index else 0.0)
+        units_day = float(qty.get(code, 0.0)) if code in qty.index else 0.0
+        return value >= sales_floor or units_day >= qty_floor, value, units_day
+
+    def small_reason(value: float, units_day: float) -> str:
+        return (f"potensi sales kecil (Rp {value:,.0f}/hari, {units_day:.1f} unit/hari) di bawah batas layak iklan "
+                f"(≥ Rp {sales_floor:,.0f}/hari = produk pembentuk 95% sales toko, atau ≥ {qty_floor:.1f} unit/hari): "
+                "budget dipusatkan ke produk penghasil sales besar").replace(",", "#").replace(".", ",").replace("#", ".")
 
     hist = pd.DataFrame(columns=["unit", "product_code", "nama", "biaya", "omzet"])
     if not members.empty:
@@ -771,11 +813,16 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
                 act, reason = "Pindahkan ke grup", [f"ROAS {roas:.1f} < 50% target dan omzet kecil: lebih efisien ditopang produk lain di grup".replace(".", ",")]
             else:
                 act, reason = "Pertahankan iklan tunggal", []
+        if act in ("Pertahankan di grup", "Pertahankan iklan tunggal"):
+            ok, value, units_day = potential(code, r.omzet)
+            if not ok:
+                act, reason = SMALL_SALES, [small_reason(value, units_day)]
         seen.add(code)
         name = str(r.nama) or (str(prod.loc[code, "nama"]) if code in prod.index else code)
         rows.append({"Saran": act, "Produk": name, "Kode produk": code, "Iklan sekarang": label_of(r.unit), "Biaya iklan/hari": r.biaya,
                      "Omzet iklan/hari": r.omzet, "ROAS 2 bulan": roas, "Porsi omzet grup": share * 100 if share == share else np.nan,
-                     "Prediksi omzet/hari": float(demand.get(code, np.nan)) if code in demand.index else np.nan, "Stok": stok,
+                     "Prediksi omzet/hari": float(demand.get(code, np.nan)) if code in demand.index else np.nan,
+                     "Prediksi qty/hari": float(qty.get(code, np.nan)) if code in qty.index else np.nan, "Stok": stok,
                      "Alasan": notes_for(code, reason), "_unit": r.unit})
     advertised = {c for u in units if u.jenis in ("Produk tunggal", "Grup") for c in u.members} | seen
     position = 0
@@ -786,6 +833,8 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
         stok, _room = stock_of(code)
         if stok == stok and stok <= 0:
             continue
+        if not potential(code, 0.0)[0]:
+            continue
         position += 1
         if position <= top_single:
             act, reason = "Buat iklan tunggal", [f"urutan {position} prediksi omzet di antara produk belum diiklankan"]
@@ -795,7 +844,7 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
             break
         rows.append({"Saran": act, "Produk": str(prod.loc[code, "nama"]), "Kode produk": code, "Iklan sekarang": "Belum diiklankan",
                      "Biaya iklan/hari": 0.0, "Omzet iklan/hari": 0.0, "ROAS 2 bulan": np.nan, "Porsi omzet grup": np.nan,
-                     "Prediksi omzet/hari": float(demand[code]), "Stok": stok, "Alasan": notes_for(code, reason), "_unit": ""})
+                     "Prediksi omzet/hari": float(demand[code]), "Prediksi qty/hari": float(qty.get(code, np.nan)) if code in qty.index else np.nan, "Stok": stok, "Alasan": notes_for(code, reason), "_unit": ""})
     frame = pd.DataFrame(rows, columns=cols)
     if frame.empty:
         return frame
@@ -808,7 +857,7 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
 
 
 def _sort_selection(frame: pd.DataFrame) -> pd.DataFrame:
-    removal = frame["Saran"].isin(["Keluarkan dari grup", "Pindahkan ke grup", "Jeda sampai restock", "Sudah di iklan lain"])
+    removal = frame["Saran"].isin(["Keluarkan dari grup", "Pindahkan ke grup", SMALL_SALES, "Jeda sampai restock", "Sudah di iklan lain"])
     value = (frame["Omzet iklan/hari"].fillna(0) + frame["Prediksi omzet/hari"].fillna(0)).where(~removal, frame["Biaya iklan/hari"].fillna(0))
     order = frame["Saran"].map({k: i for i, k in enumerate(SELECTION_ORDER)}).fillna(99)
     return frame.assign(_o=order, _v=value).sort_values(["_o", "_v"], ascending=[True, False]).drop(columns=["_o", "_v"]).reset_index(drop=True)

@@ -118,11 +118,12 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
                 guard = float(r.get("ss", r.get("safety_stock", 0)) or 0)
                 spare = max(stok - float(r.get("pred_harian", 0) or 0) * days_left - (guard if guard == guard else 0.0), 0.0)
                 room[code] = room.get(code, 0.0) + spare * price / max(days_left, 1)
-            rows.append({"product_code": code, "nama": r.get("product_name", ""), "omzet_harian": float(r.get("pred_harian", 0) or 0) * price, "stok": stok})
+            rows.append({"product_code": code, "nama": r.get("product_name", ""), "omzet_harian": float(r.get("pred_harian", 0) or 0) * price,
+                         "qty_harian": float(r.get("pred_harian", 0) or 0), "stok": stok})
     contribution = {c: sum(v * w for v, w in vals) / sum(w for _v, w in vals) for c, vals in contrib.items()}
     A.attach_economics(units, members, contribution, room)
-    products = (pd.DataFrame(rows).groupby(["product_code"], as_index=False).agg(nama=("nama", "first"), omzet_harian=("omzet_harian", "sum"), stok=("stok", lambda v: v.sum(min_count=1)))
-                if rows else pd.DataFrame(columns=["product_code", "nama", "omzet_harian", "stok"]))
+    products = (pd.DataFrame(rows).groupby(["product_code"], as_index=False).agg(nama=("nama", "first"), omzet_harian=("omzet_harian", "sum"), qty_harian=("qty_harian", "sum"), stok=("stok", lambda v: v.sum(min_count=1)))
+                if rows else pd.DataFrame(columns=["product_code", "nama", "omzet_harian", "qty_harian", "stok"]))
     products["stok_room"] = products["product_code"].map(room)
     # Fokus kejar target: hanya iklan produk tunggal & grup; iklan baru diusulkan oleh pemilihan produk (A.build_plan).
     units = [u for u in units if u.jenis in A.TARGET_KINDS]
