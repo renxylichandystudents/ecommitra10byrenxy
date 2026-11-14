@@ -189,7 +189,7 @@ def _is_big(name: str) -> bool:
 
 
 def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | None, fees: pd.DataFrame, md=None, start=None, end=None) -> pd.DataFrame:
-    """Satu baris per SKU yang laku pada periode [start, end] (bawaan 30 hari terakhir): harga akhir rata-rata transaksi, voucher penjual, kategori, iklan, affiliate."""
+    """Satu baris per SKU yang laku pada periode [start, end] (bawaan bulan berjalan s.d. hari penuh terakhir): harga akhir rata-rata transaksi, voucher penjual, kategori, iklan, affiliate."""
     from src.core.gudang import norm_sku
     from src.ui.feature_data import product_frame
 
@@ -528,14 +528,19 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     md = load_margin(features)
     tab_sum, tab_sim, tab_param = st.tabs(["📊 Ringkasan & prioritas", "🧮 Simulasi per SKU", "⚙️ Parameter biaya"])
     start = end = None
-    period_label = "30 hari terakhir"
+    period_label = "bulan berjalan"
     with tab_sum:
         if orders is not None and not orders.empty:
             from src.ui.common import date_range_picker, range_label
 
             stamps = pd.to_datetime(orders["order_time"], errors="coerce").dropna()
+            from src.ui.month_track_view import full_day_cutoff
+
             lo, hi = stamps.min().date(), stamps.max().date()
-            default = (max(lo, hi - pd.Timedelta(days=29).to_pytimedelta()), hi)
+            # Bawaan = periode kartu "aktual" bulan berjalan: tanggal 1 s.d. hari penuh terakhir data (hari data terakhir yang
+            # belum lengkap tidak ikut), sehingga kartu periode terpilih dan kartu bulan berjalan memakai rentang yang sama.
+            cutoff = min(max(full_day_cutoff(stamps.max()), lo), hi)
+            default = (max(lo, cutoff.replace(day=1)), cutoff)
             start, end = date_range_picker(key="calc-cal", lo=lo, hi=hi, default=default, label="Periode analisa")
             period_label = range_label(start, end)
     goals = _goals(features, user_root, orders, end)

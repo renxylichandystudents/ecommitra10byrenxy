@@ -777,3 +777,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Data Kompetitor lama (belum berperiode) bisa disimpan sebagai periode (bawaan Q3) dengan pemetaan daftar → kategori Shopee (tebakan dari kata kunci).
 - Rekap: Home & Living semua kategori (yang belum ada data tampil "–"), Elektronik hanya kategori yang memuat produk kita. Periode tanpa unggahan langsung disusun dari periode di dalamnya (peringkat terakhir, terbaik, rata-rata, cakupan bulan). Sales/Qty/Views kita dibanding peringkat #10.
 - Peluang Top 10 bisa memakai periode mana pun (atau data lama); kategori & kelompok mengikuti pemetaan.
+
+## 2026-11-14 — Kalkulator margin: periode kalender = periode kartu
+- Bawaan "Periode analisa" kini tanggal 1 bulan berjalan s.d. hari penuh terakhir data (sama dengan kartu Sales/Margin bersih aktual), bukan 30 hari terakhir.
+- `date_range_picker`: tanpa pilihan pengguna, kalender mengikuti periode bawaan (ikut bergeser saat data bertambah); pilihan pengguna disimpan sampai diganti.
