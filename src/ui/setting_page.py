@@ -39,6 +39,8 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
         st.warning("Role Anda tidak punya akses ke Setting.")
         st.stop()
     slugs = [slug for slug, _label, _menu in tabs]
+    if tab_slug == "laporan-margin":
+        tab_slug = "kalkulator-biaya"  # Laporan margin digabung ke Kalkulator biaya › Ringkasan & prioritas
     if tab_slug not in slugs:
         tab_slug = slugs[0]
     clicked = button_tabs([(slug, label) for slug, label, _menu in tabs], tab_slug, key="setting-tab",
@@ -54,8 +56,6 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
         _excluded_tab(features, table, username, orders)
     elif picked == "kalkulator-biaya":
         _calculator_tab(features, table, data, username, today, user_root=user_root, orders=orders)
-    elif picked == "laporan-margin":
-        _margin_report_tab(features, table, data, orders)
     elif picked == "kapasitas-gudang":
         _capacity_tab(features, table, data, role, username, today, user_root, orders)
     elif picked == "kedatangan-impor":

@@ -815,3 +815,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Kolom isian Harga jual, Biaya iklan, Diskon tambahan, Voucher penjual dihapus; nilainya dari data (sama dengan Ringkasan), tampil sebagai kartu Data SKU.
 - Program Shopee: program wajib sebagai label 🔒, program opsional sebagai toggle 2 kolom (tarif & batas di tooltip); Pengaturan lain: ukuran khusus, affiliate, unit per pesanan, kategori.
 - Unduh semua SKU kini memuat semua komponen kalkulator per SKU (kolom "Sekarang · …" dan "Rekomendasi · …"), sama dengan tabel Kalkulator lengkap.
+
+## 2026-11-14 — Laporan margin digabung ke Kalkulator › Ringkasan & prioritas
+- Tab Setting › Laporan margin dihapus (URL lama diarahkan ke Kalkulator biaya).
+- Ringkasan dirombak per bagian: (1) Penjualan & margin bulan berjalan (target), (2) Kondisi margin SKU aktif periode terpilih: kartu Sales produk bersih / Margin kotor / Margin bersih / Perlu ditindaklanjuti, chip potongan & batas, tabel Ringkasan per status (+Total), Langkah yang disarankan (gabungan), sebaran sales vs margin, (3) Daftar prioritas (jembatan sales di expander), (4) SKU nonaktif · potensi margin yang hilang.
+- Semua angka dari mesin yang sama (`_portfolio_rows` + `shopee_fee.portfolio`, transaksi bersih). SKU nonaktif: seluruh riwayat, margin bersih ÷ bulan terjual, batas margin rendah = batas SKU aktif.
