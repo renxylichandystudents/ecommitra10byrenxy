@@ -95,7 +95,11 @@ def show_ops_analysis(source_raw: pd.DataFrame, start: date | None, end: date | 
     st.markdown("**Ketepatan kirim** · pesanan tidak batal, Waktu Pengiriman Diatur dibanding Pesanan Harus Dikirimkan Sebelum")
     c1, c2 = st.columns(2)
     with c1:
-        show_table(per_service, kinds={"Pesanan dinilai": "count", "Terlambat": "count", "% terlambat": "pct"})
+        late_total = pd.DataFrame([{"Layanan": "Total", "Pesanan dinilai": ship["dinilai"], "Terlambat": ship["terlambat"], "% terlambat": ship["porsi"]}])
+        show_table(pd.concat([late_total, per_service], ignore_index=True) if not per_service.empty else per_service,
+                   kinds={"Pesanan dinilai": "count", "Terlambat": "count", "% terlambat": "pct"}, bold_label="Total")
+        st.caption("Dinilai = pesanan tidak batal yang punya Waktu Pengiriman Diatur dan Pesanan Harus Dikirimkan Sebelum; "
+                   "terlambat = waktu pengiriman diatur melewati batas kirim.")
     with c2:
         if not per_day.empty:
             fig = go.Figure(go.Bar(x=per_day["Hari pesanan"], y=per_day["% terlambat"], marker_color=[DOWN if v > ship["porsi"] else UP for v in per_day["% terlambat"]],
