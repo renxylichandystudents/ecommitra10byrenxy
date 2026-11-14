@@ -403,3 +403,46 @@ def period_bounds(frame: pd.DataFrame | None) -> tuple[date | None, date | None]
     if stamps.empty:
         return None, None
     return stamps.min().date(), stamps.max().date()
+
+
+BRIDGE_PARTS = (
+    ("seller_voucher", "Voucher penjual"),
+    ("shopee_side", "Voucher Shopee, koin & diskon kartu"),
+    ("buyer_shipping", "Ongkir dibayar pembeli"),
+)
+
+
+def sales_bridge(frame: pd.DataFrame | None, start=None, end=None) -> dict[str, float]:
+    """Jembatan Sales produk bersih → Sales bersih (Total Pembayaran) untuk periode yang sama.
+
+    Keduanya memakai pesanan yang sama (selain batal & Belum Bayar, dikurangi retur):
+    - sales_produk = Harga setelah diskon × QTY bersih (nilai barang; dasar margin per SKU)
+    - sales_bersih = Total Pembayaran per pesanan − nilai retur (angka kartu Data)
+    Selisihnya: − voucher penjual − voucher Shopee/koin/diskon kartu + ongkir dibayar pembeli ± lain-lain
+    (biaya layanan, pembulatan, retur sebagian)."""
+    out = {"sales_produk": 0.0, "seller_voucher": 0.0, "shopee_side": 0.0, "buyer_shipping": 0.0, "lain": 0.0, "sales_bersih": 0.0}
+    if frame is None or frame.empty:
+        return out
+    raw = frame.reset_index(drop=True)
+    lines = normalize_lines(raw)
+    day = pd.to_datetime(lines["order_time"], errors="coerce").dt.normalize()
+    keep = day.notna() & ~lines["is_cancel"] & ~lines["is_open"]
+    if start is not None:
+        keep &= day >= pd.Timestamp(start).normalize()
+    if end is not None:
+        keep &= day <= pd.Timestamp(end).normalize()
+    active = lines.loc[keep]
+    if active.empty:
+        return out
+    part = raw.loc[active.index]
+
+    def total(*names: str) -> float:
+        return float(sum(pd.to_numeric(part[n], errors="coerce").fillna(0).sum() for n in names if n in part.columns))
+
+    out["sales_produk"] = float((active["line_value"] - active["return_value"]).sum())
+    out["sales_bersih"] = _order_money(active) - float(active["return_value"].sum())
+    out["seller_voucher"] = total("seller_voucher")
+    out["shopee_side"] = total("shopee_voucher", "coin_deduction", "card_discount")
+    out["buyer_shipping"] = total("buyer_shipping")
+    out["lain"] = out["sales_bersih"] - (out["sales_produk"] - out["seller_voucher"] - out["shopee_side"] + out["buyer_shipping"])
+    return out
