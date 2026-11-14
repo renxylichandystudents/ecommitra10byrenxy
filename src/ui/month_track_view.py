@@ -404,9 +404,10 @@ def _top_actions(top: pd.DataFrame, summary: dict, behind: bool, missing: list[s
     st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
     show_table(top, kinds={"Prioritas": "count", "Potensi omzet": "money"}, column_config={
         # Identitas item tetap terlihat saat tabel digeser ke kanan.
-        "Prioritas": st.column_config.Column("Prioritas", width=80, pinned=True),
-        "Jenis": st.column_config.TextColumn("Jenis", width=110, pinned=True),
-        "SKU": st.column_config.TextColumn("SKU", width=110, pinned=True),
-        "Produk": st.column_config.TextColumn("Produk", width=320, pinned=True),
-        "Varian": st.column_config.TextColumn("Varian", width=150, pinned=True),
-        "Tindakan": st.column_config.TextColumn(width="large"), "Alasan": st.column_config.TextColumn(width="large")})
+        # Lebar kolom tetap dibuat ramping agar kolom Tindakan masih kebagian ruang; teks panjang dibungkus.
+        "Prioritas": st.column_config.Column("Prioritas", width=70, pinned=True),
+        "Jenis": st.column_config.TextColumn("Jenis", width=70, pinned=True),
+        "SKU": st.column_config.TextColumn("SKU", width=95, pinned=True),
+        "Produk": st.column_config.TextColumn("Produk", width=260, pinned=True),
+        "Varian": st.column_config.TextColumn("Varian", width=130, pinned=True),
+        "Tindakan": st.column_config.TextColumn("Tindakan", width=460), "Alasan": st.column_config.TextColumn("Alasan", width=360)})
