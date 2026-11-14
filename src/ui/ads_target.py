@@ -27,7 +27,13 @@ from src.core.targets import month_label
 from src.ui.common import batched_view, button_tabs, card, download_excel, explain, fmt_idr, fmt_num, fmt_pct
 from src.ui.feature_data import bump, target_for
 from src.ui.targets_view import month_outlook, target_roas_for
-from src.utils.format import angka, input_rupiah, parse_rupiah, show_table
+from functools import partial
+
+from src.utils.format import angka, input_rupiah, parse_rupiah
+from src.utils.format import show_table as _show_table
+
+# Tabel iklan: sel kosong (mis. ROAS produk yang belum pernah diiklankan) tampil "–", bukan "None".
+show_table = partial(_show_table, dash_missing=True)
 
 UP = "#1d4ed8"
 DOWN = "#dc2626"

@@ -331,6 +331,22 @@ def ad_sales(u: Unit, cost: float) -> float:
     return max(_now_sales(u) + min(delta, uplift_cap(u)), 0.0)
 
 
+BUDGET_STEP = 25_000.0   # budget harian per iklan dibulatkan ke kelipatan ini (mudah diisi di Shopee)
+
+
+def round_budget(value: float, *, lo: float = 0.0, hi: float = float("inf"), step: float = BUDGET_STEP) -> float:
+    """Budget harian per iklan ke kelipatan `step` terdekat (min. satu kelipatan bila > 0), tetap dalam batas Shopee:
+    tidak di atas `hi` (naik maks. 2×) dan tidak di bawah `lo` (turun ke ≥ ½) bila kelipatan terdekat melanggarnya."""
+    if not value or value <= 0:
+        return 0.0
+    out = max(round(value / step) * step, step)
+    if out > hi + 1e-6:
+        out = max(math.floor(hi / step) * step, step)
+    if out < lo - 1e-6:
+        out = math.ceil(lo / step) * step
+    return float(out)
+
+
 def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, budget_daily: float | None = None,
                     max_change: float = MAX_CHANGE) -> Plan:
     """Rencana mengejar target dengan ROAS & budget yang ditetapkan pengguna (margin dan stok tidak membatasi).
@@ -424,7 +440,7 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
         if best is None or (total_sales + best_gain) < target_roas * (total_cost + best_step):
             break
         move(best, best_step)
-    return Plan("Kejar target", cost, floor)
+    return Plan("Kejar target", {u.key: round_budget(cost[u.key], lo=lower[u.key], hi=caps[u.key]) for u in units}, floor)
 
 
 def plan_effect(units: list[Unit], plan: Plan, *, days: int) -> dict:
