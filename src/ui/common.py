@@ -379,7 +379,9 @@ def date_range_picker(*, key: str, lo: date, hi: date, default: tuple[date, date
         a, b = (b, a) if a > b else (a, b)
         return min(max(a, lo), hi), min(max(b, lo), hi)
 
-    saved = _kept(f"{key}-range")
+    # Tanpa pilihan pengguna, kalender selalu mengikuti periode bawaan (ikut bergeser saat data bertambah); pilihan
+    # pengguna disimpan dan dipakai sampai diganti lagi.
+    saved = _kept(f"{key}-range") if _kept(f"{key}-user") else None
     current = _fit(saved if isinstance(saved, tuple) and len(saved) == 2 else default)
     value = _DATE_RANGE(lo=lo.isoformat(), hi=hi.isoformat(), start=current[0].isoformat(), end=current[1].isoformat(), label=label, key=key, default=None,
                         presets=[[name, a.isoformat(), b.isoformat()] for name, a, b in presets or []])
@@ -388,7 +390,10 @@ def date_range_picker(*, key: str, lo: date, hi: date, default: tuple[date, date
         # Komponen terus mengirim nilai terakhir; pakai hanya bila berbeda dari klik sebelumnya.
         if st.session_state.get(f"{key}-raw") != raw:
             st.session_state[f"{key}-raw"] = raw
-            current = _fit((date.fromisoformat(raw[0]), date.fromisoformat(raw[1])))
+            picked = _fit((date.fromisoformat(raw[0]), date.fromisoformat(raw[1])))
+            if picked != current:
+                current = picked
+                _keep(f"{key}-user", True)
     _keep(f"{key}-range", current)
     return current
 
