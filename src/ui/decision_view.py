@@ -130,7 +130,7 @@ def table_parts(
         {"id": "rank", "label": "Rank", "pin": True, "width": 86, "kind": "num", "sort": True},
         {"id": "sku", "label": "SKU", "pin": True, "width": 116, "sort": True},
         {"id": "name", "label": "Produk", "pin": True, "width": 290, "kind": "name", "sort": True},
-        {"id": "variance", "label": "Varian", "width": 160, "kind": "name", "sort": True},
+        {"id": "variance", "label": "Varian", "pin": True, "width": 160, "kind": "name", "sort": True},
     ]
     if meta:
         basis = meta["basis"]
@@ -157,7 +157,7 @@ def table_parts(
         columns += [
             {"id": "dc_10062", "label": "Site 10062 · Cikupa", "group": "Stok DC", "kind": "num", "sort": True, "tone": "stock"},
             {"id": "dc_10036", "label": "Site 10036 · Cipeucang", "group": "Stok DC", "kind": "num", "sort": True, "tone": "stock"},
-            {"id": "dc_take", "label": "Ambil dari DC", "group": "Stok DC", "width": 230, "kind": "name", "sort": True, "tone": "stock"},
+            {"id": "dc_take", "label": "Ambil dari DC", "group": "Stok DC", "width": 300, "kind": "name", "sort": True, "tone": "stock"},
         ]
     columns += [
         {"id": "cover", "label": "Hari cukup", "group": "Kesehatan stok", "kind": "num", "sort": True, "tone": "stock"},

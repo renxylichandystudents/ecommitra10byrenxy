@@ -177,11 +177,12 @@ def test_dc_take_label_appends_outstanding():
     out = attach_outstanding(table, repl)
     labels = [dc_take_label(r) for _i, r in out.iterrows()]
     assert labels[0] == "Ambil 5 dari Site 10062 · kurang 3 → PO supplier · Outstanding: PO 10 · TR 5"
-    assert labels[1] == "Ambil 2 dari Site 10036"
+    assert labels[1] == "Ambil 2 dari Site 10036 · Belum ada outstanding PO/TR/TO"
     assert labels[2] == "Outstanding: TO 4"
     assert labels[3] == ""
     assert plan_only(labels[0]) == "Ambil 5 dari Site 10062 · kurang 3 → PO supplier"
     assert plan_only(labels[2]) == ""
+    assert plan_only(labels[1]) == "Ambil 2 dari Site 10036"
     # Tanpa replenishment: kolom ada tapi kosong, teks tetap rencana DC saja.
     assert dc_take_label(attach_outstanding(table, None).iloc[0]) == table["sumber_restock"].iat[0]
 
@@ -209,5 +210,5 @@ def test_outstanding_plan_nets_shortfall_then_dc_then_po():
     assert c["total"] == 0 and c["po"] == 25 and "belum ada outstanding" in outstanding_verdict(c)
     # D: stok cukup, outstanding menambah stok.
     assert d["shortfall"] == 0 and "±55" in outstanding_verdict(d)
-    # Tanpa replenishment: tetap ada kolom, rencana tidak dipakai di kartu (total 0).
-    assert outstanding_plan(attach_outstanding(table, None).iloc[0])["total"] == 0
+    # Tanpa replenishment: kolom outstanding tidak ada → kartu & Analisa menyebut data belum diunggah.
+    assert outstanding_plan(attach_outstanding(table, None).iloc[0]) is None

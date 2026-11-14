@@ -149,7 +149,8 @@ def attach_outstanding(table: pd.DataFrame, repl: pd.DataFrame | None, history: 
         return table
     pending = outstanding_10037(repl)
     if pending.empty:
-        return table.assign(outstanding_10037="", **{c: 0.0 for c in OS_COLUMNS}, os_sejak=pd.NaT, os_umur=np.nan, os_minimal=False, os_tanggal=None)
+        # Replenishment Site 10037 belum diunggah: kolom tidak ditambahkan, sehingga tampilan tidak menulis "belum ada outstanding".
+        return table.drop(columns=[c for c in ("outstanding_10037", *OS_COLUMNS, "os_sejak", "os_umur", "os_minimal", "os_tanggal") if c in table.columns])
     keys = _clean_sku(table["sku"].fillna("").astype(str))
     part = pending.reindex(keys.to_numpy()).fillna(0.0)
     age = outstanding_age(history, today)

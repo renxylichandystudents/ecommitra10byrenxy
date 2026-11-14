@@ -144,12 +144,15 @@ def add_transfer_columns(table: pd.DataFrame, need_col: str = "m_butuh") -> pd.D
 
 
 OUTSTANDING_SEP = " · Outstanding: "
+NO_OUTSTANDING = " · Belum ada outstanding PO/TR/TO"
 
 
 def dc_take_label(row) -> str:
-    """Teks kolom Ambil dari DC: rencana ambil DC/PO + outstanding PO/TR/TO Site 10037 (bila ada).
+    """Teks kolom Ambil dari DC: rencana ambil DC/PO + outstanding PO/TR/TO Site 10037.
 
-    Contoh: "Ambil 5 dari Site 10062 · kurang 3 → PO supplier · Outstanding: PO 10 · TR 5"; tanpa kebutuhan restock: "Outstanding: TR 5"."""
+    Contoh: "Ambil 5 dari Site 10062 · kurang 3 → PO supplier · Outstanding: PO 10 · TR 5 (sejak 05/11, 9 hari)";
+    perlu restock tetapi belum ada proses: "… · Belum ada outstanding PO/TR/TO"; tanpa kebutuhan restock: "Outstanding: TR 5".
+    Keterangan outstanding hanya muncul bila replenishment Site 10037 sudah diunggah (kolom outstanding_10037 ada)."""
     if row is None:
         return ""
 
@@ -158,9 +161,16 @@ def dc_take_label(row) -> str:
         return "" if value is None or (not isinstance(value, str) and pd.isna(value)) else str(value).strip()
 
     plan, pending = text("sumber_restock"), text("outstanding_10037")
-    if not pending:
-        return plan
-    return f"{plan}{OUTSTANDING_SEP}{pending}" if plan else f"Outstanding: {pending}"
+    known = "outstanding_10037" in row
+    if pending:
+        since, days = row.get("os_sejak"), row.get("os_umur")
+        if since is not None and not pd.isna(since) and days is not None and not pd.isna(days):
+            mark = "≥ " if bool(row.get("os_minimal", False)) else ""
+            pending += f" (sejak {pd.Timestamp(since):%d/%m}, {mark}{int(days)} hari)"
+        return f"{plan}{OUTSTANDING_SEP}{pending}" if plan else f"Outstanding: {pending}"
+    if plan and known:
+        return plan + NO_OUTSTANDING
+    return plan
 
 
 def plan_only(label: str) -> str:
@@ -168,4 +178,4 @@ def plan_only(label: str) -> str:
     label = str(label or "")
     if label.startswith("Outstanding: "):
         return ""
-    return label.split(OUTSTANDING_SEP)[0]
+    return label.split(OUTSTANDING_SEP)[0].split(NO_OUTSTANDING)[0]

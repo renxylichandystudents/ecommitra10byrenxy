@@ -640,3 +640,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 
 - `priority_actions` kini mengisi kolom **Varian** terpisah (sebelumnya digabung ke Produk); Prioritas, Jenis, SKU, Produk, Varian disematkan di kiri.
 - Tindakan restock ditambah keterangan outstanding Site 10037 (`month_track.outstanding_note`): "Outstanding PO 20 · TR 10 (sejak 05/11, 9 hari) → masih perlu 20 unit lagi" / "→ sudah menutup kebutuhan, pastikan segera diterima" / "Belum ada outstanding PO/TR/TO: segera buat TR/TO/PO".
+
+## Tabel Top 50 / semua prediksi: Varian dibekukan, Ambil dari DC lengkap (14 Nov 2026)
+
+- Kolom Varian ikut dibekukan (Grafik, Rank, SKU, Produk, Varian); kolom Ambil dari DC dilebarkan ke 300 px.
+- `dc_take_label`: bila replenishment Site 10037 sudah diunggah, SKU yang perlu restock tanpa proses kini ditulis "… · Belum ada outstanding PO/TR/TO"; outstanding yang ada diberi umur "(sejak 05/11, 9 hari)". Tanpa unggahan replenishment, `attach_outstanding` tidak menambah kolom outstanding (tidak ada klaim "belum ada").
