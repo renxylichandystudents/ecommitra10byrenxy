@@ -634,6 +634,10 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Aktual sales produk": month["aktual"],
         "Sales bersih toko": month["bersih"],
         "% target": np.where(done_days & (month["target"] > 0), month["bersih"] / month["target"] * 100, np.nan),
+        # Padanan kartu Pantauan harian (basis sales bersih toko): prediksi sales produk × faktor sales bersih ÷ sales produk.
+        "Prediksi sales bersih": month["prediksi"] * (float(target["factor"]) if target else np.nan),
+        "Achievement bersih": np.where(done_days & (month["prediksi"] > 0) & bool(target),
+                                       month["bersih"] / (month["prediksi"] * (float(target["factor"]) if target else 1.0)) * 100, np.nan),
         "Belum Bayar": month["belum_bayar"],
         "Selisih": month["aktual"] - month["prediksi"],
         "% capaian": month["pct"],
@@ -645,7 +649,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
     for column in view.columns.drop(["Tanggal", "Jenis hari", "Pola hari", "Status", "Sumber prediksi"]):
         view[column] = pd.to_numeric(view[column], errors="coerce")
     if not target:
-        view = view.drop(columns=["Target harian", "Sales bersih toko", "% target"])
+        view = view.drop(columns=["Target harian", "Sales bersih toko", "% target", "Prediksi sales bersih", "Achievement bersih"])
     done = month["status"].eq("Selesai")
     pred, act, pend = (float(month.loc[done, c].fillna(0).sum()) for c in ("prediksi", "aktual", "belum_bayar"))
     label = f"Total s.d. {fmt_date(last)}"
@@ -658,6 +662,9 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
     goal_done = float(month.loc[done, "target"].fillna(0).sum())
     net_done = float(month.loc[done, "bersih"].fillna(0).sum())
     total.update({"Target harian": goal_done, "Sales bersih toko": net_done, "% target": net_done / goal_done * 100 if goal_done else np.nan})
+    if target:
+        pred_net = pred * float(target["factor"])
+        total.update({"Prediksi sales bersih": pred_net, "Achievement bersih": net_done / pred_net * 100 if pred_net else np.nan})
     first = month["tanggal"].iloc[0]
     month_label = f"Total {ID_MONTHS[first.month - 1]} {first.year} ({len(month)} hari)"
     pred_month = float(month["prediksi"].fillna(0).sum())
@@ -679,6 +686,8 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
     full.update({"Target harian": goal_month, "Sales bersih toko": net_done,
                  "% target": net_projection / goal_month * 100 if goal_month else np.nan})
     if target:
+        full.update({"Prediksi sales bersih": pred_month * factor, "Achievement bersih": net_done / (pred_month * factor) * 100 if pred_month else np.nan})
+    if target:
         full["Status"] = f"Proyeksi bersih {fmt_idr(net_projection)}"
     rows = pd.DataFrame([full, total])[[c for c in view.columns]]
     with st.expander("Breakdown per tanggal (tgl 1 s.d. akhir bulan)", expanded=True):
@@ -694,13 +703,18 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         st.caption(
             "**Achievement (% capaian)** = aktual sales produk ÷ prediksi (100% = sesuai prediksi, >100% melebihi). "
             "**Akurasi prediksi** = 100% − |aktual − prediksi| ÷ aktual, hanya hari penuh; baris Total s.d. = 100% − Σ|selisih harian| ÷ Σ aktual "
-            "(meleset ke atas maupun ke bawah sama-sama mengurangi akurasi). Judul kolom dan kolom Tanggal tetap terlihat saat tabel digulir.")
+            "(meleset ke atas maupun ke bawah sama-sama mengurangi akurasi). "
+            + (f"**Prediksi sales bersih** = Prediksi sales produk × faktor {str(round(float(target['factor']), 2)).replace('.', ',')} (sales bersih ÷ sales produk) — angka yang dipakai kartu "
+               "Pantauan harian (Kemarin/Hari ini/Besok); **Achievement bersih** = Sales bersih toko ÷ Prediksi sales bersih = capaian di kartu Kemarin. "
+               if target else "")
+            + "Judul kolom dan kolom Tanggal tetap terlihat saat tabel digulir.")
         table = pd.concat([rows, view], ignore_index=True).rename(columns={"% capaian": "Achievement (% capaian)"})
         show_table(
             table,
             bold_label=(month_label, label),
             kinds={"Target harian": "money", "Sales bersih toko": "money", "Prediksi sales produk": "money", "Aktual sales produk": "money", "Belum Bayar": "money", "Selisih": "money",
-                   "% target": "pct", "Achievement (% capaian)": "pct", "Akurasi prediksi": "pct", "% bila Belum Bayar dibayar": "pct"},
+                   "% target": "pct", "Achievement (% capaian)": "pct", "Akurasi prediksi": "pct", "% bila Belum Bayar dibayar": "pct",
+                   "Prediksi sales bersih": "money", "Achievement bersih": "pct"},
             # Tinggi dibatasi agar tabel bergulir di dalam: judul kolom (header) tetap terlihat; kolom Tanggal disematkan di kiri.
             max_height=640,
             column_config={"Tanggal": st.column_config.TextColumn("Tanggal", pinned=True)},

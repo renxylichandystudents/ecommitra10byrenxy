@@ -607,3 +607,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Tabel Breakdown per tanggal (Prediksi vs aktual harian) kini bergulir di dalam (tinggi maks. 640 px) sehingga judul kolom tetap terlihat; kolom Tanggal disematkan di kiri (`pinned`). Sebelumnya `max_height=10_000` membuat tabel memanjang dan header ikut tergulir.
 - Kolom "% capaian" diberi nama **Achievement (% capaian)** (aktual ÷ prediksi) dan ditambah **Akurasi prediksi** (`prediksi_top.accuracy`: 100% − |aktual − prediksi| ÷ aktual per hari penuh; baris Total s.d. = 100% − Σ|selisih| ÷ Σ aktual).
 - Sel kosong tanggal mendatang tampil "-" (sebelumnya "None": kolom bertipe object).
+
+## Kartu Pantauan harian ↔ tabel Breakdown per tanggal (14 Nov 2026)
+
+- Pertanyaan: kartu Kemarin/Hari ini/Besok (mis. 13 Nov prediksi Rp 106.207.490) tidak sama dengan tabel (Prediksi sales produk Rp 121.131.386). Sebab: kartu berbasis **sales bersih toko** (sama dengan target) = prediksi sales produk × faktor sales bersih ÷ sales produk bulan ini (±0,88); tabel berbasis sales produk.
+- Tabel kini punya kolom **Prediksi sales bersih** (= angka kartu) dan **Achievement bersih** (Sales bersih toko ÷ Prediksi sales bersih = capaian kartu Kemarin), termasuk di baris Total. Kartu menulis jejaknya: "= prediksi sales produk Rp … × faktor 0,88".

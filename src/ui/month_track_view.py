@@ -238,7 +238,7 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
     summary, factor, profile, target = state["summary"], state["factor"], state["profile"], state["target"]
     month_cutoff, running, data_last = state["cutoff"], state["running"], state["data_last"]
 
-    _cards(summary, month_cutoff, today, running, data_last, target, current)
+    _cards(summary, month_cutoff, today, running, data_last, target, current, factor)
     _target_alert(summary, target, current, month_cutoff, today)
     if current and summary["hari_promo_sisa"]:
         bits = [f"{d:%d/%m} {lbl} (pola ×{_dec(profile.factor(d))})" for d, lbl in summary["hari_promo_sisa"][:8]]
@@ -265,7 +265,8 @@ def show_month_tracking(features, *, orders_all: pd.DataFrame | None, table: pd.
         ("Prediksi per tanggal", "prediksi dari analisa terakhir yang dijalankan sebelum tanggal itu (analisa harian = prediksi H-1). "
          "Tanggal yang belum terjadi memakai analisa terbaru. Analisa yang sudah lewat tidak dihitung ulang, jadi akurasi kemarin tetap bisa diaudit walau data latih diperbarui."),
         ("Basis angka", "sales bersih (Total Pembayaran − batal − Belum Bayar − retur), sama dengan target. Prediksi model (harga setelah diskon × QTY) "
-         f"dikali faktor {_dec(factor)} = sales bersih ÷ sales produk bulan ini."),
+         f"dikali faktor {_dec(factor)} = sales bersih ÷ sales produk bulan ini. Tabel Breakdown per tanggal di atas memakai sales produk "
+         "(kolom Prediksi sales produk); padanannya dengan kartu ini ada di kolom Prediksi sales bersih & Achievement bersih."),
         ("Pola hari & promo", "laju harian model dibagi ke tanggal menurut pola hari (Senin–Minggu) dan kenaikan hari gajian (25–3) dan tanggal kembar dari "
          f"{profile.days} hari riwayat; dinormalkan sehingga total sebulan sama dengan prediksi model. "
          f"Kenaikan: tanggal kembar ×{_dec(profile.uplift.get('Tanggal kembar', 1))} ({profile.samples.get('Tanggal kembar', 0)} hari), "
@@ -283,14 +284,23 @@ def _day_word(day: date, today: date) -> str:
     return {today - timedelta(days=1): "Kemarin", today: "Hari ini", today + timedelta(days=1): "Besok"}.get(day, "Tanggal")
 
 
-def _cards(summary: dict, cutoff: date, today: date, running: float | None, data_last: date, target: float | None, current: bool) -> None:
+def _from_product(value, factor: float) -> str:
+    """Jejak angka prediksi kartu ke tabel Breakdown per tanggal: prediksi sales produk × faktor = prediksi sales bersih."""
+    if value is None or pd.isna(value) or not factor:
+        return ""
+    return f"= prediksi sales produk {fmt_idr(float(value) / factor)} × faktor {_dec(factor)}"
+
+
+def _cards(summary: dict, cutoff: date, today: date, running: float | None, data_last: date, target: float | None, current: bool,
+           factor: float = 1.0) -> None:
     cols = st.columns(4)
     y = summary["kemarin"]
     word = _day_word(cutoff, today)
     label_y = (word if word == "Kemarin" else "Hari penuh terakhir") + f" · {cutoff:%d/%m}"
     if y:
         pred, act = y.get("prediksi"), y.get("aktual")
-        hint = (f"Prediksi {fmt_idr(pred)} · capaian {fmt_pct(y.get('capaian_pct'), 0)} {_status_chip(y.get('status', ''))}"
+        hint = (f"Sales bersih toko · prediksi {fmt_idr(pred)} · capaian {fmt_pct(y.get('capaian_pct'), 0)} {_status_chip(y.get('status', ''))}"
+                f"<br><span style='color:#64748b'>{_from_product(pred, factor)}</span>"
                 if pd.notna(pred) else "Belum ada analisa tersimpan sebelum tanggal ini (tabel Prediksi vs aktual memakai uji mundur)")
         if y.get("keterangan"):
             hint += f"<br>{html.escape(y['keterangan'])}"
@@ -304,7 +314,9 @@ def _cards(summary: dict, cutoff: date, today: date, running: float | None, data
                 card(col, word, "–", hint="Sudah akhir bulan")
                 continue
             day = row["tanggal"]
-            bits = [f"Prediksi {day:%d/%m}" + (f" · {html.escape(row['keterangan'])}" if row.get("keterangan") else "")]
+            bits = [f"Prediksi sales bersih {day:%d/%m}" + (f" · {html.escape(row['keterangan'])}" if row.get("keterangan") else "")]
+            if pd.notna(row.get("prediksi")):
+                bits.append(f"<span style='color:#64748b'>{_from_product(row.get('prediksi'), factor)}</span>")
             if pd.notna(row.get("target")):
                 bits.append(f"Target hari itu {fmt_idr(row['target'])}")
             if running is not None and day == data_last:
