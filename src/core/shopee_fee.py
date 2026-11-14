@@ -350,6 +350,27 @@ def analysis(inp: Inputs, *, target_pct: float, qty_30: float | None = None, pre
     return notes
 
 
+def row_inputs(r, *, programs: dict, order_fee: float, fallback_kotor_pct: float = float("nan"), affiliate_on: bool = False) -> tuple["Inputs", float, str, bool]:
+    """Inputs satu baris portofolio (lihat `portfolio`) + (margin kotor %, sumber, diketahui?). Modal = harga akhir × (1 − pajak − margin kotor)."""
+    from src.core.margin_file import DEFAULT_TAX_SHARE
+
+    kotor = getattr(r, "margin_kotor_pct", np.nan)
+    sumber = getattr(r, "sumber", "") or ""
+    if kotor is None or not np.isfinite(kotor):
+        kotor, sumber = fallback_kotor_pct, ("Rata-rata toko" if np.isfinite(fallback_kotor_pct) else "")
+    tax = getattr(r, "pajak_share", np.nan)
+    tax = DEFAULT_TAX_SHARE if tax is None or not np.isfinite(tax) else float(tax)
+    inp = Inputs(
+        harga=float(r.harga), diskon=float(r.diskon_unit), voucher=float(r.voucher_unit), admin_pct=float(r.admin_pct),
+        programs=programs, order_fee=order_fee, affiliate_pct=float(r.affiliate_pct or 0), affiliate_on=affiliate_on and bool(r.affiliate_pct),
+        iklan=float(r.iklan_unit or 0), ukuran_khusus=bool(r.ukuran_khusus),
+    )
+    known = bool(np.isfinite(kotor))
+    if known:
+        inp = replace(inp, pajak_share=tax, hpp=max(inp.harga_akhir * (1 - tax - kotor / 100.0), 0.0))
+    return inp, kotor, sumber, known
+
+
 def portfolio(rows: pd.DataFrame, *, programs: dict, order_fee: float, fallback_kotor_pct: float = float("nan"),
               acuan_pct: float | None = None, affiliate_on: bool = False) -> pd.DataFrame:
     """Margin bersih per SKU. rows: sku, nama, kategori, harga, diskon_unit, voucher_unit, admin_pct, affiliate_pct, iklan_unit, roas,
@@ -358,25 +379,12 @@ def portfolio(rows: pd.DataFrame, *, programs: dict, order_fee: float, fallback_
     Status: Rugi (< 0) · Rendah (untung, di bawah batas) · Tinggi (≥ batas). Batas (acuan_pct) bawaan = rata-rata margin bersih SKU yang
     untung. Prioritas = Rugi menurut kerugian Rp 30 hari, lalu Rendah menurut selisih Rp ke batas (omzet × selisih %), lalu Tinggi
     menurut omzet. attrs: acuan_pct (batas), overall_pct (rata-rata toko seluruh SKU)."""
-    from src.core.margin_file import DEFAULT_TAX_SHARE, classify
+    from src.core.margin_file import classify
 
     out = []
     for r in rows.itertuples(index=False):
-        kotor = getattr(r, "margin_kotor_pct", np.nan)
-        sumber = getattr(r, "sumber", "") or ""
-        if kotor is None or not np.isfinite(kotor):
-            kotor, sumber = fallback_kotor_pct, ("Rata-rata toko" if np.isfinite(fallback_kotor_pct) else "")
-        tax = getattr(r, "pajak_share", np.nan)
-        tax = DEFAULT_TAX_SHARE if tax is None or not np.isfinite(tax) else float(tax)
-        inp = Inputs(
-            harga=float(r.harga), diskon=float(r.diskon_unit), voucher=float(r.voucher_unit), admin_pct=float(r.admin_pct),
-            programs=programs, order_fee=order_fee, affiliate_pct=float(r.affiliate_pct or 0), affiliate_on=affiliate_on and bool(r.affiliate_pct),
-            iklan=float(r.iklan_unit or 0), ukuran_khusus=bool(r.ukuran_khusus),
-        )
+        inp, kotor, sumber, known = row_inputs(r, programs=programs, order_fee=order_fee, fallback_kotor_pct=fallback_kotor_pct, affiliate_on=affiliate_on)
         base = inp.harga_akhir
-        known = np.isfinite(kotor)
-        if known:
-            inp = replace(inp, pajak_share=tax, hpp=max(base * (1 - tax - kotor / 100.0), 0.0))
         value, pct = margin(inp) if known else (np.nan, np.nan)
         omzet = float(r.omzet_30 or 0)
         out.append({

@@ -1931,14 +1931,15 @@ def _source_status_map(store: LocalDataStore) -> dict[str, str]:
 
 TARGET_UPLOAD = "sales_target"
 MARGIN_UPLOAD = "margin_item"
-SPECIAL_UPLOADS = (TARGET_UPLOAD, MARGIN_UPLOAD)
+HARGA_BELI_UPLOAD = "harga_beli"
+SPECIAL_UPLOADS = (TARGET_UPLOAD, MARGIN_UPLOAD, HARGA_BELI_UPLOAD)
 STOCK_GROUP = ("Stok", ("stock", "stock_10062", "stock_10036"))
 UPLOAD_GROUPS = (
     ("Penjualan", ("transactions", "performance")),
     ("Iklan", ("ads_overall", "ads_auto", "ads_group", "ads_search")),
     STOCK_GROUP,
     ("Produk", ("product_descriptions", "competitors")),
-    ("Target & margin", (TARGET_UPLOAD, MARGIN_UPLOAD)),
+    ("Target & margin", (TARGET_UPLOAD, MARGIN_UPLOAD, HARGA_BELI_UPLOAD)),
 )
 
 
@@ -2062,11 +2063,19 @@ def show_training_uploads(groups=UPLOAD_GROUPS) -> tuple[list[str], str | None]:
                 return "Target sales bulanan · Kosong"
             mark = "✓ Siap (baru disimpan)" if TARGET_UPLOAD in done else "tersimpan"
             return f"Target sales bulanan · {mark} · {months} bulan"
+        if spec == HARGA_BELI_UPLOAD:
+            from src.ui.harga_beli_data import load_harga_beli
+
+            hbd = load_harga_beli(get_features())
+            if not hbd.ready:
+                return "Harga beli & bottom price · Kosong"
+            mark = "✓ Siap (baru disimpan)" if HARGA_BELI_UPLOAD in done else f"tersimpan {hbd.uploaded_at[:10]}"
+            return f"Harga beli & bottom price · {mark} · {hbd.periode}"
         if spec == MARGIN_UPLOAD:
             from src.ui.margin_data import load_margin
 
             md = load_margin(get_features())
-            if not md.ready:
+            if md.lookup.empty:
                 return "File margin · Kosong"
             if MARGIN_UPLOAD in done:
                 return f"File margin · ✓ Siap (baru disimpan) · periode {md.periode}"
@@ -2116,6 +2125,13 @@ def show_training_uploads(groups=UPLOAD_GROUPS) -> tuple[list[str], str | None]:
         if picked_key == TARGET_UPLOAD:
             st.markdown("<div class='side-section'>Target sales bulanan</div>", unsafe_allow_html=True)
             show_target_uploader(get_features(), username=AUTH_USER.username, today=date.today(), title=False)
+            return imported_keys, load_error
+        if picked_key == HARGA_BELI_UPLOAD:
+            from src.ui.harga_beli_data import upload_card as harga_beli_card
+
+            st.markdown("<div class='side-section'>Harga beli & bottom price</div>", unsafe_allow_html=True)
+            harga_beli_card(get_features(), username=AUTH_USER.username, may_edit=can(AUTH_USER.role, "ubah_data_latih"), require=require,
+                            key="upload-harga-beli")
             return imported_keys, load_error
         if picked_key == MARGIN_UPLOAD:
             from src.ui.margin_data import upload_card

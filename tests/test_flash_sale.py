@@ -87,3 +87,21 @@ class ScheduleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BottomPriceTest(unittest.TestCase):
+    def test_flash_price_never_below_bottom(self):
+        import pandas as pd
+
+        from src.core import flash_sale as F
+        items = pd.DataFrame([
+            {"sku": "1", "label": "A", "nama": "A", "harga": 1_000_000, "stok": 100, "ada_stok": True, "ss": 5, "harian": 1, "dc": 0, "terjual": 10,
+             "m_sales": 1e6, "batal_pct": 0, "floor": 500_000, "momentum": 0, "bottom": 950_000},
+            {"sku": "2", "label": "B", "nama": "B", "harga": 1_000_000, "stok": 100, "ada_stok": True, "ss": 5, "harian": 1, "dc": 0, "terjual": 10,
+             "m_sales": 1e6, "batal_pct": 0, "floor": 500_000, "momentum": 0, "bottom": 1_100_000},
+        ])
+        cands, skipped = F.candidates(items)
+        row = cands.set_index("sku").loc["1"]
+        self.assertGreaterEqual(row["harga_flash"], 950_000)
+        self.assertNotIn("2", set(cands["sku"]))
+        self.assertTrue(skipped["Alasan"].str.contains("bottom price").any())

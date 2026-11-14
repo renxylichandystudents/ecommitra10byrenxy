@@ -67,18 +67,8 @@ def _read_any(upload) -> pd.DataFrame:
 
 
 def _parameter_panel(features, *, may_edit: bool, username: str, require) -> None:
-    from src.ui.margin_data import UPLOAD_HINT, load_margin, status_line
-
     with st.container():
-        t0, t1, t2, t3 = st.tabs(["File margin", "Biaya program Shopee Mall", "Biaya administrasi kategori", "Komisi affiliate"])
-        with t0:
-            st.markdown(f"<div class='field-hint'>{status_line(load_margin(features))}.<br>{UPLOAD_HINT}</div>", unsafe_allow_html=True)
-            st.markdown(
-                "<div class='field-hint'>Margin kotor per SKU = Gross Margin Value ÷ Sales Include Tax (dasar harga jual di Shopee, karena potongan Shopee "
-                "dihitung dari harga itu). Urutan sumber: sheet <b>Shopee</b> → bila SKU tidak ada atau marginnya tidak wajar, sheet <b>Nasional</b> → "
-                "bila tetap tidak ada, <b>rata-rata toko</b>. Modal per unit diturunkan dari angka ini (estimasi, bukan HPP resmi).</div>",
-                unsafe_allow_html=True,
-            )
+        t1, t2, t3 = st.tabs(["Biaya program Shopee Mall", "Biaya administrasi kategori", "Komisi affiliate"])
         with t1:
             programs, order_fee, limit = _programs(features)
             st.markdown(
@@ -102,7 +92,7 @@ def _parameter_panel(features, *, may_edit: bool, username: str, require) -> Non
                 key="fee-programs-editor",
             )
             order = float(input_rupiah("Biaya Proses Pesanan (Rp per pesanan selesai)", int(order_fee), key="fee-order"))
-            st.caption("Margin kotor per SKU tidak diisi di sini: diambil dari File margin (tab sebelah).")
+            st.caption("Modal/margin kotor per SKU tidak diisi di sini: dari Harga beli (file merchandising) atau File margin di Upload data › Target & margin.")
             if may_edit and st.button("Simpan parameter", type="primary", key="fee-programs-save"):
                 require("setting_kalkulator_biaya", "edit")
                 payload_programs = {}
@@ -248,16 +238,18 @@ def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | 
             "admin_pct": admin, "affiliate_pct": float(aff_by_code.get(codes.get(sku, ""), 0.0) or 0.0),
             "iklan_unit": float(data.ad_per_unit.get(sku, 0.0) or 0.0), "roas": roas_map.get(sku, np.nan),
             "qty_30": float(r["qty"]), "omzet_30": float(r["omzet"]), "ukuran_khusus": _is_big(name),
-            **_margin_cols(md, sku),
+            **_margin_cols(md, sku, harga - (float(r["voucher"]) / float(r["qty"]) if r["qty"] else 0.0)),
         })
     return pd.DataFrame(rows)
 
 
-def _margin_cols(md, sku: str) -> dict:
-    hit = md.row(sku) if md is not None and md.ready else None
+def _margin_cols(md, sku: str, price: float | None = None) -> dict:
+    """Margin kotor % SKU pada harga `price`: dari harga beli (file merchandising) bila ada, selain itu dari File margin."""
+    hit = md.row_at(sku, price) if md is not None and md.ready else None
     if not hit or not np.isfinite(hit.get("margin_kotor_pct", np.nan)):
-        return {"margin_kotor_pct": np.nan, "pajak_share": np.nan, "sumber": ""}
-    return {"margin_kotor_pct": float(hit["margin_kotor_pct"]), "pajak_share": float(hit["porsi_pajak"]), "sumber": hit["sumber"]}
+        return {"margin_kotor_pct": np.nan, "pajak_share": np.nan, "sumber": "", "harga_beli": np.nan}
+    return {"margin_kotor_pct": float(hit["margin_kotor_pct"]), "pajak_share": float(hit["porsi_pajak"]), "sumber": hit["sumber"],
+            "harga_beli": float(hit.get("harga_beli", np.nan))}
 
 
 def _month_of(orders: pd.DataFrame | None) -> date:
@@ -305,7 +297,7 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
     low = port.loc[port["status"] == "Rendah"] if not port.empty else port
 
     if not md.ready:
-        st.warning("File margin belum diunggah: margin per SKU belum bisa dihitung. Unggah di tab **⚙️ Parameter biaya › File margin**.", icon=":material/upload_file:")
+        st.warning("File margin dan harga beli belum diunggah: margin per SKU belum bisa dihitung. Unggah di **Upload data › Target & margin**.", icon=":material/upload_file:")
     # Margin toko mengacu ke penjualan aktual bulan acuan (tgl 1 s.d. data terakhir); bila belum ada, pakai periode terpilih.
     mp = month_port if month_port is not None and not month_port.empty else port
     m_known = mp.loc[mp["bersih_30"].notna()] if not mp.empty else mp
@@ -354,7 +346,7 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
     )
     steps: list[str] = []
     if not md.ready:
-        steps.append("<b>Unggah file margin</b> (sheet Margin Shopee & Margin Nasional) agar margin per SKU terbaca.")
+        steps.append("<b>Unggah file harga beli / file margin</b> di Upload data › Target & margin agar margin per SKU terbaca.")
     if len(rugi):
         steps.append(f"<b>Hentikan kerugian di {fmt_num(len(rugi))} SKU rugi</b>, mulai 5 teratas (±{fmt_idr(float(rugi.head(5)['rugi_30'].sum()))} per periode): "
                      "kurangi iklan/program opsional atau naikkan harga sesuai kolom <i>Yang perlu dikerjakan</i>.")
@@ -436,6 +428,92 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir") 
     )
 
 
+def _history(orders: pd.DataFrame | None) -> dict:
+    """Histori harga per SKU (harga awal & diskon 90 hari terakhir), disimpan per sesi."""
+    from src.core import pricing
+
+    if orders is None or orders.empty:
+        return {}
+    key = (len(orders), str(pd.to_datetime(orders["order_time"], errors="coerce").max()))
+    cache = st.session_state.get("_calc-history")
+    if isinstance(cache, tuple) and cache[0] == key:
+        return cache[1]
+    hist = pricing.price_history(orders)
+    out = {str(r["sku"]): r for r in hist.to_dict("records")}
+    st.session_state["_calc-history"] = (key, out)
+    return out
+
+
+def _all_rows(features, table: pd.DataFrame, data, rows: pd.DataFrame, fees: pd.DataFrame, md) -> pd.DataFrame:
+    """Baris portofolio (SKU laku di periode) + SKU aktif lain yang belum laku (harga dari data produk)."""
+    from src.core.margin_file import sku_key
+    from src.ui.feature_data import product_frame
+
+    products = product_frame(table).drop_duplicates("sku")
+    have = set(rows["sku"].astype(str)) if not rows.empty else set()
+    active, _at = st.session_state.get("_active_skus") or (set(), "")
+    sku_cat = features.get_json(KEY_SKU_CAT, {}) or {} if features is not None else {}
+    aff = _affiliate(features)
+    aff_by_code = dict(zip(aff.get("product_code", []), aff.get("komisi_pct", []))) if not aff.empty else {}
+    codes = st.session_state.get("_sku_product_code") or {}
+    extra = []
+    for p in products.itertuples(index=False):
+        sku = str(p.sku)
+        if sku in have or not p.price or p.price <= 0 or (active and sku_key(sku) not in active):
+            continue
+        idx, admin = fee.admin_for(sku, p.product_name, fees, sku_cat)
+        extra.append({
+            "sku": sku, "nama": p.product_name, "kategori": (fees.loc[idx, "sub_kategori"] if idx is not None else "Lainnya") + f" ({fmt_num(admin, 2)}%)",
+            "harga": float(p.price), "diskon_unit": 0.0, "voucher_unit": 0.0, "admin_pct": admin,
+            "affiliate_pct": float(aff_by_code.get(codes.get(sku, ""), 0.0) or 0.0), "iklan_unit": float(data.ad_per_unit.get(sku, 0.0) or 0.0),
+            "roas": np.nan, "qty_30": 0.0, "omzet_30": 0.0, "ukuran_khusus": _is_big(p.product_name), **_margin_cols(md, sku, float(p.price)),
+        })
+    if not extra:
+        return rows
+    return pd.concat([rows, pd.DataFrame(extra)], ignore_index=True) if not rows.empty else pd.DataFrame(extra)
+
+
+def _price_table(all_rows: pd.DataFrame, *, programs: dict, order_fee: float, md, acuan: float, hist: dict) -> pd.DataFrame:
+    """Perhitungan semua SKU: biaya, margin sekarang, harga impas/sehat/disarankan, promo disarankan, harga & margin setelah promo."""
+    from src.core import pricing
+    from src.core.margin_file import classify
+
+    out = []
+    target = acuan if np.isfinite(acuan) else 0.0
+    for r in all_rows.itertuples(index=False):
+        inp, kotor, sumber, known = fee.row_inputs(r, programs=programs, order_fee=order_fee, fallback_kotor_pct=md.store_kotor_pct)
+        value, pct = fee.margin(inp) if known else (np.nan, np.nan)
+        h = hist.get(str(r.sku)) or {}
+        normal = float(h.get("harga_awal") or 0) or float(r.harga)
+        plan = pricing.plan(inp, normal=normal, target_pct=target, hist_disc=float(h.get("diskon_median", np.nan) or np.nan),
+                            hist_share=float(h.get("porsi_promo", 0) or 0), known=known)
+        out.append({
+            "SKU": str(r.sku), "Produk": r.nama, "Kategori (admin)": r.kategori, "Sumber modal": sumber or "–",
+            "Modal/harga beli per unit": inp.hpp if known else np.nan, "Harga transaksi rata-rata": float(r.harga),
+            "Harga normal (harga awal)": normal, "Voucher penjual/unit": float(r.voucher_unit), "Potongan Shopee/unit": fee.shopee_fees(inp),
+            "Iklan/unit": float(r.iklan_unit or 0), "Margin bersih/unit": value, "Margin bersih (%)": pct, "Status": classify(pct, acuan),
+            "Terjual (periode)": float(r.qty_30 or 0), "Harga minimal (impas)": plan["harga_impas"],
+            "Harga sehat (margin ≥ batas)": plan["harga_sehat"], "Harga jual disarankan": plan["harga_disarankan"],
+            "Transaksi berpromo (%)": h.get("porsi_promo", np.nan), "Promo historis median (%)": h.get("diskon_median", np.nan),
+            "Promo historis maks. (%)": h.get("diskon_maks", np.nan),
+            "Promo disarankan (%)": plan["promo_pct"], "Harga setelah promo": plan["harga_promo"],
+            "Margin setelah promo/unit": plan["margin_promo"], "Margin setelah promo (%)": plan["margin_promo_pct"], "Catatan": plan["catatan"],
+        })
+    frame = pd.DataFrame(out)
+    if frame.empty:
+        return frame
+    order = {"Rugi": 0, "Rendah": 1, "Tinggi": 2, "Tanpa data": 3}
+    return frame.assign(_o=frame["Status"].map(order)).sort_values(["_o", "Terjual (periode)"], ascending=[True, False]).drop(columns="_o").reset_index(drop=True)
+
+
+PRICE_KINDS = {c: "money" for c in ("Modal/harga beli per unit", "Harga transaksi rata-rata", "Harga normal (harga awal)", "Voucher penjual/unit",
+                                     "Potongan Shopee/unit", "Iklan/unit", "Margin bersih/unit", "Harga minimal (impas)", "Harga sehat (margin ≥ batas)",
+                                     "Harga jual disarankan", "Harga setelah promo", "Margin setelah promo/unit")}
+PRICE_KINDS.update({c: "pct" for c in ("Margin bersih (%)", "Transaksi berpromo (%)", "Promo historis median (%)", "Promo historis maks. (%)", "Promo disarankan (%)",
+                                        "Margin setelah promo (%)")})
+PRICE_KINDS["Terjual (periode)"] = "count"
+
+
 def show_calculator(features, table: pd.DataFrame, data, *, username: str, today: date, user_root: Path | None, may_edit: bool, require,
                     orders: pd.DataFrame | None = None) -> None:
     st.markdown(
@@ -483,7 +561,27 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     with tab_param:
         _parameter_panel(features, may_edit=may_edit, username=username, require=require)
     with tab_sim:
-        _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, may_edit=may_edit, username=username, require=require)
+        hist = _history(orders)
+        cache_key = ("calc-all", st.session_state.get("_feature-version", 0), st.session_state.get("_harga-beli-version", 0),
+                     st.session_state.get("_margin-version", 0), str(start), str(end), len(rows), round(acuan, 3) if np.isfinite(acuan) else None)
+        cached = st.session_state.get("_calc-all")
+        if isinstance(cached, tuple) and cached[0] == cache_key:
+            all_prices = cached[1]
+        else:
+            with st.spinner("Menghitung harga & promo semua SKU..."):
+                all_prices = _price_table(_all_rows(features, table, data, rows, fees, md), programs=programs, order_fee=order_fee, md=md,
+                                          acuan=acuan, hist=hist)
+            st.session_state["_calc-all"] = (cache_key, all_prices)
+        if not all_prices.empty:
+            d1, d2 = st.columns([3, 1], vertical_alignment="center")
+            d1.markdown(f"<div class='field-hint'>Perhitungan <b>semua {fmt_num(len(all_prices))} SKU</b> (periode {html.escape(period_label)}): modal/harga beli, "
+                        "potongan Shopee, iklan, margin sekarang, harga impas, harga jual disarankan, promo disarankan, harga & margin setelah promo.</div>",
+                        unsafe_allow_html=True)
+            with d2:
+                download_excel({"Semua SKU": all_prices}, f"kalkulator_harga_promo_semua_sku_{(end or date.today()).isoformat()}.xlsx",
+                               key="xl-calc-all", label="Unduh semua SKU")
+        _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, may_edit=may_edit, username=username, require=require,
+                    hist=hist)
 
 
 def _bar(parts: list[tuple[str, float, str]], base: float) -> str:
@@ -514,7 +612,8 @@ def _line(label: str, value: float, base: float, *, bold: bool = False, sub: str
             f"<div style='font-weight:{weight};color:{color};white-space:nowrap'>{fmt_idr(value)}{pct}</div></div>")
 
 
-def _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, *, may_edit: bool, username: str, require) -> None:
+def _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, *, may_edit: bool, username: str, require,
+                hist: dict | None = None) -> None:
     from dataclasses import replace
 
     from src.core.margin_file import DEFAULT_TAX_SHARE
@@ -592,7 +691,7 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
             st.markdown("<div class='field-hint'>Simulasi tidak mengubah data apa pun.</div>", unsafe_allow_html=True)
     admin_pct = float(fees.loc[pick, "biaya_admin_pct"]) if pick is not None and pd.notna(fees.loc[pick, "biaya_admin_pct"]) else fee.DEFAULT_ADMIN_PCT
 
-    hit = _margin_cols(md, sku)
+    hit = _margin_cols(md, sku, (harga0 - voucher0) if base_row is not None else float(product["price"]))
     kotor0, sumber = hit["margin_kotor_pct"], hit["sumber"]
     if not np.isfinite(kotor0) and np.isfinite(md.store_kotor_pct):
         kotor0, sumber = md.store_kotor_pct, "rata-rata toko"
@@ -636,7 +735,7 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
         )
         lines = [_line("Harga jual akhir", base, 0, sub="setelah diskon & voucher penjual")]
         if known:
-            lines.append(_line("Margin kotor", kotor_rp, base, sub=f"file margin · {sumber}"))
+            lines.append(_line("Margin kotor", kotor_rp, base, sub=(f"harga beli {fmt_idr(modal)}/unit · {sumber}" if "Harga beli" in str(sumber) else f"file margin · {sumber}")))
         lines.append(_line("− Potongan Shopee", -shopee_rp, base, sub=f"admin kategori {fmt_num(admin_pct, 2)}% + program + proses pesanan"))
         if iklan:
             lines.append(_line("− Iklan", -iklan, base, sub=f"ROAS {fmt_num(roas, 1)}" if roas else ""))
@@ -658,6 +757,27 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
             st.markdown("<div style='font-size:var(--fs-base)'>SKU belum ada di file margin. Unggah file margin terbaru di tab ⚙️ Parameter biaya.</div>", unsafe_allow_html=True)
         if np.isfinite(floor):
             st.caption(f"Harga impas tanpa iklan: {fmt_idr(floor)}")
+        if known:
+            from src.core import pricing
+
+            h = (hist or {}).get(str(sku)) or {}
+            normal = float(h.get("harga_awal") or 0) or harga
+            pl = pricing.plan(inp, normal=normal, target_pct=target, hist_disc=float(h.get("diskon_median", np.nan) or np.nan),
+                              hist_share=float(h.get("porsi_promo", 0) or 0))
+            hist_txt = (f"histori 90 hari: {fmt_pct(h.get('porsi_promo', 0), 0)} dari {fmt_num(h.get('transaksi', 0))} transaksi memakai promo, "
+                        f"diskon median {fmt_pct(h['diskon_median'], 0)}, maks. {fmt_pct(h['diskon_maks'], 0)}" if h else "belum ada histori harga awal di transaksi")
+            ok = pl["margin_promo"] >= 0 if np.isfinite(pl["margin_promo"]) else False
+            st.markdown(
+                "<div style='font-weight:700;margin:.7rem 0 .3rem'>Rekomendasi harga & promo</div>"
+                "<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.6rem .9rem;font-size:var(--fs-base);line-height:1.7'>"
+                f"Harga normal sekarang <b>{fmt_idr(pl['harga_normal'])}</b> · harga minimal tidak rugi (modal + potongan Shopee + iklan) <b>{fmt_idr(pl['harga_impas'])}</b> · "
+                f"harga sehat (margin ≥ {fmt_pct(target, 1)}) <b>{fmt_idr(pl['harga_sehat'])}</b><br>"
+                f"Harga jual disarankan <b>{fmt_idr(pl['harga_disarankan'])}</b> · promo disarankan <b>{fmt_pct(pl['promo_pct'], 0)}</b> → "
+                f"harga setelah promo <b>{fmt_idr(pl['harga_promo'])}</b> · margin setelah promo "
+                f"<b style='color:{'#047857' if ok else '#b91c1c'}'>{fmt_idr(pl['margin_promo'])} ({fmt_pct(pl['margin_promo_pct'], 1)})</b><br>"
+                f"<span style='color:#64748b;font-size:var(--fs-sm)'>{html.escape(hist_txt)} · {html.escape(pl['catatan'])}</span></div>",
+                unsafe_allow_html=True,
+            )
 
     scen = []
 

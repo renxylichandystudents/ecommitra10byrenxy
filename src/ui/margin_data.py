@@ -23,10 +23,12 @@ class MarginData:
     nasional: pd.DataFrame = field(default_factory=pd.DataFrame)
     lookup: pd.DataFrame = field(default_factory=pd.DataFrame)
     periods: list[str] = field(default_factory=list)
+    harga_beli: dict = field(default_factory=dict)   # sku → harga beli per unit (file merchandising), prioritas di atas File margin
+    harga_beli_periode: str = ""
 
     @property
     def ready(self) -> bool:
-        return not self.lookup.empty
+        return not self.lookup.empty or bool(self.harga_beli)
 
     @property
     def store_kotor_pct(self) -> float:
@@ -34,9 +36,27 @@ class MarginData:
         value = mf.store_average(self.shopee)
         return value if np.isfinite(value) else mf.store_average(self.nasional)
 
-    def kotor_map(self) -> dict[str, float]:
-        frame = self.lookup.dropna(subset=["margin_kotor_pct"])
-        return dict(zip(frame["sku"], frame["margin_kotor_pct"].astype(float)))
+    def kotor_map(self, prices: dict | None = None) -> dict[str, float]:
+        """Margin kotor % per SKU. prices (sku → harga jual): SKU yang punya harga beli dihitung (harga − harga beli) ÷ harga;
+        SKU lain memakai File margin."""
+        out: dict[str, float] = {}
+        if not self.lookup.empty:
+            frame = self.lookup.dropna(subset=["margin_kotor_pct"])
+            out.update(dict(zip(frame["sku"], frame["margin_kotor_pct"].astype(float))))
+        if prices and self.harga_beli:
+            for sku, price in prices.items():
+                cost = self.harga_beli.get(mf.sku_key(sku))
+                if cost and price and price > 0:
+                    out[mf.sku_key(sku)] = (float(price) - cost) / float(price) * 100
+        return out
+
+    def row_at(self, sku: str, price: float | None) -> dict | None:
+        """Seperti row(), tetapi bila SKU punya harga beli dan harga diketahui: margin dari harga beli (porsi pajak 0, sesuai rumus file)."""
+        cost = self.harga_beli.get(mf.sku_key(sku))
+        if cost and price and price > 0:
+            return {"margin_kotor_pct": (float(price) - cost) / float(price) * 100, "porsi_pajak": 0.0,
+                    "sumber": f"Harga beli {self.harga_beli_periode}".strip(), "harga_beli": float(cost)}
+        return self.row(sku) if not self.lookup.empty else None
 
     def row(self, sku: str) -> dict | None:
         key = mf.sku_key(sku)
@@ -56,7 +76,22 @@ def periods(features) -> list[str]:
     return list(order.index)
 
 
+def _with_cost(md: MarginData, features) -> MarginData:
+    try:
+        from src.ui.harga_beli_data import _load as load_cost
+
+        cost = load_cost(features)
+        md.harga_beli, md.harga_beli_periode = cost.cost_map(), cost.periode
+    except Exception:
+        pass
+    return md
+
+
 def _load(features, periode: str | None) -> MarginData:
+    return _with_cost(_load_file(features, periode), features)
+
+
+def _load_file(features, periode: str | None) -> MarginData:
     if features is None:
         return MarginData()
     try:
@@ -81,7 +116,7 @@ def _load(features, periode: str | None) -> MarginData:
 
 def load_margin(features, periode: str | None = None) -> MarginData:
     """Dibaca sekali per perubahan data (cache di session)."""
-    key = (st.session_state.get("_feature-version", 0), st.session_state.get("_margin-version", 0), periode or "")
+    key = (st.session_state.get("_feature-version", 0), st.session_state.get("_margin-version", 0), st.session_state.get("_harga-beli-version", 0), periode or "")
     cached = st.session_state.get("_margin-data")
     if isinstance(cached, dict) and key in cached:
         return cached[key]
@@ -102,7 +137,7 @@ def save_upload(features, parsed: dict, periode: str, username: str) -> int:
 
 
 def status_line(md: MarginData) -> str:
-    if not md.ready:
+    if md.lookup.empty:
         return "File margin belum diunggah"
     when = md.uploaded_at.strftime("%d/%m/%Y") if md.uploaded_at is not None and pd.notna(md.uploaded_at) else "-"
     return (f"File margin periode <b>{md.periode}</b> (diunggah {when}) · Shopee {fmt_num(len(md.shopee))} item · "
