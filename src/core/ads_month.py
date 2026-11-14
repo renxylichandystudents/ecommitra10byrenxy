@@ -1,0 +1,132 @@
+"""Budget iklan sebulan & kurva respons toko untuk fitur Iklan kejar target.
+
+- Biaya iklan yang sudah keluar bulan ini dibaca dari laporan iklan keseluruhan ("all iklan", acuan total iklan),
+  diprorata ke tanggal 1 s.d. hari data terakhir (`ads.ad_report_rows`, laporan tumpang tindih tidak dihitung dua kali).
+- Kurva respons toko: sales bersih bulanan = s0 + a · ln(1 + biaya iklan bulanan / b), b = median biaya bulanan riwayat.
+  s0 dan a dari kuadrat terkecil atas bulan-bulan penuh yang punya laporan iklan. Kurva ini mengukur tambahan sales
+  bersih seluruh toko per tambahan biaya iklan (bukan omzet yang diklaim iklan Shopee), sehingga dipakai untuk
+  menghitung budget yang dibutuhkan agar target bulan tercapai.
+- Bulan berjalan: proyeksi tanpa perubahan sudah memuat laju iklan sekarang. Tambahan dihitung dari laju biaya
+  bulanan sekarang C0 ke laju baru C1 selama hari tersisa: tambahan = (s(C1) − s(C0)) × hari_sisa / hari_bulan.
+"""
+
+from __future__ import annotations
+
+import calendar
+import math
+from dataclasses import dataclass
+from datetime import date
+
+import numpy as np
+import pandas as pd
+
+MIN_MONTHS = 3
+
+
+def _month_bounds(first: date) -> tuple[date, date]:
+    last = date(first.year, first.month, calendar.monthrange(first.year, first.month)[1])
+    return first, last
+
+
+def ad_spend(ads_overall: pd.DataFrame | None, start: date, end: date) -> dict:
+    """Biaya & omzet iklan (klaim Shopee) dari laporan iklan keseluruhan pada [start, end], diprorata per hari laporan.
+
+    {"biaya", "omzet", "hari": hari yang tercakup laporan, "sampai": tanggal terakhir yang tercakup}."""
+    from src.core import ads as A
+
+    empty = {"biaya": 0.0, "omzet": 0.0, "hari": 0, "sampai": None}
+    if ads_overall is None or not isinstance(ads_overall, pd.DataFrame) or ads_overall.empty or end < start:
+        return empty
+    rows, lo, hi, days = A.ad_report_rows([ads_overall], start=start, end=end)
+    if rows.empty:
+        return empty
+    covered_hi = None
+    if "_uhi" in rows.columns and rows["_uhi"].notna().any():
+        covered_hi = min(pd.Timestamp(rows["_uhi"].max()).date(), end)
+    return {"biaya": float(rows["biaya_iklan"].sum()), "omzet": float(rows["omzet_iklan"].sum()), "hari": int(days), "sampai": covered_hi}
+
+
+@dataclass
+class StoreCurve:
+    s0: float
+    a: float
+    b: float
+    points: list[tuple[str, float, float]]  # (bulan, biaya, sales bersih)
+    source: str
+
+    def sales(self, monthly_cost: float) -> float:
+        return self.s0 + self.a * math.log1p(max(monthly_cost, 0.0) / self.b)
+
+    def marginal(self, monthly_cost: float) -> float:
+        """Tambahan sales bersih per Rp 1 biaya iklan pada laju biaya bulanan ini."""
+        return self.a / (self.b + max(monthly_cost, 0.0))
+
+    def cost_for_lift(self, base_cost: float, lift: float) -> float:
+        """Laju biaya bulanan baru agar sales naik `lift` dari laju `base_cost`."""
+        if lift <= 0:
+            return base_cost
+        return (self.b + base_cost) * math.exp(lift / self.a) - self.b
+
+
+def fit_store_curve(history: list[tuple[str, float, float]]) -> StoreCurve | None:
+    """history = [(bulan "YYYY-MM", biaya iklan bulanan, sales bersih bulanan)] bulan penuh. None bila < MIN_MONTHS titik
+    atau kemiringan tidak positif (riwayat tidak menunjukkan hubungan biaya iklan → sales)."""
+    pts = [(m, float(c), float(s)) for m, c, s in history if c > 0 and s > 0]
+    if len(pts) < MIN_MONTHS:
+        return None
+    costs = np.array([p[1] for p in pts])
+    sales = np.array([p[2] for p in pts])
+    b = float(np.median(costs))
+    x = np.log1p(costs / b)
+    design = np.column_stack([np.ones_like(x), x])
+    (s0, a), *_ = np.linalg.lstsq(design, sales, rcond=None)
+    if not np.isfinite(a) or a <= 0:
+        return None
+    return StoreCurve(float(s0), float(a), b, pts, f"{len(pts)} bulan riwayat (biaya iklan keseluruhan vs sales bersih toko)")
+
+
+def monthly_history(ads_overall: pd.DataFrame | None, monthly_sales: dict[str, float], *, before: date, months: int = 8) -> list[tuple[str, float, float]]:
+    """Titik (bulan, biaya iklan, sales bersih) untuk bulan penuh sebelum `before` yang laporan iklannya mencakup ≥ 90% hari."""
+    out = []
+    first = before.replace(day=1)
+    for _ in range(months):
+        prev_last = first - pd.Timedelta(days=1)
+        first = date(prev_last.year, prev_last.month, 1)
+        lo, hi = _month_bounds(first)
+        key = f"{first.year:04d}-{first.month:02d}"
+        spend = ad_spend(ads_overall, lo, hi)
+        days = (hi - lo).days + 1
+        if spend["biaya"] > 0 and spend["hari"] >= 0.9 * days and monthly_sales.get(key, 0) > 0:
+            out.append((key, spend["biaya"], float(monthly_sales[key])))
+    return sorted(out)
+
+
+def month_plan(curve: StoreCurve | None, *, target: float, projection: float, spent: float, cost_now_daily: float,
+               days_left: int, month_days: int, budget_total: float | None = None) -> dict:
+    """Budget sebulan yang dibutuhkan untuk target, dan hasil budget sebulan yang diisi user (bila ada).
+
+    - pace0 = laju biaya bulanan sekarang (biaya harian berjalan × hari bulan) — sudah tercermin di proyeksi.
+    - Kebutuhan: laju baru C1 sehingga tambahan sales hari tersisa menutup kekurangan target; budget sebulan = terpakai + C1 × porsi hari sisa.
+    - Budget user: sisa = budget − terpakai → laju C = sisa ÷ porsi hari sisa → tambahan = (s(C) − s(pace0)) × porsi."""
+    share = max(days_left, 0) / max(month_days, 1)
+    pace0 = max(cost_now_daily, 0.0) * month_days
+    gap = max(target - projection, 0.0)
+    out: dict = {"porsi": share, "laju_sekarang": pace0, "kekurangan": gap, "terpakai": spent}
+    if curve is None or share <= 0:
+        out.update({"ada_kurva": False})
+        return out
+    out["ada_kurva"] = True
+    need_lift = gap / share
+    c1 = curve.cost_for_lift(pace0, need_lift) if gap > 0 else pace0
+    remaining_need = c1 * share
+    out.update({
+        "budget_dibutuhkan": spent + remaining_need, "sisa_dibutuhkan": remaining_need, "harian_dibutuhkan": remaining_need / max(days_left, 1),
+        "roas_tambahan_dibutuhkan": gap / max(remaining_need - pace0 * share, 1.0) if gap > 0 else float("nan"),
+    })
+    if budget_total is not None:
+        remaining = max(budget_total - spent, 0.0)
+        pace = remaining / share
+        extra = (curve.sales(pace) - curve.sales(pace0)) * share
+        out.update({"budget_sisa": remaining, "harian_sisa": remaining / max(days_left, 1), "tambahan": extra, "proyeksi": projection + extra,
+                    "roas_tambahan": extra / max(remaining - pace0 * share, 1.0) if remaining > pace0 * share else float("nan")})
+    return out

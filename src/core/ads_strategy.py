@@ -35,6 +35,7 @@ MAX_CHANGE = 2.0          # Shopee: budget harian naik maks. 2× / turun ke ≥ 
 MAX_SHOPEE_ROAS = 30.0    # Shopee: Target ROAS maks. 30 (di atasnya ROAS protection mati)
 NEW_DAILY = 50_000.0      # budget awal iklan produk tunggal baru (Rp/hari)
 DEMAND_LIFT = 0.5         # tambahan omzet sebuah iklan maks. 50% dari prediksi omzet produk anggotanya (analisa)
+FREE_LIFT = 20.0          # fitur Iklan kejar target: batas permintaan per iklan dilepas (proyeksi memakai kurva respons toko; stok tetap membatasi)
 EFFICIENT_MARGIN = 1.2    # Efisien: ROAS marginal ≥ 1,2 × ROAS impas
 STRATEGIES = ("Kejar target", "Seimbang", "Efisien")
 
