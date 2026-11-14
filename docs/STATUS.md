@@ -660,3 +660,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## app.py ikut terbarui tanpa Reboot (14 Nov 2026)
 
 - Ternyata perubahan di app.py (bukan src/) tidak terpakai di Cloud setelah push: dengan `fileWatcherType = "none"`, Streamlit menyimpan bytecode app.py di `Runtime._script_cache` selamanya. Contoh: tabel Pembeli batal karena belum bayar masih tinggi dan link klik kanan menu belum aktif, padahal kodenya sudah di-push. `_refresh_app_bytecode()` (app.py) membandingkan waktu ubah app.py; bila berubah, cache dibersihkan lalu rerun. Perlu **satu kali Reboot** di share.streamlit.io agar pengecek ini sendiri terpasang; sesudahnya push app.py langsung aktif.
+
+## Tinggi baris tabel dengan teks panjang (14 Nov 2026)
+
+- `wrap_layout` menghitung jumlah baris teks dengan `WRAP_CHAR_PX = 5,6` px/huruf (sebelumnya `CHAR_PX` 7,2, padahal huruf tabel terukur ±4–5 px), sehingga baris tidak lagi dua kali lebih tinggi dari isinya (mis. Riwayat perubahan data: 108 px untuk teks 3 baris). Lebar kolom satu baris tetap memakai 7,2 agar tidak terpotong. Riwayat perubahan data: lebar kolom pasti (Perubahan 640 px).

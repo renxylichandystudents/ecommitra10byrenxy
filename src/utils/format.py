@@ -119,6 +119,9 @@ def table_height(rows: int, max_height: int = 600, row_px: int = ROW_PX) -> int:
 
 CHAR_PX = 7.2  # lebar rata-rata satu huruf di tabel (px)
 CELL_PAD_PX = 18
+# Perkiraan lebar huruf untuk menghitung jumlah baris teks yang dibungkus. Teks paragraf di tabel (huruf kecil, angka)
+# terukur ±4–5 px/huruf; 7,2 membuat baris dua kali lebih tinggi dari yang perlu (tabel memanjang, sel kosong).
+WRAP_CHAR_PX = 5.6
 TEXT_MAX_PX = 400
 TEXT_WIDE_PX = 660  # ±90 huruf: sampai lebar ini kolom dilebarkan agar tetap satu baris
 NAMED_WIDTH_PX = {"small": 75, "medium": 200, "large": 400}
@@ -178,7 +181,7 @@ def wrap_layout(frame: pd.DataFrame, column_config: dict | None = None) -> tuple
                 continue
             width = TEXT_WRAP_PX
             config[column] = {**own, "width": width} if isinstance(own, dict) else st.column_config.Column(width=width)
-        per_line = max(int((width - CELL_PAD_PX) / CHAR_PX), 8)
+        per_line = max(int((width - CELL_PAD_PX) / WRAP_CHAR_PX), 8)
         lines_needed = max(lines_needed, -(-longest // per_line))
     if lines_needed <= 1:
         return ROW_PX, config

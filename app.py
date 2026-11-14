@@ -5997,7 +5997,10 @@ def show_folder_menu() -> None:
         shown_changes = changes.assign(File=changes["File"].map(_short_files)) if "File" in changes.columns else changes
         batched_view(
             len(shown_changes), key="folder-history", noun="perubahan",
-            render=lambda lo, hi: show_table(shown_changes.iloc[lo:hi], column_config={"Perubahan": st.column_config.TextColumn(width="large")}, max_height=10_000),
+            render=lambda lo, hi: show_table(shown_changes.iloc[lo:hi], column_config={
+                "Tanggal perubahan": st.column_config.TextColumn("Tanggal perubahan", width=140),
+                "Data": st.column_config.TextColumn("Data", width=130), "File": st.column_config.TextColumn("File", width=180),
+                "Perubahan": st.column_config.TextColumn("Perubahan", width=640)}, max_height=10_000),
             download=lambda: offer_excel(changes, "riwayat_perubahan_data.xlsx"),
         )
 
