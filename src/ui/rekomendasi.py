@@ -141,6 +141,47 @@ def _history(features, recs: pd.DataFrame, frames) -> tuple[pd.DataFrame, pd.Dat
     return changes, history
 
 
+KEEP, USE, FILL = "Pertahankan", "Ganti", "Lengkapi"
+ACTIONS = (KEEP, USE, FILL)
+ACTION_LABEL = {KEEP: "✅ Sudah baik, pertahankan", USE: "🔁 Ganti dengan rekomendasi", FILL: "⚠️ Perbaiki, lengkapi data dulu"}
+KEEP_SEO = 90   # skor SEO listing sekarang dianggap sudah baik
+MIN_GAIN = 10   # rekomendasi baru layak dipakai bila menaikkan skor SEO ≥ 10 poin
+
+
+def _part_of(row: dict) -> str:
+    """Bagian listing yang perlu diganti menurut kekurangan listing saat ini."""
+    gaps = row.get("Kekurangan saat ini") or []
+    title = any(str(g).startswith("Judul") for g in gaps)
+    desc = any(str(g).startswith("Deskripsi") for g in gaps)
+    if desc and not title:
+        return "deskripsi saja (nama sudah baik)"
+    if title and not desc:
+        return "nama saja (deskripsi sudah baik)"
+    return "nama & deskripsi"
+
+
+def _action_text(row: dict) -> str:
+    action = row.get("Tindakan") or _action_of(row)
+    if action == KEEP:
+        return ACTION_LABEL[KEEP]
+    return ("🔁 Ganti " if action == USE else "⚠️ Lengkapi data, lalu ganti ") + _part_of(row)
+
+
+def _action_of(row: dict) -> str:
+    """Saran tindakan per produk: pertahankan listing yang sudah baik, ganti bila rekomendasi lengkap & lebih baik, lengkapi bila masih kurang data."""
+    def num(v) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    now, rec = num(row.get("Skor SEO saat ini")), num(row.get("Skor SEO"))
+    good_now = (now == now and now >= KEEP_SEO) or (now == now and rec == rec and rec - now < MIN_GAIN and str(row.get("Status skor")) == "Excellence")
+    if good_now:
+        return KEEP
+    return USE if not (row.get("Masih kurang") or []) else FILL
+
+
 def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.DataFrame:
     from src.core import seo_history as sh
 
@@ -186,23 +227,27 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
         if column.button(f"{SCORE_DISPLAY.get(status, status)} · {fmt_num(total)}", key=f"name-filter-{status}", type="primary" if current == status else "secondary", use_container_width=True):
             st.session_state["name-filter"] = status
             st.rerun()
+    recs = recs.assign(Tindakan=[_action_of(r) for r in recs.to_dict("records")])
     view = recs if current == "Semua" else recs.loc[recs["Status skor"].eq(current)]
     ready_pick = st.session_state.get("name-ready", "Semua")
-    if "Siap upload" in recs.columns:
-        ready_all = recs["Siap upload"].astype(bool)
-        st.markdown("<div class='field-hint' style='margin-top:.4rem'><b>Kelengkapan rekomendasi</b> (nama + deskripsi baru): Siap upload = lolos semua cek SEO "
-                    "setelah dilengkapi otomatis dari data produk & kata kunci kompetitor; Perlu dilengkapi = ada data yang harus diisi manual (kolom Masih kurang)</div>",
-                    unsafe_allow_html=True)
-        rc = st.columns(3)
-        for column, (key, label, n) in zip(rc, (("Semua", "Semua", len(recs)), ("Siap", "✅ Siap upload", int(ready_all.sum())),
-                                                ("Lengkapi", "⚠️ Perlu dilengkapi", int((~ready_all).sum())))):
-            if column.button(f"{label} · {fmt_num(n)}", key=f"name-ready-{key}", type="primary" if ready_pick == key else "secondary", use_container_width=True):
-                st.session_state["name-ready"] = key
-                st.rerun()
-        if ready_pick == "Siap":
-            view = view.loc[view["Siap upload"].astype(bool)]
-        elif ready_pick == "Lengkapi":
-            view = view.loc[~view["Siap upload"].astype(bool)]
+    if ready_pick not in ("Semua", *ACTIONS):
+        ready_pick = "Semua"
+    acts = recs["Tindakan"].value_counts()
+    st.markdown(
+        "<div class='field-hint' style='margin-top:.4rem'><b>Saran tindakan</b> (membandingkan listing yang sedang tayang dengan rekomendasi): "
+        f"<b>{ACTION_LABEL[KEEP]}</b> = listing sekarang sudah baik (SEO ≥ {KEEP_SEO} atau rekomendasi hanya menambah &lt; {MIN_GAIN} poin), tidak perlu diubah · "
+        f"<b>{ACTION_LABEL[USE]}</b> = rekomendasi memperbaiki listing dan sudah lengkap, tinggal salin ke Seller Centre (kolom Saran tindakan menyebut "
+        "bagian yang diganti: nama, deskripsi, atau keduanya) · "
+        f"<b>{ACTION_LABEL[FILL]}</b> = listing perlu diperbaiki, tetapi rekomendasi masih butuh data yang diisi manual (kolom Masih kurang)</div>",
+        unsafe_allow_html=True,
+    )
+    rc = st.columns(4)
+    for column, (key, label, n) in zip(rc, (("Semua", "Semua", len(recs)), *((k, ACTION_LABEL[k], int(acts.get(k, 0))) for k in ACTIONS))):
+        if column.button(f"{label} · {fmt_num(n)}", key=f"name-ready-{key}", type="primary" if ready_pick == key else "secondary", use_container_width=True):
+            st.session_state["name-ready"] = key
+            st.rerun()
+    if ready_pick != "Semua":
+        view = view.loc[view["Tindakan"] == ready_pick]
     current = f"{current}-{ready_pick}"
     page = view.reset_index(drop=True)
     display = pd.DataFrame({
@@ -213,8 +258,10 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
         "Skor nama saat ini": page["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v)),
         "SEO saat ini": page.get("Skor SEO saat ini"),
         "SEO rekomendasi": page.get("Skor SEO"),
-        "Siap upload": page["Siap upload"].map(lambda ok: "✅ Siap" if ok else "⚠️ Lengkapi") if "Siap upload" in page.columns else "–",
-        "Masih kurang": page["Masih kurang"].map(lambda items: "; ".join(items) if items else "–") if "Masih kurang" in page.columns else "–",
+        "Saran tindakan": [_action_text(r) for r in page.to_dict("records")],
+        "Yang diperbaiki": [("–" if t == KEEP else ("; ".join(r.get("Kekurangan saat ini") or []) or "nama/deskripsi lebih lengkap"))
+                            for t, r in zip(page["Tindakan"], page.to_dict("records"))],
+        "Masih kurang (isi manual)": page["Masih kurang"].map(lambda items: "; ".join(items) if items else "–") if "Masih kurang" in page.columns else "–",
         "Rekomendasi nama baru": page["Rekomendasi nama baru"],
         "Kata kunci utama": page["Kata kunci utama"],
         "Peringkat kompetitor": [_rank_text(r) for r in page.to_dict("records")],
@@ -237,9 +284,11 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
             column_config={"Kode produk": st.column_config.TextColumn("Kode produk", width=110, pinned=True),
                            "Nama produk saat ini": st.column_config.TextColumn("Nama produk saat ini", width=380, pinned=True),
                            "Rekomendasi nama baru": st.column_config.TextColumn("Rekomendasi nama baru", width=420),
-                           "Siap upload": st.column_config.TextColumn("Siap upload", width=110,
-                                                                       help="✅ = nama & deskripsi rekomendasi memenuhi semua kaidah SEO; ⚠️ = ada bagian yang harus dilengkapi manual (kolom Masih kurang)"),
-                           "Masih kurang": st.column_config.TextColumn("Masih kurang", width=300, help="Kaidah SEO yang belum terpenuhi setelah dilengkapi otomatis"),
+                           "Saran tindakan": st.column_config.TextColumn("Saran tindakan", width=300,
+                                                                         help="Pertahankan = listing sekarang sudah baik; Ganti = salin rekomendasi; Lengkapi = isi data yang masih kurang dulu"),
+                           "Yang diperbaiki": st.column_config.TextColumn("Yang diperbaiki", width=300, help="Kekurangan listing yang sedang tayang yang ditutup oleh rekomendasi"),
+                           "Masih kurang (isi manual)": st.column_config.TextColumn("Masih kurang (isi manual)", width=300,
+                                                                                    help="Kaidah SEO yang belum bisa dilengkapi otomatis; isi sendiri sebelum upload"),
                            "USP utama": st.column_config.TextColumn(width="medium", help="Keunggulan paling menonjol; ⭐ = jarang disebut produk pembanding"),
                            "Skor nama saat ini": st.column_config.TextColumn("Skor nama saat ini", help="Penilaian 8 kriteria nama yang sedang tayang (Kurang/Cukup/Sangat baik); deskripsi tidak ikut dinilai di sini"),
                            "SEO saat ini": st.column_config.Column(help="% kaidah SEO yang dipenuhi nama & deskripsi yang sedang tayang"),
@@ -258,8 +307,8 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
         out["Peringkat kompetitor"] = display["Peringkat kompetitor"]
         out["Keunikan deskripsi (%)"] = display["Keunikan deskripsi"].round(0)
         out["USP"] = page["USP"].map(lambda items: "; ".join(t for t, _u in (items or [])))
+        out.insert(6, "Saran tindakan", [_action_text(r) for r in page.to_dict("records")])
         if "Siap upload" in page.columns:
-            out.insert(6, "Siap upload", page["Siap upload"].map(lambda ok: "Ya" if ok else "Belum"))
             out.insert(7, "Masih kurang (lengkapi manual)", page["Masih kurang"].map(lambda items: "; ".join(items)))
             out["Kekurangan listing saat ini"] = page["Kekurangan saat ini"].map(lambda items: "; ".join(items))
             out["Dilengkapi otomatis"] = page["Dilengkapi"].map(lambda items: "; ".join(items))
@@ -342,8 +391,13 @@ def _name_detail(item: pd.Series, history: pd.DataFrame | None = None) -> None:
                 parts.append("<b>Kekurangan listing saat ini</b>: " + html.escape("; ".join(now_missing)))
             if fixed:
                 parts.append("<b>Sudah dilengkapi di rekomendasi</b>: " + html.escape("; ".join(fixed)))
-            parts.append("<b style='color:#15803d'>Siap upload</b>: semua kaidah SEO terpenuhi" if not still else
-                         "<b style='color:#b45309'>Lengkapi manual sebelum upload</b>: " + html.escape("; ".join(still)))
+            action = _action_of(item)
+            if action == KEEP:
+                parts.append(f"<b style='color:#15803d'>{ACTION_LABEL[KEEP]}</b>: listing yang sedang tayang sudah baik; rekomendasi hanya referensi")
+            elif action == USE:
+                parts.append(f"<b style='color:#1d4ed8'>{html.escape(_action_text(item))}</b>: rekomendasi sudah memenuhi semua kaidah SEO, salin ke Seller Centre")
+            else:
+                parts.append(f"<b style='color:#b45309'>{html.escape(_action_text(item))}</b>: isi dulu " + html.escape("; ".join(still)))
             st.markdown("<div style='font-size:var(--fs-sm);margin:.3rem 0'>" + "<br>".join(parts) + "</div>", unsafe_allow_html=True)
         checks = item["Kriteria"] if isinstance(item["Kriteria"], dict) else {}
         if checks:

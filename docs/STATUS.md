@@ -749,3 +749,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Opsi diberi huruf berurutan (A, B, C, …) sesuai urutan tampil. Opsi pertama = **Budget Anda** dari setelan Fitur khusus yang sudah dikirim (`_submitted_setting`, kv `iklan-setelan:<periode>`); lalu laju iklan sekarang diteruskan (dilewati bila ≈ budget Anda), maksimal efisien, hemat biaya, minimum 3% sales bruto, 100% target (bila efisien).
 - Kolom baru **Asal angka budget** menjelaskan sumber tiap angka (mis. 412–418 jt = terpakai + iklan berjalan/hari × hari tersisa).
 - Bulan berikutnya: target, budget setelan, biaya terpakai, kurva toko, dan pantauan rencana semuanya per periode (bulan data terakhir); tidak ada angka bulan yang dikunci di kode.
+
+## 2026-11-14 — Nama & deskripsi: "Siap upload/Lengkapi" diganti Saran tindakan
+- Tindakan per produk (`rekomendasi._action_of`): ✅ Sudah baik, pertahankan (SEO saat ini ≥ 90, atau nama Sangat baik dan rekomendasi menambah < 10 poin) · 🔁 Ganti dengan rekomendasi (rekomendasi lengkap) · ⚠️ Perbaiki, lengkapi data dulu (rekomendasi masih butuh data manual). Teks tindakan menyebut bagian yang diganti: nama, deskripsi saja (nama sudah baik), atau keduanya (dari kekurangan listing saat ini).
+- Kolom baru "Yang diperbaiki" (kekurangan listing saat ini yang ditutup rekomendasi) dan "Masih kurang (isi manual)"; saringan & unduhan Excel ikut. Data: 5 pertahankan, 233 ganti (97 deskripsi saja), 215 lengkapi dulu.
