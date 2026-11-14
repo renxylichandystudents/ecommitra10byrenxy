@@ -17,6 +17,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
+from src.core.dc_stock import dc_take_label
 from src.core.decision_table import MAX_COVER_DAYS, stock_need
 
 RECORD_COLUMNS = ("prioritas", "tindakan", "sku", "nama", "varian", "stok", "kebutuhan", "restock", "ambil_dc", "tenggat", "pic", "alasan")
@@ -163,7 +164,7 @@ def restock_priority(table: pd.DataFrame, today: date, *, po: dict[str, dict] | 
                 "Restock": restock,
                 "Stok Site 10062": _dc(row, "10062"),
                 "Stok Site 10036": _dc(row, "10036"),
-                "Ambil dari DC": str(row.get("sumber_restock", "") or ""),
+                "Ambil dari DC": dc_take_label(row),
                 "Stok habis": habis,
                 "Status": status,
                 "Inbound": f"{inbound['no_po']} · {inbound['eta'].strftime('%d/%m/%Y') if inbound.get('eta') else 'ETA belum ada'}" if inbound else "",
@@ -268,7 +269,7 @@ def recommendation_records(
                 "stok": stok,
                 "kebutuhan": math.ceil(need),
                 "restock": restock,
-                "ambil_dc": str(row.get("sumber_restock", "") or "") if restock else "",
+                "ambil_dc": dc_take_label(row) if restock else "",
                 "tenggat": tenggat,
                 "pic": pic,
                 "alasan": "; ".join(reasons) if reasons else "-",

@@ -161,3 +161,26 @@ def test_feature_store_adds_new_nullable_columns(tmp_path):
     FeatureStore(engine)
     names = {c["name"] for c in inspect(engine).get_columns("warehouse_replenishment")}
     assert {"out_to", "out_tr_lain", "out_tr"} <= names
+
+
+def test_dc_take_label_appends_outstanding():
+    import pandas as pd
+
+    from src.core.dc_stock import dc_take_label, plan_only
+    from src.core.insight_live import attach_outstanding
+
+    table = pd.DataFrame({
+        "sku": ["A", "B", "C", "D"],
+        "sumber_restock": ["Ambil 5 dari Site 10062 · kurang 3 → PO supplier", "Ambil 2 dari Site 10036", "", ""],
+    })
+    repl = pd.DataFrame({"sku": ["A", "C"], "out_po": [10, 0], "out_tr": [5, 0], "out_to": [0, 4], "out_tr_lain": [0, 0]})
+    out = attach_outstanding(table, repl)
+    labels = [dc_take_label(r) for _i, r in out.iterrows()]
+    assert labels[0] == "Ambil 5 dari Site 10062 · kurang 3 → PO supplier · Outstanding: PO 10 · TR 5"
+    assert labels[1] == "Ambil 2 dari Site 10036"
+    assert labels[2] == "Outstanding: TO 4"
+    assert labels[3] == ""
+    assert plan_only(labels[0]) == "Ambil 5 dari Site 10062 · kurang 3 → PO supplier"
+    assert plan_only(labels[2]) == ""
+    # Tanpa replenishment: kolom ada tapi kosong, teks tetap rencana DC saja.
+    assert dc_take_label(attach_outstanding(table, None).iloc[0]) == table["sumber_restock"].iat[0]

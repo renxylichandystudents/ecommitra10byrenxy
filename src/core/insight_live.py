@@ -137,6 +137,17 @@ def outstanding_10037(repl: pd.DataFrame | None) -> pd.DataFrame:
     return out
 
 
+def attach_outstanding(table: pd.DataFrame, repl: pd.DataFrame | None) -> pd.DataFrame:
+    """Tambah kolom outstanding_10037 ("PO 10 · TR 5", kosong bila tidak ada) per SKU dari replenishment Site 10037 terbaru."""
+    if table is None or table.empty or "sku" not in table.columns:
+        return table
+    pending = outstanding_10037(repl)
+    if pending.empty:
+        return table.assign(outstanding_10037="")
+    keys = _clean_sku(table["sku"].fillna("").astype(str))
+    return table.assign(outstanding_10037=[outstanding_text(pending.loc[k]) if k in pending.index else "" for k in keys])
+
+
 def outstanding_text(row) -> str:
     """'PO 10 · TR 5 · TO 2' (hanya yang > 0)."""
     if row is None:

@@ -265,9 +265,9 @@ def show_priority_dashboard(
             [
                 ("SKU", f"Top 50 menurut {rank_basis} (kolom Rank)"),
                 ("Prediksi · Restock", f"Prediksi = prediksi QTY 30 hari ({short_date(lo)} – {short_date(hi)}, unit utuh); Restock = prediksi + SS − stok Site 10037 (minimal 0)"),
-                ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier"),
-                ("Outstanding Site 10037", "barang yang sudah dalam proses menuju Site 10037 menurut Replenishment Calculation by Date terbaru "
-                 "(Setting › Kapasitas gudang): PO, TR, TO, TR dari toko lain. Kosong = belum ada proses, perlu dibuatkan transfer/PO"),
+                ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier. "
+                 "Bila ada barang yang sudah dalam proses menuju Site 10037 (Replenishment Calculation by Date terbaru, Setting › Kapasitas gudang), "
+                 "ditambahkan \"Outstanding: PO · TR · TO · TR toko lain\"; tanpa keterangan itu = belum ada proses, perlu dibuatkan transfer/PO"),
                 ("Stok habis", "hari ini + stok ÷ prediksi harian; SKU Kosong: tanggal stok mulai 0 menurut riwayat unggahan Data stok Site 10037"),
                 ("Kosong sejak · Hari kosong", "unggahan Data stok Site 10037 pertama yang mencatat stok 0 (rangkaian kosong terakhir) s.d. hari penuh terakhir data latih (data ≥ 23:00). "
                  "\"≤\" bila semua unggahan tersimpan sudah 0: stok habis pada atau sebelum tanggal itu, jadi hari kosong dan sales hilang adalah angka minimal"),
@@ -283,15 +283,6 @@ def show_priority_dashboard(
             st.info("Data stok Top 50 belum diunggah, jadi kebutuhan restock belum bisa dihitung.")
         else:
             view = restock_view(priority)
-            from src.core.insight_live import outstanding_10037, outstanding_text
-
-            pending = outstanding_10037(data.replenishment)
-            if not pending.empty:
-                from src.core.dc_stock import _clean_sku
-
-                keys = _clean_sku(view["SKU"].astype(str))
-                view.insert(view.columns.get_loc("Inbound"), "Outstanding Site 10037",
-                            [outstanding_text(pending.loc[k]) if k in pending.index else "" for k in keys])
             # Kolom yang kosong untuk semua SKU disembunyikan (dinilai dari seluruh daftar, bukan per kelompok).
             hide = [c for c in ("Stok Site 10062", "Stok Site 10036", "Hari kosong", "Sales hilang sejak kosong", "Sales hilang bulan ini", "QTY hilang sejak kosong")
                     if view[c].isna().all()]
@@ -299,8 +290,6 @@ def show_priority_dashboard(
                 hide.append("Kosong sejak")
             if not view["Inbound"].astype(str).str.strip().any():
                 hide.append("Inbound")
-            if "Outstanding Site 10037" in view.columns and not view["Outstanding Site 10037"].astype(str).str.strip().any():
-                hide.append("Outstanding Site 10037")
             if not view["Ambil dari DC"].astype(str).str.strip().any():
                 hide.append("Ambil dari DC")
 
@@ -578,7 +567,7 @@ def _outstanding_lines(priority: pd.DataFrame, top: pd.DataFrame | None, data: F
         f"<b>Outstanding Site 10037</b> (Replenishment Calculation by Date{when}): <b>{fmt_num(info['sku_ada'])}</b> dari {fmt_num(len(need))} SKU Top 50 yang perlu restock "
         f"sudah punya barang dalam proses — PO {fmt_num(total['po'])} · TR {fmt_num(total['tr'])} · TO {fmt_num(total['to'])} · "
         f"TR dari toko lain {fmt_num(total['tr_toko_lain'])} = {fmt_num(total['masuk'])} unit; {fmt_num(covered)} SKU di antaranya sudah menutup restock-nya. "
-        f"<b>{fmt_num(len(need) - info['sku_ada'])}</b> SKU belum punya outstanding sama sekali (kolom Outstanding Site 10037 di tabel)."
+        f"<b>{fmt_num(len(need) - info['sku_ada'])}</b> SKU belum punya outstanding sama sekali (kolom Ambil dari DC tanpa keterangan Outstanding)."
     ]
     if top is not None and "kurang_setelah_dc" in top.columns:
         po_need = pd.Series(pd.to_numeric(top["kurang_setelah_dc"], errors="coerce").fillna(0.0).to_numpy(), index=top["sku"].astype(str))
@@ -645,7 +634,9 @@ def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureDat
         total = float(priority["Restock"].sum())
         when = f" untuk kebutuhan 30 hari ({short_date(span[0])} – {short_date(span[1])}) = prediksi + SS − stok Site 10037" if span else ""
         lines.append(f"<b>{fmt_num(empty)}</b> SKU Top 50 kosong · total restock Top 50 <b>{fmt_num(total)}</b> unit{when}.")
-        source = priority.loc[priority["Restock"] > 0, "Ambil dari DC"].astype(str)
+        from src.core.dc_stock import plan_only
+
+        source = priority.loc[priority["Restock"] > 0, "Ambil dari DC"].astype(str).map(plan_only)
         if source.str.strip().any():
             covered = int((source.str.startswith("Ambil") & ~source.str.contains("PO")).sum())
             partly = int((source.str.startswith("Ambil") & source.str.contains("PO")).sum())

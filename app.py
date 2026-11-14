@@ -93,6 +93,8 @@ from src.aggregate import (
 from src.core.config import changed_from_default, load_params, save_params
 from src.core.consolidation import consolidation_summary
 from src.core.decision_table import PERIOD_LABELS, build_decision_table, lama_kosong_text, period_actuals, period_groups, whole_units
+from src.core.dc_stock import dc_take_label
+from src.core.insight_live import attach_outstanding
 from src.core.enrich import StoreFrames, enrich_catalog, load_store_frames, zero_since_map
 from src.core.performance import clean_performance, perf_number
 from src.core.pipeline import (
@@ -8185,7 +8187,7 @@ def _render_movement_board(
     for item in records:
         row = decision.get(item["key"])
         has_stock = row is not None and bool(row.get("ada_data_stok", False))
-        transfer = str(row.get("sumber_restock") or "") if row is not None else ""
+        transfer = dc_take_label(row) if row is not None else ""
         cells = {
             "rank": {"v": item["rank"], "t": format_number(item["rank"], 0)},
             "sku": {"v": item["sku"], "t": item["sku"]},
@@ -9098,6 +9100,10 @@ with PAGE_ROOT.container(key="page-root"):
         stamp=str(stored.get("run_id") or ""),
     )
     _tick("data fitur")
+    if isinstance(enriched, pd.DataFrame) and not enriched.empty:
+        # Outstanding PO/TR/TO Site 10037 per SKU → ikut tampil di kolom Ambil dari DC.
+        enriched = attach_outstanding(enriched, FEATURE_DATA.replenishment)
+        shown = enriched.head(TOP_N).reset_index(drop=True)
     TABLE_META = None
     if isinstance(enriched, pd.DataFrame) and not enriched.empty:
         enriched, TABLE_META = _with_table_extras(

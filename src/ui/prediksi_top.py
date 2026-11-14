@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.core.dc_stock import dc_take_label
 from src.core.decision_table import stock_need
 from src.core.fmt import fmt_date, fmt_date_short
 from src.core.metrics import sold_lines
@@ -92,7 +93,7 @@ def show_prediction_checklist(
             "Stok Site 10037": page["stok"].where(page["ada_data_stok"].astype(bool)).to_numpy(),
             "Stok Site 10062": page["stok_10062"].to_numpy() if "stok_10062" in page.columns else np.nan,
             "Stok Site 10036": page["stok_10036"].to_numpy() if "stok_10036" in page.columns else np.nan,
-            "Ambil dari DC": page["sumber_restock"].fillna("").astype(str).to_numpy() if "sumber_restock" in page.columns else "",
+            "Ambil dari DC": [dc_take_label(r) for _i, r in page.iterrows()] if "sumber_restock" in page.columns else "",
             "SS": page["ss"].to_numpy(),
             "Status stok": page["m_status"].map(status_key).to_numpy(),
             "Label": page.get("label_text", pd.Series("", index=page.index)).fillna("").astype(str).to_numpy(),
@@ -211,6 +212,8 @@ def _explain_card(row, *, pred_label, actual_label, month_qty, last_day, day_qty
                     parts.append(f"Stok Site {code} {fmt_num(value)}")
             if restock and str(row.get("sumber_restock") or ""):
                 parts.append(str(row["sumber_restock"]))
+            if str(row.get("outstanding_10037") or "").strip() and str(row.get("outstanding_10037")) != "nan":
+                parts.append(f"Outstanding Site 10037: {row['outstanding_10037']}")
         parts.append(f"PO impor {po['no_po']} · {fmt_num(po['qty'])} unit · ETA {fmt_date(po['eta'])}" if po else "tidak ada PO impor terbuka")
         st.markdown(f"<div class='field-hint'>{html.escape(' · '.join(parts))}</div>", unsafe_allow_html=True)
 

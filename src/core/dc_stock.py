@@ -141,3 +141,31 @@ def add_transfer_columns(table: pd.DataFrame, need_col: str = "m_butuh") -> pd.D
     out["kurang_setelah_dc"] = rest
     out["sumber_restock"] = texts
     return out
+
+
+OUTSTANDING_SEP = " · Outstanding: "
+
+
+def dc_take_label(row) -> str:
+    """Teks kolom Ambil dari DC: rencana ambil DC/PO + outstanding PO/TR/TO Site 10037 (bila ada).
+
+    Contoh: "Ambil 5 dari Site 10062 · kurang 3 → PO supplier · Outstanding: PO 10 · TR 5"; tanpa kebutuhan restock: "Outstanding: TR 5"."""
+    if row is None:
+        return ""
+
+    def text(name: str) -> str:
+        value = row.get(name)
+        return "" if value is None or (not isinstance(value, str) and pd.isna(value)) else str(value).strip()
+
+    plan, pending = text("sumber_restock"), text("outstanding_10037")
+    if not pending:
+        return plan
+    return f"{plan}{OUTSTANDING_SEP}{pending}" if plan else f"Outstanding: {pending}"
+
+
+def plan_only(label: str) -> str:
+    """Bagian rencana DC/PO dari teks Ambil dari DC (tanpa keterangan outstanding)."""
+    label = str(label or "")
+    if label.startswith("Outstanding: "):
+        return ""
+    return label.split(OUTSTANDING_SEP)[0]

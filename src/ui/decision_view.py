@@ -263,7 +263,9 @@ def table_parts(
                 if known:
                     totals[f"dc_{code}"] = totals.get(f"dc_{code}", 0.0) + float(value)
                 export[f"Stok Site {code}"] = float(value) if known else None
-            plan = str(row.get("sumber_restock") or "").strip()
+            from src.core.dc_stock import dc_take_label
+
+            plan = dc_take_label(row)
             cells["dc_take"] = {"v": plan, "t": plan or "Tidak perlu"}
             export["Ambil dari DC"] = plan
         cover = row.get("hari_cukup")
