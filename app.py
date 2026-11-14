@@ -5478,8 +5478,11 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
                 * len(row),
                 axis=1,
             )
-            view_row, view_cfg = wrap_layout(view)
-            st.dataframe(styled, height=table_height(len(view), 720, view_row), row_height=view_row, column_config=view_cfg or None, hide_index=True, use_container_width=True)
+            # Tinggi baris tetap satu baris (tabel tidak memanjang): nama produk panjang dipotong "…", utuh di Excel.
+            view_row = 35
+            view_cfg = {"Nama akun pembeli": st.column_config.TextColumn("Nama akun pembeli", width=180, pinned=True),
+                        "Produk": st.column_config.TextColumn("Produk", width=420), "Varian": st.column_config.TextColumn("Varian", width=150)}
+            st.dataframe(styled, height=table_height(len(view), 720, view_row), row_height=view_row, column_config=view_cfg, hide_index=True, use_container_width=True)
 
         export = pd.concat([total_row, work.drop(columns=["_grp", "_rank"])], ignore_index=True)
         batched_view(

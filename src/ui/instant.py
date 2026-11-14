@@ -155,11 +155,12 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
         lo, hi = pager(len(products), key="instant-products", noun="produk", default_size=5,
                        download=lambda: download_excel(pd.concat([total_row, products], ignore_index=True), "produk_pengiriman_instan.xlsx",
                                                        key="xl-instant-products"))
-        show_table(pd.concat([total_row, products.iloc[lo:hi]], ignore_index=True), bold_label="Total",
+        # Satu baris per produk (tinggi tetap): nama panjang dipotong "…", lihat utuh dengan mengarahkan/klik sel atau di Excel.
+        show_table(pd.concat([total_row, products.iloc[lo:hi]], ignore_index=True), bold_label="Total", row_height=35,
                    kinds={"Invoice instan": "count", "QTY instan": "count", "Sales instan": "money", "Porsi instan dari sales SKU (%)": "pct"},
                    column_config={"Rank": st.column_config.Column("Rank", width=60, pinned=True),
                                   "SKU": st.column_config.TextColumn("SKU", width=110, pinned=True),
-                                  "Produk": st.column_config.TextColumn("Produk", width=360, pinned=True),
+                                  "Produk": st.column_config.TextColumn("Produk", width=460, pinned=True),
                                   "Varian": st.column_config.TextColumn("Varian", width=150, pinned=True)})
 
     seller_fault = int(reasons.loc[reasons["Alasan batal"].str.contains("tidak mengatur pengiriman|Penjual", case=False, regex=True), "Invoice"].sum()) if not reasons.empty else 0
