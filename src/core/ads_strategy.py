@@ -347,8 +347,11 @@ def round_budget(value: float, *, lo: float = 0.0, hi: float = float("inf"), ste
     return float(out)
 
 
+MIN_MARGINAL = 5.0  # tiap tambahan Rp 1 biaya iklan minimal kembali Rp 5 omzet iklan (biaya ≤ 20% omzet tambahan)
+
+
 def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, budget_daily: float | None = None,
-                    max_change: float = MAX_CHANGE) -> Plan:
+                    max_change: float = MAX_CHANGE, min_marginal: float = MIN_MARGINAL) -> Plan:
     """Rencana mengejar target dengan ROAS & budget yang ditetapkan pengguna (margin dan stok tidak membatasi).
 
     Target ROAS = ROAS rata-rata seluruh iklan di rencana (total omzet iklan / total biaya iklan), sama dengan arti
@@ -356,8 +359,10 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
     ≥ 1/`max_change` per evaluasi (lebih dari itu ROAS protection mati), selain dijeda.
     1. Budget dipindah dari iklan dengan tambahan omzet per Rp terendah ke yang tertinggi selama omzet naik.
     2. Bila biaya di atas budget atau ROAS rata-rata di bawah target, iklan yang paling tidak efektif dipangkas dulu.
-    3. Sisa budget ditambahkan bertahap (Rp 25 rb/hari) ke iklan paling efektif sampai kekurangan omzet harian
-       tertutup, selama ROAS rata-rata tetap ≥ target.
+    3. Iklan yang Rp terakhirnya kembali < `min_marginal` omzet iklan dipangkas (sampai ½, lalu dijeda bila rata-ratanya
+       pun < min_marginal): biaya yang tidak menghasilkan sales tidak dipertahankan.
+    4. Sisa budget ditambahkan bertahap (Rp 25 rb/hari) ke iklan paling efektif sampai kekurangan omzet harian
+       tertutup, selama ROAS rata-rata tetap ≥ target dan tiap tambahan Rp 1 kembali ≥ `min_marginal`.
     """
     floor = {u.key: float(target_roas) for u in units}
     cost = {u.key: 0.0 if u.locked else _base(u) for u in units}
@@ -423,6 +428,15 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
         worst = min(live, key=loss_rate)
         move(worst, -cut_step(worst))
 
+    for _ in range(20_000):
+        live = [u for u in units if cost[u.key] > 0]
+        if not live:
+            break
+        worst = min(live, key=loss_rate)
+        if loss_rate(worst) >= min_marginal:
+            break
+        move(worst, -cut_step(worst))
+
     for _ in range(8000):
         if target_left <= 0:
             break
@@ -437,7 +451,7 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
                 g = gain(u, step)
                 if g / step > (best_gain / best_step if best_step else 0.0):
                     best, best_gain, best_step = u, g, step
-        if best is None or (total_sales + best_gain) < target_roas * (total_cost + best_step):
+        if best is None or (total_sales + best_gain) < target_roas * (total_cost + best_step) or best_gain < min_marginal * best_step:
             break
         move(best, best_step)
     return Plan("Kejar target", {u.key: round_budget(cost[u.key], lo=lower[u.key], hi=caps[u.key]) for u in units}, floor)
@@ -503,6 +517,7 @@ def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.D
             notes.append({"Jeda sampai restock": "stok 0: jeda sampai barang masuk (lihat Pemilihan produk)",
                           "Pindahkan ke grup": "produk dipindah ke grup (lihat Pemilihan produk)",
                           "Keluarkan dari grup": "produk sudah diiklankan di iklan lain (lihat Pemilihan produk)",
+                          MANUAL_OUT: "dikecualikan pengguna: iklan dihentikan (lihat Pemilihan produk)",
                           SMALL_SALES: "sales produk kecil: iklan dihentikan, budget dipindah ke produk penghasil sales besar (lihat Pemilihan produk)"}.get(u.origin, f"{u.origin} (lihat Pemilihan produk)"))
         elif act in {"Turunkan budget", "Jeda"}:
             notes.append(f"tiap Rp 1 terakhir hanya kembali Rp {u.marginal(new):.1f}: dananya dipindah ke iklan yang lebih efektif".replace(".", ","))
@@ -684,9 +699,10 @@ def group_hygiene(members: pd.DataFrame, units: list[Unit], contribution_by_code
 
 
 SMALL_SALES = "Stop iklan · sales kecil"
+MANUAL_OUT = "Dikecualikan pengguna"
 SELECTION_ORDER = ("Buat iklan tunggal", "Jadikan iklan tunggal", "Pertahankan iklan tunggal", "Tambahkan ke grup", "Pertahankan di grup",
-                   "Pindahkan ke grup", "Keluarkan dari grup", SMALL_SALES, "Jeda sampai restock", "Sudah di iklan lain")
-MOVE_OUT = ("Keluarkan dari grup", "Jadikan iklan tunggal", "Jeda sampai restock", "Pindahkan ke grup", "Sudah di iklan lain", SMALL_SALES)
+                   "Pindahkan ke grup", "Keluarkan dari grup", SMALL_SALES, MANUAL_OUT, "Jeda sampai restock", "Sudah di iklan lain")
+MOVE_OUT = ("Keluarkan dari grup", "Jadikan iklan tunggal", "Jeda sampai restock", "Pindahkan ke grup", "Sudah di iklan lain", SMALL_SALES, MANUAL_OUT)
 SALES_PARETO = 0.95  # produk "sales besar" = produk teratas yang bersama-sama membentuk 95% prediksi sales toko
 MIN_QTY_DAY = 1.0    # produk "qty laku banyak" = prediksi ≥ 1 unit/hari (atau persentil 90 bila lebih tinggi)
 
@@ -716,7 +732,7 @@ NEW_KINDS = ("Produk tunggal (baru)", "Produk tunggal (dari grup)")
 
 def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                       target_roas: float, plan: Plan | None = None, top_single: int = 15, top_group: int = 60,
-                      max_promote: int = 10, focus: bool = True) -> pd.DataFrame:
+                      max_promote: int = 10, focus: bool = True, exclude: frozenset | set = frozenset()) -> pd.DataFrame:
     """Pemilihan produk untuk iklan produk tunggal vs iklan grup, per Kode Produk (satu produk = satu iklan).
 
     Dasar: hasil iklan 2 bulan terakhir per produk (biaya, omzet, ROAS, porsi omzet di grup), prediksi omzet harian dari
@@ -732,6 +748,7 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
     - Stop iklan · sales kecil (focus=True): potensi sales (maks. omzet iklan/hari, prediksi omzet/hari) di bawah batas produk
       pembentuk 95% sales toko DAN prediksi qty di bawah batas laku banyak (`potential_floors`). Produk belum diiklankan yang
       tidak lolos batas ini juga tidak diusulkan.
+    - Dikecualikan pengguna: Kode Produk di `exclude` (daftar pengecualian) dikeluarkan dari semua iklan dan tidak diusulkan.
     Kolom `_unit` = kunci iklan asal (kosong untuk produk belum diiklankan); dipakai `restructure`.
     """
     cols = ["Saran", "Produk", "Kode produk", "Iklan sekarang", "Biaya iklan/hari", "Omzet iklan/hari", "ROAS 2 bulan", "Porsi omzet grup",
@@ -804,7 +821,9 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
         is_group = r.unit.startswith("grup:")
         share = r.omzet / group_total[r.unit] if is_group and group_total.get(r.unit, 0) > 0 else float("nan")
         reason: list[str] = []
-        if home.get(code, r.unit) != r.unit and not running:
+        if code in exclude:
+            act, reason = MANUAL_OUT, ["dikeluarkan dari iklan sesuai daftar pengecualian pengguna"]
+        elif home.get(code, r.unit) != r.unit and not running:
             act, reason = "Sudah di iklan lain", [f"iklan ini tidak berjalan; produk dihitung di {label_of(home[code])}"]
         elif home.get(code, r.unit) != r.unit:
             act = "Keluarkan dari grup" if is_group else "Pindahkan ke grup"
@@ -844,7 +863,7 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
     position = 0
     for code in demand.sort_values(ascending=False).index:
         code = str(code)
-        if code in advertised or demand.get(code, 0) <= 0:
+        if code in advertised or code in exclude or demand.get(code, 0) <= 0:
             continue
         stok, _room = stock_of(code)
         if stok == stok and stok <= 0:
@@ -873,7 +892,7 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
 
 
 def _sort_selection(frame: pd.DataFrame) -> pd.DataFrame:
-    removal = frame["Saran"].isin(["Keluarkan dari grup", "Pindahkan ke grup", SMALL_SALES, "Jeda sampai restock", "Sudah di iklan lain"])
+    removal = frame["Saran"].isin(["Keluarkan dari grup", "Pindahkan ke grup", SMALL_SALES, MANUAL_OUT, "Jeda sampai restock", "Sudah di iklan lain"])
     value = (frame["Omzet iklan/hari"].fillna(0) + frame["Prediksi omzet/hari"].fillna(0)).where(~removal, frame["Biaya iklan/hari"].fillna(0))
     order = frame["Saran"].map({k: i for i, k in enumerate(SELECTION_ORDER)}).fillna(99)
     return frame.assign(_o=order, _v=value).sort_values(["_o", "_v"], ascending=[True, False]).drop(columns=["_o", "_v"]).reset_index(drop=True)
@@ -983,7 +1002,7 @@ def _unit_of(selection: pd.DataFrame, plan_units: list[Unit]) -> list[str]:
 
 def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                gap_daily: float, target_roas: float, budget_daily: float | None, lift: float = DEMAND_LIFT,
-               stock_cap: bool = False, select_roas: float | None = None) -> tuple[list[Unit], Plan, pd.DataFrame]:
+               stock_cap: bool = False, select_roas: float | None = None, exclude: frozenset | set = frozenset()) -> tuple[list[Unit], Plan, pd.DataFrame]:
     """Satu alur: pemilihan produk → susunan iklan baru → rencana budget, sehingga langkah 3 & 4 selalu sejalan.
 
     Iklan tunggal baru / hasil pisah yang tidak mendapat budget di rencana dikembalikan (tetap di grup / masuk grup),
@@ -991,7 +1010,7 @@ def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame,
     select_roas: ROAS acuan pemilihan produk (bawaan = target_roas).
     Mengembalikan (unit rencana, rencana, pemilihan + kolom budget usulan)."""
     selection = product_selection(members, units, products, contribution_by_code,
-                                  target_roas=target_roas if select_roas is None else select_roas)
+                                  target_roas=target_roas if select_roas is None else select_roas, exclude=exclude)
     plan_units, plan = [], Plan("Kejar target", {}, {})
     for _ in range(3):
         plan_units = [replace(u, lift=lift) for u in restructure(units, selection, products, contribution_by_code)]

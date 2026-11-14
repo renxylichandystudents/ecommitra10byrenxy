@@ -43,7 +43,7 @@ class AllocateTargetTest(unittest.TestCase):
         self.assertLessEqual(sum(plan.cost.values()), 150_000 + 1)
 
     def test_margin_and_stock_do_not_block_but_are_noted(self):
-        plan = A.allocate_target(self.units, gap_daily=5_000_000, target_roas=1.5, budget_daily=None)
+        plan = A.allocate_target(self.units, gap_daily=5_000_000, target_roas=1.5, budget_daily=None, min_marginal=0)
         acts = A.target_actions(self.units, plan, target_roas=1.5)
         weak = acts.loc[acts["key"] == "weak"].iloc[0]
         self.assertEqual(weak["Tindakan"], "Naikkan budget")
@@ -288,3 +288,29 @@ class RoundBudgetTest(unittest.TestCase):
                    a=1_500_000, b=70_000, spread=0.2, members=["1"])
         plan = A.allocate_target([u], gap_daily=500_000, target_roas=5, budget_daily=None)
         self.assertEqual(plan.cost["produk:1"] % 25_000, 0)
+
+
+class ExcludeAndEfficiencyTest(unittest.TestCase):
+    def test_excluded_products_leave_ads_and_are_not_proposed(self):
+        import pandas as pd
+
+        group = A.Unit(key="grup:G", nama="G", jenis="Grup", status="Berjalan", mode="GMV Max", daily_cost=60_000, daily_sales=900_000,
+                       a=1, b=1, spread=0.2, members=["1", "2"])
+        members = pd.DataFrame([
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "1", "nama": "Kloset", "biaya": 30_000, "omzet": 600_000, "terjual": 5},
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "2", "nama": "Lem Dextone", "biaya": 30_000, "omzet": 300_000, "terjual": 5},
+        ])
+        products = pd.DataFrame([
+            {"product_code": "1", "nama": "Kloset", "omzet_harian": 900_000, "qty_harian": 2, "stok_room": 1e6, "stok": 50},
+            {"product_code": "2", "nama": "Lem Dextone", "omzet_harian": 800_000, "qty_harian": 5, "stok_room": 1e6, "stok": 50},
+            {"product_code": "3", "nama": "Lem Dextone besar", "omzet_harian": 2_000_000, "qty_harian": 5, "stok_room": 1e6, "stok": 50},
+        ])
+        sel = A.product_selection(members, [group], products, {}, target_roas=5, exclude={"2", "3"}).set_index("Kode produk")
+        self.assertEqual(sel.loc["2", "Saran"], A.MANUAL_OUT)
+        self.assertNotIn("3", sel.index)
+
+    def test_inefficient_ad_is_cut(self):
+        poor = A.Unit(key="produk:9", nama="Boros", jenis="Produk tunggal", status="Berjalan", mode="GMV Max", daily_cost=100_000, daily_sales=200_000,
+                      a=300_000, b=100_000, spread=0.2, members=["9"])
+        plan = A.allocate_target([poor], gap_daily=1_000_000, target_roas=1.5, budget_daily=None)
+        self.assertEqual(plan.cost["produk:9"], 0.0)

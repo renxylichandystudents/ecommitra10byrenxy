@@ -706,3 +706,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Iklan: biaya iklan % sales bruto, tabel rincian proyeksi dirapikan
 - `month_outlook` mengembalikan `mtd_bruto` (sales bruto `order_metrics`). Kartu Fitur khusus "Biaya iklan % sales bersih · bruto" (data 12 Nov: 7,9% · 5,3%); Rekomendasi › kartu Biaya iklan terpakai juga menampilkan keduanya.
 - Tabel rincian proyeksi: row_height 35, lebar kolom tetap, keterangan dipersingkat.
+
+## 2026-11-14 — Iklan: daftar pengecualian produk & efisiensi minimum
+- Daftar pengecualian (`kv_setting` kunci `iklan-kecualikan`: kode produk + kata kunci nama/merek), diedit di langkah Pemilihan produk. Produk di daftar → saran "Dikecualikan pengguna" (keluar dari grup / iklan tunggal dijeda) dan tidak diusulkan iklan baru. Kata kunci "dextone" = 17 produk.
+- `allocate_target(min_marginal=5)`: iklan yang Rp terakhirnya kembali < Rp 5 omzet iklan dipangkas/dijeda; tambahan budget hanya bila tiap Rp 1 kembali ≥ Rp 5. Data 12 Nov, sisa ±Rp 21 jt/hari: biaya rencana −Rp 63 jt, ROAS 13,7 → 15,7 (sisa budget yang tidak efisien tidak dibelanjakan).
+- Tabel Pemilihan produk & Budget per iklan: tinggi baris 35 px.
