@@ -26,6 +26,15 @@ class PricingTest(unittest.TestCase):
         _v, pct = fee.margin(fee.Inputs(harga=out["harga_promo"], admin_pct=8.0, hpp=480_000))
         self.assertGreaterEqual(pct, 0)
 
+    def test_promo_never_zero_and_still_profitable(self):
+        for hist, share in ((0.0, 0.0), (15.0, 60.0), (60.0, 90.0)):
+            inp = fee.Inputs(harga=500_000, admin_pct=8.0, hpp=470_000, iklan=20_000)
+            out = P.plan(inp, normal=500_000, target_pct=8.0, hist_disc=hist, hist_share=share)
+            self.assertGreaterEqual(out["promo_pct"], P.MIN_PROMO)
+            self.assertLessEqual(out["promo_pct"], P.MAX_PROMO)
+            self.assertGreater(out["margin_promo"], 0)
+            self.assertGreaterEqual(out["margin_promo_pct"], 8.0 - 0.2)
+
     def test_unknown_cost(self):
         out = P.plan(fee.Inputs(harga=100_000), normal=100_000, target_pct=5, known=False)
         self.assertIn("modal belum diketahui", out["catatan"])

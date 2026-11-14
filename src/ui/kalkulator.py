@@ -419,7 +419,8 @@ def _suggestions(prices: pd.DataFrame | None, skus: pd.Series, actual: pd.Series
 
 
 PRIORITY_GROUPS = {
-    "Prioritas & tindakan": ("Prioritas", "Status", "SKU", "Nama", "Yang perlu dikerjakan"),
+    "Produk": ("Prioritas", "Status", "SKU", "Nama"),
+    "Tindakan": ("Yang perlu dikerjakan",),
     "Aktual periode terpilih (bersih)": ("Sales produk bersih", "QTY bersih", "Harga akhir", "Margin kotor", "Potongan Shopee", "Iklan", "Komisi affiliate",
                                          "ROAS", "Margin bersih", "Margin bersih/unit", "Margin bersih periode", "Rugi / kurang periode"),
     "Usulan harga untuk MD": SUGGEST_COLUMNS,
@@ -445,8 +446,9 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
             "Semua margin dihitung dari angka bersih ini.\n"
             "- **Yang perlu dikerjakan**: tuas yang bisa dikendalikan tim — iklan (ROAS minimal), komisi affiliate, program opsional, diskon/voucher, lalu harga.\n"
             "- **Usulan harga untuk MD** (setelah kolom Harga akhir = aktual): **Harga beli / modal** (file MD, belum PPN; selain itu file margin) → "
-            "**Harga jual disarankan** (harga normal minimal impas setelah semua biaya & iklan) → **Promo disarankan** (sesuai kebiasaan promo transaksi SKU itu, "
-            "dibatasi agar tidak rugi) → **Harga setelah promo** → **Harga nett** (uang diterima per unit setelah voucher, potongan Shopee, dan iklan) → "
+            "**Promo disarankan** (selalu ada, min. 5% maks. 30%: kebiasaan promo transaksi SKU itu bila ≥ 20% transaksi berpromo, selain itu ruang margin sehat) → "
+            "**Harga jual disarankan** (harga normal; dinaikkan bila perlu agar tanpa promo tidak rugi dan setelah promo margin tetap ≥ batas margin rendah) → "
+            "**Harga setelah promo** → **Harga nett** (uang diterima per unit setelah voucher, potongan Shopee, dan iklan) → "
             "**Profit/unit** = harga nett − harga beli. Bandingkan dengan Margin bersih/unit aktual; baris Total menunjukkan profit periode bila usulan dipakai dengan qty yang sama."
         )
     f1, f2 = st.columns([1.2, 1.8])
@@ -495,22 +497,18 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
             note += (f". Ditambah {fmt_num(recon['sku_nonaktif'])} SKU nonaktif (tidak ada di stok terakhir, tidak ditampilkan) "
                      f"{fmt_idr(recon['sales_nonaktif'])} = {fmt_idr(recon['sales_semua'])}, sama dengan sales produk di kartu Sales bersih aktual bila periodenya sebulan yang sama")
         st.markdown(f"<div class='field-hint'>{note}.</div>", unsafe_allow_html=True)
-    batched_view(
-        len(frame), key="calc-port", noun="SKU",
-        render=lambda lo, hi: show_table(
-            pd.concat([full.iloc[:1], full.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label="Total", kinds=kinds, max_height=10_000, dash_missing=True,
-            groups={c: g for g, cols in PRIORITY_GROUPS.items() for c in cols},
-            column_config={"Yang perlu dikerjakan": st.column_config.TextColumn(width="large"), "Catatan harga": st.column_config.TextColumn(width="large"),
-                           "Harga akhir": st.column_config.Column(help="Aktual: harga transaksi rata-rata periode terpilih setelah diskon & voucher"),
-                           "Harga beli / modal": st.column_config.Column(help="Harga beli file MD (belum PPN); bila tidak ada, modal dari file margin"),
-                           "Harga jual disarankan": st.column_config.Column(help="Harga normal yang disarankan agar untung: ≥ harga impas (semua biaya + iklan) dan, bila bisa, margin ≥ batas margin rendah"),
-                           "Perubahan harga bayar vs aktual": st.column_config.Column(help="Harga yang dibayar pembeli bila usulan dipakai (harga setelah promo − voucher penjual) dibanding Harga akhir aktual"),
-                           "Promo disarankan": st.column_config.Column(help="Kedalaman promo sesuai kebiasaan transaksi SKU ini (median diskon bila ≥ 20% transaksi berpromo), dibatasi agar tidak di bawah impas"),
-                           "Harga setelah promo": st.column_config.Column(help="Harga jual disarankan setelah promo disarankan = harga yang dibayar pembeli"),
-                           "Harga nett (setelah semua biaya)": st.column_config.Column(help="Uang diterima per unit: harga setelah promo − voucher − potongan Shopee − iklan"),
-                           "Profit/unit setelah promo": st.column_config.Column(help="Harga nett − harga beli/modal (bandingkan dengan Margin bersih/unit aktual)")},
-        ),
-        download=lambda: download_excel(full, "prioritas_perbaikan_margin.xlsx", key="xl-calc-port"),
+    from src.ui import grouped_table
+
+    total_row = {c: v for c, v in total.items() if not (isinstance(v, float) and np.isnan(v))}
+    total_row.update({"Nama": "Total", "Status": ""})
+    grouped_table.show(
+        frame, key="calc-port-tbl", filename="prioritas_perbaikan_margin.xlsx", export=full, noun="SKU", first=5,
+        groups=PRIORITY_GROUPS, kinds=kinds, total=total_row, rank="Prioritas",
+        pin=("Prioritas", "Status", "SKU", "Nama"), wrap=("Nama", "Yang perlu dikerjakan", "Catatan harga"),
+        widths={"Prioritas": 84, "Status": 104, "SKU": 104, "Nama": 240, "Yang perlu dikerjakan": 380, "Catatan harga": 380,
+                "Sumber margin": 170, "Kategori Shopee": 240},
+        signed=("Margin kotor", "Margin bersih", "Margin bersih/unit", "Margin bersih periode", "Perubahan harga bayar vs aktual",
+                "Profit/unit setelah promo", "Margin setelah promo"),
     )
 
 

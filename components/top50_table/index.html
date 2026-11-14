@@ -113,6 +113,22 @@
   .pg.on { background: linear-gradient(135deg, #ff7348 0%, #ee4d2d 100%); border: none; color: #fff; }
   .pg:disabled { opacity: .45; cursor: default; }
   .pg-gap { color: #6b7280; padding: 0 2px; }
+  /* Tabel berkelompok umum (grouped_table): angka minus merah, warna judul kelompok. */
+  td.neg .main { color: #dc2626; }
+  td.pos .main { color: #15803d; }
+  thead th.group.tone-g1, thead th.group.tone-g2, thead th.group.tone-g3, thead th.group.tone-g4 { font-weight: 700; font-size: var(--fs-sm); letter-spacing: .02em; }
+  thead th.group.tone-g1 { background: #e2e8f0; color: #0f172a; }
+  thead th.leaf.tone-g1 { background: #f1f5f9; }
+  thead th.group.tone-g2 { background: #dbeafe; color: #1e3a8a; border-left: 2px solid #93c5fd; }
+  thead th.leaf.tone-g2 { background: #eff6ff; color: #1e3a8a; }
+  thead th.group.tone-g3 { background: #bbf7d0; color: #14532d; border-left: 2px solid #4ade80; }
+  thead th.leaf.tone-g3 { background: #f0fdf4; color: #14532d; }
+  thead th.group.tone-g4 { background: #e5e7eb; color: #374151; }
+  thead th.group.tone-g5 { background: #ffedd5; color: #7c2d12; border-left: 2px solid #fdba74; font-weight: 700; font-size: var(--fs-sm); }
+  thead th.leaf.tone-g5 { background: #fff7ed; color: #7c2d12; }
+  .glabel { position: sticky; right: 12px; display: inline-block; }
+  thead th.leaf.tone-g1, thead th.leaf.tone-g2, thead th.leaf.tone-g3, thead th.leaf.tone-g4, thead th.leaf.tone-g5 { white-space: normal; vertical-align: bottom; }
+  thead th.leaf.tone-g4 { background: #f9fafb; }
   .chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 0 0; border-radius: 999px; background: #f1f5f9; border: 1px solid #e2e8f0; font-weight: 600; }
 </style>
 </head>
@@ -226,7 +242,7 @@
     rows.sort((a, b) => {
       const x = a.cells[id] ? a.cells[id].v : null;
       const y = b.cells[id] ? b.cells[id].v : null;
-      if (x === y) return (a.cells.rank.v - b.cells.rank.v);
+      if (x === y) return (a.cells.rank ? a.cells.rank.v - b.cells.rank.v : 0);
       if (x === null || x === undefined) return 1;
       if (y === null || y === undefined) return -1;
       if (typeof x === "number" && typeof y === "number") return (x - y) * state.sortDir;
@@ -282,7 +298,13 @@
       }
       let span = 1;
       while (i + span < cols.length && cols[i + span].group === c.group) span++;
-      row1 += `<th colspan="${span}" data-col="${esc(c.id)}" data-move="block" class="group movable r1${c.tone ? " tone-" + c.tone : ""}">${esc(c.group)}</th>`;
+      // Kelompok yang kolom pertamanya terkunci ikut terkunci di kiri agar judulnya tetap terlihat saat digeser.
+      const allPin = cols.slice(i, i + span).every((x) => x.pin);
+      const gpin = allPin ? ` pin` : "";
+      const gstyle = allPin ? ` style="left:${lefts[c.id]}px"` : "";
+      // Judul kelompok lebar tetap terlihat saat tabel digeser: label menempel di tepi area yang terlihat (setelah kolom terkunci).
+      const label = c.tone && !allPin ? `<span class="glabel" style="left:${left + 12}px">${esc(c.group)}</span>` : esc(c.group);
+      row1 += `<th colspan="${span}" data-col="${esc(c.id)}" data-move="block" class="group movable r1${gpin}${c.tone ? " tone-" + c.tone : ""}"${gstyle}>${label}</th>`;
       for (let j = i; j < i + span; j++) {
         const leaf = cols[j];
         leaf.first = j === i;

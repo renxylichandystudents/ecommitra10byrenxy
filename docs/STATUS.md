@@ -794,3 +794,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - `date_range_picker`: setelah pengguna memilih tanggal, halaman dijalankan ulang sekali agar teks kalender ikut berubah (sebelumnya angka berubah tetapi kalender masih menampilkan rentang lama).
 - `show_table(groups=...)`: baris judul kelompok di atas header (MultiIndex). Daftar prioritas: Prioritas & tindakan · Aktual periode terpilih (bersih) · Usulan harga untuk MD · Keterangan.
 - Keterangan total tabel: sales produk bersih & QTY bersih periode, + SKU nonaktif yang tidak ditampilkan = total sales produk bersih periode.
+
+## 2026-11-14 — Kalkulator: tabel prioritas berkelompok (komponen HTML), promo selalu ada
+- Daftar prioritas memakai komponen tabel berkelompok (`src/ui/grouped_table.py`, komponen top50_table): judul kelompok berwarna & tetap terlihat saat digeser (Produk · Tindakan · Aktual periode terpilih (bersih) · Usulan harga untuk MD · Keterangan), kolom Produk terkunci, angka minus merah, urut per kolom, halaman & Excel di dalam tabel.
+- `pricing.plan`: promo selalu ada (min. 5%, maks. 30%): kebiasaan promo transaksi bila ≥ 20% transaksi berpromo, selain itu ruang margin sehat (maks. 10%) atau 5%. Harga normal disarankan dinaikkan bila perlu agar setelah promo margin ≥ batas sehat (min. 2%).
+- Evaluasi hanya SKU yang bertransaksi pada periode terpilih (SKU tanpa transaksi tidak masuk daftar).
