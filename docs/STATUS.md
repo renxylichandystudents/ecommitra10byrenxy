@@ -2,6 +2,14 @@
 
 Diperbarui: 13 November 2026.
 
+## Insight Ringkasan: bulan berjalan, iklan yang sedang berjalan, outstanding PO/TR/TO (14 Nov 2026)
+
+- **Bulan berjalan**: SKU Top 50 yang perlu restock untuk sisa bulan = prediksi sisa bulan (unit utuh, `run_rest_qty`) + SS − stok Site 10037, dibagi DC (10062 → 10036) lalu PO dengan `transfer_plan` (aturan sama dengan Analisa safety stock).
+- **Iklan**: dulu "SKU beriklan" = SKU dengan biaya iklan > 0 di jendela 30 hari (termasuk iklan yang sudah berhenti). Kini hanya iklan berstatus **Berjalan** di unggahan laporan iklan terakhir yang disimpan **sebelum analisa yang dibuka dijalankan** (`run_at`): anggota grup Berjalan (laporan grup), produk tunggal Berjalan (Semua Laporan Iklan), produk berbiaya di iklan otomatis bila iklan otomatis Berjalan. Kode produk → SKU lewat Data stok terbaru. Alasan tahan dirinci (stok, margin, batal). Bila ada laporan iklan lebih baru dari analisa, diberi catatan untuk jalankan analisa.
+- **Outstanding** untuk SKU Top 50 yang perlu restock: Site 10037 PO & TR (replenishment Setting › Kapasitas gudang; tabel database belum menyimpan TO), Site 10062/10036 PO, TR, TO, TR dari toko lain (unggahan stok DC berformat Replenishment Calculation by Date). Kebutuhan PO 30 hari (`kurang_setelah_dc`) dibanding barang masuk dalam proses (PO + TR semua site) → SKU tertutup/sebagian/belum ada PO dan perkiraan PO baru. Bila unggahan DC terakhir berformat Stock Qty and Value, outstanding ditulis belum terbaca (data lokal 14 Nov: keempat unggahan DC tersimpan berformat ini).
+- Kode `src/core/insight_live.py` (`month_restock`, `running_ads`, `outstanding_for`, `po_coverage`), `dashboard._month_line/_outstanding_lines/_ads_line`, `FeatureData.replenishment`, `app._run_at_of`. Tes `tests/test_insight_live.py`. Rumus prediksi & SS tidak berubah.
+- Data lokal (analisa 16, laporan iklan 14 Nov 07:14): 5 grup + 3 produk tunggal + otomatis berjalan = 546 SKU (49 di Top 50); 350 dari 492 SKU berprediksi sebaiknya ditahan (322 batal tinggi, 103 stok).
+
 ## Kartu "SKU Top 50 stok kurang": rincian menjumlah + bulan berjalan (14 Nov 2026)
 
 - Masukan pengguna: "4 kosong · 34 di bawah SS" tidak menjumlah ke 44. Kini rincian tanpa tumpang tindih: kurang = kosong + masih berstok tapi di bawah SS + di atas SS tapi belum cukup (mis. 44 = 4 + 30 + 10); total di bawah SS (kosong + berstok di bawah SS) tetap disebut; di luar hitungan: cukup · tanpa data stok.

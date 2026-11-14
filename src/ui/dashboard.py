@@ -190,6 +190,8 @@ def show_priority_dashboard(
     fresh_period: bool,
     metric: str = "qty",
     basis: str = "bersih",
+    frames=None,
+    run_at=None,
 ) -> None:
     st.markdown("<div class='section-title'>Prioritas hari ini</div>", unsafe_allow_html=True)
     if table is None or table.empty:
@@ -254,7 +256,8 @@ def show_priority_dashboard(
     priority = restock_priority(top, today, po=data.po, orders=orders, day_weight=weight, through=through)
     rank_basis = "Sales value" if metric == "sales" else "QTY terjual"
     # Insight di atas, tabel restock selebar penuh agar kolom Produk/Varian tidak terpotong.
-    _insight_cards(table, priority, data, role, top=top, span=(lo, hi))
+    _insight_cards(table, priority, data, role, top=top, span=(lo, hi), month=running_month_parts(top, orders, orders_all, today),
+                   frames=frames, run_at=run_at)
     with st.container():
         st.markdown(f"**Kebutuhan restock prioritas · Top 50 {rank_basis}**")
         _empty_loss_box(priority, every, features, today)
@@ -459,8 +462,124 @@ def _rest_of_month(empty: pd.DataFrame, orders_all: pd.DataFrame | None, today: 
     return float((empty["_sales_harian"].astype(float) * weight).sum()), float((empty["_pred_harian"].astype(float) * weight).sum())
 
 
+def _span_text(lo: date, hi: date) -> str:
+    month = MONTHS_SHORT[hi.month - 1]
+    return f"{lo.day} {month}" if lo == hi else f"{lo.day}–{hi.day} {month}"
+
+
+def _month_line(top: pd.DataFrame | None, month: dict | None) -> str:
+    from src.core.insight_live import month_restock
+
+    if top is None or not month or month["rest_start"] > month["month_end"]:
+        return ""
+    plan = month_restock(top)
+    if plan is None:
+        return ""
+    lo, hi = month["rest_start"], month["month_end"]
+    head = f"<b>Bulan berjalan</b> (sisa {_span_text(lo, hi)}, {(hi - lo).days + 1} hari): "
+    if plan["kurang_sku"] == 0:
+        return head + f"stok Site 10037 sudah cukup untuk prediksi sisa bulan {fmt_num(plan['prediksi'])} unit + SS di semua SKU Top 50."
+    return (
+        head + f"<b>{fmt_num(plan['kurang_sku'])}</b> SKU perlu restock <b>{fmt_num(plan['restock'])}</b> unit "
+        f"(prediksi sisa bulan {fmt_num(plan['prediksi'])} + SS − stok Site 10037, per SKU): {fmt_num(plan['dc_penuh'])} cukup dari DC, "
+        f"{fmt_num(plan['dc_sebagian'])} sebagian DC + PO, {fmt_num(plan['po_saja'])} harus PO. "
+        f"Dalam unit: <b>{fmt_num(plan['dari_dc'])}</b> dari DC + <b>{fmt_num(plan['po'])}</b> PO. "
+        "Angka ini yang harus datang sebelum akhir bulan agar target bulan ini tidak hilang karena stok."
+    )
+
+
+def _outstanding_lines(priority: pd.DataFrame, top: pd.DataFrame | None, data: FeatureData, frames) -> list[str]:
+    from src.core.insight_live import outstanding_for, po_coverage
+
+    if priority.empty:
+        return []
+    need = priority.loc[priority["Restock"] > 0, "sku"].astype(str).tolist()
+    if not need:
+        return []
+    info = outstanding_for(need, getattr(frames, "dc_stock", None), data.replenishment, data.replenishment_date)
+    sites = info["sites"]
+    parts = []
+    if "10037" in sites:
+        s = sites["10037"]
+        when = f" ({short_date(s['tanggal'])})" if s.get("tanggal") else ""
+        parts.append(f"Site 10037{when}: PO {fmt_num(s['po'])} · TR {fmt_num(s['tr'])} unit ({fmt_num(s['sku'])} SKU)")
+    for code in ("10062", "10036"):
+        if code in sites:
+            s = sites[code]
+            when = f" ({short_date(s['tanggal'])})" if s.get("tanggal") is not None else ""
+            parts.append(f"Site {code}{when}: PO {fmt_num(s['po'])} · TR {fmt_num(s['tr'])} · TO {fmt_num(s['to'])} · "
+                         f"TR dari toko lain {fmt_num(s['tr_toko_lain'])} unit ({fmt_num(s['sku'])} SKU)")
+    lines = []
+    if parts:
+        lines.append(f"<b>Outstanding</b> untuk {fmt_num(len(need))} SKU Top 50 yang perlu restock (Replenishment Calculation by Date): " + " · ".join(parts) + ".")
+    missing = [code for code in ("10062", "10036") if code not in sites]
+    if missing:
+        lines.append(
+            "Outstanding PO/TR/TO " + " & ".join(f"Site {c}" for c in missing) + " belum terbaca: unggahan stok DC terakhir bukan laporan "
+            "Replenishment Calculation by Date (mis. Stock Qty and Value). Unggah laporan replenishment di Upload data › Stok agar barang dalam proses ikut dihitung."
+        )
+    if "10037" not in sites:
+        lines.append("Outstanding Site 10037 belum ada: unggah Replenishment Site 10037 di Setting › Kapasitas gudang.")
+    if parts and top is not None and "kurang_setelah_dc" in top.columns:
+        po_need = pd.Series(pd.to_numeric(top["kurang_setelah_dc"], errors="coerce").fillna(0.0).to_numpy(), index=top["sku"].astype(str))
+        per = info["per_sku"].assign(sku=need).set_index("sku")["masuk"]
+        cover = po_coverage(po_need, per.groupby(level=0).sum())
+        if cover["sku_perlu_po"]:
+            lines.append(
+                f"Kebutuhan PO 30 hari {fmt_num(cover['unit_perlu_po'])} unit ({fmt_num(cover['sku_perlu_po'])} SKU) dibanding barang masuk yang sudah diproses "
+                f"(outstanding PO + TR): {fmt_num(cover['sku_tertutup'])} SKU sudah tertutup, {fmt_num(cover['sku_sebagian'])} sebagian, "
+                f"<b>{fmt_num(cover['sku_belum'])}</b> belum ada PO/TR sama sekali → buat PO baru ±<b>{fmt_num(cover['unit_po_baru'])}</b> unit."
+            )
+    return lines
+
+
+def _ads_line(table: pd.DataFrame, data: FeatureData, frames, run_at) -> list[str]:
+    """Iklan yang berstatus Berjalan di unggahan laporan iklan terakhir sebelum analisa dijalankan."""
+    from src.core.enrich import AD_SOURCES
+    from src.core.insight_live import running_ads
+
+    if frames is None or not frames.has_ads:
+        return []
+    ads = dict(zip(AD_SOURCES, frames.ads))
+    live = running_ads(ads, frames.stock, cutoff=run_at)
+    if live is None:
+        return ["Laporan iklan yang diunggah sebelum analisa ini belum ada; unggah laporan iklan lalu jalankan analisa."]
+    newer = running_ads(ads, frames.stock, cutoff=None)
+    stamp = live["diunggah"]
+    source = (f"laporan iklan diunggah {short_date(stamp)} {stamp:%H:%M}" if stamp is not None else "laporan iklan terakhir") + (
+        f", periode {html.escape(live['periode'])}" if live["periode"] else "")
+    kinds = [f"{fmt_num(live['grup'])} grup", f"{fmt_num(live['tunggal'])} produk tunggal"] + (["iklan otomatis"] if live["otomatis"] else [])
+    lines = []
+    skus = live["skus"]
+    if not skus:
+        lines.append(f"Tidak ada iklan berstatus Berjalan di {source}.")
+    else:
+        rows = table.loc[table["sku"].astype(str).isin(skus)]
+        held, reasons = 0, {"stok": 0, "margin": 0, "batal": 0}
+        for _, row in rows.iterrows():
+            ok, why, _decision = promo_eligible(row, excluded=data.excluded, margin_pct=data.margin_pct.get(str(row["sku"])), cancel_pct=row.get("batal_pct"))
+            if ok:
+                continue
+            held += 1
+            text = " ".join(why).lower()
+            reasons["stok"] += "stok" in text
+            reasons["margin"] += "margin" in text
+            reasons["batal"] += "batal" in text
+        why_text = ", ".join(f"{fmt_num(n)} {label}" for label, n in (("stok kurang/belum ada", reasons["stok"]), ("margin minus/rendah", reasons["margin"]),
+                                                                       ("batal tinggi", reasons["batal"])) if n)
+        top_live = int(table.head(50)["sku"].astype(str).isin(skus).sum())
+        lines.append(
+            f"<b>Iklan sedang berjalan</b> ({source}): {', '.join(kinds)}, mencakup {fmt_num(len(skus))} SKU ({fmt_num(top_live)} di Top 50). "
+            + (f"<b>{fmt_num(held)}</b> SKU ({fmt_num(held / len(rows) * 100, 0)}% dari {fmt_num(len(rows))} SKU berprediksi) sebaiknya ditahan"
+               f"{' — ' + why_text if why_text else ''} (satu SKU bisa lebih dari satu alasan)." if held and len(rows) else "Semua SKU yang diiklankan lolos cek stok, margin, dan batal.")
+        )
+    if newer is not None and newer["diunggah"] is not None and stamp is not None and newer["diunggah"] > stamp:
+        lines.append(f"Ada laporan iklan lebih baru ({short_date(newer['diunggah'])} {newer['diunggah']:%H:%M}) yang belum dipakai analisa ini; jalankan analisa agar ikut.")
+    return lines
+
+
 def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureData, role: str, *, top: pd.DataFrame | None = None,
-                   span: tuple[date, date] | None = None) -> None:
+                   span: tuple[date, date] | None = None, month: dict | None = None, frames=None, run_at=None) -> None:
     lines = []
     if not priority.empty:
         empty = int((priority["Status"] == "Kosong").sum())
@@ -488,16 +607,17 @@ def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureDat
             lines.append(f"SKU teratas {html.escape(str(first['sku']))} punya PO impor {html.escape(po['no_po'])} ({fmt_num(po['qty'])} unit, {eta}).")
         elif data.po:
             lines.append(f"{fmt_num(len(data.po))} SKU punya PO impor terbuka (lihat kolom Inbound).")
-    held = 0
-    spending = pd.DataFrame()
-    if "biaya_iklan" in table.columns:
-        spending = table.loc[table["biaya_iklan"].fillna(0) > 0]
-        for _, row in spending.iterrows():
-            ok, _reasons, _decision = promo_eligible(row, excluded=data.excluded, margin_pct=data.margin_pct.get(str(row["sku"])), cancel_pct=row.get("batal_pct"))
-            held += 0 if ok else 1
-    if held:
-        lines.append(f"<b>{fmt_num(held)}</b> dari {fmt_num(len(spending))} SKU yang sedang beriklan (semua SKU, bukan hanya Top 50; "
-                     f"{fmt_num(held / len(spending) * 100, 0)}%) sebaiknya ditahan karena stok kurang, margin rendah, atau batal tinggi.")
+        try:
+            lines += _outstanding_lines(priority, top, data, frames)
+        except Exception as exc:  # noqa: BLE001 - insight tambahan, tidak menghentikan halaman
+            lines.append(f"Outstanding PO/TR/TO belum bisa dibaca: {html.escape(str(exc))}")
+    month_text = _month_line(top, month)
+    if month_text:
+        lines.append(month_text)
+    try:
+        lines += _ads_line(table, data, frames, run_at)
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"Iklan berjalan belum bisa dibaca: {html.escape(str(exc))}")
     body = "".join(f"<div style='margin:.25rem 0;font-size:var(--fs-sm)'>{line}</div>" for line in lines) or "<div class='field-hint'>Belum ada insight.</div>"
     st.markdown(f"<div class='stat-card'><div class='readable-metric-label'>Insight</div>{body}</div>", unsafe_allow_html=True)
     if role in ("team_dc", "team_icmd"):

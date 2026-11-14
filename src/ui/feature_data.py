@@ -28,6 +28,8 @@ class FeatureData:
     margin_fallback: float | None = None  # margin bersih tipikal toko (dari File margin) untuk SKU tanpa data
     margin_source: str = ""
     margin_inputs: dict = field(default_factory=dict)  # sku → shopee_fee.Inputs (modal dari File margin) untuk harga flash
+    replenishment: pd.DataFrame = field(default_factory=pd.DataFrame)  # replenishment Site 10037 terbaru: sku, out_po, out_tr
+    replenishment_date: object = None
 
 
 SEED_ACTION = "seed:excluded_sku"
@@ -100,6 +102,13 @@ def load_feature_data(features, table: pd.DataFrame, today: date, *, periode: st
     if data.import_po.empty and not data.import_note.empty and "sku" in data.import_note.columns:
         data.import_po = po_from_notes(data.import_note)
     data.po = open_po_map(data.import_po)
+    try:
+        dates = features.snapshot_dates("warehouse_replenishment")
+        if dates:
+            data.replenishment = features.read("warehouse_replenishment", {"snapshot_date": dates[0]})
+            data.replenishment_date = dates[0]
+    except Exception:
+        pass
     data.ad_per_unit = ad_cost_map(table)
     if not data.components.empty:
         data.margin = margin_core.sku_margin_table(product_frame(table), data.components, iklan_per_unit=data.ad_per_unit, on=today)

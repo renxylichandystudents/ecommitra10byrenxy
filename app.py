@@ -3461,6 +3461,22 @@ def show_prediction_inputs() -> None:
     st.stop()
 
 
+def _run_at_of(run_id) -> datetime | None:
+    """Waktu analisa dijalankan (jam WIB tanpa zona), untuk membaca unggahan yang tersedia saat itu."""
+    if not run_id:
+        return None
+    try:
+        record = run_repository().get(int(run_id))
+        stamp = pd.Timestamp(str(record.run_at)) if record is not None else None
+    except Exception:
+        return None
+    if stamp is None or pd.isna(stamp):
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.tz_convert("Asia/Jakarta").tz_localize(None)
+    return stamp.to_pydatetime()
+
+
 def show_result_status(status: dict) -> None:
     """Baris status di atas hasil: analisa mana yang dibuka dan apakah sudah memakai data terbaru."""
     latest = status["latest"]
@@ -9206,6 +9222,8 @@ with PAGE_ROOT.container(key="page-root"):
                 fresh_period=window_start.day == 1,
                 metric=metric,
                 basis=(TABLE_META or {}).get("basis") or ("bersih" if exclude_return_cancel else "masuk"),
+                frames=frames,
+                run_at=_run_at_of(stored.get("run_id")),
                 )
         show_exclude_and_cards()
         if isinstance(stock, pd.DataFrame) and not shown.empty:
