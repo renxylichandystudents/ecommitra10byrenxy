@@ -698,3 +698,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Kartu "Proyeksi sales bersih akhir bulan" (seluruh penjualan toko, iklan + non-iklan, sesudah batal/Belum Bayar/retur) dan "Efek budget iklan setelan" (dulu "Tambahan sales bersih dari iklan") dengan penjelasan arah: sisa budget/hari vs laju iklan rata-rata bulan ini.
 - Langkah 2 Fitur khusus: tabel rincian Aktual + Prediksi sisa bulan (laju iklan rata-rata) + Efek budget = Proyeksi, Target, Kurang/Lebih.
 - Opsi rekomendasi: kolom "Efek budget iklan"; opsi A menyebut biaya iklan berjalan/hari.
+
+## 2026-11-14 — Iklan: budget kelipatan Rp 25 rb & sel kosong "–"
+- `ads_strategy.round_budget`: budget harian usulan per iklan (setiap rencana mingguan) dibulatkan ke kelipatan Rp 25.000 terdekat (min. Rp 25 rb), tetap dalam batas naik 2× / turun ½.
+- `show_table(dash_missing=True)`: kolom angka yang punya sel kosong ditampilkan sebagai teks berformat dengan "–" (Streamlit 1.50 menampilkan NaN angka sebagai "None" walau Styler na_rep). Dipakai semua tabel halaman Iklan.

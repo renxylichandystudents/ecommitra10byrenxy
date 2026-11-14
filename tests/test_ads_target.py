@@ -272,3 +272,19 @@ class EvaluateTest(unittest.TestCase):
         row = frame.set_index("_key").loc["pisah:42"]
         self.assertEqual(row["Hari dievaluasi"], 1)
         self.assertEqual(row["Rekomendasi dijalankan"], "Ya")
+
+
+class RoundBudgetTest(unittest.TestCase):
+    def test_multiples_of_25k_within_shopee_limits(self):
+        self.assertEqual(A.round_budget(0), 0.0)
+        self.assertEqual(A.round_budget(3_000), 25_000)
+        self.assertEqual(A.round_budget(142_784), 150_000)
+        self.assertEqual(A.round_budget(137_000), 125_000)
+        self.assertEqual(A.round_budget(110_000, hi=110_000), 100_000)  # tidak melewati batas naik 2×
+        self.assertEqual(A.round_budget(60_000, lo=62_000), 75_000)     # tidak di bawah batas turun ½
+
+    def test_plan_budgets_are_rounded(self):
+        u = A.Unit(key="produk:1", nama="X", jenis="Produk tunggal", status="Berjalan", mode="GMV Max", daily_cost=73_333, daily_sales=900_000,
+                   a=1_500_000, b=70_000, spread=0.2, members=["1"])
+        plan = A.allocate_target([u], gap_daily=500_000, target_roas=5, budget_daily=None)
+        self.assertEqual(plan.cost["produk:1"] % 25_000, 0)

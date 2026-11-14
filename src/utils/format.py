@@ -300,6 +300,7 @@ def show_table(
     bold_label: str | tuple[str, ...] | None = None,
     column_config: dict | None = None,
     styled: bool = True,
+    dash_missing: bool = False,
     **kwargs,
 ):
     """st.dataframe dengan tinggi pas isi (tanpa baris kosong) dan format angka Indonesia.
@@ -319,6 +320,16 @@ def show_table(
     frame = _numeric_objects(frame)
     config = dict(column_config or {})
     preformatted = [name for name, cfg in config.items() if _has_own_format(cfg)]
+    if dash_missing:
+        # Streamlit menampilkan sel angka kosong sebagai "None" walau Styler memberi "–": kolom angka yang punya sel kosong
+        # diubah jadi teks berformat (sel kosong = "–"). Dipakai di tabel yang sel kosongnya bermakna "belum ada".
+        frame = frame.copy()
+        for column in frame.columns:
+            series = frame[column]
+            if column in preformatted or not pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series) or not series.isna().any():
+                continue
+            fmt = formatter_for((kinds or {}).get(column) or column_kind(column), series)
+            frame[column] = series.map(lambda v, f=fmt: EMPTY if pd.isna(v) else f(v))
     data = style_frame(frame, kinds=kinds, skip=preformatted, bold_label=bold_label) if styled else frame
     fixed_row = kwargs.pop("row_height", None)
     wrapped_row, config = wrap_layout(frame, config)
