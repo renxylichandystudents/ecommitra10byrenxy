@@ -564,7 +564,7 @@ def unpaid_buyer_table(
 
 def region_lines(source: pd.DataFrame) -> pd.DataFrame:
     """Baris pesanan dengan provinsi dan kota/kabupaten pembeli (dari kolom Provinsi & Kota/Kabupaten Shopee)."""
-    columns = ["order_id", "order_time", "month", "province", "city", "cancelled", "menunggu", "qty", "returned_qty", "unit_price"]
+    columns = ["order_id", "order_time", "month", "province", "city", "cancelled", "menunggu", "qty", "returned_qty", "unit_price", "order_amount"]
     if source is None or source.empty:
         return pd.DataFrame(columns=columns)
     table = source.drop(columns=["Nama file"], errors="ignore")
@@ -590,6 +590,8 @@ def region_lines(source: pd.DataFrame) -> pd.DataFrame:
     else:
         frame["returned_qty"] = 0.0
     frame["unit_price"] = _parse_number(table[mapping["unit_price"]]).fillna(0).clip(lower=0) if "unit_price" in mapping else 0.0
+    # Total Pembayaran per pesanan (dasar Sales bersih di kartu Data & target); kosong → nilai baris dipakai.
+    frame["order_amount"] = _parse_number(table[mapping["order_amount"]]) if "order_amount" in mapping else np.nan
     frame = frame.dropna(subset=["order_time"])
     frame = frame.loc[frame["order_id"].ne("")].copy()
     frame["province"] = frame["province"].replace("", "TIDAK DIKETAHUI")
@@ -606,16 +608,18 @@ def _region_title(name: str) -> str:
 
 
 REGION_COLUMNS = [
-    "Invoice bersih", "Invoice batal", "Invoice retur", "Invoice Belum Bayar", "Invoice total", "% batal", "% retur",
-    "QTY bersih", "Sales produk bersih", "Kontribusi invoice bersih", "Kontribusi sales bersih",
+    "Invoice bersih", "Invoice batal", "Invoice retur penuh", "Invoice Belum Bayar", "Invoice total", "% batal", "% retur penuh",
+    "QTY bersih", "Sales bersih", "Kontribusi invoice bersih", "Kontribusi sales bersih",
 ]
 
 
 def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
     """Ringkasan per provinsi (level="province") atau per kota/kabupaten (level="city").
 
-    Invoice bersih, QTY bersih, dan sales value bersih TIDAK memasukkan pesanan batal dan retur.
-    Invoice batal/retur ditampilkan terpisah sebagai pesanan yang dikeluarkan."""
+    Definisi sama dengan kartu di halaman Data (`src.core.metrics.order_metrics`), sehingga baris Total = kartu:
+    - Invoice bersih = semua − batal − Belum Bayar − retur penuh (pesanan retur sebagian tetap bersih).
+    - Sales bersih = Total Pembayaran (sekali per pesanan, sudah dipotong voucher) pesanan selain batal & Belum Bayar − nilai unit retur.
+    - QTY bersih = QTY pesanan selain batal & Belum Bayar − unit retur."""
     keys = ["province"] if level == "province" else ["province", "city"]
     names = {"province": "Provinsi", "city": "Kota/Kabupaten"}
     out_cols = ["Rank"] + [names[k] for k in keys] + REGION_COLUMNS
@@ -624,18 +628,30 @@ def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
     work = lines.copy()
     if "menunggu" not in work.columns:
         work["menunggu"] = False
-    work["net_qty"] = (work["qty"] - work["returned_qty"]).clip(lower=0).where(~work["cancelled"] & ~work["menunggu"], 0.0)
-    work["net_sales"] = work["net_qty"] * work["unit_price"]
+    if "order_amount" not in work.columns:
+        work["order_amount"] = np.nan
+    work["menunggu"] = work["menunggu"].astype(bool)
+    work["cancelled"] = work["cancelled"].astype(bool) & ~work["menunggu"]
+    returned = np.minimum(work["returned_qty"], work["qty"]).clip(lower=0)
+    work["line_value"] = work["qty"] * work["unit_price"]
+    work["return_value"] = returned * work["unit_price"]
+    work["net_qty"] = (work["qty"] - returned).clip(lower=0)
+    work["full_return"] = work["qty"].gt(0) & returned.ge(work["qty"])
     orders = work.groupby(["order_id"] + keys, as_index=False).agg(
-        cancelled=("cancelled", "all"), menunggu=("menunggu", "all"), returned=("returned_qty", "sum"), net_qty=("net_qty", "sum"), net_sales=("net_sales", "sum")
+        cancelled=("cancelled", "all"), menunggu=("menunggu", "all"), full=("full_return", "all"), returned=("returned_qty", "sum"),
+        amount=("order_amount", "first"), line=("line_value", "sum"), return_value=("return_value", "sum"), net_qty=("net_qty", "sum"),
     )
-    orders["retur"] = ~orders["cancelled"] & ~orders["menunggu"] & orders["returned"].gt(0)
-    orders["bersih"] = ~orders["cancelled"] & ~orders["menunggu"] & ~orders["retur"]
-    orders["belum_bayar"] = orders["menunggu"] & ~orders["cancelled"]
+    amount = orders["amount"].where(orders["amount"].fillna(0) > 0, orders["line"]).fillna(0.0)
+    active = ~orders["cancelled"] & ~orders["menunggu"]
+    orders["belum_bayar"] = orders["menunggu"]
+    orders["batal"] = orders["cancelled"]
+    orders["retur"] = active & orders["full"] & orders["returned"].gt(0)
+    orders["bersih"] = active & ~orders["retur"]
+    orders["sales"] = (amount - orders["return_value"]).where(active, 0.0)  # tanpa batas 0, sama dengan kartu Sales bersih
+    orders["qty"] = orders["net_qty"].where(active, 0.0)
     result = orders.groupby(keys).agg(
-        total=("order_id", "nunique"), batal=("cancelled", "sum"), retur=("retur", "sum"), bersih=("bersih", "sum"),
-        belum_bayar=("belum_bayar", "sum"),
-        qty=("net_qty", "sum"), sales=("net_sales", "sum"),
+        total=("order_id", "nunique"), batal=("batal", "sum"), retur=("retur", "sum"), bersih=("bersih", "sum"),
+        belum_bayar=("belum_bayar", "sum"), qty=("qty", "sum"), sales=("sales", "sum"),
     ).reset_index()
     total_clean = float(result["bersih"].sum()) or 1.0
     total_sales = float(result["sales"].sum()) or 1.0
@@ -645,15 +661,13 @@ def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
         out[names[key]] = result[key].map(_region_title).to_numpy()
     out["Invoice bersih"] = result["bersih"].astype(int).to_numpy()
     out["Invoice batal"] = result["batal"].astype(int).to_numpy()
-    out["Invoice retur"] = result["retur"].astype(int).to_numpy()
-    # Belum Bayar = pesanan yang belum dibayar (bukan batal/retur): sebelumnya tidak punya kolom sehingga
-    # Invoice bersih + batal + retur tidak sama dengan Invoice total.
+    out["Invoice retur penuh"] = result["retur"].astype(int).to_numpy()
     out["Invoice Belum Bayar"] = result["belum_bayar"].astype(int).to_numpy()
     out["Invoice total"] = result["total"].astype(int).to_numpy()
     out["% batal"] = (result["batal"] / result["total"].replace(0, np.nan) * 100).fillna(0).to_numpy()
-    out["% retur"] = (result["retur"] / result["total"].replace(0, np.nan) * 100).fillna(0).to_numpy()
+    out["% retur penuh"] = (result["retur"] / result["total"].replace(0, np.nan) * 100).fillna(0).to_numpy()
     out["QTY bersih"] = result["qty"].to_numpy()
-    out["Sales produk bersih"] = result["sales"].to_numpy()
+    out["Sales bersih"] = result["sales"].to_numpy()
     out["Kontribusi invoice bersih"] = (result["bersih"] / total_clean * 100).to_numpy()
     out["Kontribusi sales bersih"] = (result["sales"] / total_sales * 100).to_numpy()
     return out[out_cols]
@@ -664,11 +678,11 @@ def region_total_row(table: pd.DataFrame, label_col: str) -> pd.DataFrame:
     row = {column: "" for column in table.columns}
     row[label_col] = "Total"
     row["Rank"] = ""
-    for column in ("Invoice bersih", "Invoice batal", "Invoice retur", "Invoice Belum Bayar", "Invoice total", "QTY bersih", "Sales produk bersih"):
+    for column in ("Invoice bersih", "Invoice batal", "Invoice retur penuh", "Invoice Belum Bayar", "Invoice total", "QTY bersih", "Sales bersih"):
         row[column] = float(table[column].sum()) if not table.empty else 0.0
     total = row["Invoice total"] or 1.0
     row["% batal"] = row["Invoice batal"] / total * 100 if row["Invoice total"] else 0.0
-    row["% retur"] = row["Invoice retur"] / total * 100 if row["Invoice total"] else 0.0
+    row["% retur penuh"] = row["Invoice retur penuh"] / total * 100 if row["Invoice total"] else 0.0
     row["Kontribusi invoice bersih"] = 100.0 if row["Invoice bersih"] else 0.0
-    row["Kontribusi sales bersih"] = 100.0 if row["Sales produk bersih"] else 0.0
+    row["Kontribusi sales bersih"] = 100.0 if row["Sales bersih"] else 0.0
     return pd.DataFrame([row], columns=table.columns)

@@ -10,8 +10,8 @@ def test_invoice_columns_add_up_and_sales_share():
         "menunggu": [False, False, False, True, False], "unit_price": [100, 100, 100, 50, 50],
     })
     table = region_summary(lines, "province")
-    parts = table[["Invoice bersih", "Invoice batal", "Invoice retur", "Invoice Belum Bayar"]].sum(axis=1)
+    parts = table[["Invoice bersih", "Invoice batal", "Invoice retur penuh", "Invoice Belum Bayar"]].sum(axis=1)
     assert (parts == table["Invoice total"]).all()
     assert list(table["Kontribusi sales bersih"].round(1)) == [66.7, 33.3]
     total = region_total_row(table, "Provinsi").iloc[0]
-    assert total["Rank"] == "" and total["Invoice Belum Bayar"] == 1 and total["Sales produk bersih"] == 150
+    assert total["Rank"] == "" and total["Invoice Belum Bayar"] == 1 and total["Sales bersih"] == 150
