@@ -7,6 +7,7 @@ dibatasi ruang stok produknya (barang yang tidak ada tidak bisa terjual); margin
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import math
@@ -798,22 +799,59 @@ def _excluded_codes(features, products: pd.DataFrame, members: pd.DataFrame) -> 
     return frozenset(codes)
 
 
+def _match(query: str, text: str) -> bool:
+    """Pencarian tepat: semua kata yang diketik harus ada di nama/kode produk (tanpa beda huruf besar-kecil)."""
+    words = query.lower().split()
+    low = text.lower()
+    return all(w in low for w in words)
+
+
 def _exclusion_editor(features, products: pd.DataFrame, members: pd.DataFrame, excluded: frozenset, *, can_edit: bool, username: str) -> None:
     store = _exclusion_store(features)
     names = _product_names(products, members)
-    with st.expander(f"🚫 Produk dikecualikan dari iklan · {fmt_num(len(excluded))} produk", expanded=bool(excluded) and False):
-        st.caption("Produk di daftar ini dikeluarkan dari semua iklan (grup & tunggal), tidak diusulkan iklan baru, dan budgetnya dibagi ulang ke "
-                   "produk lain. Berlaku untuk Fitur khusus, Rekomendasi sistem, dan rencana berikutnya sampai dihapus dari daftar.")
-        with st.form("adt-exclude-form", border=False):
-            words = st.text_input("Kata kunci nama produk / merek (pisahkan dengan koma)", value=", ".join(store["kata"]),
-                                  help="Semua produk yang namanya mengandung kata ini ikut dikecualikan, mis. dextone")
-            options = sorted(names, key=lambda k: names[k])
-            picked = st.multiselect("Pilih produk", options, default=[k for k in store["kode"] if k in names],
-                                    format_func=lambda k: f"{names.get(k, k)[:90]} · {k}", placeholder="Cari nama produk")
-            go = st.form_submit_button("Simpan daftar pengecualian", type="primary", disabled=not can_edit)
-        if go:
-            new = {"kode": [str(k) for k in picked], "kata": [w.strip() for w in words.split(",") if w.strip()],
-                   "oleh": username, "waktu": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")}
+    draft_key, ver_key = "adt-exclude-draft", "adt-exclude-ver"
+    if not isinstance(st.session_state.get(draft_key), set):
+        st.session_state[draft_key] = set(store["kode"])
+    draft: set = st.session_state[draft_key]
+    ver = int(st.session_state.get(ver_key, 0))
+    with st.expander(f"🚫 Produk dikecualikan dari iklan · {fmt_num(len(excluded))} produk"):
+        st.caption("Produk yang dicentang dikeluarkan dari semua iklan (grup & tunggal), tidak diusulkan iklan baru, dan budgetnya dibagi ulang ke "
+                   "produk lain. Berlaku untuk Fitur khusus, Rekomendasi sistem, dan rencana berikutnya sampai centangnya dihapus.")
+        c1, c2 = st.columns([2, 1])
+        query = c1.text_input("Cari produk", key="adt-ex-q", placeholder="ketik nama / merek / kode, mis. lem dextone silicon",
+                              help="Hanya produk yang memuat SEMUA kata yang diketik yang tampil.")
+        words = c2.text_input("Kata kunci otomatis (opsional)", value=", ".join(store["kata"]), key=f"adt-ex-words-{ver}",
+                              help="Produk yang namanya memuat kata ini ikut dikecualikan, termasuk produk baru nanti. Pisahkan dengan koma.")
+        if query.strip():
+            codes = [k for k in names if _match(query, f"{names[k]} {k}")]
+            note = f"{fmt_num(len(codes))} produk cocok dengan “{html.escape(query.strip())}”"
+        else:
+            codes = [k for k in names if k in draft]
+            note = "ketik di kotak Cari untuk menampilkan produk; tanpa pencarian hanya produk yang sudah dicentang yang tampil"
+        codes = sorted(codes, key=lambda k: (k not in draft, names[k]))[:300]
+        st.markdown(f"<div class='field-hint'>{note} · dicentang: <b>{fmt_num(len(draft))}</b> produk</div>", unsafe_allow_html=True)
+        if codes:
+            b1, b2, _sp = st.columns([1, 1, 3])
+            if b1.button("Centang semua hasil", key="adt-ex-all", use_container_width=True):
+                draft.update(codes)
+                st.session_state[ver_key] = ver + 1
+                st.rerun()
+            if b2.button("Hapus centang hasil", key="adt-ex-none", use_container_width=True):
+                draft.difference_update(codes)
+                st.session_state[ver_key] = ver + 1
+                st.rerun()
+            frame = pd.DataFrame({"Kecualikan": [k in draft for k in codes], "Produk": [names[k] for k in codes], "Kode produk": codes})
+            edited = st.data_editor(frame, key=f"adt-ex-ed-{ver}-{hashlib.md5(query.strip().lower().encode()).hexdigest()[:8]}", hide_index=True,
+                                    disabled=["Produk", "Kode produk"], use_container_width=True, row_height=35,
+                                    height=min(35 * (len(codes) + 1) + 3, 400),
+                                    column_config={"Kecualikan": st.column_config.CheckboxColumn("Kecualikan", width=90),
+                                                   "Produk": st.column_config.TextColumn(width=760), "Kode produk": st.column_config.TextColumn(width=130)})
+            for code, on in zip(edited["Kode produk"], edited["Kecualikan"]):
+                (draft.add if bool(on) else draft.discard)(str(code))
+        new_words = [w.strip() for w in words.split(",") if w.strip()]
+        changed = draft != set(store["kode"]) or new_words != store["kata"]
+        if st.button("Simpan daftar pengecualian", key="adt-ex-save", type="primary", disabled=not (can_edit and changed)):
+            new = {"kode": sorted(draft), "kata": new_words, "oleh": username, "waktu": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")}
             st.session_state["adt-exclude"] = new
             if features is not None:
                 try:
@@ -821,11 +859,10 @@ def _exclusion_editor(features, products: pd.DataFrame, members: pd.DataFrame, e
                 except Exception:
                     pass
             st.rerun()
-        if excluded:
-            show_table(pd.DataFrame([{"Kode produk": k, "Produk": names.get(k, k)} for k in sorted(excluded, key=lambda k: names.get(k, k))]),
-                       max_height=260, row_height=35, column_config={"Produk": st.column_config.TextColumn(width=700)})
-            if store.get("oleh"):
-                st.caption(f"Terakhir diubah {store['oleh']} {store.get('waktu', '')}")
+        if changed:
+            st.caption("Ada perubahan yang belum disimpan: rencana di bawah masih memakai daftar tersimpan.")
+        elif store.get("oleh"):
+            st.caption(f"Terakhir disimpan {store['oleh']} {store.get('waktu', '')}.")
         if not can_edit:
             st.caption("Hanya pengguna dengan akses edit Rekomendasi yang bisa mengubah daftar ini.")
 
