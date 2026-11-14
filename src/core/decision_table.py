@@ -314,14 +314,21 @@ def stock_need(row, prefix: str = "m") -> float:
 def stock_shortage(table: pd.DataFrame, prefix: str = "m") -> dict[str, int]:
     """Hitungan dari label status yang sama dengan tabel: Kurang (stok < prediksi + SS) termasuk Kosong (stok 0)."""
     if table is None or table.empty or f"{prefix}_status" not in table.columns:
-        return {"kurang": 0, "kosong": 0, "di_bawah_ss": 0, "tanpa_data": 0}
+        return {"kurang": 0, "kosong": 0, "di_bawah_ss": 0, "tanpa_data": 0, "bawah_ss_berstok": 0, "di_atas_ss": 0, "aman": 0}
     status = table[f"{prefix}_status"].astype(str).str.split(" · ").str[0].replace({"Tipis": "Kurang"})
     below = table["di_bawah_ss"].astype(bool) if "di_bawah_ss" in table.columns else pd.Series(False, index=table.index)
+    short = status.isin({"Kurang", "Kosong"})
+    empty = status.eq("Kosong")
+    no_data = status.eq("Tanpa data stok")
+    # Rincian Kurang tanpa tumpang tindih: kosong + berstok di bawah SS + di atas SS tetapi < prediksi + SS = kurang.
     return {
-        "kurang": int(status.isin({"Kurang", "Kosong"}).sum()),
-        "kosong": int(status.eq("Kosong").sum()),
+        "kurang": int(short.sum()),
+        "kosong": int(empty.sum()),
         "di_bawah_ss": int(below.sum()),
-        "tanpa_data": int(status.eq("Tanpa data stok").sum()),
+        "tanpa_data": int(no_data.sum()),
+        "bawah_ss_berstok": int((short & below & ~empty).sum()),
+        "di_atas_ss": int((short & ~below & ~empty).sum()),
+        "aman": int((~short & ~no_data).sum()),
     }
 
 

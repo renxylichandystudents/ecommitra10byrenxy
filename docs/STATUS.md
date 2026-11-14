@@ -2,6 +2,12 @@
 
 Diperbarui: 13 November 2026.
 
+## Kartu "SKU Top 50 stok kurang": rincian menjumlah + bulan berjalan (14 Nov 2026)
+
+- Masukan pengguna: "4 kosong · 34 di bawah SS" tidak menjumlah ke 44. Kini rincian tanpa tumpang tindih: kurang = kosong + masih berstok tapi di bawah SS + di atas SS tapi belum cukup (mis. 44 = 4 + 30 + 10); total di bawah SS (kosong + berstok di bawah SS) tetap disebut; di luar hitungan: cukup · tanpa data stok.
+- Baris baru **Bulan berjalan** (sisa hari ini s.d. akhir bulan): SKU stok < prediksi sisa bulan (unit utuh, `run_rest_qty`) + SS dan total kekurangan unit, aturan sama dengan baris Bulan berjalan di Analisa safety stock.
+- `decision_table.stock_shortage` menambah kunci `bawah_ss_berstok`, `di_atas_ss`, `aman` (status & rumus tidak berubah); `dashboard._running_month_shortage`. Tes `tests/test_stock_shortage.py`.
+
 ## Rincian kecocokan: SKU aktif belum pernah terjual (14 Nov 2026)
 
 - Upload data › Ringkasan data tersimpan › Rincian kecocokan, di bawah tabel "SKU transaksi yang tidak ada di Data stok": tabel baru **SKU aktif di Data stok yang belum pernah terjual** (SKU di unggahan Data stok Site 10037 terbaru yang tidak pernah muncul di Data transaksi). Kolom: SKU, Produk, Variasi, Stok Site 10037/10036/10062, Tidak terjual sejak, Umur tidak terjual (hari); urut total stok terbesar; bernomor, bertahap, Excel. Kartu: jumlah SKU, stok toko, stok DC, tanpa stok di mana pun.

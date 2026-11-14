@@ -156,6 +156,26 @@ def running_month(table: pd.DataFrame, orders: pd.DataFrame | None, orders_all: 
     return parts["actual_qty"] + parts["rest_qty"], f"{qty}<br>{sales} = {fmt_rp(parts['actual_sales'] + parts['rest_sales'])}"
 
 
+def _running_month_shortage(top: pd.DataFrame, orders, orders_all, today: date, known: pd.Series, stok: pd.Series) -> str:
+    """Baris bulan berjalan: SKU stok < prediksi sisa bulan (unit utuh) + SS, aturan sama dengan tabel safety stock."""
+    if "run_rest_qty" not in top.columns or "ss" not in top.columns:
+        return ""
+    parts = running_month_parts(top, orders, orders_all, today)
+    if parts["rest_start"] > parts["month_end"]:
+        return ""
+    rest = np.floor(pd.to_numeric(top["run_rest_qty"], errors="coerce").fillna(0.0) + 1e-9)
+    need = rest + pd.to_numeric(top["ss"], errors="coerce").fillna(0.0)
+    short = known & (stok < need)
+    gap = (need - stok).clip(lower=0).where(short, 0.0)
+    month = MONTHS_SHORT[parts["month_end"].month - 1]
+    lo, hi = parts["rest_start"], parts["month_end"]
+    span = f"{lo.day} {month}" if lo == hi else f"{lo.day}–{hi.day} {month}"
+    return (
+        f"<b>Bulan berjalan</b> (sisa {span}, {(hi - lo).days + 1} hari): {fmt_num(int(short.sum()))} SKU stok < prediksi sisa bulan "
+        f"{fmt_num(rest.sum())} unit + SS · kurang {fmt_num(gap.sum())} unit"
+    )
+
+
 def show_priority_dashboard(
     table: pd.DataFrame,
     *,
@@ -205,11 +225,24 @@ def show_priority_dashboard(
         hint=f"= prediksi {fmt_num(pred_whole)} (unit utuh) + safety stock {fmt_num(need.sum() - pred_whole)} · {short_date(lo)} – {short_date(hi)}"
         f"<br>stok Site 10037 {fmt_num(stok.where(known, 0).sum())} unit · kurang {fmt_num(short_units)} unit (dijumlah dari SKU yang kurang)",
     )
-    gaps = [f"{fmt_num(shortage['kosong'])} kosong (stok 0)", f"{fmt_num(shortage['di_bawah_ss'])} di bawah SS (sudah termasuk yang kosong)"]
+    parts = [
+        f"{fmt_num(shortage['kosong'])} kosong (stok 0)",
+        f"{fmt_num(shortage['bawah_ss_berstok'])} masih berstok tapi di bawah SS",
+        f"{fmt_num(shortage['di_atas_ss'])} di atas SS tapi belum cukup",
+    ]
+    outside = [f"{fmt_num(shortage['aman'])} cukup"]
     if shortage["tanpa_data"]:
-        gaps.append(f"{fmt_num(shortage['tanpa_data'])} tanpa data stok")
-    card(cols[3], "SKU Top 50 stok kurang", f"{fmt_num(shortage['kurang'])} dari {fmt_num(len(top))} SKU",
-         hint=f"stok Site 10037 < prediksi 30 hari ({short_date(lo)} – {short_date(hi)}) + SS · " + " · ".join(gaps))
+        outside.append(f"{fmt_num(shortage['tanpa_data'])} tanpa data stok")
+    hint = (
+        f"stok Site 10037 < prediksi 30 hari ({short_date(lo)} – {short_date(hi)}) + SS"
+        f"<br><b>{fmt_num(shortage['kurang'])}</b> = " + " + ".join(parts)
+        + f"<br>total di bawah SS {fmt_num(shortage['di_bawah_ss'])} SKU (kosong + berstok di bawah SS)"
+        + "<br>di luar hitungan: " + " · ".join(outside)
+    )
+    month_line = _running_month_shortage(top, orders, orders_all, today, known, stok)
+    if month_line:
+        hint += "<br>" + month_line
+    card(cols[3], "SKU Top 50 stok kurang", f"{fmt_num(shortage['kurang'])} dari {fmt_num(len(top))} SKU", hint=hint)
     cap_value, cap_note = capacity_summary(features, table)
     card(cols[4], "Kapasitas gudang 10037", cap_value if cap_value not in ("–", "-", "") else "Belum ada data", hint=cap_note)
 
