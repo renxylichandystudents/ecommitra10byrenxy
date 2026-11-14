@@ -649,9 +649,20 @@ def _round_m(value: float) -> float:
     return float(math.ceil(max(value, 0.0) / 1_000_000) * 1_000_000)
 
 
+def _submitted_setting(features, periode: str) -> dict | None:
+    """Setelan Fitur khusus yang sudah dikirim untuk bulan ini (kv `iklan-setelan:<periode>`), disimpan per sesi."""
+    key = f"adt-submitted-{periode}"
+    if key not in st.session_state:
+        try:
+            st.session_state[key] = features.get_json(f"iklan-setelan:{periode}", None) if features is not None else None
+        except Exception:
+            st.session_state[key] = None
+    return st.session_state.get(key) or None
+
+
 def _rec_options(*, target: float, projection: float, spent: float, cost_now: float, days_left: int, month_days: int, run_days: int, pace_total: float,
                  curve, spent_daily: float, best_roas, option, project, units, factor: float, month_name: str,
-                 economics, ratio_budget) -> tuple[list[dict], dict]:
+                 economics, ratio_budget, user_budget: float | None = None, user_note: str = "") -> tuple[list[dict], dict]:
     """Opsi rekomendasi sistem (semua memakai biaya yang benar-benar bisa dibelanjakan efisien):
     A laju sekarang, B maksimal yang efisien, H hemat biaya (tiap Rp 1 kembali ≥ Rp 10), C budget 100% target bila masih efisien.
     Mengembalikan (opsi, info kebutuhan 100% target)."""
@@ -662,7 +673,7 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
     strict = 2 * A.MIN_MARGINAL
     res_share = max(days_left, 0) / max(month_days, 1)
 
-    def make(name: str, budget: float, action: str, extra_lines: list[str] | None = None, *, mm: float = A.MIN_MARGINAL) -> dict:
+    def make(name: str, budget: float, action: str, extra_lines: list[str] | None = None, *, mm: float = A.MIN_MARGINAL, origin: str = "") -> dict:
         daily = max(budget - spent, 0.0) / max(days_left, 1)
         roas = best_roas(daily, gap, mm)
         final, extra, by_curve, effective = project(target, budget, roas, mm)
@@ -693,10 +704,16 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
         if econ:
             lines.insert(3, "Ekonomi: " + " · ".join(econ) + ".")
         return {"nama": name, "budget": budget, "harian": daily, "roas": roas, "proyeksi": final, "tambahan": extra, "aksi": action, "rincian": lines,
-                "utama": False, "efektif": effective, "mm": mm, "rasio": ratio, "laba": profit}
+                "utama": False, "efektif": effective, "mm": mm, "rasio": ratio, "laba": profit, "asal": origin}
 
-    out.append(make(f"A · Pertahankan iklan berjalan sekarang ({fmt_idr(cost_now)}/hari)", max(pace_total, spent),
-                    "budget harian iklan tetap seperti sekarang; rapikan pemilihan produk & Target ROAS sesuai tabel di bawah."))
+    if user_budget:
+        out.append(make("Budget Anda", float(user_budget),
+                        "jalankan budget yang Anda isi di Fitur khusus; sistem membagi sisanya ke iklan dan produk paling efektif (tabel di bawah).",
+                        origin=f"diisi di Fitur khusus{(' · ' + user_note) if user_note else ''}"))
+    if not user_budget or abs(pace_total - user_budget) > 0.02 * max(user_budget, 1):
+        out.append(make(f"Laju iklan sekarang diteruskan ({fmt_idr(cost_now)}/hari)", max(pace_total, spent),
+                        "budget harian iklan tetap seperti sekarang; rapikan pemilihan produk & Target ROAS sesuai tabel di bawah.",
+                        origin=f"terpakai {fmt_idr(spent)} + iklan berjalan {fmt_idr(cost_now)}/hari × {days_left} hari"))
     res = M.month_plan(curve, target=target, projection=projection, spent=spent, cost_now_daily=spent_daily, days_left=days_left,
                        month_days=month_days, budget_total=None)
     need_total = _round_m(res["budget_dibutuhkan"]) if res.get("ada_kurva") else None
@@ -705,20 +722,23 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
     max_total = _round_m(spent + absorbed * days_left)
     lean_daily = min(float(option(best_roas(big, gap, strict), big, gap, strict)["biaya_total"]) / max(run_days, 1), big)
     lean_total = _round_m(spent + lean_daily * days_left)
-    if max_total > out[0]["efektif"] * 1.02:
-        out.append(make("B · Maksimal yang bisa dibelanjakan efisien", max_total,
+    if max_total > max(o["efektif"] for o in out) * 1.02:
+        out.append(make("Maksimal yang bisa dibelanjakan efisien", max_total,
                         "naikkan budget iklan yang masih efektif bertahap (maks. 2× tiap Senin) dan buat iklan baru untuk produk laris sesuai Pemilihan produk.",
                         [f"Ini batas biaya yang masih efisien: iklan yang ada + usulan iklan baru ±{fmt_idr(absorbed)}/hari. Di atas itu tambahan Rp 1 "
-                         f"kembali kurang dari Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan."]))
+                         f"kembali kurang dari Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan."],
+                        origin=f"batas biaya yang tiap tambahan Rp 1 masih kembali ≥ Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan"))
     if lean_total < min(o["efektif"] for o in out) * 0.98:
-        out.append(make(f"H · Hemat biaya (tiap Rp 1 kembali ≥ Rp {fmt_num(strict, 0)})", lean_total,
+        out.append(make(f"Hemat biaya (tiap Rp 1 kembali ≥ Rp {fmt_num(strict, 0)})", lean_total,
                         "pangkas/jeda iklan dan produk yang hasilnya rendah, pertahankan hanya iklan paling produktif.",
-                        ["Opsi ini mengutamakan penghematan: biaya turun, sales sedikit berkurang dibanding opsi lain."], mm=strict))
+                        ["Opsi ini mengutamakan penghematan: biaya turun, sales sedikit berkurang dibanding opsi lain."], mm=strict,
+                        origin=f"hanya iklan yang tiap tambahan Rp 1 kembali ≥ Rp {fmt_num(strict, 0)} omzet iklan"))
     min_total = ratio_budget()
     if min_total is not None and min_total < min(o["efektif"] for o in out) * 0.98:
-        out.append(make(f"M · Minimum {fmt_num(M.SHOPEE_MIN_AD_PCT, 0)}% sales bruto (syarat Shopee)", min_total,
+        out.append(make(f"Minimum {fmt_num(M.SHOPEE_MIN_AD_PCT, 0)}% sales bruto (syarat Shopee)", min_total,
                         "turunkan budget iklan ke batas minimum agar benefit Shopee tetap didapat; budget hanya untuk iklan dengan ROAS tertinggi.",
-                        ["Opsi paling hemat yang masih memenuhi syarat minimum biaya iklan Shopee: biaya turun paling banyak, sales ikut turun sesuai kurva toko."]))
+                        ["Opsi paling hemat yang masih memenuhi syarat minimum biaya iklan Shopee: biaya turun paling banyak, sales ikut turun sesuai kurva toko."],
+                        origin=f"{fmt_num(M.SHOPEE_MIN_AD_PCT, 0)}% × sales bruto proyeksi bulan ini (tidak kurang dari yang sudah terpakai)"))
     info = {"need": need_total, "max_efisien": max(max(o["efektif"] for o in out), spent + absorbed * days_left), "gap": gap, "absorbed": absorbed}
     if need_total is not None and gap > 0 and need_total <= info["max_efisien"] * 1.02:
         lines = []
@@ -727,8 +747,9 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
         if room and need_extra_daily > room:
             lines.append(f"⚠️ Ruang stok produk yang diiklankan ±{fmt_idr(room)}/hari, di bawah tambahan penjualan yang dibutuhkan ±{fmt_idr(need_extra_daily)}/hari: "
                          "ajukan restock/PO agar target tidak tertahan stok.")
-        out.append(make("C · Budget untuk 100% target", need_total,
-                        "naikkan budget iklan efektif bertahap tiap Senin, buat iklan baru untuk produk laris, dan pastikan stok cukup.", lines))
+        out.append(make("Budget untuk 100% target", need_total,
+                        "naikkan budget iklan efektif bertahap tiap Senin, buat iklan baru untuk produk laris, dan pastikan stok cukup.", lines,
+                        origin="kurva respons toko: biaya sebulan agar proyeksi = target"))
     if gap <= 0:
         ok = [o for o in out if o["proyeksi"] >= target - 1]
         pick = min(ok, key=lambda o: o["efektif"]) if ok else max(out, key=lambda o: o["proyeksi"])
@@ -737,6 +758,8 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
         best = max(o["proyeksi"] for o in out)
         pick = min((o for o in out if o["proyeksi"] >= best - max(0.005 * target, 1.0)), key=lambda o: o["efektif"])
     pick["utama"] = True
+    for i, o in enumerate(out):
+        o["nama"] = f"{chr(65 + i)} · {o['nama']}"
     return out, info
 
 
@@ -1438,6 +1461,9 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                                                              f"(ROAS {fmt_num(spend['omzet'] / spent if spent else 0, 1)})" if spent_days else "laporan iklan bulan ini belum ada"))
     notes = [f"Iklan berjalan sekarang {fmt_num(len(running))} iklan, {fmt_idr(cost_now)}/hari, ROAS {fmt_num(sales_now / cost_now if cost_now else 0, 1)}; "
              f"bila diteruskan, biaya iklan sebulan ≈ {fmt_idr(pace_total)}."]
+    _sub0 = _submitted_setting(features, periode)
+    notes.append(f"Budget iklan sebulan yang Anda isi di Fitur khusus: <b>{fmt_idr(float(_sub0['budget_bulan']))}</b> (opsi A memakai angka ini)."
+                 if _sub0 else f"Belum ada budget {month_name} yang dikirim di Fitur khusus: isi di sana agar opsi pertama memakai budget Anda.")
     if spent_days and cost_now:
         diff = cost_now / spent_daily - 1 if spent_daily else 0
         if abs(diff) > 0.1:
@@ -1466,17 +1492,21 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
 
     _step(2, "Opsi mencapai target", "· pilih satu opsi; rincian produk & budget per iklan serta tombol simpan ada di bawah")
     with st.spinner("Menghitung opsi..."):
+        _sub = _submitted_setting(features, periode)
         opts, need_info = _rec_options(target=target, projection=projection, spent=spent, cost_now=cost_now, days_left=days_left, month_days=month_days, run_days=run_days,
                             pace_total=pace_total, curve=curve, spent_daily=spent_daily, best_roas=best_roas, option=option, project=project, units=base_units,
-                            factor=factor, month_name=month_name, economics=economics, ratio_budget=ratio_budget)
-    table_opts = pd.DataFrame([{"Opsi": o["nama"], "Budget sebulan": o["budget"], "Biaya efektif sebulan": o["efektif"], "Hemat": max(o["budget"] - o["efektif"], 0.0),
+                            factor=factor, month_name=month_name, economics=economics, ratio_budget=ratio_budget,
+                            user_budget=float(_sub["budget_bulan"]) if _sub else None,
+                            user_note=f"dikirim {_sub.get('oleh', '')} {_sub.get('dikirim', '')}".strip() if _sub else "")
+    table_opts = pd.DataFrame([{"Opsi": o["nama"], "Asal angka budget": o["asal"], "Budget sebulan": o["budget"], "Biaya efektif sebulan": o["efektif"], "Hemat": max(o["budget"] - o["efektif"], 0.0),
                                 "Sisa/hari": o["harian"], "Target ROAS": o["roas"],
                                 "Proyeksi sales bersih akhir bulan": o["proyeksi"], "% target": o["proyeksi"] / target * 100, "Efek budget iklan": o["tambahan"],
                                 "Biaya iklan % sales bruto": o["rasio"], "Estimasi kontribusi": o["laba"],
                                 "Yang dilakukan": o["aksi"]} for o in opts])
     show_table(table_opts, kinds={"Budget sebulan": "money", "Biaya efektif sebulan": "money", "Hemat": "money", "Sisa/hari": "money", "Target ROAS": "dec", "Proyeksi sales bersih akhir bulan": "money", "% target": "pct",
                                   "Efek budget iklan": "money", "Biaya iklan % sales bruto": "pct", "Estimasi kontribusi": "money"},
-               column_config={"Opsi": st.column_config.TextColumn(width="medium"), "Yang dilakukan": st.column_config.TextColumn(width="large")})
+               column_config={"Opsi": st.column_config.TextColumn(width="medium"), "Asal angka budget": st.column_config.TextColumn(width="large"),
+                              "Yang dilakukan": st.column_config.TextColumn(width="large")}, row_height=35)
     top = max(opts, key=lambda o: o["proyeksi"])
     if need_info["gap"] > 0 and top["proyeksi"] < target - 1:
         lack = target - top["proyeksi"]

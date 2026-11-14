@@ -744,3 +744,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Harga beli merchandising = belum termasuk PPN; PPN dari harga jual Shopee: margin kotor % = (harga × (1 − porsi PPN 1/11) − harga beli) ÷ harga (`margin_data.cost_margin_pct`, `harga_beli.margin_pct`), porsi pajak = DEFAULT_TAX_SHARE.
 - Laporan margin: `margin_report.build(cost=…)` memakai harga beli bila ada, selain itu File margin; catatan "Memakai harga beli"; batas acuan & rata-rata toko ikut menghitung SKU berharga beli (`shopee_fee.portfolio`).
 - Data 15 Okt–13 Nov: 558 SKU rugi, 126 rendah, 41 tinggi; margin bersih −18,8%.
+
+## 2026-11-14 — Rekomendasi iklan: opsi berurutan & memakai budget Anda
+- Opsi diberi huruf berurutan (A, B, C, …) sesuai urutan tampil. Opsi pertama = **Budget Anda** dari setelan Fitur khusus yang sudah dikirim (`_submitted_setting`, kv `iklan-setelan:<periode>`); lalu laju iklan sekarang diteruskan (dilewati bila ≈ budget Anda), maksimal efisien, hemat biaya, minimum 3% sales bruto, 100% target (bila efisien).
+- Kolom baru **Asal angka budget** menjelaskan sumber tiap angka (mis. 412–418 jt = terpakai + iklan berjalan/hari × hari tersisa).
+- Bulan berikutnya: target, budget setelan, biaya terpakai, kurva toko, dan pantauan rencana semuanya per periode (bulan data terakhir); tidak ada angka bulan yang dikunci di kode.
