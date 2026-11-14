@@ -785,3 +785,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Kalkulator margin: kolom usulan harga untuk MD di daftar prioritas
 - Setelah kolom Harga akhir (aktual): Harga beli / modal, Harga jual disarankan, Promo disarankan (kebiasaan promo transaksi), Harga setelah promo, Perubahan harga bayar vs aktual, Harga nett (setelah voucher, potongan Shopee, iklan), Profit/unit setelah promo, Margin setelah promo, Catatan harga. Sumber: perhitungan semua SKU (`_price_table`, sama dengan unduhan Simulasi).
 - Baris Total: profit periode bila usulan dipakai dengan qty yang sama vs aktual SKU yang sama. Sel kosong tampil "–" (bukan None).
+
+## 2026-11-14 — Kalkulator margin: semua angka bersih, istilah header seragam
+- `_portfolio_rows` memakai `metrics.sold_lines` (selain batal & Belum Bayar, dikurangi retur; voucher penjual dikurangi sebanding unit retur) — sama dengan Sales produk bersih / QTY bersih di tabel Data & Prediksi. Sebelumnya hanya batal yang dikeluarkan.
+- Header daftar prioritas: Omzet periode → **Sales produk bersih**, Terjual periode → **QTY bersih**; unduhan semua SKU: Terjual (periode) → QTY bersih (periode). Teks kartu & langkah memakai "sales produk bersih" (bukan omzet).
