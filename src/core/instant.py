@@ -244,6 +244,17 @@ def top_cities(orders: pd.DataFrame, limit: int = 15) -> pd.DataFrame:
     return out.rename(columns={"city": "Kota/Kabupaten", "inv": "Invoice instan", "batal": "% batal", "sales": "Sales bersih"})[cols].reset_index(drop=True)
 
 
+def cities_total(orders: pd.DataFrame) -> pd.DataFrame:
+    """Baris Total semua kota (bukan hanya kota yang tampil) untuk tabel Kota tujuan pesanan instan."""
+    inst = orders.loc[orders["instan"]] if orders is not None and not orders.empty else pd.DataFrame()
+    if inst.empty:
+        return pd.DataFrame(columns=["Kota/Kabupaten", "Invoice instan", "% batal", "Sales bersih"])
+    return pd.DataFrame([{
+        "Kota/Kabupaten": "Total", "Invoice instan": float(len(inst)),
+        "% batal": float(inst["cancelled"].mean() * 100), "Sales bersih": float(inst["sales_bersih"].sum()),
+    }])
+
+
 def cancel_reasons(orders: pd.DataFrame) -> pd.DataFrame:
     inst = orders.loc[orders["instan"] & orders["cancelled"]] if orders is not None and not orders.empty else pd.DataFrame()
     if inst.empty:

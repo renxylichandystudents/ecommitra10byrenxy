@@ -138,7 +138,11 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
     with c2:
         st.markdown("**Kota tujuan pesanan instan**")
         if not cities.empty:
-            show_table(cities, kinds={"Invoice instan": "count", "% batal": "pct", "Sales bersih": "money"})
+            total = I.cities_total(orders)
+            shown_note = f"{len(cities)} kota teratas dari {orders.loc[orders['instan'], 'city'].nunique()} kota; baris Total = semua kota"
+            st.caption(shown_note)
+            show_table(pd.concat([total, cities], ignore_index=True), bold_label="Total",
+                       kinds={"Invoice instan": "count", "% batal": "pct", "Sales bersih": "money"})
 
     st.markdown("**Produk yang paling banyak dibeli dengan pengiriman instan** · kandidat stok siap kirim di toko terdekat")
     products = I.top_products(lines)
