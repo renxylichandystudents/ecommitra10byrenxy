@@ -97,7 +97,7 @@ ACT_KINDS = {"Budget harian sekarang": "money", "Budget harian usulan": "money",
              "Prediksi omzet produk/hari": "money", "Omzet iklan usulan/hari": "money",
              "Anggota": "count", "ROAS bulan terakhir": "dec", "Target ROAS Shopee": "dec"}
 SEL_KINDS = {"Biaya iklan/hari": "money", "Omzet iklan/hari": "money", "ROAS 2 bulan": "dec", "Porsi omzet grup": "pct",
-             "Prediksi omzet/hari": "money", "Stok": "count", "Budget usulan iklan/hari": "money"}
+             "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money"}
 
 
 LIFTS = (0.5, 0.75, 1.0)
@@ -899,7 +899,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 ("Buat iklan tunggal", "🆕", UP, "produk laris belum diiklankan"), ("Jadikan iklan tunggal", "⭐", UP, "andalan di grup"),
                 ("Pertahankan iklan tunggal", "✅", "#64748b", ""), ("Tambahkan ke grup", "➕", UP, "belum diiklankan"),
                 ("Pertahankan di grup", "✅", "#64748b", ""), ("Pindahkan ke grup", "↘️", DOWN, "iklan tunggal kurang efisien"),
-                ("Keluarkan dari grup", "➖", DOWN, "menyedot budget"), ("Jeda sampai restock", "⏸️", DOWN, "stok 0"),
+                ("Keluarkan dari grup", "➖", DOWN, "menyedot budget"), (A.SMALL_SALES, "🔻", DOWN, "potensi sales & qty kecil"),
+                ("Jeda sampai restock", "⏸️", DOWN, "stok 0"),
             ]
             chips = []
             for name, icon, color, note in sel_groups:
@@ -914,7 +915,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             selection = selection.drop(columns=["_unit"], errors="ignore")
             sel_view = selection.loc[selection["Saran"].isin(picked)] if picked else selection
             sel_kinds = {"Biaya iklan/hari": "money", "Omzet iklan/hari": "money", "ROAS 2 bulan": "dec", "Porsi omzet grup": "pct",
-                         "Prediksi omzet/hari": "money", "Stok": "count", "Budget usulan iklan/hari": "money"}
+                         "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money"}
             batched_view(
                 len(sel_view), key="adt-sel", noun="produk",
                 render=lambda lo, hi: show_table(sel_view.iloc[lo:hi], kinds=sel_kinds, max_height=10_000,
@@ -924,11 +925,14 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                                                                 "Budget usulan iklan/hari": st.column_config.Column(help="Budget harian usulan iklan tersebut di tabel Budget per iklan (untuk grup: budget seluruh grup)")}),
                 download=lambda: download_excel(selection, f"pemilihan_produk_iklan_{periode}.xlsx", key="xl-adt-sel"),
             )
+            floor_sales, floor_qty = A.potential_floors(products)
             dup_count = int((selection["Saran"] == "Sudah di iklan lain").sum())
             if dup_count:
                 st.caption(f"{fmt_num(dup_count)} baris lain adalah produk di iklan yang sudah dijeda/berakhir yang juga ada di iklan aktif: "
                            "tidak perlu tindakan, omzetnya hanya dihitung di iklan aktifnya (ada di unduhan Excel).")
             st.caption(f"Dasar: hasil iklan 2 bulan terakhir per produk, prediksi omzet dari analisa, stok, dan target ROAS {fmt_num(roas, 1)}. "
+                       f"Layak diiklankan = potensi sales ≥ {fmt_idr(floor_sales)}/hari (produk pembentuk 95% sales toko) atau laku ≥ {fmt_num(floor_qty, 1)} unit/hari; "
+                       "di bawah itu iklan dihentikan (Stop iklan · sales kecil) dan produk belum diiklankan tidak diusulkan. "
                        "Jadikan tunggal = porsi omzet ≥ 30% di grup dan ROAS ≥ 80% target; keluarkan/pindahkan = ROAS < 50% target atau biaya tanpa omzet. "
                        "Satu produk hanya di satu iklan. Budget per iklan sudah dihitung dengan susunan ini: produk yang dikeluarkan/dijeda tidak lagi "
                        "dihitung omzetnya, iklan tunggal hasil pisah mengambil budget dari grup asalnya. Kerjakan bersamaan dengan perubahan budget hari Senin.")

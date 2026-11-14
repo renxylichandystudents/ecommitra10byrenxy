@@ -112,13 +112,40 @@ class ProductSelectionTest(unittest.TestCase):
             {"product_code": "9", "nama": "Laris belum iklan", "omzet_harian": 2_000_000, "stok_room": 1e6, "stok": 20},
             {"product_code": "8", "nama": "Habis", "omzet_harian": 1_500_000, "stok_room": 0, "stok": 0},
         ])
-        sel = A.product_selection(members, [group], products, {}, target_roas=15).set_index("Kode produk")
+        sel = A.product_selection(members, [group], products, {}, target_roas=15, focus=False).set_index("Kode produk")
         self.assertEqual(sel.loc["1", "Saran"], "Jadikan iklan tunggal")
         self.assertEqual(sel.loc["2", "Saran"], "Keluarkan dari grup")
         self.assertEqual(sel.loc["3", "Saran"], "Keluarkan dari grup")
         self.assertEqual(sel.loc["4", "Saran"], "Pertahankan di grup")
         self.assertEqual(sel.loc["9", "Saran"], "Buat iklan tunggal")
         self.assertNotIn("8", sel.index)
+
+
+class SmallSalesFocusTest(unittest.TestCase):
+    def test_small_products_stop_unless_fast_moving(self):
+        import pandas as pd
+
+        group = A.Unit(key="grup:G", nama="G", jenis="Grup", status="Berjalan", mode="GMV Max", daily_cost=60_000, daily_sales=900_000,
+                       a=1, b=1, spread=0.2, members=["1", "2", "3"])
+        members = pd.DataFrame([
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "1", "nama": "Besar", "biaya": 10_000, "omzet": 150_000, "terjual": 5},
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "2", "nama": "Kecil", "biaya": 3_000, "omzet": 30_000, "terjual": 1},
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "3", "nama": "Murah laris", "biaya": 3_000, "omzet": 30_000, "terjual": 9},
+        ])
+        products = pd.DataFrame([
+            {"product_code": "1", "nama": "Besar", "omzet_harian": 9_000_000, "qty_harian": 3, "stok_room": 1e6, "stok": 50},
+            {"product_code": "2", "nama": "Kecil", "omzet_harian": 20_000, "qty_harian": 0.1, "stok_room": 1e6, "stok": 50},
+            {"product_code": "3", "nama": "Murah laris", "omzet_harian": 40_000, "qty_harian": 8, "stok_room": 1e6, "stok": 50},
+            {"product_code": "5", "nama": "Kecil belum iklan", "omzet_harian": 30_000, "qty_harian": 0.2, "stok_room": 1e6, "stok": 50},
+        ])
+        sales_floor, qty_floor = A.potential_floors(products)
+        self.assertEqual(sales_floor, 9_000_000)  # 1 produk sudah membentuk ≥ 95% prediksi sales toko
+        self.assertGreaterEqual(qty_floor, 1.0)
+        sel = A.product_selection(members, [group], products, {}, target_roas=5).set_index("Kode produk")
+        self.assertEqual(sel.loc["2", "Saran"], A.SMALL_SALES)
+        self.assertNotEqual(sel.loc["3", "Saran"], A.SMALL_SALES)  # sales kecil tapi qty laku banyak
+        self.assertNotEqual(sel.loc["1", "Saran"], A.SMALL_SALES)
+        self.assertNotIn("5", sel.index)  # tidak diusulkan iklan baru
 
 
 class UnifiedPlanTest(unittest.TestCase):
