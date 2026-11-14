@@ -1021,7 +1021,7 @@ def _sku_table(view: dict) -> None:
         "Status": work["status"].map(lambda v: STATUS_ICON.get(v, v)), "SKU": work["sku"], "Nama": work["nama"],
         **_omzet_columns(work),
         "Stok 10037": work["stok"], "Min": work["min_stock"], "Titik pesan ulang": work["rop"], "Max": work["max_stock"],
-        "Barang dalam perjalanan": work["out_po"] + work["out_tr"], "Saran": work["saran"],
+        "Barang dalam perjalanan": work["di_jalan"], "Saran": work["saran"],
         "Kategori": work["kategori"].str.title(), "Barang": work["spesifikasi"].str.title(),
         "Lokasi ambil (gondola)": work["pick_location"].replace("", "—"), "Sumber stok": work["sumber_stok"],
     }).reset_index(drop=True)
@@ -1030,6 +1030,7 @@ def _sku_table(view: dict) -> None:
         ("Tren omzet", "omzet 30 hari terakhir dibanding 30 hari sebelumnya (▲ naik, ▼ turun)"),
         ("Stok cukup untuk", "stok Site 10037 ÷ prediksi QTY harian"),
         ("Prediksi 30 hari", "dari analisa aplikasi; dibandingkan dengan Max untuk menyarankan Max dinaikkan/diturunkan"),
+        ("Barang dalam perjalanan · Saran", "outstanding PO + TR + TO + TR dari toko lain (Replenishment Site 10037); isi ulang = Max − stok − barang dalam perjalanan"),
     ])
     _omzet_note(view)
     frame = _with_total(frame, "Status", f"Total · {fmt_num(len(frame))} SKU")

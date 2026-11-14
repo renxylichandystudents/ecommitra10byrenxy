@@ -60,6 +60,7 @@ REPL_COLUMNS = {
     "Date": "tanggal",
     "Site No": "site",
 }
+INCOMING = ("out_po", "out_tr", "out_to", "out_tr_lain")  # barang menuju Site 10037: PO, TR, TO, TR dari toko lain
 NUMERIC = ("avg_sales", "min_stock", "max_stock", "rop", "soh", "out_po", "out_tr", "out_to", "out_tr_lain", "over_stock_qty")
 
 
@@ -403,6 +404,9 @@ def build_view(
     loc_cat = locations.set_index("lokasi")["kategori"].to_dict()
     items["kategori_lokasi"] = items["pick_location"].map(loc_cat).fillna("")
     items["status"] = [_item_status(r) for r in items.itertuples(index=False)]
+    for column in INCOMING:  # snapshot lama belum punya TO & TR dari toko lain → 0
+        items[column] = pd.to_numeric(items[column], errors="coerce").fillna(0.0) if column in items.columns else 0.0
+    items["di_jalan"] = items[list(INCOMING)].sum(axis=1)
     items["saran"] = [_item_action(r) for r in items.itertuples(index=False)]
 
     # Lokasi gondola: SKU yang menempati (bisa >1 per lokasi).
@@ -475,13 +479,16 @@ def _item_status(row) -> str:
 
 def _item_action(row) -> str:
     stock, max_stock = float(row.stok), float(row.max_stock)
-    incoming = float(row.out_po) + float(row.out_tr)
+    incoming = float(row.di_jalan)
     notes = []
     if row.status in ("Kosong", "Hampir habis"):
         need = max(max_stock - stock - incoming, 0)
-        on_way = f", {incoming:,.0f} di jalan" if incoming > 0 else ""
-        notes.append(f"Isi ulang ±{need:,.0f} unit (s.d. Max {max_stock:,.0f}{on_way})".replace(",", ".")
-                     if need > 0 else "Tunggu barang di jalan")
+        def num(value: float) -> str:
+            return f"{value:,.0f}".replace(",", ".")
+
+        on_way = f", {num(incoming)} di jalan" if incoming > 0 else ""
+        notes.append(f"Isi ulang ±{num(need)} unit (s.d. Max {num(max_stock)}{on_way})"
+                     if need > 0 else f"Tunggu barang di jalan ({num(incoming)} unit)")
     elif row.status == "Stok berlebih":
         notes.append(f"Lebih {stock - max_stock:,.0f} unit: tahan isi / promo".replace(",", "."))
     if str(row.spesifikasi).lower() != "besar" and not row.pick_location:

@@ -578,3 +578,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Bila SKU punya outstanding di Replenishment Calculation by Date Site 10037 terbaru, kolom **Ambil dari DC** kini menambahkan keterangannya: mis. "Ambil 5 dari Site 10062 · kurang 3 → PO supplier · Outstanding: PO 10 · TR 5"; SKU tanpa kebutuhan restock tetapi ada outstanding: "Outstanding: TO 4". Berlaku di tabel Restock Ringkasan, tabel keputusan (Prediksi/Top 50), tabel Prediksi Top, rekap prediksi harian, unduhan Excel, dan daftar tindakan restock.
 - Sumber: `insight_live.attach_outstanding` (kolom `outstanding_10037` pada katalog setelah data fitur dibaca di `app.py`) + `dc_stock.dc_take_label`. `sumber_restock` tidak diubah, jadi hitungan "cukup dari DC / sebagian / harus PO" tetap membaca rencana saja (`dc_stock.plan_only`).
 - Kolom terpisah "Outstanding Site 10037" di tabel Restock Ringkasan dihapus karena isinya sekarang ada di Ambil dari DC.
+
+## Kapasitas gudang: barang di jalan = PO + TR + TO + TR toko lain (14 Nov 2026)
+
+- Saran isi ulang (`gudang._item_action`) dan kolom "Barang dalam perjalanan" kini menghitung outstanding PO + TR + TO + TR dari toko lain (`items["di_jalan"]`, `gudang.INCOMING`); sebelumnya hanya PO + TR. Snapshot lama tanpa kolom TO/TR toko lain dibaca 0.
+- Perbaikan teks: "s.d. Max 20. 3 di jalan" → "s.d. Max 20, 3 di jalan" (koma pemisah sebelumnya ikut diganti titik). "Tunggu barang di jalan" kini menyebut jumlah unitnya.
