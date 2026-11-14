@@ -152,17 +152,17 @@ def _day_shape_of(orders: pd.DataFrame | None, last: date):
 
 
 def _fixed_plan(units, members, products, contribution, *, weeks, blocks, gap_ads: float, roas: float, budget_daily: float, lift: float, shape, key: tuple,
-                select_roas: float | None = None) -> dict:
+                select_roas: float | None = None, exclude: frozenset = frozenset()) -> dict:
     """Rencana budget & ROAS tetap (dengan batas stok) + kalender budget harian; disimpan per sesi seperti rekomendasi."""
     cache = st.session_state.setdefault("adt-fixed-cache", {})
     full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), round(budget_daily), lift, select_roas, len(units), round(sum(u.daily_cost for u in units)),
-            round(sum(u.daily_sales for u in units)), len(products))
+            round(sum(u.daily_sales for u in units)), len(products), tuple(sorted(exclude)))
     if full not in cache:
         if len(cache) > 8:
             cache.clear()
         run_days = max(sum(weeks), 1)
         plan_units, plan, selection = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
-                                                   budget_daily=budget_daily, lift=lift, stock_cap=True, select_roas=select_roas)
+                                                   budget_daily=budget_daily, lift=lift, stock_cap=True, select_roas=select_roas, exclude=exclude)
         steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas, budget_total=budget_daily * run_days, first=plan)
         calendar, timing = F.day_plan(plan_units, steps, blocks, shape)
         cache[full] = {"units": plan_units, "plan": plan, "selection": selection, "steps": steps, "eff": A.ramp_effect(plan_units, steps),
@@ -189,19 +189,19 @@ def _calendar_view(calendar: pd.DataFrame) -> pd.DataFrame:
 
 
 def _option_plan(units, members, products, contribution, *, weeks, gap_ads: float, roas: float, budget_daily: float | None, lift: float, key: tuple,
-                 stock: bool = True, select_roas: float | None = None) -> dict:
+                 stock: bool = True, select_roas: float | None = None, exclude: frozenset = frozenset()) -> dict:
     """Hasil iklan untuk ROAS & budget harian tertentu (None = tanpa batas); stock=False: stok dianggap cukup. Disimpan per sesi.
 
     Selain angka `ramp_effect`, `kurang_stok` = daftar iklan yang tambahan penjualannya melebihi stok tersisa (nilai jual)."""
     cache = st.session_state.setdefault("adt-option-cache", {})
     full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), -1 if budget_daily is None else round(budget_daily), lift, stock, select_roas, len(units),
-            round(sum(u.daily_cost for u in units)), len(products))
+            round(sum(u.daily_cost for u in units)), len(products), tuple(sorted(exclude)))
     if full not in cache:
         if len(cache) > 300:
             cache.clear()
         run_days = max(sum(weeks), 1)
         plan_units, plan, _sel = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
-                                              budget_daily=budget_daily, lift=lift, stock_cap=stock, select_roas=select_roas)
+                                              budget_daily=budget_daily, lift=lift, stock_cap=stock, select_roas=select_roas, exclude=exclude)
         steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas,
                        budget_total=None if budget_daily is None else budget_daily * run_days, first=plan)
         result = dict(A.ramp_effect(plan_units, steps))
@@ -760,6 +760,76 @@ def _track_detail(cur: dict, track: dict | None, *, today: date) -> None:
                "Biaya iklan dari laporan iklan keseluruhan; unggah laporan terbaru agar pantauan akurat.")
 
 
+EXCLUDE_KEY = "iklan-kecualikan"
+
+
+def _exclusion_store(features) -> dict:
+    cache = st.session_state.get("adt-exclude")
+    if not isinstance(cache, dict):
+        try:
+            cache = (features.get_json(EXCLUDE_KEY, None) if features is not None else None) or {}
+        except Exception:
+            cache = {}
+        cache = {"kode": [str(k) for k in cache.get("kode", [])], "kata": [str(k) for k in cache.get("kata", []) if str(k).strip()],
+                 "oleh": cache.get("oleh", ""), "waktu": cache.get("waktu", "")}
+        st.session_state["adt-exclude"] = cache
+    return cache
+
+
+def _product_names(products: pd.DataFrame, members: pd.DataFrame) -> dict[str, str]:
+    names: dict[str, str] = {}
+    if isinstance(members, pd.DataFrame) and not members.empty and {"product_code", "nama"} <= set(members.columns):
+        names.update({str(k): str(v) for k, v in zip(members["product_code"], members["nama"]) if str(v)})
+    if isinstance(products, pd.DataFrame) and not products.empty and {"product_code", "nama"} <= set(products.columns):
+        names.update({str(k): str(v) for k, v in zip(products["product_code"], products["nama"]) if str(v)})
+    return names
+
+
+def _excluded_codes(features, products: pd.DataFrame, members: pd.DataFrame) -> frozenset:
+    """Kode Produk yang dikecualikan pengguna: dipilih langsung + nama mengandung kata kunci (mis. merek)."""
+    store = _exclusion_store(features)
+    codes = set(store["kode"])
+    words = [w.lower() for w in store["kata"]]
+    if words:
+        for code, name in _product_names(products, members).items():
+            low = name.lower()
+            if any(w in low for w in words):
+                codes.add(code)
+    return frozenset(codes)
+
+
+def _exclusion_editor(features, products: pd.DataFrame, members: pd.DataFrame, excluded: frozenset, *, can_edit: bool, username: str) -> None:
+    store = _exclusion_store(features)
+    names = _product_names(products, members)
+    with st.expander(f"🚫 Produk dikecualikan dari iklan · {fmt_num(len(excluded))} produk", expanded=bool(excluded) and False):
+        st.caption("Produk di daftar ini dikeluarkan dari semua iklan (grup & tunggal), tidak diusulkan iklan baru, dan budgetnya dibagi ulang ke "
+                   "produk lain. Berlaku untuk Fitur khusus, Rekomendasi sistem, dan rencana berikutnya sampai dihapus dari daftar.")
+        with st.form("adt-exclude-form", border=False):
+            words = st.text_input("Kata kunci nama produk / merek (pisahkan dengan koma)", value=", ".join(store["kata"]),
+                                  help="Semua produk yang namanya mengandung kata ini ikut dikecualikan, mis. dextone")
+            options = sorted(names, key=lambda k: names[k])
+            picked = st.multiselect("Pilih produk", options, default=[k for k in store["kode"] if k in names],
+                                    format_func=lambda k: f"{names.get(k, k)[:90]} · {k}", placeholder="Cari nama produk")
+            go = st.form_submit_button("Simpan daftar pengecualian", type="primary", disabled=not can_edit)
+        if go:
+            new = {"kode": [str(k) for k in picked], "kata": [w.strip() for w in words.split(",") if w.strip()],
+                   "oleh": username, "waktu": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")}
+            st.session_state["adt-exclude"] = new
+            if features is not None:
+                try:
+                    features.set_json(EXCLUDE_KEY, new, username=username)
+                except Exception:
+                    pass
+            st.rerun()
+        if excluded:
+            show_table(pd.DataFrame([{"Kode produk": k, "Produk": names.get(k, k)} for k in sorted(excluded, key=lambda k: names.get(k, k))]),
+                       max_height=260, row_height=35, column_config={"Produk": st.column_config.TextColumn(width=700)})
+            if store.get("oleh"):
+                st.caption(f"Terakhir diubah {store['oleh']} {store.get('waktu', '')}")
+        if not can_edit:
+            st.caption("Hanya pengguna dengan akses edit Rekomendasi yang bisa mengubah daftar ini.")
+
+
 def show_target_strategy(table: pd.DataFrame, *, features, params: dict, username: str, can_edit: bool, frames=None,
                          orders: pd.DataFrame | None = None, inputs=None) -> None:
     st.markdown("<div class='section-title'>Strategi iklan kejar target</div>", unsafe_allow_html=True)
@@ -854,12 +924,13 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     weeks = [(b - a).days + 1 for a, b in blocks]
     run_days = max(sum(weeks), 1)
     base_units = units
+    excluded = _excluded_codes(features, products, members)
     lift = A.FREE_LIFT
     select = F.selection_roas(base_units) if base_units else None
 
     def option(r: float, daily: float, gap_now: float) -> dict:
         return _option_plan(base_units, members, products, contribution, weeks=weeks, gap_ads=max(gap_now / factor, 0.0), roas=r, budget_daily=daily, lift=lift,
-                            key=(periode, start, end), stock=True, select_roas=select)
+                            key=(periode, start, end), stock=True, select_roas=select, exclude=excluded)
 
     def best_roas(daily: float, gap_now: float) -> float:
         if daily <= 0:
@@ -888,7 +959,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         reach = final / target * 100 if target > 0 else 0.0
         with st.spinner("Membagi budget ke iklan..."):
             fixed = _fixed_plan(base_units, members, products, contribution, weeks=weeks, blocks=blocks, gap_ads=max(target - projection, 0.0) / factor, roas=roas,
-                                budget_daily=budget_daily, lift=lift, shape=_day_shape_of(orders, last), key=(periode, start, end), select_roas=select)
+                                budget_daily=budget_daily, lift=lift, shape=_day_shape_of(orders, last), key=(periode, start, end), select_roas=select,
+                                exclude=excluded)
         units, plan, selection, steps = fixed["units"], fixed["plan"], fixed["selection"], fixed["steps"]
         eff = fixed["eff"]
         week_table = A.weekly_table(units, steps, blocks)
@@ -898,6 +970,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
 
         # ---------------- 3. Pemilihan produk
         _step(n0, "Pemilihan produk iklan", "· siapa masuk iklan tunggal, siapa di grup, siapa dikeluarkan")
+        _exclusion_editor(features, products, members, excluded, can_edit=can_edit, username=username)
         if selection.empty:
             st.info("Belum ada data produk iklan (laporan iklan grup / keseluruhan) untuk dianalisa.")
         else:
@@ -905,7 +978,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 ("Buat iklan tunggal", "🆕", UP, "produk laris belum diiklankan"), ("Jadikan iklan tunggal", "⭐", UP, "andalan di grup"),
                 ("Pertahankan iklan tunggal", "✅", "#64748b", ""), ("Tambahkan ke grup", "➕", UP, "belum diiklankan"),
                 ("Pertahankan di grup", "✅", "#64748b", ""), ("Pindahkan ke grup", "↘️", DOWN, "iklan tunggal kurang efisien"),
-                ("Keluarkan dari grup", "➖", DOWN, "menyedot budget"), (A.SMALL_SALES, "🔻", DOWN, "potensi sales & qty kecil"),
+                ("Keluarkan dari grup", "➖", DOWN, "menyedot budget"), (A.SMALL_SALES, "🔻", DOWN, "potensi sales & qty kecil"), (A.MANUAL_OUT, "🚫", DOWN, "daftar pengecualian"),
                 ("Jeda sampai restock", "⏸️", DOWN, "stok 0"),
             ]
             chips = []
@@ -924,7 +997,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                          "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money"}
             batched_view(
                 len(sel_view), key="adt-sel", noun="produk",
-                render=lambda lo, hi: show_table(sel_view.iloc[lo:hi], kinds=sel_kinds, max_height=10_000,
+                render=lambda lo, hi: show_table(sel_view.iloc[lo:hi], kinds=sel_kinds, max_height=10_000, row_height=35,
                                                  column_config={"Produk": st.column_config.TextColumn(width="medium"), "Alasan": st.column_config.TextColumn(width="large"),
                                                                 "Prediksi omzet/hari": st.column_config.Column(help="Prediksi omzet harian produk dari analisa (semua kanal penjualan)"),
                                                                 "Iklan di rencana": st.column_config.Column(help="Iklan tempat produk ini berada sesudah perubahan; sama dengan baris di tabel Budget per iklan"),
@@ -984,7 +1057,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             ])
             batched_view(
                 len(shown), key="adt-units", noun="iklan",
-                render=lambda lo, hi: show_table(shown.iloc[lo:hi][cols], kinds=kinds, max_height=10_000,
+                render=lambda lo, hi: show_table(shown.iloc[lo:hi][cols], kinds=kinds, max_height=10_000, row_height=35,
                                                  column_config={"Iklan": st.column_config.TextColumn(width="medium"), "Catatan": st.column_config.TextColumn(width="large"),
                                                                 "Target ROAS Shopee": st.column_config.Column(help="ROAS rata-rata iklan ini pada budget usulan (maks. 30); isi di pengaturan iklan GMV Max ROAS Shopee"),
                                                                 "Prediksi omzet produk/hari": st.column_config.Column(help="Prediksi omzet harian (analisa, semua kanal) produk yang tinggal di iklan ini"),
@@ -1025,7 +1098,10 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 ("Urutan", "1) budget dipindah dari iklan dengan tambahan omzet per Rp terendah ke yang tertinggi selama omzet naik, "
                            "2) bila melebihi budget atau ROAS rata-rata di bawah target, iklan paling tidak efektif dipangkas, "
                            "3) sisa budget diberikan ke iklan paling efektif sampai kekurangan omzet tertutup atau ROAS rata-rata menyentuh target"),
-                ("Target ROAS Shopee per iklan", "ROAS rata-rata iklan itu pada budget usulan, maks. 30; boleh berbeda antar iklan selama rata-ratanya ≥ target"),
+                ("Efisiensi minimum", f"tiap tambahan Rp 1 biaya iklan harus kembali ≥ Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan; iklan yang Rp terakhirnya di bawah itu "
+                                  "dipangkas (lalu dijeda bila rata-ratanya pun di bawah itu). Sisa budget yang tidak bisa dipakai efisien tidak dibelanjakan"),
+            ("Pengecualian", "produk di daftar pengecualian (pilih produk atau kata kunci nama/merek) dikeluarkan dari semua iklan"),
+            ("Target ROAS Shopee per iklan", "ROAS rata-rata iklan itu pada budget usulan, maks. 30; boleh berbeda antar iklan selama rata-ratanya ≥ target"),
                 ("Batas per iklan", "budget harian naik maks. 2× atau turun ke ≥ ½ dari sekarang per minggu (selain dijeda), iklan baru maks. Rp 100 rb/hari: "
                                     "di luar batas itu perlindungan ROAS Shopee mati"),
                 ("Siklus", "rencana dibagi per minggu: budget tiap iklan boleh naik maks. 2× dari minggu sebelumnya, jadi budget bisa naik bertahap sampai akhir bulan; "
