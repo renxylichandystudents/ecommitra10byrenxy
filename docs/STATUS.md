@@ -820,3 +820,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Tab Setting › Laporan margin dihapus (URL lama diarahkan ke Kalkulator biaya).
 - Ringkasan dirombak per bagian: (1) Penjualan & margin bulan berjalan (target), (2) Kondisi margin SKU aktif periode terpilih: kartu Sales produk bersih / Margin kotor / Margin bersih / Perlu ditindaklanjuti, chip potongan & batas, tabel Ringkasan per status (+Total), Langkah yang disarankan (gabungan), sebaran sales vs margin, (3) Daftar prioritas (jembatan sales di expander), (4) SKU nonaktif · potensi margin yang hilang.
 - Semua angka dari mesin yang sama (`_portfolio_rows` + `shopee_fee.portfolio`, transaksi bersih). SKU nonaktif: seluruh riwayat, margin bersih ÷ bulan terjual, batas margin rendah = batas SKU aktif.
+
+## 2026-11-14 — Kapasitas gudang › SKU di gudang 10037: outstanding & istilah bersih
+- Tabel memakai komponen berkelompok: Produk · Penjualan & prediksi 30 hari · Stok Site 10037 · Outstanding PO/TR/TO · Tindakan · Keterangan (kolom Produk terkunci, Total, Excel).
+- Outstanding dipecah PO / TR / TO / TR toko lain / Total + Umur outstanding (sejak & hari, dari riwayat snapshot replenishment) + Follow up outstanding (masih perlu X unit / sudah menutup kebutuhan / belum ada outstanding: segera buat TR/TO/PO / lewat 7 hari: kejar).
+- `gudang.sales_summary` memakai `metrics.sold_lines` (tanpa batal & Belum Bayar, dikurangi retur). Header gudang: QTY bersih 30 hari, Sales produk bersih 30 hari, Tren sales, Prediksi sales 30 hari; "barang di jalan" → outstanding.

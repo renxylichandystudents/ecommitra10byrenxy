@@ -362,7 +362,7 @@ def show_capacity(features, table: pd.DataFrame, *, may_upload: bool, username: 
 
     _lane_detail(view)
     _category_table(view)
-    _sku_table(view)
+    _sku_table(view, features)
 
 
 def show_parameters(features, user_root, *, may_edit: bool) -> None:
@@ -722,7 +722,7 @@ def _save_master_rows(features, rows: pd.DataFrame, known: set, *, username: str
 
 
 OMZET_KINDS = {
-    "Terjual 30 hari (QTY)": "count", "Omzet 30 hari": "money", "Prediksi QTY 30 hari": "count", "Prediksi omzet 30 hari": "money",
+    "QTY bersih 30 hari": "count", "Sales produk bersih 30 hari": "money", "Prediksi QTY 30 hari": "count", "Prediksi sales 30 hari": "money",
     "Stok 10037": "count", "Min": "count", "Titik pesan ulang": "count", "Max": "count", "Barang dalam perjalanan": "count",
 }
 
@@ -745,8 +745,8 @@ def _days_text(value) -> str:
 def _omzet_columns(src: pd.DataFrame) -> dict:
     """Kolom omzet & prediksi yang sama untuk tabel lorong dan tabel SKU."""
     return {
-        "Terjual 30 hari (QTY)": src["qty_30"], "Omzet 30 hari": src["omzet_30"], "Tren omzet": src["tren_pct"].map(_trend_text),
-        "Prediksi QTY 30 hari": src["pred_30"].round(0), "Prediksi omzet 30 hari": src["pred_omzet_30"].round(0),
+        "QTY bersih 30 hari": src["qty_30"], "Sales produk bersih 30 hari": src["omzet_30"], "Tren sales": src["tren_pct"].map(_trend_text),
+        "Prediksi QTY 30 hari": src["pred_30"].round(0), "Prediksi sales 30 hari": src["pred_omzet_30"].round(0),
         "Stok cukup untuk": src["hari_cukup"].map(_days_text),
     }
 
@@ -758,7 +758,7 @@ def _with_total(frame: pd.DataFrame, label_col: str, label: str) -> pd.DataFrame
             frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
     total = {c: (np.nan if pd.api.types.is_numeric_dtype(frame[c]) else "") for c in frame.columns}
     total[label_col] = label
-    for column in ("Terjual 30 hari (QTY)", "Omzet 30 hari", "Prediksi QTY 30 hari", "Prediksi omzet 30 hari", "Stok 10037"):
+    for column in ("QTY bersih 30 hari", "Sales produk bersih 30 hari", "Prediksi QTY 30 hari", "Prediksi sales 30 hari", "Stok 10037"):
         if column in frame.columns:
             total[column] = float(pd.to_numeric(frame[column], errors="coerce").fillna(0).sum())
     return pd.concat([pd.DataFrame([total], columns=frame.columns), frame], ignore_index=True)
@@ -778,7 +778,8 @@ def _latest_run_id(features):
 
 def _omzet_note(view: dict) -> None:
     end = view.get("sales_end")
-    bits = [f"Omzet & QTY 30 hari s.d. {end:%d/%m/%Y} (tanpa pesanan batal); tren = dibanding 30 hari sebelumnya." if end else "Data penjualan belum termuat, kolom omzet kosong."]
+    bits = [f"QTY bersih & Sales produk bersih 30 hari s.d. {end:%d/%m/%Y} (tanpa batal & Belum Bayar, dikurangi retur); tren = dibanding 30 hari sebelumnya."
+            if end else "Data penjualan belum termuat, kolom sales kosong."]
     if view.get("has_pred"):
         bits.append(f"Prediksi 30 hari dari {view.get('pred_source') or 'analisa terakhir'}.")
     else:
@@ -852,7 +853,7 @@ def _lane_detail(view: dict) -> None:
     )
     st.markdown(
         "<div class='field-hint'>Urutan prioritas: 🔴 Kosong → 🟠 Hampir habis → 🟣 Stok berlebih → ⚪ Lokasi kosong → 🟢 Aman; "
-        "dalam status yang sama, <b>omzet terbesar di atas</b> (prediksi omzet 30 hari, atau omzet 30 hari terakhir bila prediksi belum ada).</div>",
+        "dalam status yang sama, <b>sales terbesar di atas</b> (prediksi sales 30 hari, atau sales produk bersih 30 hari terakhir bila prediksi belum ada).</div>",
         unsafe_allow_html=True,
     )
     _omzet_note(view)
@@ -954,11 +955,11 @@ def _category_table(view: dict) -> None:
         "Kategori": cats["kategori"].str.title(),
         "Prioritas": cats["_lvl"].map(PRIORITY_LABEL),
         "Yang perlu dikerjakan": cats["_job"],
-        "Terjual 30 hari (QTY)": money["q30"].fillna(0).to_numpy(),
-        "Omzet 30 hari": money["s30"].fillna(0).to_numpy(),
-        "Tren omzet": [_trend_text(v) for v in trend],
+        "QTY bersih 30 hari": money["q30"].fillna(0).to_numpy(),
+        "Sales produk bersih 30 hari": money["s30"].fillna(0).to_numpy(),
+        "Tren sales": [_trend_text(v) for v in trend],
         "Prediksi QTY 30 hari": money["pq"].to_numpy() if has_pred else np.nan,
-        "Prediksi omzet 30 hari": money["ps"].to_numpy() if has_pred else np.nan,
+        "Prediksi sales 30 hari": money["ps"].to_numpy() if has_pred else np.nan,
         "Rak terpakai": cats["rak_pct"].map(pct),
         "Lokasi rak": cats["lokasi_rak"], "SKU besar berstok": cats["sku_besar_berstok"],
         "Gondola terpakai": cats["gondola_pct"].map(pct),
@@ -968,14 +969,14 @@ def _category_table(view: dict) -> None:
     })
     rack_total, rack_sku = int(frame["Lokasi rak"].sum()), int(frame["SKU besar berstok"].sum())
     gon_total, gon_used = int(frame["Lokasi gondola"].sum()), int(frame["Gondola terisi"].sum())
-    sales_now = float(frame["Omzet 30 hari"].sum())
+    sales_now = float(frame["Sales produk bersih 30 hari"].sum())
     sales_prev = float(prev.sum()) if prev is not None else 0.0
     total = {
         "Kategori": "Total", "Prioritas": f"{len(groups[0])} tinggi · {len(groups[1])} sedang", "Yang perlu dikerjakan": "",
-        "Terjual 30 hari (QTY)": frame["Terjual 30 hari (QTY)"].sum(), "Omzet 30 hari": sales_now,
-        "Tren omzet": _trend_text((sales_now - sales_prev) / sales_prev * 100 if sales_prev > 0 else np.nan),
+        "QTY bersih 30 hari": frame["QTY bersih 30 hari"].sum(), "Sales produk bersih 30 hari": sales_now,
+        "Tren sales": _trend_text((sales_now - sales_prev) / sales_prev * 100 if sales_prev > 0 else np.nan),
         "Prediksi QTY 30 hari": frame["Prediksi QTY 30 hari"].sum() if has_pred else np.nan,
-        "Prediksi omzet 30 hari": frame["Prediksi omzet 30 hari"].sum() if has_pred else np.nan,
+        "Prediksi sales 30 hari": frame["Prediksi sales 30 hari"].sum() if has_pred else np.nan,
         "Rak terpakai": pct(rack_sku / rack_total * 100) if rack_total else "–", "Lokasi rak": rack_total, "SKU besar berstok": rack_sku,
         "Gondola terpakai": pct(gon_used / gon_total * 100) if gon_total else "–", "Lokasi gondola": gon_total, "Gondola terisi": gon_used,
         "SKU kecil tanpa lokasi": frame["SKU kecil tanpa lokasi"].sum(), "SKU perlu diisi ulang": frame["SKU perlu diisi ulang"].sum(),
@@ -994,7 +995,67 @@ def _category_table(view: dict) -> None:
     )
 
 
-def _sku_table(view: dict) -> None:
+STALE_DAYS = 7  # outstanding lebih lama dari ini perlu dikejar (sama dengan Analisa per SKU)
+
+
+def _outstanding_age(features) -> pd.DataFrame:
+    """Umur outstanding per SKU dari riwayat snapshot replenishment Site 10037 (insight_live.outstanding_age)."""
+    from src.core.insight_live import outstanding_age
+
+    if features is None:
+        return pd.DataFrame()
+    try:
+        dates = features.snapshot_dates("warehouse_replenishment")
+    except Exception:
+        return pd.DataFrame()
+    key = ("gudang-os-age", tuple(str(d) for d in (dates or [])[:3]), len(dates or []))
+    cached = st.session_state.get("_gudang-os-age")
+    if isinstance(cached, tuple) and cached[0] == key:
+        return cached[1]
+    try:
+        history = features.read("warehouse_replenishment")
+        keep = [c for c in ("snapshot_date", "sku", "out_po", "out_tr", "out_to", "out_tr_lain") if c in history.columns]
+        age = outstanding_age(history[keep], pd.Timestamp.today().normalize())
+    except Exception:
+        age = pd.DataFrame()
+    st.session_state["_gudang-os-age"] = (key, age)
+    return age
+
+
+def _follow_up(row, age: pd.DataFrame) -> tuple[str, str]:
+    """(umur, follow up) outstanding Site 10037 untuk satu SKU."""
+    def unit(v: float) -> str:
+        return f"{v:,.0f}".replace(",", ".")
+
+    total = float(row.di_jalan or 0)
+    need_restock = row.status in ("Kosong", "Hampir habis")
+    short = max(float(row.max_stock) - float(row.stok), 0.0) if need_restock else 0.0
+    if total <= 0:
+        return "–", ("Belum ada outstanding PO/TR/TO: segera buat TR/TO/PO" + (f" (±{unit(short)} unit s.d. Max)" if short > 0 else "")
+                     if need_restock else "–")
+    days_text, stale = "–", False
+    key = gudang.norm_sku(row.sku)
+    if age is not None and not age.empty and key in age.index:
+        hit = age.loc[key]
+        since, days = hit.get("sejak"), hit.get("umur_hari")
+        if pd.notna(since) and pd.notna(days):
+            mark = "≥ " if bool(hit.get("minimal", False)) else ""
+            days_text = f"sejak {pd.Timestamp(since):%d/%m} · {mark}{int(days)} hari"
+            stale = int(days) > STALE_DAYS
+    parts = " · ".join(f"{label} {unit(float(v))}" for label, v in (("PO", row.out_po), ("TR", row.out_tr), ("TO", row.out_to), ("TR toko lain", row.out_tr_lain))
+                       if float(v or 0) > 0)
+    text = f"Outstanding {parts}"
+    if need_restock:
+        rest = max(short - total, 0.0)
+        text += " → sudah menutup kebutuhan, pastikan segera diterima" if rest <= 0 else f" → masih perlu {unit(rest)} unit lagi: buat TR/TO/PO tambahan"
+    elif row.status == "Stok berlebih":
+        text += " → stok sudah di atas Max: pertimbangkan tunda/batalkan"
+    if stale:
+        text += f" · lewat {STALE_DAYS} hari: kejar ke supplier/DC"
+    return days_text, text
+
+
+def _sku_table(view: dict, features=None) -> None:
     st.markdown("<div class='section-title'>SKU di gudang 10037 & tindakan</div>", unsafe_allow_html=True)
     items = view["items"]
     if items.empty:
@@ -1017,25 +1078,46 @@ def _sku_table(view: dict) -> None:
         work = work.loc[work["spesifikasi"].str.title().isin(spec_pick)]
     order = {"Kosong": 0, "Hampir habis": 1, "Stok berlebih": 2, "Aman": 3}
     work = work.assign(_o=work["status"].map(order)).sort_values(["_o", "dampak_omzet"], ascending=[True, False], kind="mergesort")
+    age = _outstanding_age(features)
+    follow = [_follow_up(r, age) for r in work.itertuples(index=False)]
     frame = pd.DataFrame({
         "Status": work["status"].map(lambda v: STATUS_ICON.get(v, v)), "SKU": work["sku"], "Nama": work["nama"],
         **_omzet_columns(work),
         "Stok 10037": work["stok"], "Min": work["min_stock"], "Titik pesan ulang": work["rop"], "Max": work["max_stock"],
-        "Barang dalam perjalanan": work["di_jalan"], "Saran": work["saran"],
+        "PO": work["out_po"], "TR": work["out_tr"], "TO": work["out_to"], "TR toko lain": work["out_tr_lain"], "Total outstanding": work["di_jalan"],
+        "Umur outstanding": [f[0] for f in follow], "Follow up outstanding": [f[1] for f in follow],
+        "Saran tindakan": work["saran"],
         "Kategori": work["kategori"].str.title(), "Barang": work["spesifikasi"].str.title(),
         "Lokasi ambil (gondola)": work["pick_location"].replace("", "—"), "Sumber stok": work["sumber_stok"],
     }).reset_index(drop=True)
-    explain([
-        ("Urutan", "status dulu (Kosong → Hampir habis → Stok berlebih → Aman), lalu omzet terbesar di atas: prediksi omzet 30 hari, atau omzet 30 hari terakhir bila prediksi belum ada"),
-        ("Tren omzet", "omzet 30 hari terakhir dibanding 30 hari sebelumnya (▲ naik, ▼ turun)"),
-        ("Stok cukup untuk", "stok Site 10037 ÷ prediksi QTY harian"),
-        ("Prediksi 30 hari", "dari analisa aplikasi; dibandingkan dengan Max untuk menyarankan Max dinaikkan/diturunkan"),
-        ("Barang dalam perjalanan · Saran", "outstanding PO + TR + TO + TR dari toko lain (Replenishment Site 10037); isi ulang = Max − stok − barang dalam perjalanan"),
-    ])
+    with st.expander("Cara membaca tabel ini"):
+        explain([
+            ("Urutan", "status dulu (Kosong → Hampir habis → Stok berlebih → Aman), lalu sales terbesar di atas: prediksi sales 30 hari, atau sales produk bersih 30 hari terakhir bila prediksi belum ada"),
+            ("Penjualan", "QTY bersih & Sales produk bersih 30 hari terakhir (tanpa batal & Belum Bayar, dikurangi retur); tren = dibanding 30 hari sebelumnya"),
+            ("Stok cukup untuk", "stok Site 10037 ÷ prediksi QTY harian"),
+            ("Prediksi 30 hari", "dari analisa aplikasi; dibandingkan dengan Max untuk menyarankan Max dinaikkan/diturunkan"),
+            ("Outstanding", "PO, TR, TO, dan TR dari toko lain di Replenishment Site 10037 terbaru; umur = sejak kapan terlihat terus-menerus di snapshot replenishment"),
+            ("Follow up outstanding", f"outstanding > {STALE_DAYS} hari ditandai perlu dikejar; SKU perlu isi ulang tanpa outstanding = segera buat TR/TO/PO; "
+                                      "selisih kebutuhan (Max − stok − outstanding) ditulis sebagai sisa yang masih perlu diproses"),
+            ("Saran tindakan", "isi ulang = Max − stok − outstanding; stok berlebih; lokasi ambil; Max dibanding prediksi"),
+        ])
     _omzet_note(view)
-    frame = _with_total(frame, "Status", f"Total · {fmt_num(len(frame))} SKU")
-    batched_view(
-        len(frame) - 1, key="gudang-sku", noun="SKU",
-        render=lambda lo, hi: show_table(pd.concat([frame.iloc[:1], frame.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label=str(frame.iloc[0]["Status"]), kinds=OMZET_KINDS),
-        download=lambda: download_excel(frame, "gudang_10037_sku.xlsx", key="xl-gudang-sku"),
+    numeric = ("QTY bersih 30 hari", "Sales produk bersih 30 hari", "Prediksi QTY 30 hari", "Prediksi sales 30 hari", "Stok 10037", "PO", "TR", "TO",
+               "TR toko lain", "Total outstanding")
+    total = {c: float(pd.to_numeric(frame[c], errors="coerce").fillna(0).sum()) for c in numeric}
+    total["Nama"] = f"Total · {fmt_num(len(frame))} SKU"
+    from src.ui import grouped_table
+
+    grouped_table.show(
+        frame, key="gudang-sku-tbl", filename="gudang_10037_sku.xlsx", noun="SKU", first=5,
+        groups={"Produk": ("Status", "SKU", "Nama"),
+                "Penjualan & prediksi 30 hari": ("QTY bersih 30 hari", "Sales produk bersih 30 hari", "Tren sales", "Prediksi QTY 30 hari", "Prediksi sales 30 hari"),
+                "Stok Site 10037": ("Stok 10037", "Stok cukup untuk", "Min", "Titik pesan ulang", "Max"),
+                "Outstanding PO/TR/TO": ("PO", "TR", "TO", "TR toko lain", "Total outstanding", "Umur outstanding", "Follow up outstanding"),
+                "Tindakan": ("Saran tindakan",),
+                "Keterangan": ("Kategori", "Barang", "Lokasi ambil (gondola)", "Sumber stok")},
+        kinds={**OMZET_KINDS, "PO": "count", "TR": "count", "TO": "count", "TR toko lain": "count", "Total outstanding": "count"},
+        total=total, pin=("Status", "SKU", "Nama"), wrap=("Nama", "Follow up outstanding", "Saran tindakan"),
+        widths={"Status": 128, "SKU": 104, "Nama": 280, "Tren sales": 110, "Stok cukup untuk": 110, "PO": 76, "TR": 76, "TO": 76, "TR toko lain": 96,
+                "Umur outstanding": 130, "Follow up outstanding": 330, "Saran tindakan": 330, "Lokasi ambil (gondola)": 140, "Sumber stok": 160},
     )

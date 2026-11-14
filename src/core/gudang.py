@@ -486,9 +486,9 @@ def _item_action(row) -> str:
         def num(value: float) -> str:
             return f"{value:,.0f}".replace(",", ".")
 
-        on_way = f", {num(incoming)} di jalan" if incoming > 0 else ""
+        on_way = f", dikurangi outstanding {num(incoming)}" if incoming > 0 else ""
         notes.append(f"Isi ulang ±{num(need)} unit (s.d. Max {num(max_stock)}{on_way})"
-                     if need > 0 else f"Tunggu barang di jalan ({num(incoming)} unit)")
+                     if need > 0 else f"Tunggu outstanding diterima ({num(incoming)} unit)")
     elif row.status == "Stok berlebih":
         notes.append(f"Lebih {stock - max_stock:,.0f} unit: tahan isi / promo".replace(",", "."))
     if str(row.spesifikasi).lower() != "besar" and not row.pick_location:
@@ -558,15 +558,16 @@ def snapshot_stamp(value) -> str:
 
 
 def sales_summary(orders: pd.DataFrame | None, days: int = 30) -> pd.DataFrame:
-    """Per SKU: QTY & omzet `days` hari terakhir (q30, s30) dan periode sebelumnya (qprev, sprev); pesanan batal dibuang."""
+    """Per SKU: QTY bersih & Sales produk bersih `days` hari terakhir (q30, s30) dan periode sebelumnya (qprev, sprev).
+    Bersih = tanpa batal & Belum Bayar, dikurangi retur (metrics.sold_lines), sama dengan tabel Data & Kalkulator."""
     columns = ["q30", "s30", "qprev", "sprev"]
     if orders is None or orders.empty or not {"sku", "order_time", "qty", "sales"} <= set(orders.columns):
         return pd.DataFrame(columns=columns)
-    work = orders
-    if "status" in work.columns:
-        from src.ingest import cancelled_status_mask
+    from src.core.metrics import sold_lines
 
-        work = work.loc[~cancelled_status_mask(work["status"])]
+    work = sold_lines(orders)
+    if work is None or work.empty:
+        return pd.DataFrame(columns=columns)
     stamp = pd.to_datetime(work["order_time"], errors="coerce").dt.normalize()
     if stamp.dropna().empty:
         return pd.DataFrame(columns=columns)
