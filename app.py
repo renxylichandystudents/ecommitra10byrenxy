@@ -2238,6 +2238,32 @@ def show_match_diagnostics(store, stamp: float) -> None:
             dc_ready = int((miss_tx[dc_cols].sum(axis=1) > 0).sum()) if dc_cols else 0
             card(t4, "Masih ada stok di DC", f"{format_number(dc_ready, 0)} SKU", hint="Site 10062 / 10036 · bisa didaftarkan ulang")
             paged_table(diag["tx_miss"], key="diag-tx", filename=f"sku_tidak_cocok_stok_{period_text}", kinds={"QTY terjual": "count", "Sales value": "money", "Stok Site 10062": "count", "Stok Site 10036": "count"})
+        unsold = diag.get("stock_unsold")
+        if isinstance(unsold, pd.DataFrame) and not unsold.empty:
+            st.markdown(
+                f"**SKU aktif di Data stok yang belum pernah terjual** · listing di unggahan Data stok Site 10037 terbaru, "
+                f"tidak ada satu pun pesanan di data transaksi {period_text} · stok DC dari unggahan Site 10062/10036 terbaru"
+            )
+            u1, u2, u3, u4 = st.columns(4)
+            dc_cols = [c for c in unsold.columns if c.startswith("Stok Site") and c != "Stok Site 10037"]
+            dc_total = unsold[dc_cols].sum(axis=1) if dc_cols else pd.Series(0.0, index=unsold.index)
+            card(u1, "SKU aktif belum terjual", format_number(len(unsold), 0), hint=f"dari {format_number(tx['sku_stok'], 0)} SKU di Data stok")
+            card(u2, "Stok Site 10037", f"{format_number(unsold['Stok Site 10037'].sum(), 0)} unit", hint=f"{format_number((unsold['Stok Site 10037'] > 0).sum(), 0)} SKU berstok di toko")
+            card(u3, "Stok DC 10036 + 10062", f"{format_number(dc_total.sum(), 0)} unit", hint=f"{format_number((dc_total > 0).sum(), 0)} SKU berstok di DC")
+            no_stock = int(((unsold["Stok Site 10037"] + dc_total) <= 0).sum())
+            card(u4, "Tanpa stok di mana pun", f"{format_number(no_stock, 0)} SKU", hint="kandidat arsipkan listing")
+            paged_table(
+                unsold,
+                key="diag-unsold",
+                filename=f"sku_aktif_belum_terjual_{period_text}",
+                kinds={"Stok Site 10037": "count", "Stok Site 10036": "count", "Stok Site 10062": "count", "Umur tidak terjual (hari)": "count"},
+            )
+            st.caption(
+                "Umur tidak terjual = hari sejak awal data transaksi s.d. hari ini (angka minimal: tanggal tayang listing tidak ada di ekspor Shopee). "
+                "SKU yang baru muncul setelah unggahan Data stok pertama ditandai listing baru dan dihitung sejak tanggal itu. "
+                "Dihitung dari data tersimpan, jadi tidak perlu menjalankan analisa ulang. "
+                "Berstok tetapi lama tidak terjual: cek harga, judul, foto, atau ikutkan iklan/flash sale; tanpa stok sama sekali: arsipkan listing."
+            )
     else:
         st.caption("Data transaksi atau Data stok Site 10037 belum ada.")
     ads = diag.get("ads")

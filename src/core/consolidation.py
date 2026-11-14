@@ -163,6 +163,56 @@ def _num(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(text, errors="coerce").fillna(0.0)
 
 
+def _unsold_active(stock: pd.DataFrame, sold: set[str], dc_qty: dict[str, pd.Series], tx_start, ref) -> pd.DataFrame:
+    """SKU di snapshot Data stok terbaru (listing aktif) yang tidak pernah muncul di Data transaksi.
+
+    Umur tidak terjual dihitung dari awal data transaksi; SKU yang baru muncul di Data stok setelah unggahan
+    stok pertama (listing baru) dihitung dari tanggal kemunculannya.
+    """
+    if stock.empty or "sku" not in stock.columns:
+        return pd.DataFrame()
+    work = stock.copy()
+    work["sku"] = _clean_key(work["sku"])
+    work = work.loc[work["sku"].ne("")]
+    if "_submitted_at" in work.columns:
+        work["_snap"] = snapshot_time(work["_submitted_at"].astype(str))
+        latest = work.loc[work["_submitted_at"].astype(str).eq(str(work["_submitted_at"].astype(str).max()))]
+        first_upload = work["_snap"].min()
+        first_seen = work.groupby("sku")["_snap"].min()
+    else:
+        latest, first_upload, first_seen = work, pd.NaT, pd.Series(dtype="datetime64[ns]")
+    latest = latest.loc[~latest["sku"].isin(sold)].drop_duplicates("sku", keep="last")
+    if latest.empty:
+        return pd.DataFrame()
+    start = pd.Timestamp(tx_start).normalize() if tx_start is not None and pd.notna(tx_start) else pd.NaT
+    seen = latest["sku"].map(first_seen).dt.normalize()
+    is_new = seen.notna() & pd.notna(first_upload) & seen.gt(pd.Timestamp(first_upload).normalize())
+    since = seen.where(is_new | pd.isna(start), start)
+    end = pd.Timestamp(ref).normalize() if ref is not None and pd.notna(ref) else pd.NaT
+    days = (end - since).dt.days.clip(lower=0) if pd.notna(end) else pd.Series(np.nan, index=latest.index)
+    stok_10037 = _num(latest, "stock_dc_cikupa")
+    table = pd.DataFrame(
+        {
+            "SKU": latest["sku"],
+            "Produk": latest["product_name"].astype(str) if "product_name" in latest.columns else "",
+            "Variasi": latest["variation"].fillna("").astype(str).replace({"nan": "", "-": ""}) if "variation" in latest.columns else "",
+            "Stok Site 10037": stok_10037,
+            **{f"Stok Site {code}": latest["sku"].map(qty).fillna(0.0) if len(qty) else 0.0 for code, qty in sorted(dc_qty.items())},
+            "Tidak terjual sejak": [
+                "-" if pd.isna(d) else (f"{tanggal(d)} (listing baru)" if new else f"≤ {tanggal(d)} (awal data transaksi)")
+                for d, new in zip(since, is_new)
+            ],
+            "Umur tidak terjual (hari)": days,
+        }
+    )
+    stock_cols = [c for c in table.columns if c.startswith("Stok Site")]
+    table["_total"] = table[stock_cols].sum(axis=1)
+    table = table.sort_values(["_total", "Umur tidak terjual (hari)"], ascending=False).drop(columns="_total")
+    if not table["Variasi"].astype(str).str.strip().ne("").any():
+        table = table.drop(columns="Variasi")
+    return table.reset_index(drop=True)
+
+
 def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
     """Rincian tiga angka konsolidasi: SKU yang tidak cocok, kode iklan yang tidak terpetakan, dan daftar snapshot.
 
@@ -230,6 +280,7 @@ def match_diagnostics(store: LocalDataStore, today=None) -> dict[str, object]:
                 **{f"Stok Site {code}": table["sku"].map(qty).fillna(0.0) if len(qty) else np.nan for code, qty in dc_qty.items()},
             }
         )
+        out["stock_unsold"] = _unsold_active(stock, set(per.index), dc_qty, out["tx_period"][0], ref)
 
     # 2) Kode produk iklan vs Kode Produk di Data stok Site 10037
     code_to_sku = _product_code_to_sku(stock)

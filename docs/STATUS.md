@@ -2,6 +2,12 @@
 
 Diperbarui: 13 November 2026.
 
+## Rincian kecocokan: SKU aktif belum pernah terjual (14 Nov 2026)
+
+- Upload data › Ringkasan data tersimpan › Rincian kecocokan, di bawah tabel "SKU transaksi yang tidak ada di Data stok": tabel baru **SKU aktif di Data stok yang belum pernah terjual** (SKU di unggahan Data stok Site 10037 terbaru yang tidak pernah muncul di Data transaksi). Kolom: SKU, Produk, Variasi, Stok Site 10037/10036/10062, Tidak terjual sejak, Umur tidak terjual (hari); urut total stok terbesar; bernomor, bertahap, Excel. Kartu: jumlah SKU, stok toko, stok DC, tanpa stok di mana pun.
+- Umur = hari sejak awal data transaksi s.d. hari ini (angka minimal; tanggal tayang listing tidak ada di ekspor Shopee); SKU yang baru muncul setelah unggahan Data stok pertama = listing baru, dihitung sejak tanggal itu. Dari data tersimpan, tanpa menjalankan analisa.
+- Kode `consolidation._unsold_active` (dipanggil `match_diagnostics`, kunci `stock_unsold`); tes `tests/test_unsold_active.py`. Data lokal: 159 SKU, semuanya ≤ 01/01/2026 (317 hari).
+
 ## Localhost + Supabase = salinan baca-saja dari Cloud (14 Nov 2026)
 
 - Insiden: localhost yang disambungkan ke Supabase (DATABASE_URL) memakai folder laptop dan brankas mendorong file laptop ke `file_vault`, menimpa `team/sources/*`, `team/registry.json`, dan file analisa 6–11 milik Cloud (analisa 12–15 utuh), serta menambah kunci `library/` dan `history/` yang tidak dipakai Cloud. Beranda lokal juga menampilkan transaksi s.d. 8 Nov karena file laptop tidak ditimpa versi database.
