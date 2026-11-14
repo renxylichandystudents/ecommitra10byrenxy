@@ -484,9 +484,9 @@ def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.D
         d_sales = ad_sales(u, new) - _now_sales(u)
         notes = []
         if u.locked:
-            notes.append({"Jeda sampai restock": "stok 0: jeda sampai barang masuk (langkah 3)",
-                          "Pindahkan ke grup": "produk dipindah ke grup (langkah 3)",
-                          "Keluarkan dari grup": "produk sudah diiklankan di iklan lain (langkah 3)"}.get(u.origin, f"{u.origin} (langkah 3)"))
+            notes.append({"Jeda sampai restock": "stok 0: jeda sampai barang masuk (lihat Pemilihan produk)",
+                          "Pindahkan ke grup": "produk dipindah ke grup (lihat Pemilihan produk)",
+                          "Keluarkan dari grup": "produk sudah diiklankan di iklan lain (lihat Pemilihan produk)"}.get(u.origin, f"{u.origin} (lihat Pemilihan produk)"))
         elif act in {"Turunkan budget", "Jeda"}:
             notes.append(f"tiap Rp 1 terakhir hanya kembali Rp {u.marginal(new):.1f}: dananya dipindah ke iklan yang lebih efektif".replace(".", ","))
         elif act in {"Naikkan budget", "Aktifkan kembali", "Buat iklan baru", "Pisahkan jadi iklan tunggal"}:
@@ -865,7 +865,7 @@ def restructure(units: list[Unit], selection: pd.DataFrame, products: pd.DataFra
             nu.members = [c for c in u.members if c not in gone]
             if not nu.locked:
                 dup = int((moved["Saran"] == "Sudah di iklan lain").sum())
-                parts = [f"{len(moved) - dup} anggota dilepas (langkah 3)"] if len(moved) > dup else []
+                parts = [f"{len(moved) - dup} anggota dilepas (lihat Pemilihan produk)"] if len(moved) > dup else []
                 if dup:
                     parts.append(f"keluarkan {dup} produk yang sudah diiklankan di iklan lain sebelum mengaktifkan")
                 nu.origin = "; ".join(parts)

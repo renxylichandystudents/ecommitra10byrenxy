@@ -682,3 +682,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Buka di tab baru untuk sub-menu
 - `link_buttons` dipindah dari app.py ke `src/ui/common.py`; `button_tabs(..., routes=...)` memasang link sungguhan di tiap sub-menu.
 - Sub-menu Rekomendasi (Nama & deskripsi, Iklan, Flash sale toko, Exposure media sosial, Ranking kategori) → `?page=analisa&tab=rekomendasi&sub=<slug>`; tab Setting → `?page=setting&tab=<slug>`. Klik kanan → Buka di tab baru / Ctrl-klik / klik tengah kini membuka sub-menu yang sama.
+
+## 2026-11-14 — Iklan: Fitur khusus, Rekomendasi sistem, Pantau rencana dipisah
+- Rekomendasi › Iklan punya tiga tampilan (tombol sub-menu): **Fitur khusus · setelan Anda**, **Rekomendasi sistem**, **Pantau rencana tersimpan** (bila ada). Penomoran langkah mulai dari 1 di tiap tampilan.
+- Fitur khusus: form target + budget iklan total sebulan + Target ROAS, tombol **Hitung rencana**. Setelan yang dikirim disimpan (`kv_setting` kunci `iklan-setelan:<periode>`) dan menjadi acuan. Biaya terpakai dari laporan iklan keseluruhan; sisa budget dibagi ke hari tersisa → evaluasi budget, hasil, pemilihan produk, budget per iklan, simpan. Tidak memakai/mengubah rekomendasi.
+- Rekomendasi sistem: evaluasi kondisi saat ini + opsi A (laju sekarang), B (maksimal terserap iklan, bila 100% target melebihi daya serap), C (budget untuk 100% target / paling hemat bila target sudah aman). Opsi dipilih → rincian produk & budget per iklan → simpan.
+- Rencana tersimpan menyimpan titik awal (sumber, sales bersih & biaya terpakai saat disimpan, tanggal data, hari sisa, proyeksi tanpa perubahan). `ads_month.plan_track` membandingkan sales bersih & biaya iklan terbaru dengan jalur rencana → On track / Tertinggal (banner di atas + kartu di Pantau rencana), evaluasi per iklan tetap ada.

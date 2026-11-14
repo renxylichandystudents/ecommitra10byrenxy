@@ -130,3 +130,47 @@ def month_plan(curve: StoreCurve | None, *, target: float, projection: float, sp
         out.update({"budget_sisa": remaining, "harian_sisa": remaining / max(days_left, 1), "tambahan": extra, "proyeksi": projection + extra,
                     "roas_tambahan": extra / max(remaining - pace0 * share, 1.0) if remaining > pace0 * share else float("nan")})
     return out
+
+
+def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: str, sales_tol: float = 0.97, spend_tol: float = 0.15) -> dict | None:
+    """Pantauan rencana iklan tersimpan: apakah sales bersih & biaya iklan sejak rencana disimpan sesuai jalur rencana.
+
+    Jalur rencana (dibagi rata ke hari tersisa saat disimpan):
+    - sales bersih s.d. hari ini = sales saat disimpan + (proyeksi rencana − sales saat disimpan) × hari_berjalan ÷ hari_sisa
+    - biaya iklan s.d. hari ini = terpakai saat disimpan + budget harian rencana × hari_berjalan
+    On track = sales aktual ≥ sales_tol × jalur. None bila rencana tidak menyimpan titik awal (rencana lama) atau bulan sudah berganti."""
+    s = setelan or {}
+    if not s.get("data_sampai") or s.get("periode_target") != periode or not s.get("hari_sisa"):
+        return None
+    start = date.fromisoformat(str(s["data_sampai"])[:10])
+    left = max(int(s["hari_sisa"]), 1)
+    days = (last - start).days
+    mtd0, spent0 = float(s.get("mtd") or 0), float(s.get("terpakai") or 0)
+    final = float(s.get("proyeksi") or 0)
+    base = float(s.get("proyeksi_tanpa") or final)
+    daily_budget = float(s.get("budget_harian") or 0)
+    out = {"hari": max(days, 0), "hari_sisa": left, "mulai": start, "mtd_awal": mtd0, "terpakai_awal": spent0, "proyeksi_rencana": final}
+    if days <= 0:
+        out.update({"status": "Menunggu data", "jalur_sales": mtd0, "jalur_biaya": spent0, "sales": mtd, "biaya": spent})
+        return out
+    frac = min(days / left, 1.0)
+    path_sales = mtd0 + (final - mtd0) * frac
+    path_base = mtd0 + (base - mtd0) * frac
+    path_cost = spent0 + daily_budget * min(days, left)
+    sales_new, cost_new = mtd - mtd0, spent - spent0
+    sales_pct = mtd / path_sales * 100 if path_sales > 0 else float("nan")
+    cost_pct = cost_new / (path_cost - spent0) * 100 if path_cost > spent0 else float("nan")
+    on = path_sales <= 0 or mtd >= sales_tol * path_sales
+    if cost_pct == cost_pct and cost_pct > (1 + spend_tol) * 100:
+        spend = "lebih boros"
+    elif cost_pct == cost_pct and cost_pct < (1 - spend_tol) * 100:
+        spend = "kurang terserap"
+    else:
+        spend = "sesuai"
+    out.update({
+        "status": "On track" if on else "Tertinggal", "jalur_sales": path_sales, "jalur_tanpa": path_base, "jalur_biaya": path_cost,
+        "sales": mtd, "biaya": spent, "sales_baru": sales_new, "biaya_baru": cost_new, "pct_sales": sales_pct, "pct_biaya": cost_pct,
+        "selisih_sales": mtd - path_sales, "biaya_status": spend,
+        "roas_baru": sales_new / cost_new if cost_new > 0 else float("nan"),
+    })
+    return out

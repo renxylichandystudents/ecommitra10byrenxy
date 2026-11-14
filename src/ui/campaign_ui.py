@@ -58,7 +58,7 @@ def _require() -> None:
     require("rekomendasi", "edit")
 
 
-def panel(kind: str, *, features, today: date, can_edit: bool, username: str, describe) -> tuple[str, dict | None]:
+def panel(kind: str, *, features, today: date, can_edit: bool, username: str, describe, toggle: bool = True) -> tuple[str, dict | None]:
     """Kotak campaign acuan + riwayat (hentikan/hapus). Mengembalikan (mode tampilan, campaign acuan).
 
     describe(campaign) -> str HTML ringkas setelannya."""
@@ -78,8 +78,9 @@ def panel(kind: str, *, features, today: date, can_edit: bool, username: str, de
             f"{html.escape(str(cur.get('dibuat_oleh') or '-'))} {html.escape(str(cur.get('dibuat') or ''))}<br>{describe(cur)}</div></div>",
             unsafe_allow_html=True,
         )
-        st.segmented_control("Tampilan", [SAVED, NEW], key=mode_key, label_visibility="collapsed")
-    else:
+        if toggle:
+            st.segmented_control("Tampilan", [SAVED, NEW], key=mode_key, label_visibility="collapsed")
+    elif toggle:
         st.markdown("<div class='field-hint'>Belum ada campaign tersimpan yang berjalan. Susun rencana di bawah, pilih periodenya, lalu simpan sebagai campaign "
                     "agar rencana terkunci dan menjadi acuan harian.</div>", unsafe_allow_html=True)
     if items:
@@ -105,6 +106,8 @@ def panel(kind: str, *, features, today: date, can_edit: bool, username: str, de
                     _require()
                     store.save(C.remove(items, pick), username=username)
                     st.rerun()
+    if not toggle:
+        return (SAVED if cur is not None else NEW), cur
     return ((st.session_state.get(mode_key) or SAVED) if cur is not None else NEW), cur
 
 
