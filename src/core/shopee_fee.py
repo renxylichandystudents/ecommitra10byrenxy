@@ -397,7 +397,7 @@ def portfolio(rows: pd.DataFrame, *, programs: dict, order_fee: float, fallback_
     frame = pd.DataFrame(out)
     if frame.empty:
         return frame
-    part = frame.loc[frame["sumber"].isin(["Shopee", "Nasional"]) & frame["bersih_30"].notna()]
+    part = frame.loc[(frame["sumber"].isin(["Shopee", "Nasional"]) | frame["sumber"].astype(str).str.startswith("Harga beli")) & frame["bersih_30"].notna()]
     overall = float(part["bersih_30"].sum() / part["omzet_30"].sum() * 100) if part["omzet_30"].sum() > 0 else float("nan")
     if acuan_pct is None:
         # Batas "margin rendah" = rata-rata margin bersih SKU yang untung (tetap bermakna walau rata-rata toko minus).

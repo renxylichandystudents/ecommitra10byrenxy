@@ -15,6 +15,12 @@ from src.ui.common import file_check, fmt_idr, fmt_num, fmt_pct, mark_upload_don
 TABLE = "margin_item"
 
 
+def cost_margin_pct(price: float, cost: float) -> float:
+    """Margin kotor % harga jual Shopee (termasuk PPN) dari harga beli (belum termasuk PPN):
+    harga jual = PPN + harga beli + margin kotor → margin kotor % = (harga × (1 − porsi PPN) − harga beli) ÷ harga."""
+    return (price * (1 - mf.DEFAULT_TAX_SHARE) - cost) / price * 100
+
+
 @dataclass
 class MarginData:
     periode: str = ""
@@ -37,7 +43,7 @@ class MarginData:
         return value if np.isfinite(value) else mf.store_average(self.nasional)
 
     def kotor_map(self, prices: dict | None = None) -> dict[str, float]:
-        """Margin kotor % per SKU. prices (sku → harga jual): SKU yang punya harga beli dihitung (harga − harga beli) ÷ harga;
+        """Margin kotor % per SKU. prices (sku → harga jual): SKU yang punya harga beli dihitung dari harga beli (PPN dari harga jual);
         SKU lain memakai File margin."""
         out: dict[str, float] = {}
         if not self.lookup.empty:
@@ -47,14 +53,14 @@ class MarginData:
             for sku, price in prices.items():
                 cost = self.harga_beli.get(mf.sku_key(sku))
                 if cost and price and price > 0:
-                    out[mf.sku_key(sku)] = (float(price) - cost) / float(price) * 100
+                    out[mf.sku_key(sku)] = cost_margin_pct(float(price), cost)
         return out
 
     def row_at(self, sku: str, price: float | None) -> dict | None:
-        """Seperti row(), tetapi bila SKU punya harga beli dan harga diketahui: margin dari harga beli (porsi pajak 0, sesuai rumus file)."""
+        """Seperti row(), tetapi bila SKU punya harga beli dan harga diketahui: margin dari harga beli (PPN dari harga jual Shopee)."""
         cost = self.harga_beli.get(mf.sku_key(sku))
         if cost and price and price > 0:
-            return {"margin_kotor_pct": (float(price) - cost) / float(price) * 100, "porsi_pajak": 0.0,
+            return {"margin_kotor_pct": cost_margin_pct(float(price), cost), "porsi_pajak": mf.DEFAULT_TAX_SHARE,
                     "sumber": f"Harga beli {self.harga_beli_periode}".strip(), "harga_beli": float(cost)}
         return self.row(sku) if not self.lookup.empty else None
 
