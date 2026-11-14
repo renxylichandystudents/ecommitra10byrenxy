@@ -1002,7 +1002,8 @@ def _unit_of(selection: pd.DataFrame, plan_units: list[Unit]) -> list[str]:
 
 def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                gap_daily: float, target_roas: float, budget_daily: float | None, lift: float = DEMAND_LIFT,
-               stock_cap: bool = False, select_roas: float | None = None, exclude: frozenset | set = frozenset()) -> tuple[list[Unit], Plan, pd.DataFrame]:
+               stock_cap: bool = False, select_roas: float | None = None, exclude: frozenset | set = frozenset(),
+               min_marginal: float = MIN_MARGINAL) -> tuple[list[Unit], Plan, pd.DataFrame]:
     """Satu alur: pemilihan produk → susunan iklan baru → rencana budget, sehingga langkah 3 & 4 selalu sejalan.
 
     Iklan tunggal baru / hasil pisah yang tidak mendapat budget di rencana dikembalikan (tetap di grup / masuk grup),
@@ -1018,7 +1019,7 @@ def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame,
             from src.core.ads_fixed import stock_capped
 
             plan_units = stock_capped(plan_units)
-        plan = allocate_target(plan_units, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily)
+        plan = allocate_target(plan_units, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily, min_marginal=min_marginal)
         idle = {u.members[0] for u in plan_units if u.jenis in NEW_KINDS and u.members and plan.cost.get(u.key, 0.0) <= 0}
         if selection.empty or not idle:
             break
@@ -1065,7 +1066,7 @@ def _carry(u: Unit, cost: float) -> Unit:
 
 
 def ramp(units: list[Unit], *, weeks: list[int], gap_total: float, target_roas: float, budget_total: float | None,
-         first: Plan | None = None) -> list[tuple[int, Plan]]:
+         first: Plan | None = None, min_marginal: float = MIN_MARGINAL) -> list[tuple[int, Plan]]:
     """Rencana per minggu: tiap minggu budget per iklan boleh naik maks. 2× (turun ke ≥ ½) dari minggu sebelumnya, sisa
     kekurangan omzet & sisa budget dibagi rata ke hari yang tersisa. Mengembalikan [(jumlah hari, rencana minggu itu)]."""
     base_now = sum(_now_sales(u) for u in units)
@@ -1077,7 +1078,8 @@ def ramp(units: list[Unit], *, weeks: list[int], gap_total: float, target_roas: 
         carried = sum(_now_sales(u) for u in current) - base_now
         gap_daily = max((gap_total - gained) / days_left - carried, 0.0)
         budget_daily = None if budget_total is None else max(budget_total - spent, 0.0) / days_left
-        plan = first if index == 0 and first is not None else allocate_target(current, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily)
+        plan = first if index == 0 and first is not None else allocate_target(current, gap_daily=gap_daily, target_roas=target_roas, budget_daily=budget_daily,
+                                                                             min_marginal=min_marginal)
         out.append((days, plan))
         spent += sum(plan.cost.values()) * days
         gained += (sum(ad_sales(u, plan.cost[u.key]) for u in units) - base_now) * days

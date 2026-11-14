@@ -714,3 +714,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 
 ## 2026-11-14 — Pengecualian produk: centang + pencarian tepat
 - Multiselect diganti kotak Cari (semua kata harus ada di nama/kode; "lem dextone silicon" → 8 produk) + tabel centang (data_editor CheckboxColumn), tombol Centang semua hasil / Hapus centang hasil, kata kunci otomatis opsional, tombol Simpan aktif hanya bila ada perubahan.
+
+## 2026-11-14 — Audit halaman Iklan
+- Proyeksi (Fitur khusus, opsi rekomendasi, Pantau rencana) kini memakai **biaya yang benar-benar dibelanjakan rencana per iklan** (sesudah pemilihan produk, pengecualian, batas naik 2×/minggu, efisiensi minimum), bukan budget nominal. Budget yang tidak terserap ditampilkan sebagai "hemat"; pengecualian produk ikut mengubah proyeksi bila biaya rencana berubah; Target ROAS manual yang terlalu tinggi tidak lagi memberi proyeksi terlalu optimis.
+- Rekomendasi sistem: opsi A (laju sekarang), B (maksimal yang efisien, bila beda), H (hemat biaya, tiap Rp 1 kembali ≥ Rp 10), C (100% target, hanya bila masih efisien). Bila 100% target melebihi batas efisien, tampil kotak 🎯 dengan kekurangan dan cara lain menutupnya. Kolom Biaya efektif & Hemat.
+- `min_marginal` diteruskan ke build_plan/ramp/_option_plan/_fixed_plan; rencana tersimpan menyimpan `biaya_harian_rencana` (jalur biaya pantauan) dan `efisiensi_min`; Pantau rencana menghitung proyeksi dengan cara yang sama seperti saat disimpan.
+- Data 12 Nov: batas efisien ±Rp 425 jt/bulan (±Rp 17 jt/hari); 100% target menurut kurva toko butuh ±Rp 1,22 M → tidak efisien lewat iklan saja.
