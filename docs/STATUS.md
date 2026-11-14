@@ -804,3 +804,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Kalkulator memakai semua transaksi tersimpan (`analysis.orders_all`, sama dengan kartu Sales bersih aktual & tab Data) untuk kalender, kartu, tabel, dan jembatan.
 - `metrics.sales_bridge`: Sales produk bersih − voucher penjual − voucher Shopee/koin/diskon kartu + ongkir dibayar pembeli ± lain-lain = Sales bersih (Total Pembayaran), pesanan yang sama (tanpa batal & Belum Bayar, dikurangi retur). Ditampilkan di atas tabel prioritas, plus selisih SKU nonaktif ke baris Total tabel.
 - Hint kartu Sales bersih aktual: "Total Pembayaran, sama dengan tab Data · Sales produk bersih … (dasar margin)".
+
+## 2026-11-14 — Kalkulator › Simulasi per SKU dirombak
+- Kartu "Margin bersih per unit · sekarang" (komposisi harga beli, PPN, potongan Shopee, iklan, profit) + kartu "Rekomendasi harga & promo" bergaya sama: harga beli, harga jual disarankan, promo, harga setelah promo, nett diterima, profit/unit, margin.
+- Tabel "Kalkulator lengkap · sekarang vs rekomendasi": harga normal, promo, voucher, harga dibayar pembeli, PPN, admin kategori, tiap program Shopee, proses pesanan, affiliate, iklan, nett diterima, harga beli, profit, margin.
+- Menu Skenario cepat, Rincian biaya lengkap, Analisa lengkap dihapus; histori promo, harga impas/sehat, catatan, dan tuas tanpa ubah harga ringkas di bawah tabel.
+- Harga nett = dibayar pembeli − PPN − potongan Shopee − iklan (definisi sama di daftar prioritas).
