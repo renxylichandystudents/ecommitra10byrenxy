@@ -324,7 +324,7 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
     k = st.columns(4)
     card(k[0], f"Sales bersih aktual {month_label}", fmt_idr(mtd),
          hint=(f"realisasi {actual_span}" if running else "bulan sudah lewat · angka aktual")
-              + f" · sama dengan tab Data · sales produk {fmt_idr(outlook.get('mtd_produk', 0))}"
+              + f" · Total Pembayaran, sama dengan tab Data · Sales produk bersih {fmt_idr(outlook.get('mtd_produk', 0))} (dasar margin)"
               + (f"<br>{reach}" if reach else ""))
     card(k[1], f"Margin bersih aktual {month_label}", fmt_pct(m_overall, 1) if np.isfinite(m_overall) else "–",
          hint=(f"{actual_span} · margin kotor {fmt_pct(m_kotor, 1)} − potongan Shopee & iklan = {fmt_idr(m_bersih)}") if np.isfinite(m_overall) else "butuh file margin")
@@ -428,8 +428,37 @@ PRIORITY_GROUPS = {
 }
 
 
+def _bridge_html(bridge: dict, table_sales: float, recon: dict | None, period_label: str) -> str:
+    """Jembatan angka: Sales produk bersih (tabel) → Sales bersih / Total Pembayaran (kartu & tab Data)."""
+    def line(sign: str, label: str, note: str, value: float, *, strong: bool = False) -> str:
+        weight = "800" if strong else "500"
+        top = "border-top:1px solid #cbd5e1;padding-top:.3rem;margin-top:.2rem;" if strong and sign == "=" else ""
+        return (f"<div style='display:grid;grid-template-columns:1.4rem 1fr auto;gap:.5rem;align-items:baseline;{top}'>"
+                f"<span style='color:#64748b;font-weight:700'>{sign}</span>"
+                f"<span style='font-weight:{weight}'>{html.escape(label)}<span style='color:#64748b;font-weight:400;font-size:var(--fs-xs)'> · {html.escape(note)}</span></span>"
+                f"<span style='font-weight:{weight};white-space:nowrap'>{fmt_idr(value)}</span></div>")
+
+    rows = [line("", "Sales produk bersih", "harga setelah diskon × QTY bersih; dasar margin di tabel ini", bridge["sales_produk"], strong=True),
+            line("−", "Voucher penjual", "biaya Mitra10, sudah dihitung di Harga akhir & margin", bridge["seller_voucher"]),
+            line("−", "Voucher Shopee, koin & diskon kartu", "ditanggung Shopee, bukan biaya Mitra10", bridge["shopee_side"]),
+            line("+", "Ongkir dibayar pembeli", "ikut tercatat di Total Pembayaran", bridge["buyer_shipping"])]
+    if abs(bridge["lain"]) >= 1:
+        rows.append(line("±", "Lain-lain", "biaya layanan, retur sebagian, pembulatan", bridge["lain"]))
+    rows.append(line("=", "Sales bersih (Total Pembayaran)", "angka kartu Sales bersih aktual & tab Data", bridge["sales_bersih"], strong=True))
+    hidden = ""
+    if recon and recon.get("sku_nonaktif", 0) > 0:
+        hidden = (f"<div style='color:#64748b;font-size:var(--fs-xs);margin-top:.35rem'>Baris Total tabel {fmt_idr(table_sales)} = Sales produk bersih "
+                  f"tanpa {fmt_num(recon['sku_nonaktif'])} SKU nonaktif ({fmt_idr(recon.get('sales_nonaktif', 0))}; tidak ada di stok terakhir, tidak bisa diperbaiki harganya).</div>")
+    return ("<div style='border:1px solid #e2e8f0;border-left:5px solid #2563eb;border-radius:12px;background:#fff;padding:.7rem 1rem;margin:.3rem 0 .7rem;"
+            "font-size:var(--fs-sm);line-height:1.7;max-width:900px'>"
+            f"<div style='font-weight:800;margin-bottom:.25rem'>Dari Sales produk bersih ke Sales bersih · {html.escape(period_label)}</div>"
+            "<div style='color:#64748b;font-size:var(--fs-xs);margin-bottom:.35rem'>Pesanan yang sama (tanpa batal & Belum Bayar, dikurangi retur). "
+            "Margin dihitung dari Sales produk bersih karena voucher Shopee & koin tidak mengurangi pendapatan Mitra10.</div>"
+            + "".join(rows) + hidden + "</div>")
+
+
 def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", *, prices: pd.DataFrame | None = None,
-                    recon: dict | None = None) -> None:
+                    recon: dict | None = None, bridge: dict | None = None) -> None:
     st.markdown(f"<div class='section-title'>Daftar prioritas perbaikan margin · {html.escape(period_label)}</div>", unsafe_allow_html=True)
     if port.empty:
         st.info("Belum ada SKU terjual pada periode ini.")
@@ -490,13 +519,8 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
              "QTY bersih": "count", "Prioritas": "count",
              "Harga beli / modal": "money", "Harga jual disarankan": "money", "Harga setelah promo": "money", "Harga nett (setelah semua biaya)": "money",
              "Profit/unit setelah promo": "money", "Perubahan harga bayar vs aktual": "pct", "Promo disarankan": "pct", "Margin setelah promo": "pct"}
-    if recon and not status_pick and not query:
-        note = (f"Total tabel = transaksi bersih {html.escape(period_label)} (selain batal & Belum Bayar, dikurangi retur): "
-                f"sales produk bersih {fmt_idr(omzet)} · QTY bersih {fmt_num(frame['QTY bersih'].sum())}")
-        if recon.get("sku_nonaktif", 0) > 0 and recon.get("sales_nonaktif", 0) > 0:
-            note += (f". Ditambah {fmt_num(recon['sku_nonaktif'])} SKU nonaktif (tidak ada di stok terakhir, tidak ditampilkan) "
-                     f"{fmt_idr(recon['sales_nonaktif'])} = {fmt_idr(recon['sales_semua'])}, sama dengan sales produk di kartu Sales bersih aktual bila periodenya sebulan yang sama")
-        st.markdown(f"<div class='field-hint'>{note}.</div>", unsafe_allow_html=True)
+    if bridge and bridge.get("sales_produk") and not status_pick and not query:
+        st.markdown(_bridge_html(bridge, omzet, recon, period_label), unsafe_allow_html=True)
     from src.ui import grouped_table
 
     total_row = {c: v for c, v in total.items() if not (isinstance(v, float) and np.isnan(v))}
@@ -607,6 +631,11 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     )
     from src.ui.margin_data import load_margin
 
+    # Satu sumber transaksi untuk semua angka halaman ini (kartu, tabel, jembatan): semua transaksi tersimpan bila ada,
+    # sama dengan kartu Sales bersih aktual dan tab Data.
+    every = (st.session_state.get("analysis") or {}).get("orders_all")
+    if isinstance(every, pd.DataFrame) and not every.empty:
+        orders = every
     fees = _category_fees(features)
     programs, order_fee, _old_limit = _programs(features)
     md = load_margin(features)
@@ -657,7 +686,10 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
         st.session_state["_calc-all"] = (cache_key, all_prices)
     with tab_sum:
         _summary(goals, port, orders, features, md, end, month_port=month_port, period_label=period_label)
-        _priority_table(port, period_label, prices=all_prices, recon=rows.attrs.get("rekonsiliasi") if not rows.empty else None)
+        from src.core.metrics import sales_bridge
+
+        bridge = sales_bridge(orders, start, end) if orders is not None and not orders.empty else None
+        _priority_table(port, period_label, prices=all_prices, recon=rows.attrs.get("rekonsiliasi") if not rows.empty else None, bridge=bridge)
     with tab_param:
         _parameter_panel(features, may_edit=may_edit, username=username, require=require)
     with tab_sim:

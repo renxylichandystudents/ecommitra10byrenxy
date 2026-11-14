@@ -799,3 +799,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Daftar prioritas memakai komponen tabel berkelompok (`src/ui/grouped_table.py`, komponen top50_table): judul kelompok berwarna & tetap terlihat saat digeser (Produk · Tindakan · Aktual periode terpilih (bersih) · Usulan harga untuk MD · Keterangan), kolom Produk terkunci, angka minus merah, urut per kolom, halaman & Excel di dalam tabel.
 - `pricing.plan`: promo selalu ada (min. 5%, maks. 30%): kebiasaan promo transaksi bila ≥ 20% transaksi berpromo, selain itu ruang margin sehat (maks. 10%) atau 5%. Harga normal disarankan dinaikkan bila perlu agar setelah promo margin ≥ batas sehat (min. 2%).
 - Evaluasi hanya SKU yang bertransaksi pada periode terpilih (SKU tanpa transaksi tidak masuk daftar).
+
+## 2026-11-14 — Kalkulator: satu sumber transaksi & jembatan Sales produk bersih → Sales bersih
+- Kalkulator memakai semua transaksi tersimpan (`analysis.orders_all`, sama dengan kartu Sales bersih aktual & tab Data) untuk kalender, kartu, tabel, dan jembatan.
+- `metrics.sales_bridge`: Sales produk bersih − voucher penjual − voucher Shopee/koin/diskon kartu + ongkir dibayar pembeli ± lain-lain = Sales bersih (Total Pembayaran), pesanan yang sama (tanpa batal & Belum Bayar, dikurangi retur). Ditampilkan di atas tabel prioritas, plus selisih SKU nonaktif ke baris Total tabel.
+- Hint kartu Sales bersih aktual: "Total Pembayaran, sama dengan tab Data · Sales produk bersih … (dasar margin)".

@@ -177,3 +177,14 @@ class October2026Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SalesBridgeTest(unittest.TestCase):
+    def test_bridge_matches_card_and_product_sales(self):
+        from src.core.metrics import net_sku_sales, order_metrics, sales_bridge
+
+        led = ledger_from_raw(RAW)
+        b = sales_bridge(led)
+        self.assertAlmostEqual(b["sales_bersih"], order_metrics(led)["sales_bersih"])
+        self.assertAlmostEqual(b["sales_produk"], float(net_sku_sales(led)["sales"].sum()))
+        self.assertAlmostEqual(b["sales_produk"] - b["seller_voucher"] - b["shopee_side"] + b["buyer_shipping"] + b["lain"], b["sales_bersih"])
