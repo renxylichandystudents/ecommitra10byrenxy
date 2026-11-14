@@ -1699,9 +1699,8 @@ def format_idr(value: float) -> str:
 def format_qty(value: float) -> str:
     if value is None or pd.isna(value):
         return fmt_angka(None)
-    number = float(value)
-    decimals = 0 if abs(number - round(number)) < 0.05 else 1
-    return format_number(number, decimals)
+    # QTY selalu unit utuh (dibulatkan), mis. 180,6 → 181.
+    return format_number(float(value), 0)
 
 
 def format_columns(frame: pd.DataFrame, kinds: dict[str, str]) -> pd.DataFrame:
@@ -4299,7 +4298,7 @@ def explain_qty_gap(
     trend = "naik" if slope > 1e-4 else "turun" if slope < -1e-4 else "datar"
     if len(qty):
         pred_lines.append(
-            f"Model membaca rata-rata {format_number(level, 1)} unit per hari dari 28 hari terakhir dengan tren {trend}."
+            f"Model membaca rata-rata {format_number(level, 0)} unit per hari dari 28 hari terakhir dengan tren {trend}."
         )
     pred_lines.append(
         f"Stok yang dikunci untuk {period_text}: {format_qty(stock_qty)} unit, yaitu prediksi {format_qty(predicted)} ditambah cadangan {format_qty(safety)}."

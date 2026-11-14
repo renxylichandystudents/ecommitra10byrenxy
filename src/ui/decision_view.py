@@ -711,11 +711,12 @@ def _two_panel(
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.2, row_heights=[0.6, 0.4], subplot_titles=(title, "Proyeksi sisa stok"))
     fmt = _round_label(money)
     lapsed = [today_index is None or i < today_index for i in range(len(x_labels))]
-    label_style = dict(textposition="outside", textangle=-90, textfont=dict(size=9), cliponaxis=False, constraintext="none")
+    # Batang tanpa teks: angka ditulis satu label per tanggal (lihat anotasi di bawah) agar tidak saling menimpa.
+    label_style = {}
     fig.add_bar(
         x=x_labels, y=sold, name=sold_name, marker_color="#1b3da6",
         # Hari yang sudah lewat selalu diberi angka (termasuk 0) agar tanggal 1 s.d. kemarin terbaca lengkap.
-        text=[fmt(v) if done else "" for v, done in zip(sold, lapsed)], **label_style,
+        **label_style,
         hovertemplate="%{x}<br>%{customdata}<extra></extra>",
         customdata=list(sold_hover) if sold_hover is not None else [f"{sold_name}: {fmt(v)}" for v in sold], row=1, col=1,
     )
@@ -729,12 +730,12 @@ def _two_panel(
         fig.add_bar(
             x=x_labels, y=past, name="Prediksi sebelumnya (hari lewat)", marker_color="rgba(238,77,45,0.30)",
             marker_line=dict(color="#ee4d2d", width=1.2), marker_pattern_shape="/",
-            text=[fmt(v) if src else "" for v, src in zip(past, sources)], **label_style,
+            **label_style,
             hovertemplate="%{x}<br>Prediksi sebelumnya: %{customdata}<extra></extra>", customdata=hit, row=1, col=1,
         )
     fig.add_bar(
         x=x_labels, y=pred, name="Prediksi", marker_color="#ee4d2d",
-        text=[fmt(v) if not done else "" for v, done in zip(pred, lapsed)], **label_style,
+        **label_style,
         hovertemplate="%{x}<br>Prediksi: %{customdata}<extra></extra>", customdata=[fmt(v) for v in pred], row=1, col=1,
     )
     if stock_past is not None and np.isfinite(np.asarray(stock_past, dtype=float)).any():
@@ -770,10 +771,22 @@ def _two_panel(
     fig.update_layout(barmode="group", height=760, margin=dict(l=40, r=20, t=70, b=40), legend=dict(orientation="h", y=-0.1), font=dict(family="Plus Jakarta Sans"))
     # Tanggal tegak lurus (sama di kedua panel), tidak miring.
     fig.update_xaxes(showticklabels=True, tickangle=-90, tickfont=dict(size=9))
+    # Satu label tegak per tanggal di atas batang tertinggi: hari lewat "terjual / prediksi sebelumnya", hari mendatang "prediksi".
+    sold_v = np.nan_to_num(np.asarray(sold, dtype=float))
+    pred_v = np.nan_to_num(np.asarray(pred, dtype=float))
+    past_v = np.nan_to_num(np.asarray(past, dtype=float)) if past is not None else np.zeros(len(x_labels))
+    has_past = past is not None and (past_source is None or any(str(src) for src in past_source))
+    for i, x in enumerate(x_labels):
+        if lapsed[i]:
+            text, height = (f"{fmt(sold_v[i])} / {fmt(past_v[i])}" if has_past else fmt(sold_v[i])), max(sold_v[i], past_v[i] if has_past else 0.0)
+        else:
+            text, height = fmt(pred_v[i]), pred_v[i]
+        fig.add_annotation(x=x, y=height, xref="x", yref="y", text=text, textangle=-90, yanchor="bottom", yshift=3, showarrow=False,
+                           font=dict(size=10, color="#334155"))
     tops = [np.nanmax(np.asarray(v, dtype=float)) for v in (sold, pred, past) if v is not None and len(v) and np.isfinite(np.asarray(v, dtype=float)).any()]
     top = max(tops) if tops else 0.0
     # Ruang di atas batang tertinggi untuk label tegak, agar tidak menabrak judul grafik.
-    fig.update_yaxes(title_text=unit, range=[0, top * 1.35] if top > 0 else None, row=1, col=1)
+    fig.update_yaxes(title_text=unit, range=[0, top * (1.6 if money else 1.35)] if top > 0 else None, row=1, col=1)
     fig.update_yaxes(title_text=unit, row=2, col=1)
     return fig
 
@@ -958,6 +971,8 @@ def sku_charts(
                        sold_name=basis_word, sold_hover=sold_hover(True), today_index=today_index, stock_past=stock_past * price, stock_past_hover=past_hover_sales),
             use_container_width=True, key=f"{key}-sales",
         )
+    st.caption(f"Angka di atas batang: tanggal lewat = {basis_word.lower()} / prediksi sebelumnya; tanggal mendatang = prediksi. "
+               "Semua angka dibulatkan (QTY unit utuh, sales Rupiah utuh).")
     _sku_summary(
         row, today=today, month_end=month_end, sold=sold, sold_sales=sold_sales, pred=pred, pred_sales=pred_sales,
         qty_line=qty_line, days=days, past_qty=past_qty, past_sales=past_sales, past_source=past_source, daily=daily, basis=basis,
@@ -1044,18 +1059,18 @@ def _sku_summary(
         cols[0],
         f"Terjual {word} {sold_span}",
         f"{fmt_qty(sold_qty)} unit",
-        hint=f"{fmt_idr(sold_val)} · rata-rata {fmt_num(sold_qty / sold_days, 1) if sold_days else '0'} unit/hari" + other_text,
+        hint=f"{fmt_idr(sold_val)} · rata-rata {fmt_num(sold_qty / sold_days, 0) if sold_days else '0'} unit/hari" + other_text,
     )
     card(
         cols[1],
         f"Prediksi sisa {month_name} ({fmt_date(today, short=True)}–{fmt_date(month_end, short=True)})",
-        f"{fmt_num(rest_qty, 1)} unit",
+        f"{fmt_num(rest_qty, 0)} unit",
         hint=f"{fmt_idr(rest_val)} · {(month_end - today).days + 1} hari, laju harian × pola hari",
     )
     card(
         cols[2],
         f"Bulan berjalan {month_name} (1–{fmt_date(month_end, short=True)})",
-        f"{fmt_num(sold_qty + rest_qty, 1)} unit",
+        f"{fmt_num(sold_qty + rest_qty, 0)} unit",
         hint=f"{fmt_idr(sold_val + rest_val)} = terjual {word} {sold_span} + prediksi sisa",
         tone="extra",
     )
@@ -1063,7 +1078,7 @@ def _sku_summary(
         cols[3],
         f"Prediksi {fmt_date(window_lo, short=True)} – {fmt_date(window_hi, short=True)}",
         f"{fmt_qty(row['m_qty'])} unit",
-        hint=f"{fmt_idr(row['m_sales'])} · {fmt_num(daily_pred, 2)} unit/hari · dasar kebutuhan stok",
+        hint=f"{fmt_idr(row['m_sales'])} · {fmt_num(daily_pred, 0)} unit/hari · dasar kebutuhan stok",
     )
     card(
         cols[4],
@@ -1149,7 +1164,7 @@ def _sku_summary(
         notes.append(
             (
                 "Laju prediksi vs aktual",
-                f"{fmt_num(daily_pred, 2)} vs {fmt_num(actual_rate, 2)} unit/hari bulan ini"
+                f"{fmt_num(daily_pred, 0)} vs {fmt_num(actual_rate, 0)} unit/hari bulan ini"
                 + (f" ({'+' if diff >= 0 else '−'}{fmt_num(abs(diff), 0)}%)" if diff is not None else ""),
             )
         )
@@ -1163,7 +1178,7 @@ def _sku_summary(
         notes.append(
             (
                 f"Aktual vs prediksi sebelumnya ({fmt_date(first_day.date(), short=True)}–{fmt_date(yesterday, short=True)})",
-                f"terjual {word} {fmt_qty(a_qty)} vs prediksi {fmt_num(p_qty, 1)} unit ({fmt_num(rate, 0)}%, {verdict}); "
+                f"terjual {word} {fmt_qty(a_qty)} vs prediksi {fmt_num(p_qty, 0)} unit ({fmt_num(rate, 0)}%, {verdict}); "
                 f"sales {fmt_idr(a_val)} vs {fmt_idr(p_val)}",
             )
         )

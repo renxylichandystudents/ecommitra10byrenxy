@@ -37,7 +37,7 @@ def fmt_qty(value: object) -> str:
         return angka(None)
     if not np.isfinite(number):
         return angka(None)
-    return fmt_num(number, 0 if abs(number - round(number)) < 0.05 else 1)
+    return fmt_num(number, 0)  # QTY selalu unit utuh (dibulatkan), mis. 180,6 → 181
 
 
 def fmt_idr(value: object) -> str:

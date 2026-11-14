@@ -31,3 +31,10 @@ def test_past_stock_path_without_uploads_goes_back_from_today():
 def test_chart_labels_are_whole_numbers():
     assert _round_label(False)(10.6) == "11"
     assert _round_label(True)(5_169_499.6) == "5.169.500"
+
+
+def test_qty_always_whole_units():
+    from src.ui.common import fmt_qty
+
+    assert fmt_qty(180.6) == "181"
+    assert fmt_qty(14.5) in ("14", "15")
