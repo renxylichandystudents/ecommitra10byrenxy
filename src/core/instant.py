@@ -218,12 +218,14 @@ def hourly_table(orders: pd.DataFrame) -> pd.DataFrame:
 
 def top_products(lines: pd.DataFrame, limit: int | None = None) -> pd.DataFrame:
     """Produk yang paling sering dibeli dengan pengiriman instan (tidak batal) + porsi instan dari sales SKU itu."""
-    cols = ["Rank", "SKU", "Produk", "Varian", "Invoice instan", "QTY instan", "Sales instan", "Porsi instan dari sales SKU (%)"]
+    cols = ["Rank", "SKU", "Produk", "Varian", "Invoice instan", "QTY instan", "Sales produk instan", "Porsi instan dari sales produk SKU (%)"]
     if lines is None or lines.empty:
         return pd.DataFrame(columns=cols)
     if "variation" not in lines.columns:
         lines = lines.assign(variation="")
-    active = lines.loc[~lines["cancelled"]].assign(value=lambda f: f["net_price"] * (f["qty"] - f["returned_qty"]), qty_net=lambda f: f["qty"] - f["returned_qty"])
+    # Sales produk = Harga Setelah Diskon × (QTY − retur), pesanan selain batal & Belum Bayar (sebelum voucher, sama dengan tab Prediksi).
+    keep = ~lines["cancelled"] & ~lines.get("menunggu", pd.Series(False, index=lines.index)).astype(bool)
+    active = lines.loc[keep].assign(value=lambda f: f["net_price"] * (f["qty"] - f["returned_qty"]), qty_net=lambda f: f["qty"] - f["returned_qty"])
     inst = active.loc[active["instan"]]
     if inst.empty:
         return pd.DataFrame(columns=cols)
@@ -231,25 +233,25 @@ def top_products(lines: pd.DataFrame, limit: int | None = None) -> pd.DataFrame:
                                                    qty=("qty_net", "sum"), sales=("value", "sum"))
     out["Varian"] = out["Varian"].fillna("").replace("", "Tanpa variasi")
     all_sales = active.groupby("sku")["value"].sum()
-    out["Porsi instan dari sales SKU (%)"] = out["sales"] / out["sku"].map(all_sales).replace(0, np.nan) * 100
+    out["Porsi instan dari sales produk SKU (%)"] = out["sales"] / out["sku"].map(all_sales).replace(0, np.nan) * 100
     out = out.sort_values(["sales", "inv"], ascending=False).reset_index(drop=True)
     if limit:
         out = out.head(limit)
     out.insert(0, "Rank", np.arange(1, len(out) + 1))
-    return out.rename(columns={"sku": "SKU", "inv": "Invoice instan", "qty": "QTY instan", "sales": "Sales instan"})[cols]
+    return out.rename(columns={"sku": "SKU", "inv": "Invoice instan", "qty": "QTY instan", "sales": "Sales produk instan"})[cols]
 
 
 def products_total(lines: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
     """Baris Total semua produk instan (porsi = sales instan ÷ sales semua pesanan tidak batal dari SKU yang sama)."""
     if table is None or table.empty:
         return pd.DataFrame(columns=table.columns if table is not None else [])
-    active = lines.loc[~lines["cancelled"]]
+    active = lines.loc[~lines["cancelled"] & ~lines.get("menunggu", pd.Series(False, index=lines.index)).astype(bool)]
     value = active["net_price"] * (active["qty"] - active["returned_qty"])
     base = float(value[active["sku"].isin(set(table["SKU"]))].sum())
-    sales = float(table["Sales instan"].sum())
+    sales = float(table["Sales produk instan"].sum())
     row = {"Rank": "", "SKU": "Total", "Produk": f"{len(table)} produk", "Varian": "",
            "Invoice instan": float(active.loc[active["instan"], "order_id"].nunique()), "QTY instan": float(table["QTY instan"].sum()),
-           "Sales instan": sales, "Porsi instan dari sales SKU (%)": sales / base * 100 if base else np.nan}
+           "Sales produk instan": sales, "Porsi instan dari sales produk SKU (%)": sales / base * 100 if base else np.nan}
     return pd.DataFrame([row], columns=table.columns)
 
 

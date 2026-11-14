@@ -151,13 +151,15 @@ def show_instant_analysis(source_raw: pd.DataFrame, start: date | None, end: dat
     else:
         from src.ui.common import pager
 
+        st.caption("Sales produk instan = Harga Setelah Diskon × (QTY − retur) pesanan instan selain batal & Belum Bayar, sebelum voucher "
+                   "(sama dengan sales produk di tab Prediksi). Berbeda dari Sales bersih di kartu & tabel kota (Total Pembayaran, sudah dipotong voucher).")
         total_row = I.products_total(lines, products)
         lo, hi = pager(len(products), key="instant-products", noun="produk", default_size=5,
                        download=lambda: download_excel(pd.concat([total_row, products], ignore_index=True), "produk_pengiriman_instan.xlsx",
                                                        key="xl-instant-products"))
         # Satu baris per produk (tinggi tetap): nama panjang dipotong "…", lihat utuh dengan mengarahkan/klik sel atau di Excel.
         show_table(pd.concat([total_row, products.iloc[lo:hi]], ignore_index=True), bold_label="Total", row_height=35,
-                   kinds={"Invoice instan": "count", "QTY instan": "count", "Sales instan": "money", "Porsi instan dari sales SKU (%)": "pct"},
+                   kinds={"Invoice instan": "count", "QTY instan": "count", "Sales produk instan": "money", "Porsi instan dari sales produk SKU (%)": "pct"},
                    column_config={"Rank": st.column_config.Column("Rank", width=60, pinned=True),
                                   "SKU": st.column_config.TextColumn("SKU", width=110, pinned=True),
                                   "Produk": st.column_config.TextColumn("Produk", width=460, pinned=True),

@@ -49,7 +49,7 @@ class InstantTest(unittest.TestCase):
         self.assertAlmostEqual(services["Kontribusi sales (%)"].sum(), 100.0)
         top = I.top_products(self.lines)
         self.assertEqual(list(top["SKU"]), ["100", "200"])
-        self.assertAlmostEqual(top.set_index("SKU").loc["100", "Porsi instan dari sales SKU (%)"], 100.0)
+        self.assertAlmostEqual(top.set_index("SKU").loc["100", "Porsi instan dari sales produk SKU (%)"], 100.0)
         daily = I.daily_table(self.orders)
         self.assertAlmostEqual(daily["Porsi instan (%)"].iloc[0], 60.0)
 
