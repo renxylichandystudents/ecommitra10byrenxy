@@ -737,8 +737,8 @@ def _track_detail(cur: dict, track: dict | None, *, today: date) -> None:
     card(k[2], "Biaya iklan sejak disimpan", fmt_idr(track["biaya_baru"]),
          hint=f"rencana {fmt_idr(track['jalur_biaya'] - track['terpakai_awal'])} · <b>{track['biaya_status']}</b>"
               + (f" ({fmt_pct(track['pct_biaya'], 0)})" if track["pct_biaya"] == track["pct_biaya"] else ""))
-    card(k[3], "Sales bersih per Rp 1 iklan", fmt_num(track["sales_baru"] / track["biaya_baru"], 1) if track["biaya_baru"] > 0 else "–",
-         hint=f"sejak disimpan: sales bersih +{fmt_idr(track['sales_baru'])} ÷ biaya iklan")
+    card(k[3], "Biaya iklan % sales bersih", fmt_pct(track["biaya_baru"] / track["sales_baru"] * 100, 1) if track["sales_baru"] > 0 else "–",
+         hint=f"sejak disimpan: biaya iklan {fmt_idr(track['biaya_baru'])} ÷ sales bersih {fmt_idr(track['sales_baru'])} (TACoS; makin kecil makin hemat)")
     tips = []
     if not on:
         tips.append("Sales bersih di bawah jalur rencana. Buka <b>Rekomendasi sistem</b> untuk opsi baru atau ubah setelan di <b>Fitur khusus</b>, lalu simpan rencana baru "
@@ -1169,7 +1169,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         card(k[2], "Sisa per hari", fmt_idr(budget_daily), hint=f"{days_left} hari tersisa · iklan berjalan sekarang {fmt_idr(cost_now)}/hari "
              + (f"(<b style='color:{UP}'>+{fmt_pct((budget_daily / cost_now - 1) * 100, 0)}</b>)" if cost_now and budget_daily > cost_now * 1.01 else
                 f"(<b style='color:{DOWN}'>−{fmt_pct((1 - budget_daily / cost_now) * 100, 0)}</b>)" if cost_now and budget_daily < cost_now * 0.99 else ""))
-        card(k[3], "Sales bersih per Rp 1 iklan", fmt_num(mtd / spent if spent else 0, 1), hint=f"sales bersih s.d. {fmt_date(last)} {fmt_idr(mtd)} ÷ biaya iklan terpakai")
+        card(k[3], "Biaya iklan % sales bersih", fmt_pct(spent / mtd * 100, 1) if mtd > 0 else "–",
+             hint=f"biaya iklan terpakai ÷ sales bersih toko s.d. {fmt_date(last)} {fmt_idr(mtd)} (TACoS: termasuk penjualan non-iklan; makin kecil makin hemat)")
         if spent > month_budget:
             _box("Budget sebulan sudah terlampaui", f"Biaya iklan yang sudah keluar {fmt_idr(spent)} melebihi setelan {fmt_idr(month_budget)} "
                  f"({fmt_idr(spent - month_budget)}). Sisa budget dihitung 0: rencana di bawah menjeda iklan dan proyeksi turun. Naikkan budget sebulan bila iklan tetap ingin berjalan.", DOWN)
