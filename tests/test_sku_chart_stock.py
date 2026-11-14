@@ -38,3 +38,11 @@ def test_qty_always_whole_units():
 
     assert fmt_qty(180.6) == "181"
     assert fmt_qty(14.5) in ("14", "15")
+
+
+def test_label_headroom_keeps_long_labels_inside_panel():
+    from src.ui.decision_view import TOP_PANEL_PX, label_headroom
+
+    top = label_headroom([("10 Nov", 5_669_562.0, "682.500 / 5.669.562"), ("9 Nov", 5_167_500.0, "5.167.500 / 0")])
+    length = len("682.500 / 5.669.562") * 10 * 0.68 + 12
+    assert 5_669_562 + length * top / TOP_PANEL_PX <= top + 1

@@ -703,6 +703,25 @@ def _round_label(money: bool):
     return lambda v: fmt_num(round(float(v)), 0) if v is not None and np.isfinite(float(v)) else "-"
 
 
+LABEL_FONT = 10
+CHART_HEIGHT = 760
+TOP_PANEL_PX = (CHART_HEIGHT - 70 - 40) * (1 - 0.2) * 0.6  # tinggi area panel atas (px): margin, jarak antarpanel, porsi 60%
+
+
+def label_headroom(labels: list[tuple[object, float, str]], panel_px: float = TOP_PANEL_PX, char_px: float = LABEL_FONT * 0.68) -> float:
+    """Batas atas sumbu Y agar setiap label tegak (panjang teks × lebar huruf) masih muat di dalam panel, tidak menabrak judul.
+
+    Label setinggi L px di atas batang h harus memenuhi h + L × (Y / panel_px) ≤ Y → Y ≥ h ÷ (1 − L ÷ panel_px)."""
+    need = 0.0
+    for _x, height, text in labels:
+        if height <= 0:
+            continue
+        length = len(str(text)) * char_px + 12  # + jarak yshift & ruang napas
+        share = min(length / panel_px, 0.85)
+        need = max(need, height / (1 - share))
+    return need if need > 0 else 1.0
+
+
 def _two_panel(
     x_labels, sold, pred, stock_line, ss_value: float, out_label: str | None, *, money: bool, title: str, unit: str,
     past=None, past_source=None, sold_name: str = "Terjual", sold_hover=None, today_index: int | None = None, stock_past=None,
@@ -765,10 +784,7 @@ def _two_panel(
         for axis in ("y", "y2"):
             fig.add_shape(type="line", xref="x", yref=f"{axis} domain", x0=today_index - 0.5, x1=today_index - 0.5, y0=0, y1=1,
                           line=dict(color="#64748b", width=1, dash="dot"))
-        # Di dalam area grafik (bukan di atasnya) agar tidak menimpa judul grafik.
-        fig.add_annotation(xref="x", yref="y domain", x=today_index - 0.5, y=0.99, yanchor="top", text="◀ aktual | prediksi ▶", showarrow=False,
-                           font=dict(size=10, color="#475569"), bgcolor="rgba(255,255,255,0.85)")
-    fig.update_layout(barmode="group", height=760, margin=dict(l=40, r=20, t=70, b=40), legend=dict(orientation="h", y=-0.1), font=dict(family="Plus Jakarta Sans"))
+    fig.update_layout(barmode="group", height=CHART_HEIGHT, margin=dict(l=40, r=20, t=70, b=40), legend=dict(orientation="h", y=-0.1), font=dict(family="Plus Jakarta Sans"))
     # Tanggal tegak lurus (sama di kedua panel), tidak miring.
     fig.update_xaxes(showticklabels=True, tickangle=-90, tickfont=dict(size=9))
     # Satu label tegak per tanggal di atas batang tertinggi: hari lewat "terjual / prediksi sebelumnya", hari mendatang "prediksi".
@@ -776,17 +792,16 @@ def _two_panel(
     pred_v = np.nan_to_num(np.asarray(pred, dtype=float))
     past_v = np.nan_to_num(np.asarray(past, dtype=float)) if past is not None else np.zeros(len(x_labels))
     has_past = past is not None and (past_source is None or any(str(src) for src in past_source))
+    labels = []
     for i, x in enumerate(x_labels):
         if lapsed[i]:
             text, height = (f"{fmt(sold_v[i])} / {fmt(past_v[i])}" if has_past else fmt(sold_v[i])), max(sold_v[i], past_v[i] if has_past else 0.0)
         else:
             text, height = fmt(pred_v[i]), pred_v[i]
+        labels.append((x, float(height), text))
         fig.add_annotation(x=x, y=height, xref="x", yref="y", text=text, textangle=-90, yanchor="bottom", yshift=3, showarrow=False,
-                           font=dict(size=10, color="#334155"))
-    tops = [np.nanmax(np.asarray(v, dtype=float)) for v in (sold, pred, past) if v is not None and len(v) and np.isfinite(np.asarray(v, dtype=float)).any()]
-    top = max(tops) if tops else 0.0
-    # Ruang di atas batang tertinggi untuk label tegak, agar tidak menabrak judul grafik.
-    fig.update_yaxes(title_text=unit, range=[0, top * (1.6 if money else 1.35)] if top > 0 else None, row=1, col=1)
+                           font=dict(size=LABEL_FONT, color="#334155"))
+    fig.update_yaxes(title_text=unit, range=[0, label_headroom(labels)], row=1, col=1)
     fig.update_yaxes(title_text=unit, row=2, col=1)
     return fig
 
@@ -971,7 +986,8 @@ def sku_charts(
                        sold_name=basis_word, sold_hover=sold_hover(True), today_index=today_index, stock_past=stock_past * price, stock_past_hover=past_hover_sales),
             use_container_width=True, key=f"{key}-sales",
         )
-    st.caption(f"Angka di atas batang: tanggal lewat = {basis_word.lower()} / prediksi sebelumnya; tanggal mendatang = prediksi. "
+    st.caption("Garis putus-putus = batas hari ini: kiri aktual, kanan prediksi. "
+               f"Angka di atas batang: tanggal lewat = {basis_word.lower()} / prediksi sebelumnya; tanggal mendatang = prediksi. "
                "Semua angka dibulatkan (QTY unit utuh, sales Rupiah utuh).")
     _sku_summary(
         row, today=today, month_end=month_end, sold=sold, sold_sales=sold_sales, pred=pred, pred_sales=pred_sales,
