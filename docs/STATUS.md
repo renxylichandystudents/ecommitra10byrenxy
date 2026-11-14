@@ -664,3 +664,10 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## Tinggi baris tabel dengan teks panjang (14 Nov 2026)
 
 - `wrap_layout` menghitung jumlah baris teks dengan `WRAP_CHAR_PX = 5,6` px/huruf (sebelumnya `CHAR_PX` 7,2, padahal huruf tabel terukur ±4–5 px), sehingga baris tidak lagi dua kali lebih tinggi dari isinya (mis. Riwayat perubahan data: 108 px untuk teks 3 baris). Lebar kolom satu baris tetap memakai 7,2 agar tidak terpotong. Riwayat perubahan data: lebar kolom pasti (Perubahan 640 px).
+
+## Rekomendasi nama & deskripsi: lengkap untuk upload (14 Nov 2026)
+
+- Tabel 1 baris per produk (35 px), Kode produk & Nama saat ini dibekukan; kolom **Siap upload** (✅/⚠️) dan **Masih kurang**; Excel memuat Kekurangan listing saat ini, Dilengkapi otomatis, Kata kunci kompetitor.
+- `complete_title` / `complete_description` (nlp_competitor): kekurangan hasil penilaian dilengkapi otomatis hanya dengan data produk sendiri + kata kunci judul kompetitor teratas (`allowed_keyword`): kata kunci utama ke awal judul, ukuran/material/kegunaan/garansi, SPESIFIKASI, INFORMASI PEMBELIAN (≥600 karakter), hashtag 3–10, hapus link/kontak. Yang tidak bisa dipastikan dari data (merek, ukuran) ditandai manual.
+- Cek SEO dibenahi: label [INCLUDE PACKING KAYU] tidak dihitung panjang/pengulangan; kode tipe (L-XKS) satu kata; kepadatan kata kunci tidak menghitung hashtag, nama toko, SPESIFIKASI & PILIHAN VARIAN (`keyword_count`); merek berangka (Mitra10) bukan "kode tipe"; ringkasan deskripsi lama dipotong di akhir kalimat/kata.
+- Data lokal (453 produk): siap upload 224 → 235; sisa terbanyak: deskripsi mirip produk lain (88), judul < 60 karakter karena data produk terbatas (70), merek tidak ada di data (44).

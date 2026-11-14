@@ -64,7 +64,7 @@ def _product_frame(table: pd.DataFrame, frames) -> pd.DataFrame:
 
 def _name_recs(table: pd.DataFrame, frames, params: dict) -> tuple[pd.DataFrame, str]:
     products = _product_frame(table, frames)
-    stamp = (len(products), float(pd.to_numeric(products.get("qty_total"), errors="coerce").fillna(0).sum()), len(frames.descriptions), len(frames.competitors), "v2")
+    stamp = (len(products), float(pd.to_numeric(products.get("qty_total"), errors="coerce").fillna(0).sum()), len(frames.descriptions), len(frames.competitors), "v4")
     cached = st.session_state.get("_name-recs")
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1], cached[2]
@@ -161,6 +161,15 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
         f"{fmt_num(ranked)} produk kita masuk daftar peringkat kompetitor · {fmt_num(similar)} deskripsi masih mirip produk lain (>60%).",
         help=f"Metode: {note}. Nama & deskripsi Shopee melekat pada produk, jadi varian (SKU) satu produk dinilai sekali.",
     )
+    if "Siap upload" in recs.columns:
+        ready = int(recs["Siap upload"].sum())
+        st.caption(
+            f"**Siap upload: {fmt_num(ready)} dari {fmt_num(len(recs))} produk** — nama & deskripsi rekomendasi sudah memenuhi semua kaidah SEO "
+            "setelah bagian yang kurang (kata kunci di awal judul, ukuran/material, spesifikasi, panjang deskripsi, hashtag, link/kontak) "
+            "dilengkapi otomatis dari data produk sendiri dan kata kunci judul kompetitor teratas. Sisanya ditandai ⚠️ dengan rincian di kolom "
+            "Masih kurang (mis. merek tidak ada di data produk) dan harus dilengkapi manual. Unggah ulang Produk kompetitor agar kata kunci "
+            "& rekomendasi ikut menyesuaikan peringkat terbaru."
+        )
     if "perubahan" in recs.columns and recs["tanggal_lalu"].notna().any():
         last = pd.to_datetime(recs["tanggal_lalu"]).max()
         cnt = recs["perubahan"].value_counts()
@@ -191,6 +200,8 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
         "Status skor": page["Status skor"].map(lambda v: SCORE_DISPLAY.get(str(v), v)),
         "SEO saat ini": page.get("Skor SEO saat ini"),
         "SEO rekomendasi": page.get("Skor SEO"),
+        "Siap upload": page["Siap upload"].map(lambda ok: "✅ Siap" if ok else "⚠️ Lengkapi") if "Siap upload" in page.columns else "–",
+        "Masih kurang": page["Masih kurang"].map(lambda items: "; ".join(items) if items else "–") if "Masih kurang" in page.columns else "–",
         "Rekomendasi nama baru": page["Rekomendasi nama baru"],
         "Kata kunci utama": page["Kata kunci utama"],
         "Peringkat kompetitor": [_rank_text(r) for r in page.to_dict("records")],
@@ -209,7 +220,14 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
             on_select="rerun",
             selection_mode="single-row",
             key=f"name-table-{current}-{hi}",
-            column_config={"USP utama": st.column_config.TextColumn(width="medium", help="Keunggulan paling menonjol; ⭐ = jarang disebut produk pembanding"),
+            row_height=35,  # satu baris per produk; teks panjang dipotong "…", lengkap di rincian & Excel
+            column_config={"Kode produk": st.column_config.TextColumn("Kode produk", width=110, pinned=True),
+                           "Nama produk saat ini": st.column_config.TextColumn("Nama produk saat ini", width=380, pinned=True),
+                           "Rekomendasi nama baru": st.column_config.TextColumn("Rekomendasi nama baru", width=420),
+                           "Siap upload": st.column_config.TextColumn("Siap upload", width=110,
+                                                                       help="✅ = nama & deskripsi rekomendasi memenuhi semua kaidah SEO; ⚠️ = ada bagian yang harus dilengkapi manual (kolom Masih kurang)"),
+                           "Masih kurang": st.column_config.TextColumn("Masih kurang", width=300, help="Kaidah SEO yang belum terpenuhi setelah dilengkapi otomatis"),
+                           "USP utama": st.column_config.TextColumn(width="medium", help="Keunggulan paling menonjol; ⭐ = jarang disebut produk pembanding"),
                            "SEO saat ini": st.column_config.Column(help="% kaidah SEO yang dipenuhi nama & deskripsi yang sedang tayang"),
                            "SEO rekomendasi": st.column_config.Column(help="% kaidah SEO yang dipenuhi nama & deskripsi rekomendasi (rincian di bawah tabel)"),
                            "Keunikan deskripsi": st.column_config.Column(help="100% − kemiripan tertinggi dengan deskripsi produk lain; di bawah 40% berisiko dianggap duplikat")},
@@ -226,6 +244,12 @@ def _names_tab(table: pd.DataFrame, frames, params: dict, features=None) -> pd.D
         out["Peringkat kompetitor"] = display["Peringkat kompetitor"]
         out["Keunikan deskripsi (%)"] = display["Keunikan deskripsi"].round(0)
         out["USP"] = page["USP"].map(lambda items: "; ".join(t for t, _u in (items or [])))
+        if "Siap upload" in page.columns:
+            out.insert(6, "Siap upload", page["Siap upload"].map(lambda ok: "Ya" if ok else "Belum"))
+            out.insert(7, "Masih kurang (lengkapi manual)", page["Masih kurang"].map(lambda items: "; ".join(items)))
+            out["Kekurangan listing saat ini"] = page["Kekurangan saat ini"].map(lambda items: "; ".join(items))
+            out["Dilengkapi otomatis"] = page["Dilengkapi"].map(lambda items: "; ".join(items))
+            out["Kata kunci kompetitor"] = page["Kata kunci kompetitor"]
         if "perubahan" in page.columns:
             out["Perubahan"] = page["perubahan"]
             out["Keterangan perubahan"] = page["keterangan"]
@@ -295,6 +319,18 @@ def _name_detail(item: pd.Series, history: pd.DataFrame | None = None) -> None:
         st.markdown(f"<div style='font-size:var(--fs-xs);color:#64748b;margin-top:.5rem'>Nama rekomendasi · skor {html.escape(SCORE_DISPLAY.get(str(item['Skor nama baru']), str(item['Skor nama baru'])))}</div>"
                     f"<div style='font-weight:700'>{html.escape(str(item['Rekomendasi nama baru']))}</div>", unsafe_allow_html=True)
         st.markdown(_keyword_chips(item["Kata kunci utama"]) + _keyword_chips(item["Kata kunci pendukung"]), unsafe_allow_html=True)
+        now_missing = item.get("Kekurangan saat ini") or []
+        fixed = item.get("Dilengkapi") or []
+        still = item.get("Masih kurang") or []
+        if now_missing or fixed or still:
+            parts = []
+            if now_missing:
+                parts.append("<b>Kekurangan listing saat ini</b>: " + html.escape("; ".join(now_missing)))
+            if fixed:
+                parts.append("<b>Sudah dilengkapi di rekomendasi</b>: " + html.escape("; ".join(fixed)))
+            parts.append("<b style='color:#15803d'>Siap upload</b>: semua kaidah SEO terpenuhi" if not still else
+                         "<b style='color:#b45309'>Lengkapi manual sebelum upload</b>: " + html.escape("; ".join(still)))
+            st.markdown("<div style='font-size:var(--fs-sm);margin:.3rem 0'>" + "<br>".join(parts) + "</div>", unsafe_allow_html=True)
         checks = item["Kriteria"] if isinstance(item["Kriteria"], dict) else {}
         if checks:
             st.caption(" · ".join(f"{'✅' if ok else '❌'} {name}" for name, ok in checks.items()))

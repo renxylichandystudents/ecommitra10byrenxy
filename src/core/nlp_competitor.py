@@ -44,6 +44,7 @@ MATERIALS = (
     "gypsum", "kalsiboard", "gipsum", "karet", "plastik", "nylon", "fiber", "polycarbonate", "vinyl", "spc",
     "hpl", "multiplek", "triplek", "mdf", "bitumen", "silikon", "epoxy", "akrilik", "porselen",
 )
+FINISHES = ("chrome", "krom", "matte", "glossy", "doff", "satin", "brushed", "gun grey", "black", "hitam", "putih", "gold")
 USAGE_HINTS = (
     "anti bocor", "anti karat", "anti jamur", "anti lumut", "tahan", "waterproof", "kedap", "dinding", "lantai",
     "atap", "plafon", "kamar mandi", "dapur", "taman", "eksterior", "interior", "outdoor", "indoor", "pipa",
@@ -531,7 +532,9 @@ def usp_points(name: str, description: str, variation: str, comp_titles: list[st
         points.append((f"Material stainless {grade.group(1)} — tahan karat untuk pemakaian harian", rare(grade.group(1))))
     elif material:
         points.append((f"Bahan {material} — kuat dan awet", rare(material)))
-    model = next((w for w in tokens(clean_name) if MODEL_CODE.fullmatch(w) and not SIZE_PATTERN.fullmatch(w) and not w.startswith("sus")), "")
+    brand_keys = {re.sub(r"[^a-z0-9]", "", b.lower()) for b in brands}
+    model = next((w for w in tokens(clean_name) if MODEL_CODE.fullmatch(w) and not SIZE_PATTERN.fullmatch(w) and not w.startswith("sus")
+                  and re.sub(r"[^a-z0-9]", "", w) not in brand_keys), "")  # merek berangka (mis. Mitra10) bukan kode tipe
     if model:
         points.append((f"Kode tipe {model.upper()} tercantum jelas — mudah dicocokkan dengan kebutuhan & suku cadang", rare(model)))
     size = SIZE_PATTERN.search(f"{clean_name} {variation}")
@@ -618,7 +621,12 @@ def generate_description(
     own_sentences = [s for s in _sentences(strip_packing_words(description))
                      if not s.lower().startswith(("pilihan varian", "spesifikasi", "keunggulan utama", "fitur utama"))
                      and not any(s.strip(" .") in line or line.strip(" .") in s for line in specs) and len(s.split()) >= 4]
-    intro = " ".join(own_sentences[:2])[:400] if own_sentences else ""
+    intro = " ".join(own_sentences[:2]) if own_sentences else ""
+    if len(intro) > 400:
+        # Potong di akhir kalimat/kata terdekat, bukan di tengah kata ("… langsung di r").
+        cut = intro[:400]
+        end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+        intro = cut[: end + 1] if end >= 200 else cut.rsplit(" ", 1)[0].rstrip(",;:") + "…"
     if not intro:
         usage = _usage_line(description, clean_name)
         intro = f"{usage} Dikirim langsung dari gudang Mitra10, stok dan kualitas terjaga.".strip()
@@ -656,24 +664,44 @@ def generate_description(
 def seo_title_checks(title: str, primary: list[str], brands: list[str], *, max_len: int) -> dict[str, bool]:
     """Kaidah judul Shopee: kata kunci utama di 40 karakter awal, 60–maks karakter, merek, tanpa pengulangan/simbol/huruf kapital semua."""
     low = clean_text(title)
-    words = [w for w in low.split() if len(w) > 2 and not w.isdigit()]
     head = clean_text(title[:40])
+    # Label "[INCLUDE PACKING KAYU]" wajib untuk produk berpacking kayu, jadi tidak dihitung dalam panjang ideal judul
+    # maupun pengulangan kata (mis. "Cermin Kayu … [INCLUDE PACKING KAYU]").
+    core = re.sub(r"\s*\[[^\]]*packing[^\]]*\]", "", str(title), flags=re.IGNORECASE).strip()
+    # Kode tipe (mis. L-XKS, ZN-30A-2) dihitung sebagai satu kata: "Xks … L-XKS" bukan pengulangan kata.
+    words = [w for w in (re.sub(r"[^a-z0-9/-]", "", t.lower()) for t in core.split()) if len(w) > 2 and not w.isdigit()]
     return {
         "Kata kunci di awal judul": bool(primary) and any(k in head for k in primary[:2]),
-        f"Panjang 60–{max_len} karakter": 60 <= len(title) <= max_len,
+        f"Panjang 60–{max_len} karakter": 60 <= len(core) <= max_len,
         "Ada merek": bool(_brand(title, brands)),
-        "Ada ukuran/tipe/material": bool(SIZE_PATTERN.search(title) or MODEL_CODE.search(low) or any(re.search(rf"\b{m}\b", low) for m in MATERIALS)),
+        "Ada ukuran/tipe/material": bool(SIZE_PATTERN.search(title) or MODEL_CODE.search(low) or MODEL_CODE.search(str(title).lower())
+                                         or any(re.search(rf"\b{m}\b", low) for m in (*MATERIALS, *FINISHES))),
         "Tanpa kata berulang": len(words) == len(set(words)),
         "Tanpa simbol/emoji/kapital berlebih": not EMOJI_PATTERN.search(title) and not re.search(r"[!?*#~]{1,}|\b[A-Z]{8,}\b", title.replace("[INCLUDE PACKING KAYU]", "")),
     }
 
 
+def keyword_count(body: str, keyword: str) -> int:
+    """Kemunculan kata kunci yang dihitung sebagai penjejalan: tidak termasuk hashtag, nama toko ("Mitra10 Official Store",
+    "gudang Mitra10"), serta bagian SPESIFIKASI dan PILIHAN VARIAN (data faktual seperti jenis produk & nama varian)."""
+    narrative, skip = [], False
+    for line in str(body or "").split("\n"):
+        if re.fullmatch(r"[A-Z &/]{6,}", line.strip()):
+            skip = line.strip() in ("SPESIFIKASI", "PILIHAN VARIAN")
+            continue
+        if not skip:
+            narrative.append(line)
+    text = re.sub(r"#\w+|mitra10 official store|gudang mitra10", " ", "\n".join(narrative), flags=re.IGNORECASE)
+    return clean_text(text).count(keyword) if keyword else 0
+
+
 def seo_description_checks(text: str, primary: list[str], *, max_chars: int, similarity: float = 0.0) -> dict[str, bool]:
     body = str(text or "")
     first = clean_text(body.split("\n", 1)[0])
-    low = clean_text(body)
+    # Hashtag di akhir dan nama toko ("Mitra10 Official Store", "gudang Mitra10") tidak dihitung dalam kepadatan kata kunci.
+    low = clean_text(re.sub(r"#\w+", " ", body))  # hashtag di akhir tidak dihitung dalam kepadatan kata kunci
     tags = re.findall(r"#\w+", body)
-    density = (sum(low.count(k) for k in primary[:1]) * max(len(primary[0].split()), 1) / max(len(low.split()), 1) * 100) if primary else 0
+    density = (keyword_count(body, primary[0]) * max(len(primary[0].split()), 1) / max(len(low.split()), 1) * 100) if primary else 0
     return {
         "Kata kunci di kalimat pertama": bool(primary) and primary[0] in first,
         "Panjang 600–3.000 karakter": 600 <= len(body) <= max_chars,
@@ -799,6 +827,157 @@ def _fit_long_title(clean_name: str, max_len: int) -> str:
     return fit_title(base, max_len)
 
 
+def complete_title(title: str, *, name: str, variation: str, description: str, primary: list[str], supporting: list[str],
+                   brands: list[str], vocab: set[str], max_len: int) -> tuple[str, list[str]]:
+    """Lengkapi judul rekomendasi agar lolos cek SEO judul, hanya dengan kata yang ada di produk sendiri
+    (nama, varian, deskripsi) atau kata kunci kompetitor yang lolos `allowed_keyword`. Mengembalikan (judul, catatan)."""
+    notes: list[str] = []
+    out = EMOJI_PATTERN.sub("", str(title or ""))
+    out = re.sub(r"[!?*#~]+", " ", out)
+    out = re.sub(r"\s+", " ", out).strip()
+
+    def dedupe(text: str) -> str:
+        seen: set[str] = set()
+        words = []
+        for word in text.split():
+            key = re.sub(r"[^a-z0-9]", "", word.lower())
+            if key and key in seen and len(key) > 2 and not key.isdigit():
+                continue
+            seen.add(key)
+            words.append(word)
+        return " ".join(words)
+
+    out = dedupe(out)
+    keys = [k for k in primary if allowed_keyword(k, vocab)]
+    if keys and not any(k in clean_text(out[:40]) for k in keys[:2]):
+        brand = _brand(out, brands)
+        rest = out[len(brand):].strip() if brand and out.lower().startswith(brand.lower()) else out
+        out = dedupe(" ".join(p for p in (brand, _title_case(keys[0]), rest) if p))
+        notes.append(f"Kata kunci utama \"{keys[0]}\" dipindah ke awal judul (dicari pembeli & dipakai kompetitor teratas)")
+    if len(out) < 60:
+        low_all = clean_text(f"{name} {variation} {description}")
+        size = SIZE_PATTERN.search(f"{variation} {name}")
+        material = next((m for m in MATERIALS if re.search(rf"\b{m}\b", low_all)), "")
+        # Hanya petunjuk kegunaan yang bermakna sendiri (bukan kata lepas seperti "tahan", "lem").
+        usage = next((h for h in USAGE_HINTS if h in low_all and (" " in h or h in ("waterproof", "outdoor", "indoor", "eksterior", "interior"))), "")
+        warranty = WARRANTY.search(f"{name} {description}")
+        extras = [size.group(0) if size else "", material, usage, *[k for k in supporting if allowed_keyword(k, vocab)],
+                  warranty.group(0) if warranty else ""]
+        added = []
+        for extra in extras:
+            if len(out) >= 60:
+                break
+            if not extra or clean_text(extra) in clean_text(out):
+                continue
+            candidate = dedupe(f"{out} {_title_case(extra)}")
+            if len(candidate) <= max_len:
+                out = candidate
+                added.append(extra)
+        if len(out) < 60:
+            # Kata dari nama asli yang belum terpakai (sudah pasti benar untuk produk ini).
+            for word in str(name).split():
+                if len(out) >= 60:
+                    break
+                key = re.sub(r"[^a-z0-9]", "", word.lower())
+                if not key or key.isdigit() or len(key) < 3 or key in re.sub(r"[^a-z0-9 ]", "", out.lower()).split() or key in STOPWORDS:
+                    continue
+                candidate = f"{out} {word}"
+                if len(candidate) <= max_len:
+                    out = candidate
+                    added.append(word)
+        if added:
+            notes.append("Judul dilengkapi: " + ", ".join(added) + " (dari data produk & kata kunci kompetitor)")
+    out = fit_title(out, max_len)
+    if not _brand(out, brands):
+        notes.append("Merek belum terbaca di nama/deskripsi: tambahkan merek resmi produk secara manual")
+    if not (SIZE_PATTERN.search(out) or MODEL_CODE.search(clean_text(out)) or MODEL_CODE.search(out.lower())
+            or any(re.search(rf"\b{m}\b", clean_text(out)) for m in (*MATERIALS, *FINISHES))):
+        notes.append("Ukuran/tipe/material tidak ada di data produk: lengkapi manual sebelum upload")
+    return out, notes
+
+
+def complete_description(text: str, *, title: str, name: str, variation: str, primary: list[str], supporting: list[str],
+                         brands: list[str], max_chars: int) -> tuple[str, list[str]]:
+    """Lengkapi deskripsi agar lolos cek SEO deskripsi: tanpa link/kontak, spesifikasi, panjang ≥600 karakter,
+    kepadatan kata kunci utama ≤3%, 3–10 hashtag. Bagian tambahan disisipkan sebelum kalimat penutup "Pesan sekarang"."""
+    notes: list[str] = []
+    body, sep, tail = str(text or "").rpartition("\n\n")
+    if not sep or not tail.strip().startswith("#"):
+        body, tail = str(text or ""), ""
+    tags = re.findall(r"#\w+", tail)
+    lines = [line.lstrip("\\") for line in body.split("\n")]
+    kept = [line for line in lines if not CONTACT.search(line.replace("#", " "))]
+    if len(kept) < len(lines):
+        notes.append("Baris berisi link/kontak dihapus (dilarang Shopee)")
+    closing_at = next((i for i, line in enumerate(kept) if line.startswith("Pesan sekarang")), len(kept))
+    head, closing = kept[:closing_at], kept[closing_at:]
+    added: list[str] = []
+    if "SPESIFIKASI" not in body and not SIZE_PATTERN.search(body):
+        spec = ["SPESIFIKASI"]
+        brand_keys = {re.sub(r"[^a-z0-9]", "", b.lower()) for b in brands}
+        model = next((m for m in re.findall(r"[A-Za-z]{1,5}-?\d{2,}[A-Za-z0-9-]*", name) if re.sub(r"[^a-z0-9]", "", m.lower()) not in brand_keys), "")
+        if model:
+            spec.append(f"- Kode tipe: {model.upper()}")
+        if variation and variation.lower() not in ("nan", "-", "tanpa variasi"):
+            spec.append(f"- Varian: {variation}")
+        brand = _brand(name, brands)
+        if brand:
+            spec.append(f"- Merek: {brand}")
+        if len(spec) == 1:
+            spec.append(f"- Nama produk: {title}")
+        added += [""] + spec
+        notes.append("Ditambah bagian SPESIFIKASI")
+
+    def density(text_: str) -> float:
+        low = clean_text(text_)
+        if not primary or not low:
+            return 0.0
+        return keyword_count(text_, primary[0]) * max(len(primary[0].split()), 1) / max(len(low.split()), 1) * 100
+
+    draft = "\n".join(head + added + closing)
+    if len(draft) + len(tail) + 2 < 600 or density(draft) > 3.0:
+        info = ["", "INFORMASI PEMBELIAN", "- Produk dijual langsung oleh Mitra10 Official Store dan dikirim dari gudang Mitra10.",
+                "- Periksa pilihan varian, ukuran, dan warna sebelum checkout agar sesuai kebutuhan.",
+                "- Simpan bukti pembelian untuk klaim garansi atau pengembalian sesuai ketentuan Shopee.",
+                "- Hubungi chat toko bila butuh bantuan memilih tipe yang tepat sebelum membeli."]
+        # Kata kunci pendukung (dari judul kompetitor) yang tidak mengulang kata kunci utama, agar kepadatan tetap ≤3%.
+        related = [k for k in supporting if k and (not primary or primary[0] not in k)][:3]
+        if related and density("\n".join(head + added + info + closing) + " " + " ".join(related)) <= 3.0:
+            info.append("- Cocok juga untuk pencarian: " + ", ".join(related) + ".")
+        added += info
+        notes.append("Ditambah informasi pembelian (panjang ≥600 karakter & kepadatan kata kunci ≤3%)")
+    body = "\n".join(head + added + ([""] if closing and added else []) + closing).strip()
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    if len(tags) < 3:
+        brand = _brand(name, brands)
+        pool = [*(t[1:] for t in tags), re.sub(r"[^a-z0-9]", "", brand.lower()), *[re.sub(r"[^a-z0-9]", "", k.lower()) for k in [*primary, *supporting]],
+                "mitra10", "mitra10officialstore"]
+        uniq: list[str] = []
+        for t in pool:
+            if 3 <= len(t) <= 30 and not any(ch.isdigit() for ch in t.replace("mitra10", "")) and t not in uniq:
+                uniq.append(t)
+        tags = ["#" + t for t in uniq[:8]]
+        notes.append("Hashtag dilengkapi menjadi " + str(len(tags)))
+    tail = " ".join(tags)
+    # Hashtag baru bisa lebih panjang/pendek dari semula: pastikan total tetap ≥600 karakter dengan poin yang berlaku umum
+    # (tidak mengarang spesifikasi produk).
+    extra_pool = [
+        "- Baca spesifikasi dan ukuran di atas untuk memastikan produk sesuai kebutuhan sebelum membeli.",
+        "- Bila barang yang diterima rusak atau tidak sesuai, ajukan pengembalian lewat fitur Shopee dengan video unboxing.",
+        "- Warna pada foto dapat sedikit berbeda dengan aslinya karena pencahayaan dan layar perangkat.",
+    ]
+    while len(body) + len(tail) + 2 < 600 and extra_pool:
+        line = extra_pool.pop(0)
+        at = body.find("\n\nPesan sekarang")
+        body = (body[:at] + "\n" + line + body[at:]) if at >= 0 else (body + "\n" + line)
+        if "Ditambah poin pembelian umum agar panjang ≥600 karakter" not in notes:
+            notes.append("Ditambah poin pembelian umum agar panjang ≥600 karakter")
+    budget = max_chars - len(tail) - 2
+    if len(body) > budget:
+        body = body[:budget].rsplit("\n", 1)[0].rstrip()
+    return (body + ("\n\n" + tail if tail else "")), notes
+
+
 def build_name_recommendations(
     own: pd.DataFrame,
     descriptions: pd.DataFrame | None,
@@ -875,6 +1054,11 @@ def build_name_recommendations(
             fitted_kept = len(old_words & set(clean_text(fitted).split())) / max(len(old_words), 1)
             if fitted_kept > kept:
                 new_title, new_score = fitted, score_name(fitted, primary, brands, min_len=min_len, max_len=max_len)
+        new_title, title_notes = complete_title(new_title, name=clean_name, variation=variation, description=current_desc, primary=primary,
+                                                supporting=supporting, brands=brands, vocab=vocab, max_len=room)
+        if foreign_words(new_title, vocab):
+            new_title, title_notes = clean_name if len(clean_name) <= room else _fit_long_title(clean_name, room), title_notes + ["Judul dikembalikan: ada kata di luar data produk"]
+        new_score = score_name(new_title, primary, brands, min_len=min_len, max_len=max_len)
         final_title = with_tag(new_title, tag, SHOPEE_TITLE_HARD, ideal=max_len)
         variants = [v for v in (item.get("variants") or []) if str(v).strip() and str(v).lower() not in {"nan", "none"}]
         usp = usp_points(name, current_desc, variation, titles, brands)
@@ -882,6 +1066,8 @@ def build_name_recommendations(
             title=new_title, name=name, variation=variation, description=current_desc, primary=primary, supporting=supporting,
             cancel_reasons=(cancel_reasons or {}).get(key, []), max_chars=max_desc, usp=usp, variants=variants, brands=brands,
         )
+        description, desc_notes = complete_description(description, title=new_title, name=clean_name, variation=variation, primary=primary,
+                                                       supporting=supporting, brands=brands, max_chars=max_desc)
         posisi = info.get("posisi", np.nan)
         rows.append(
             {
@@ -914,6 +1100,8 @@ def build_name_recommendations(
                 "SEO judul": seo_title_checks(final_title, primary, brands, max_len=max_len),
                 "_desc_now": current_desc,
                 "SEO judul saat ini": seo_title_checks(name, primary, brands, max_len=max_len),
+                "Dilengkapi": title_notes + desc_notes,
+                "Kata kunci kompetitor": ", ".join(primary[:3]) if titles else "",
             }
         )
     out = pd.DataFrame(rows)
@@ -962,4 +1150,14 @@ def build_name_recommendations(
         round((sum(a.values()) + sum(b.values())) / max(len(a) + len(b), 1) * 100)
         for a, b in zip(out["SEO judul"], out["SEO deskripsi"])
     ]
+    # Yang masih gagal setelah dilengkapi otomatis = harus dilengkapi manual sebelum upload.
+    out["Masih kurang"] = [
+        [f"Judul: {k}" for k, ok in a.items() if not ok] + [f"Deskripsi: {k}" for k, ok in b.items() if not ok]
+        for a, b in zip(out["SEO judul"], out["SEO deskripsi"])
+    ]
+    out["Kekurangan saat ini"] = [
+        [f"Judul: {k}" for k, ok in a.items() if not ok] + [f"Deskripsi: {k}" for k, ok in b.items() if not ok]
+        for a, b in zip(out["SEO judul saat ini"], now_desc)
+    ]
+    out["Siap upload"] = [not miss for miss in out["Masih kurang"]]
     return out, vec_note
