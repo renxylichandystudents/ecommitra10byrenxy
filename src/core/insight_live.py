@@ -8,15 +8,6 @@ import pandas as pd
 from src.core.dc_stock import DC_SITES, _clean_sku, transfer_plan
 from src.core.inventory import snapshot_time
 
-# Kolom laporan Replenishment Calculation by Date (ERP) → nama internal.
-OUTSTANDING_COLUMNS = {
-    "Outstanding PO": "po",
-    "Outstanding TR": "tr",
-    "Outstanding TO": "to",
-    "Outstanding TR from other Store": "tr_toko_lain",
-}
-
-
 def month_restock(top: pd.DataFrame) -> dict | None:
     """Restock untuk sisa bulan berjalan per SKU = prediksi sisa bulan (unit utuh) + SS − stok Site 10037, lalu DC → PO."""
     if top is None or top.empty or not {"run_rest_qty", "ss", "stok"} <= set(top.columns):
@@ -130,46 +121,45 @@ def running_ads(ads: dict[str, pd.DataFrame], stock: pd.DataFrame | None, cutoff
     }
 
 
-def site_outstanding(frame: pd.DataFrame | None) -> tuple[pd.DataFrame, pd.Timestamp | None]:
-    """Outstanding per SKU dari unggahan Replenishment Calculation by Date terakhir sebuah site DC."""
-    columns = ["sku", *OUTSTANDING_COLUMNS.values()]
-    if frame is None or frame.empty or not any(c in frame.columns for c in OUTSTANDING_COLUMNS):
-        return pd.DataFrame(columns=columns), None
-    latest, stamp = _latest_upload(frame.loc[frame[[c for c in OUTSTANDING_COLUMNS if c in frame.columns]].notna().any(axis=1)], None)
-    if latest.empty:
-        return pd.DataFrame(columns=columns), None
-    out = pd.DataFrame({"sku": _clean_sku(latest["sku"].astype(str))})
-    for raw, name in OUTSTANDING_COLUMNS.items():
-        out[name] = pd.to_numeric(latest[raw], errors="coerce").fillna(0.0).to_numpy() if raw in latest.columns else 0.0
-    out = out.loc[out["sku"].ne("")].groupby("sku", as_index=False).sum()
-    return out, stamp
+def outstanding_10037(repl: pd.DataFrame | None) -> pd.DataFrame:
+    """Outstanding per SKU dari Replenishment Calculation by Date Site 10037: po, tr, to, tr_toko_lain, masuk (jumlah keempatnya).
+
+    Snapshot lama (sebelum kolom TO & TR dari toko lain disimpan) terbaca 0 untuk kedua kolom itu."""
+    columns = ["po", "tr", "to", "tr_toko_lain", "masuk"]
+    if repl is None or repl.empty or "sku" not in repl.columns:
+        return pd.DataFrame(columns=columns)
+    source = {"po": "out_po", "tr": "out_tr", "to": "out_to", "tr_toko_lain": "out_tr_lain"}
+    work = pd.DataFrame({"sku": _clean_sku(repl["sku"].astype(str))})
+    for name, column in source.items():
+        work[name] = pd.to_numeric(repl[column], errors="coerce").fillna(0.0).to_numpy() if column in repl.columns else 0.0
+    out = work.loc[work["sku"].ne("")].groupby("sku")[list(source)].sum()
+    out["masuk"] = out[list(source)].sum(axis=1)
+    return out
 
 
-def outstanding_for(skus: list[str], dc_frames: dict[str, pd.DataFrame] | None, repl_10037: pd.DataFrame | None, repl_date=None) -> dict:
-    """Outstanding PO/TR/TO per site untuk daftar SKU. Site 10037 dari replenishment Setting (PO & TR), DC dari unggahan stok DC."""
+def outstanding_text(row) -> str:
+    """'PO 10 · TR 5 · TO 2' (hanya yang > 0)."""
+    if row is None:
+        return ""
+    labels = (("po", "PO"), ("tr", "TR"), ("to", "TO"), ("tr_toko_lain", "TR toko lain"))
+    parts = [f"{label} {int(round(float(row[name]))):,}".replace(",", ".") for name, label in labels if float(row.get(name, 0) or 0) > 0]
+    return " · ".join(parts)
+
+
+def outstanding_for(skus: list[str], repl_10037: pd.DataFrame | None, repl_date=None) -> dict | None:
+    """Outstanding Site 10037 untuk daftar SKU: total per jenis dan per SKU."""
+    table = outstanding_10037(repl_10037)
+    if table.empty:
+        return None
     keys = [_clean_sku(pd.Series([s])).iat[0] for s in skus]
-    sites: dict[str, dict] = {}
-    per_sku = pd.DataFrame({"sku": keys})
-    if repl_10037 is not None and not repl_10037.empty and {"sku", "out_po", "out_tr"} <= set(repl_10037.columns):
-        repl = repl_10037.assign(sku=_clean_sku(repl_10037["sku"].astype(str))).groupby("sku")[["out_po", "out_tr"]].sum()
-        part = repl.reindex(keys).fillna(0.0)
-        sites["10037"] = {"tanggal": repl_date, "po": float(part["out_po"].sum()), "tr": float(part["out_tr"].sum()),
-                          "sku": int((part[["out_po", "out_tr"]].sum(axis=1) > 0).sum())}
-        per_sku["10037_po"] = part["out_po"].to_numpy()
-        per_sku["10037_tr"] = part["out_tr"].to_numpy()
-    for code, _name, source in DC_SITES:
-        table, stamp = site_outstanding((dc_frames or {}).get(source))
-        if table.empty:
-            continue
-        part = table.set_index("sku").reindex(keys).fillna(0.0)
-        sites[code] = {"tanggal": stamp, **{name: float(part[name].sum()) for name in OUTSTANDING_COLUMNS.values()},
-                       "sku": int((part.sum(axis=1) > 0).sum())}
-        per_sku[f"{code}_po"] = part["po"].to_numpy()
-        per_sku[f"{code}_tr"] = part["tr"].to_numpy() + part["tr_toko_lain"].to_numpy()
-    # Barang masuk yang sudah dalam proses (PO & transfer masuk); TO = transfer keluar, tidak menambah stok site itu.
-    inbound_cols = [c for c in per_sku.columns if c.endswith(("_po", "_tr"))]
-    per_sku["masuk"] = per_sku[inbound_cols].sum(axis=1) if inbound_cols else 0.0
-    return {"sites": sites, "per_sku": per_sku}
+    part = table.reindex(keys).fillna(0.0)
+    part.index = list(skus)
+    return {
+        "tanggal": repl_date,
+        "total": {name: float(part[name].sum()) for name in ("po", "tr", "to", "tr_toko_lain", "masuk")},
+        "sku_ada": int((part["masuk"] > 0).sum()),
+        "per_sku": part,
+    }
 
 
 def po_coverage(need_po: pd.Series, inbound: pd.Series) -> dict:

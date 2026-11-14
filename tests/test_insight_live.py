@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.core.insight_live import month_restock, outstanding_for, po_coverage, running_ads
+from src.core.insight_live import month_restock, outstanding_for, outstanding_text, po_coverage, running_ads
 
 
 def test_month_restock_splits_dc_and_po():
@@ -74,23 +74,41 @@ def test_running_ads_latest_upload_changes_result():
     assert live["diunggah"] == pd.Timestamp("2026-11-14 07:00")
 
 
-def test_outstanding_and_po_coverage():
-    dc = pd.DataFrame(
+def test_outstanding_10037_and_po_coverage():
+    repl = pd.DataFrame(
         {
-            "sku": ["A", "B", "Z"],
-            "Outstanding PO": [10, 0, 99],
-            "Outstanding TR": [0, 2, 0],
-            "Outstanding TO": [1, 0, 0],
-            "Outstanding TR from other Store": [0, 1, 0],
-            "_submitted_at": ["2026-11-14T07:00:00+07:00"] * 3,
+            "sku": ["A", "B", "Z", "C"],
+            "out_po": [10, 0, 99, 0],
+            "out_tr": [5, 2, 0, 0],
+            "out_to": [1, 0, 0, 0],
+            "out_tr_lain": [0, 1, 0, 0],
         }
     )
-    repl = pd.DataFrame({"sku": ["A", "C"], "out_po": [0, 0], "out_tr": [5, 0]})
-    info = outstanding_for(["A", "B", "C"], {"stock_10062": dc}, repl, "2026-11-13")
-    assert info["sites"]["10062"]["po"] == 10 and info["sites"]["10062"]["to"] == 1
-    assert info["sites"]["10037"]["tr"] == 5
-    inbound = info["per_sku"].set_index("sku")["masuk"]
-    assert inbound.to_dict() == {"A": 15, "B": 3, "C": 0}
+    info = outstanding_for(["A", "B", "C"], repl, "2026-11-13")
+    assert info["total"]["po"] == 10 and info["total"]["to"] == 1 and info["total"]["tr_toko_lain"] == 1
+    assert info["sku_ada"] == 2
+    inbound = info["per_sku"]["masuk"]
+    assert inbound.to_dict() == {"A": 16, "B": 3, "C": 0}
+    assert outstanding_text(info["per_sku"].loc["A"]) == "PO 10 · TR 5 · TO 1"
     cover = po_coverage(pd.Series({"A": 12, "B": 5, "C": 4}), inbound)
     assert (cover["sku_tertutup"], cover["sku_sebagian"], cover["sku_belum"]) == (1, 1, 1)
     assert cover["unit_po_baru"] == 2 + 4
+
+
+def test_outstanding_old_snapshot_without_to_columns():
+    repl = pd.DataFrame({"sku": ["A"], "out_po": [3.0], "out_tr": [None]})
+    info = outstanding_for(["A"], repl)
+    assert info["per_sku"].loc["A", "masuk"] == 3
+
+
+def test_feature_store_adds_new_nullable_columns(tmp_path):
+    from sqlalchemy import create_engine, inspect, text
+
+    from src.core.feature_store import FeatureStore
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'f.db'}")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE warehouse_replenishment (id INTEGER PRIMARY KEY, snapshot_date DATE NOT NULL, sku VARCHAR(64) NOT NULL, out_po FLOAT)"))
+    FeatureStore(engine)
+    names = {c["name"] for c in inspect(engine).get_columns("warehouse_replenishment")}
+    assert {"out_to", "out_tr_lain", "out_tr"} <= names

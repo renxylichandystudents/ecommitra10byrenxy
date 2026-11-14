@@ -266,6 +266,8 @@ def show_priority_dashboard(
                 ("SKU", f"Top 50 menurut {rank_basis} (kolom Rank)"),
                 ("Prediksi · Restock", f"Prediksi = prediksi QTY 30 hari ({short_date(lo)} – {short_date(hi)}, unit utuh); Restock = prediksi + SS − stok Site 10037 (minimal 0)"),
                 ("Ambil dari DC", "dipenuhi dulu dari Site 10062 (DC Cikupa), lalu Site 10036 (DC Cipeucang); sisanya PO ke supplier"),
+                ("Outstanding Site 10037", "barang yang sudah dalam proses menuju Site 10037 menurut Replenishment Calculation by Date terbaru "
+                 "(Setting › Kapasitas gudang): PO, TR, TO, TR dari toko lain. Kosong = belum ada proses, perlu dibuatkan transfer/PO"),
                 ("Stok habis", "hari ini + stok ÷ prediksi harian; SKU Kosong: tanggal stok mulai 0 menurut riwayat unggahan Data stok Site 10037"),
                 ("Kosong sejak · Hari kosong", "unggahan Data stok Site 10037 pertama yang mencatat stok 0 (rangkaian kosong terakhir) s.d. hari penuh terakhir data latih (data ≥ 23:00). "
                  "\"≤\" bila semua unggahan tersimpan sudah 0: stok habis pada atau sebelum tanggal itu, jadi hari kosong dan sales hilang adalah angka minimal"),
@@ -281,6 +283,15 @@ def show_priority_dashboard(
             st.info("Data stok Top 50 belum diunggah, jadi kebutuhan restock belum bisa dihitung.")
         else:
             view = restock_view(priority)
+            from src.core.insight_live import outstanding_10037, outstanding_text
+
+            pending = outstanding_10037(data.replenishment)
+            if not pending.empty:
+                from src.core.dc_stock import _clean_sku
+
+                keys = _clean_sku(view["SKU"].astype(str))
+                view.insert(view.columns.get_loc("Inbound"), "Outstanding Site 10037",
+                            [outstanding_text(pending.loc[k]) if k in pending.index else "" for k in keys])
             # Kolom yang kosong untuk semua SKU disembunyikan (dinilai dari seluruh daftar, bukan per kelompok).
             hide = [c for c in ("Stok Site 10062", "Stok Site 10036", "Hari kosong", "Sales hilang sejak kosong", "Sales hilang bulan ini", "QTY hilang sejak kosong")
                     if view[c].isna().all()]
@@ -288,6 +299,8 @@ def show_priority_dashboard(
                 hide.append("Kosong sejak")
             if not view["Inbound"].astype(str).str.strip().any():
                 hide.append("Inbound")
+            if "Outstanding Site 10037" in view.columns and not view["Outstanding Site 10037"].astype(str).str.strip().any():
+                hide.append("Outstanding Site 10037")
             if not view["Ambil dari DC"].astype(str).str.strip().any():
                 hide.append("Ambil dari DC")
 
@@ -488,7 +501,8 @@ def _month_line(top: pd.DataFrame | None, month: dict | None) -> str:
     )
 
 
-def _outstanding_lines(priority: pd.DataFrame, top: pd.DataFrame | None, data: FeatureData, frames) -> list[str]:
+def _outstanding_lines(priority: pd.DataFrame, top: pd.DataFrame | None, data: FeatureData) -> list[str]:
+    """Outstanding PO/TR/TO Site 10037 (Replenishment Calculation by Date) untuk SKU Top 50 yang perlu restock."""
     from src.core.insight_live import outstanding_for, po_coverage
 
     if priority.empty:
@@ -496,39 +510,29 @@ def _outstanding_lines(priority: pd.DataFrame, top: pd.DataFrame | None, data: F
     need = priority.loc[priority["Restock"] > 0, "sku"].astype(str).tolist()
     if not need:
         return []
-    info = outstanding_for(need, getattr(frames, "dc_stock", None), data.replenishment, data.replenishment_date)
-    sites = info["sites"]
-    parts = []
-    if "10037" in sites:
-        s = sites["10037"]
-        when = f" ({short_date(s['tanggal'])})" if s.get("tanggal") else ""
-        parts.append(f"Site 10037{when}: PO {fmt_num(s['po'])} · TR {fmt_num(s['tr'])} unit ({fmt_num(s['sku'])} SKU)")
-    for code in ("10062", "10036"):
-        if code in sites:
-            s = sites[code]
-            when = f" ({short_date(s['tanggal'])})" if s.get("tanggal") is not None else ""
-            parts.append(f"Site {code}{when}: PO {fmt_num(s['po'])} · TR {fmt_num(s['tr'])} · TO {fmt_num(s['to'])} · "
-                         f"TR dari toko lain {fmt_num(s['tr_toko_lain'])} unit ({fmt_num(s['sku'])} SKU)")
-    lines = []
-    if parts:
-        lines.append(f"<b>Outstanding</b> untuk {fmt_num(len(need))} SKU Top 50 yang perlu restock (Replenishment Calculation by Date): " + " · ".join(parts) + ".")
-    missing = [code for code in ("10062", "10036") if code not in sites]
-    if missing:
-        lines.append(
-            "Outstanding PO/TR/TO " + " & ".join(f"Site {c}" for c in missing) + " belum terbaca: unggahan stok DC terakhir bukan laporan "
-            "Replenishment Calculation by Date (mis. Stock Qty and Value). Unggah laporan replenishment di Upload data › Stok agar barang dalam proses ikut dihitung."
-        )
-    if "10037" not in sites:
-        lines.append("Outstanding Site 10037 belum ada: unggah Replenishment Site 10037 di Setting › Kapasitas gudang.")
-    if parts and top is not None and "kurang_setelah_dc" in top.columns:
+    info = outstanding_for(need, data.replenishment, data.replenishment_date)
+    if info is None:
+        return ["Outstanding PO/TR/TO belum ada: unggah Replenishment Calculation by Date Site 10037 di Setting › Kapasitas gudang."]
+    total = info["total"]
+    when = f" tanggal {short_date(info['tanggal'])}" if info.get("tanggal") else ""
+    per = info["per_sku"]
+    restock = pd.Series(pd.to_numeric(priority["Restock"], errors="coerce").fillna(0.0).to_numpy(), index=priority["sku"].astype(str))
+    have = per.index[per["masuk"] > 0]
+    covered = int(sum(per.at[s, "masuk"] >= restock.get(s, 0) for s in have))
+    lines = [
+        f"<b>Outstanding Site 10037</b> (Replenishment Calculation by Date{when}): <b>{fmt_num(info['sku_ada'])}</b> dari {fmt_num(len(need))} SKU Top 50 yang perlu restock "
+        f"sudah punya barang dalam proses — PO {fmt_num(total['po'])} · TR {fmt_num(total['tr'])} · TO {fmt_num(total['to'])} · "
+        f"TR dari toko lain {fmt_num(total['tr_toko_lain'])} = {fmt_num(total['masuk'])} unit; {fmt_num(covered)} SKU di antaranya sudah menutup restock-nya. "
+        f"<b>{fmt_num(len(need) - info['sku_ada'])}</b> SKU belum punya outstanding sama sekali (kolom Outstanding Site 10037 di tabel)."
+    ]
+    if top is not None and "kurang_setelah_dc" in top.columns:
         po_need = pd.Series(pd.to_numeric(top["kurang_setelah_dc"], errors="coerce").fillna(0.0).to_numpy(), index=top["sku"].astype(str))
-        per = info["per_sku"].assign(sku=need).set_index("sku")["masuk"]
-        cover = po_coverage(po_need, per.groupby(level=0).sum())
+        cover = po_coverage(po_need, per["masuk"].groupby(level=0).sum())
         if cover["sku_perlu_po"]:
             lines.append(
-                f"Kebutuhan PO 30 hari {fmt_num(cover['unit_perlu_po'])} unit ({fmt_num(cover['sku_perlu_po'])} SKU) dibanding barang masuk yang sudah diproses "
-                f"(outstanding PO + TR): {fmt_num(cover['sku_tertutup'])} SKU sudah tertutup, {fmt_num(cover['sku_sebagian'])} sebagian, "
-                f"<b>{fmt_num(cover['sku_belum'])}</b> belum ada PO/TR sama sekali → buat PO baru ±<b>{fmt_num(cover['unit_po_baru'])}</b> unit."
+                f"Kebutuhan PO 30 hari {fmt_num(cover['unit_perlu_po'])} unit ({fmt_num(cover['sku_perlu_po'])} SKU, setelah ambil DC) dibanding outstanding: "
+                f"{fmt_num(cover['sku_tertutup'])} SKU sudah tertutup, {fmt_num(cover['sku_sebagian'])} sebagian, "
+                f"<b>{fmt_num(cover['sku_belum'])}</b> belum ada outstanding → PO baru ±<b>{fmt_num(cover['unit_po_baru'])}</b> unit."
             )
     return lines
 
@@ -608,7 +612,7 @@ def _insight_cards(table: pd.DataFrame, priority: pd.DataFrame, data: FeatureDat
         elif data.po:
             lines.append(f"{fmt_num(len(data.po))} SKU punya PO impor terbuka (lihat kolom Inbound).")
         try:
-            lines += _outstanding_lines(priority, top, data, frames)
+            lines += _outstanding_lines(priority, top, data)
         except Exception as exc:  # noqa: BLE001 - insight tambahan, tidak menghentikan halaman
             lines.append(f"Outstanding PO/TR/TO belum bisa dibaca: {html.escape(str(exc))}")
     month_text = _month_line(top, month)

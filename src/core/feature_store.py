@@ -132,6 +132,8 @@ warehouse_replenishment = Table(
     Column("soh", Float),
     Column("out_po", Float),
     Column("out_tr", Float),
+    Column("out_to", Float),
+    Column("out_tr_lain", Float),
     Column("over_stock_qty", Float),
     Column("abc", String(10), nullable=False, default=""),
     Column("stock_out", String(10), nullable=False, default=""),
@@ -346,10 +348,32 @@ def _where(table: Table, filters: Mapping | None):
     return and_(*[table.c[key] == value for key, value in filters.items()])
 
 
+def _add_missing_columns(engine: Engine, table: Table) -> None:
+    """Kolom nullable baru di definisi tabel ditambahkan ke tabel database lama (create_all tidak mengubah tabel yang sudah ada)."""
+    from sqlalchemy import inspect, text
+
+    try:
+        existing = {c["name"] for c in inspect(engine).get_columns(table.name)}
+    except Exception:
+        return
+    missing = [c for c in table.columns if c.name not in existing and c.nullable and not c.primary_key]
+    if not existing or not missing:
+        return
+    for column in missing:
+        kind = column.type.compile(dialect=engine.dialect)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN "{column.name}" {kind}'))
+        except Exception:
+            continue  # proses lain sudah menambahkannya
+
+
 class FeatureStore:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         metadata.create_all(engine, checkfirst=True)
+        for table in TABLES.values():
+            _add_missing_columns(engine, table)
         self._ready: set[str] = set(TABLES)
 
     def _table(self, name: str) -> Table:
@@ -360,6 +384,7 @@ class FeatureStore:
         if name not in ready:
             # Tabel yang ditambahkan sesudah store dibuat (proses server lama) dibuat saat pertama dipakai.
             table.create(self.engine, checkfirst=True)
+            _add_missing_columns(self.engine, table)
             ready.add(name)
         return table
 

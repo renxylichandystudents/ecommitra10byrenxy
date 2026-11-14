@@ -51,6 +51,8 @@ REPL_COLUMNS = {
     "Stock On Hand": "soh",
     "Outstanding PO": "out_po",
     "Outstanding TR": "out_tr",
+    "Outstanding TO": "out_to",
+    "Outstanding TR from other Store": "out_tr_lain",
     "Over Stock Qty": "over_stock_qty",
     "ABC Class": "abc",
     "Stock Out": "stock_out",
@@ -58,7 +60,7 @@ REPL_COLUMNS = {
     "Date": "tanggal",
     "Site No": "site",
 }
-NUMERIC = ("avg_sales", "min_stock", "max_stock", "rop", "soh", "out_po", "out_tr", "over_stock_qty")
+NUMERIC = ("avg_sales", "min_stock", "max_stock", "rop", "soh", "out_po", "out_tr", "out_to", "out_tr_lain", "over_stock_qty")
 
 
 def norm_sku(value) -> str:
