@@ -375,7 +375,39 @@ def _summary(goals, port: pd.DataFrame, orders: pd.DataFrame | None, features, m
 STATUS_ICON = {"Rugi": "🔴 Rugi", "Rendah": "🟠 Rendah", "Tinggi": "🟢 Tinggi", "Tanpa data": "⚪ Tanpa data"}
 
 
-def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir") -> None:
+SUGGEST_COLUMNS = ("Harga beli / modal", "Harga jual disarankan", "Promo disarankan", "Harga setelah promo", "Perubahan harga bayar vs aktual",
+                   "Harga nett (setelah semua biaya)", "Profit/unit setelah promo", "Margin setelah promo", "Catatan harga")
+
+
+def _suggestions(prices: pd.DataFrame | None, skus: pd.Series, actual: pd.Series) -> pd.DataFrame:
+    """Kolom usulan harga per SKU (dari perhitungan Simulasi › semua SKU) untuk dibandingkan dengan aktual.
+
+    Harga nett = harga setelah promo − voucher − potongan Shopee − iklan per unit (uang yang diterima per unit);
+    profit/unit = harga nett − harga beli/modal."""
+    empty = pd.DataFrame({c: [np.nan] * len(skus) for c in SUGGEST_COLUMNS})
+    if prices is None or prices.empty:
+        return empty
+    p = prices.drop_duplicates("SKU").set_index("SKU")
+    key = skus.astype(str).to_numpy()
+
+    def col(name):
+        return p[name].reindex(key).to_numpy(dtype=float) if name in p.columns else np.full(len(key), np.nan)
+
+    modal, saran, after, profit = col("Modal/harga beli per unit"), col("Harga jual disarankan"), col("Harga setelah promo"), col("Margin setelah promo/unit")
+    notes = p["Catatan"].reindex(key).fillna("").to_numpy() if "Catatan" in p.columns else [""] * len(key)
+    voucher = np.nan_to_num(col("Voucher penjual/unit"))
+    actual = pd.to_numeric(actual, errors="coerce").to_numpy(dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        change = np.where(actual > 0, ((after - voucher) / actual - 1) * 100, np.nan)
+    return pd.DataFrame({
+        "Harga beli / modal": modal, "Harga jual disarankan": saran, "Promo disarankan": col("Promo disarankan (%)"),
+        "Harga setelah promo": after, "Perubahan harga bayar vs aktual": change,
+        "Harga nett (setelah semua biaya)": modal + profit, "Profit/unit setelah promo": profit,
+        "Margin setelah promo": col("Margin setelah promo (%)"), "Catatan harga": notes,
+    })
+
+
+def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", *, prices: pd.DataFrame | None = None) -> None:
     st.markdown(f"<div class='section-title'>Daftar prioritas perbaikan margin · {html.escape(period_label)}</div>", unsafe_allow_html=True)
     if port.empty:
         st.info("Belum ada SKU terjual pada periode ini.")
@@ -388,7 +420,11 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir") 
             f"- **Status**: 🔴 Rugi = margin bersih di bawah 0 · 🟠 Rendah = untung tetapi di bawah {fmt_pct(acuan, 1)} (rata-rata margin bersih SKU yang untung) · 🟢 Tinggi = sama/di atas batas itu · "
             "⚪ Tanpa data = tidak ada di file margin.\n"
             "- **Urutan**: Rugi dari kerugian Rp terbesar → Rendah dari selisih Rp terbesar ke batas (omzet × selisih %) → Tinggi dari omzet terbesar.\n"
-            "- **Yang perlu dikerjakan**: tuas yang bisa dikendalikan tim — iklan (ROAS minimal), komisi affiliate, program opsional, diskon/voucher, lalu harga."
+            "- **Yang perlu dikerjakan**: tuas yang bisa dikendalikan tim — iklan (ROAS minimal), komisi affiliate, program opsional, diskon/voucher, lalu harga.\n"
+            "- **Usulan harga untuk MD** (setelah kolom Harga akhir = aktual): **Harga beli / modal** (file MD, belum PPN; selain itu file margin) → "
+            "**Harga jual disarankan** (harga normal minimal impas setelah semua biaya & iklan) → **Promo disarankan** (sesuai kebiasaan promo transaksi SKU itu, "
+            "dibatasi agar tidak rugi) → **Harga setelah promo** → **Harga nett** (uang diterima per unit setelah voucher, potongan Shopee, dan iklan) → "
+            "**Profit/unit** = harga nett − harga beli. Bandingkan dengan Margin bersih/unit aktual; baris Total menunjukkan profit periode bila usulan dipakai dengan qty yang sama."
         )
     f1, f2 = st.columns([1.2, 1.8])
     status_pick = f1.multiselect("Status", list(STATUS_ICON), key="calc-port-status", placeholder="Semua status")
@@ -407,22 +443,41 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir") 
         "Harga akhir": view["harga_akhir"], "ROAS": view["roas"], "Komisi affiliate": view["affiliate_pct"],
         "Sumber margin": view["sumber"], "Kategori Shopee": view["kategori"],
     }).reset_index(drop=True)
+    # Usulan untuk MD: dibandingkan langsung dengan aktual (harga akhir & margin bersih) di baris yang sama.
+    suggest = _suggestions(prices, frame["SKU"], frame["Harga akhir"])
+    at = frame.columns.get_loc("Harga akhir") + 1
+    frame = pd.concat([frame.iloc[:, :at], suggest, frame.iloc[:, at:]], axis=1)
     total = {c: np.nan for c in frame.columns}
     omzet = frame["Omzet periode"].sum()
     bersih = frame["Margin bersih periode"].sum(min_count=1)
+    unit_after = pd.to_numeric(frame["Profit/unit setelah promo"], errors="coerce")
+    after_qty = (unit_after * frame["Terjual periode"]).sum(min_count=1)
+    same = frame.loc[unit_after.notna(), "Margin bersih periode"].sum()
     total.update({"Status": "Total", "SKU": f"{fmt_num(len(frame))} SKU", "Nama": "", "Yang perlu dikerjakan": "", "Sumber margin": "", "Kategori Shopee": "",
+                  "Catatan harga": (f"{fmt_num(int(unit_after.notna().sum()))} SKU berusulan: bila harga & promo usulan dipakai dengan qty periode ini, "
+                                    f"profit {fmt_idr(after_qty)} (aktual SKU yang sama {fmt_idr(same)})") if pd.notna(after_qty) else "",
                   "Omzet periode": omzet, "Terjual periode": frame["Terjual periode"].sum(), "Margin bersih periode": bersih,
                   "Margin bersih": (bersih / frame.loc[frame["Margin bersih periode"].notna(), "Omzet periode"].sum() * 100) if pd.notna(bersih) else np.nan,
                   "Rugi / kurang periode": frame["Rugi / kurang periode"].sum()})
     full = pd.concat([pd.DataFrame([total]), frame], ignore_index=True)
     kinds = {"Omzet periode": "money", "Margin bersih/unit": "money", "Margin bersih periode": "money", "Rugi / kurang periode": "money", "Harga akhir": "money",
              "Margin kotor": "pct", "Potongan Shopee": "pct", "Iklan": "pct", "Margin bersih": "pct", "Komisi affiliate": "pct", "ROAS": "dec",
-             "Terjual periode": "count", "Prioritas": "count"}
+             "Terjual periode": "count", "Prioritas": "count",
+             "Harga beli / modal": "money", "Harga jual disarankan": "money", "Harga setelah promo": "money", "Harga nett (setelah semua biaya)": "money",
+             "Profit/unit setelah promo": "money", "Perubahan harga bayar vs aktual": "pct", "Promo disarankan": "pct", "Margin setelah promo": "pct"}
     batched_view(
         len(frame), key="calc-port", noun="SKU",
         render=lambda lo, hi: show_table(
-            pd.concat([full.iloc[:1], full.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label="Total", kinds=kinds, max_height=10_000,
-            column_config={"Yang perlu dikerjakan": st.column_config.TextColumn(width="large")},
+            pd.concat([full.iloc[:1], full.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label="Total", kinds=kinds, max_height=10_000, dash_missing=True,
+            column_config={"Yang perlu dikerjakan": st.column_config.TextColumn(width="large"), "Catatan harga": st.column_config.TextColumn(width="large"),
+                           "Harga akhir": st.column_config.Column(help="Aktual: harga transaksi rata-rata periode terpilih setelah diskon & voucher"),
+                           "Harga beli / modal": st.column_config.Column(help="Harga beli file MD (belum PPN); bila tidak ada, modal dari file margin"),
+                           "Harga jual disarankan": st.column_config.Column(help="Harga normal yang disarankan agar untung: ≥ harga impas (semua biaya + iklan) dan, bila bisa, margin ≥ batas margin rendah"),
+                           "Perubahan harga bayar vs aktual": st.column_config.Column(help="Harga yang dibayar pembeli bila usulan dipakai (harga setelah promo − voucher penjual) dibanding Harga akhir aktual"),
+                           "Promo disarankan": st.column_config.Column(help="Kedalaman promo sesuai kebiasaan transaksi SKU ini (median diskon bila ≥ 20% transaksi berpromo), dibatasi agar tidak di bawah impas"),
+                           "Harga setelah promo": st.column_config.Column(help="Harga jual disarankan setelah promo disarankan = harga yang dibayar pembeli"),
+                           "Harga nett (setelah semua biaya)": st.column_config.Column(help="Uang diterima per unit: harga setelah promo − voucher − potongan Shopee − iklan"),
+                           "Profit/unit setelah promo": st.column_config.Column(help="Harga nett − harga beli/modal (bandingkan dengan Margin bersih/unit aktual)")},
         ),
         download=lambda: download_excel(full, "prioritas_perbaikan_margin.xlsx", key="xl-calc-port"),
     )
@@ -560,23 +615,23 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
             m_rows = _portfolio_rows(features, table, data, orders, fees, md, m_start, m_end)
             if not m_rows.empty:
                 month_port = fee.portfolio(m_rows, programs=programs, order_fee=order_fee, fallback_kotor_pct=md.store_kotor_pct)
+    hist = _history(orders)
+    cache_key = ("calc-all", st.session_state.get("_feature-version", 0), st.session_state.get("_harga-beli-version", 0),
+                 st.session_state.get("_margin-version", 0), str(start), str(end), len(rows), round(acuan, 3) if np.isfinite(acuan) else None)
+    cached = st.session_state.get("_calc-all")
+    if isinstance(cached, tuple) and cached[0] == cache_key:
+        all_prices = cached[1]
+    else:
+        with tab_sum, st.spinner("Menghitung harga & promo semua SKU..."):
+            all_prices = _price_table(_all_rows(features, table, data, rows, fees, md), programs=programs, order_fee=order_fee, md=md,
+                                      acuan=acuan, hist=hist)
+        st.session_state["_calc-all"] = (cache_key, all_prices)
     with tab_sum:
         _summary(goals, port, orders, features, md, end, month_port=month_port, period_label=period_label)
-        _priority_table(port, period_label)
+        _priority_table(port, period_label, prices=all_prices)
     with tab_param:
         _parameter_panel(features, may_edit=may_edit, username=username, require=require)
     with tab_sim:
-        hist = _history(orders)
-        cache_key = ("calc-all", st.session_state.get("_feature-version", 0), st.session_state.get("_harga-beli-version", 0),
-                     st.session_state.get("_margin-version", 0), str(start), str(end), len(rows), round(acuan, 3) if np.isfinite(acuan) else None)
-        cached = st.session_state.get("_calc-all")
-        if isinstance(cached, tuple) and cached[0] == cache_key:
-            all_prices = cached[1]
-        else:
-            with st.spinner("Menghitung harga & promo semua SKU..."):
-                all_prices = _price_table(_all_rows(features, table, data, rows, fees, md), programs=programs, order_fee=order_fee, md=md,
-                                          acuan=acuan, hist=hist)
-            st.session_state["_calc-all"] = (cache_key, all_prices)
         if not all_prices.empty:
             d1, d2 = st.columns([3, 1], vertical_alignment="center")
             d1.markdown(f"<div class='field-hint'>Perhitungan <b>semua {fmt_num(len(all_prices))} SKU</b> (periode {html.escape(period_label)}): modal/harga beli, "

@@ -781,3 +781,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Kalkulator margin: periode kalender = periode kartu
 - Bawaan "Periode analisa" kini tanggal 1 bulan berjalan s.d. hari penuh terakhir data (sama dengan kartu Sales/Margin bersih aktual), bukan 30 hari terakhir.
 - `date_range_picker`: tanpa pilihan pengguna, kalender mengikuti periode bawaan (ikut bergeser saat data bertambah); pilihan pengguna disimpan sampai diganti.
+
+## 2026-11-14 — Kalkulator margin: kolom usulan harga untuk MD di daftar prioritas
+- Setelah kolom Harga akhir (aktual): Harga beli / modal, Harga jual disarankan, Promo disarankan (kebiasaan promo transaksi), Harga setelah promo, Perubahan harga bayar vs aktual, Harga nett (setelah voucher, potongan Shopee, iklan), Profit/unit setelah promo, Margin setelah promo, Catatan harga. Sumber: perhitungan semua SKU (`_price_table`, sama dengan unduhan Simulasi).
+- Baris Total: profit periode bila usulan dipakai dengan qty yang sama vs aktual SKU yang sama. Sel kosong tampil "–" (bukan None).
