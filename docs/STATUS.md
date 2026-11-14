@@ -789,3 +789,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 ## 2026-11-14 — Kalkulator margin: semua angka bersih, istilah header seragam
 - `_portfolio_rows` memakai `metrics.sold_lines` (selain batal & Belum Bayar, dikurangi retur; voucher penjual dikurangi sebanding unit retur) — sama dengan Sales produk bersih / QTY bersih di tabel Data & Prediksi. Sebelumnya hanya batal yang dikeluarkan.
 - Header daftar prioritas: Omzet periode → **Sales produk bersih**, Terjual periode → **QTY bersih**; unduhan semua SKU: Terjual (periode) → QTY bersih (periode). Teks kartu & langkah memakai "sales produk bersih" (bukan omzet).
+
+## 2026-11-14 — Kalender ikut berubah, tabel prioritas berkelompok, rekonsiliasi total
+- `date_range_picker`: setelah pengguna memilih tanggal, halaman dijalankan ulang sekali agar teks kalender ikut berubah (sebelumnya angka berubah tetapi kalender masih menampilkan rentang lama).
+- `show_table(groups=...)`: baris judul kelompok di atas header (MultiIndex). Daftar prioritas: Prioritas & tindakan · Aktual periode terpilih (bersih) · Usulan harga untuk MD · Keterangan.
+- Keterangan total tabel: sales produk bersih & QTY bersih periode, + SKU nonaktif yang tidak ditampilkan = total sales produk bersih periode.

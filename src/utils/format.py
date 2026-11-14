@@ -301,6 +301,7 @@ def show_table(
     column_config: dict | None = None,
     styled: bool = True,
     dash_missing: bool = False,
+    groups: dict[str, str] | None = None,
     **kwargs,
 ):
     """st.dataframe dengan tinggi pas isi (tanpa baris kosong) dan format angka Indonesia.
@@ -336,6 +337,25 @@ def show_table(
     row_px = fixed_row or wrapped_row
     if row_px > ROW_PX:
         max_height = max(max_height, 720)
+    if groups:
+        # Baris judul kelompok di atas header (kolom MultiIndex → grup header di st.dataframe). Konfigurasi kolom tetap
+        # memakai nama kolom asli (level terakhir).
+        heads = pd.MultiIndex.from_tuples([(groups.get(str(c), ""), str(c)) for c in frame.columns])
+        if styled:
+            # Fungsi gaya yang tertunda memakai subset nama kolom; terjemahkan ke nama bertingkat yang baru.
+            lookup = dict(zip(frame.columns, heads))
+
+            def _subset(value):
+                if isinstance(value, (list, pd.Index)) and all(v in lookup for v in value):
+                    return [lookup[v] for v in value]
+                return value
+
+            data._todo = [(f, tuple(_subset(a) for a in args), {k: _subset(v) for k, v in kw.items()}) for f, args, kw in data._todo]
+            data.data.columns = heads
+            data.columns = heads
+        else:
+            data = data.copy()
+            data.columns = heads
     return st.dataframe(
         data,
         height=table_height(len(frame), max_height, row_px),

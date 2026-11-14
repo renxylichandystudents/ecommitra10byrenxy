@@ -217,12 +217,15 @@ def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | 
         voucher=("seller_voucher", "sum") if "seller_voucher" in work.columns else ("qty", lambda s: 0.0),
     )
     grouped = grouped.loc[grouped["qty"] > 0]
+    total_sales, total_qty, n_before = float(grouped["omzet"].sum()), float(grouped["qty"].sum()), len(grouped)
     active, _at = st.session_state.get("_active_skus") or (set(), "")
     if active:
         # SKU nonaktif (tidak ada di unggahan stok terakhir) tidak bisa diperbaiki; dampaknya ada di Laporan margin › SKU nonaktif.
         from src.core.margin_file import sku_key
 
         grouped = grouped.loc[[sku_key(s) in active for s in grouped.index]]
+    recon = {"sales_semua": total_sales, "qty_semua": total_qty, "sku_nonaktif": int(n_before - len(grouped)),
+             "sales_nonaktif": total_sales - float(grouped["omzet"].sum()), "qty_nonaktif": total_qty - float(grouped["qty"].sum())}
     names = dict(zip(products["sku"], products["product_name"]))
     prices = dict(zip(products["sku"], products["price"]))
     sku_cat = features.get_json(KEY_SKU_CAT, {}) or {}
@@ -246,7 +249,9 @@ def _portfolio_rows(features, table: pd.DataFrame, data, orders: pd.DataFrame | 
             "qty_30": float(r["qty"]), "omzet_30": float(r["omzet"]), "ukuran_khusus": _is_big(name),
             **_margin_cols(md, sku, harga - (float(r["voucher"]) / float(r["qty"]) if r["qty"] else 0.0)),
         })
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    out.attrs["rekonsiliasi"] = recon
+    return out
 
 
 def _margin_cols(md, sku: str, price: float | None = None) -> dict:
@@ -413,7 +418,17 @@ def _suggestions(prices: pd.DataFrame | None, skus: pd.Series, actual: pd.Series
     })
 
 
-def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", *, prices: pd.DataFrame | None = None) -> None:
+PRIORITY_GROUPS = {
+    "Prioritas & tindakan": ("Prioritas", "Status", "SKU", "Nama", "Yang perlu dikerjakan"),
+    "Aktual periode terpilih (bersih)": ("Sales produk bersih", "QTY bersih", "Harga akhir", "Margin kotor", "Potongan Shopee", "Iklan", "Komisi affiliate",
+                                         "ROAS", "Margin bersih", "Margin bersih/unit", "Margin bersih periode", "Rugi / kurang periode"),
+    "Usulan harga untuk MD": SUGGEST_COLUMNS,
+    "Keterangan": ("Sumber margin", "Kategori Shopee"),
+}
+
+
+def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", *, prices: pd.DataFrame | None = None,
+                    recon: dict | None = None) -> None:
     st.markdown(f"<div class='section-title'>Daftar prioritas perbaikan margin · {html.escape(period_label)}</div>", unsafe_allow_html=True)
     if port.empty:
         st.info("Belum ada SKU terjual pada periode ini.")
@@ -453,8 +468,8 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
     }).reset_index(drop=True)
     # Usulan untuk MD: dibandingkan langsung dengan aktual (harga akhir & margin bersih) di baris yang sama.
     suggest = _suggestions(prices, frame["SKU"], frame["Harga akhir"])
-    at = frame.columns.get_loc("Harga akhir") + 1
-    frame = pd.concat([frame.iloc[:, :at], suggest, frame.iloc[:, at:]], axis=1)
+    frame = pd.concat([frame, suggest], axis=1)
+    frame = frame[[c for cols in PRIORITY_GROUPS.values() for c in cols]]
     total = {c: np.nan for c in frame.columns}
     omzet = frame["Sales produk bersih"].sum()
     bersih = frame["Margin bersih periode"].sum(min_count=1)
@@ -473,10 +488,18 @@ def _priority_table(port: pd.DataFrame, period_label: str = "30 hari terakhir", 
              "QTY bersih": "count", "Prioritas": "count",
              "Harga beli / modal": "money", "Harga jual disarankan": "money", "Harga setelah promo": "money", "Harga nett (setelah semua biaya)": "money",
              "Profit/unit setelah promo": "money", "Perubahan harga bayar vs aktual": "pct", "Promo disarankan": "pct", "Margin setelah promo": "pct"}
+    if recon and not status_pick and not query:
+        note = (f"Total tabel = transaksi bersih {html.escape(period_label)} (selain batal & Belum Bayar, dikurangi retur): "
+                f"sales produk bersih {fmt_idr(omzet)} · QTY bersih {fmt_num(frame['QTY bersih'].sum())}")
+        if recon.get("sku_nonaktif", 0) > 0 and recon.get("sales_nonaktif", 0) > 0:
+            note += (f". Ditambah {fmt_num(recon['sku_nonaktif'])} SKU nonaktif (tidak ada di stok terakhir, tidak ditampilkan) "
+                     f"{fmt_idr(recon['sales_nonaktif'])} = {fmt_idr(recon['sales_semua'])}, sama dengan sales produk di kartu Sales bersih aktual bila periodenya sebulan yang sama")
+        st.markdown(f"<div class='field-hint'>{note}.</div>", unsafe_allow_html=True)
     batched_view(
         len(frame), key="calc-port", noun="SKU",
         render=lambda lo, hi: show_table(
             pd.concat([full.iloc[:1], full.iloc[1:].iloc[lo:hi]], ignore_index=True), bold_label="Total", kinds=kinds, max_height=10_000, dash_missing=True,
+            groups={c: g for g, cols in PRIORITY_GROUPS.items() for c in cols},
             column_config={"Yang perlu dikerjakan": st.column_config.TextColumn(width="large"), "Catatan harga": st.column_config.TextColumn(width="large"),
                            "Harga akhir": st.column_config.Column(help="Aktual: harga transaksi rata-rata periode terpilih setelah diskon & voucher"),
                            "Harga beli / modal": st.column_config.Column(help="Harga beli file MD (belum PPN); bila tidak ada, modal dari file margin"),
@@ -636,7 +659,7 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
         st.session_state["_calc-all"] = (cache_key, all_prices)
     with tab_sum:
         _summary(goals, port, orders, features, md, end, month_port=month_port, period_label=period_label)
-        _priority_table(port, period_label, prices=all_prices)
+        _priority_table(port, period_label, prices=all_prices, recon=rows.attrs.get("rekonsiliasi") if not rows.empty else None)
     with tab_param:
         _parameter_panel(features, may_edit=may_edit, username=username, require=require)
     with tab_sim:
