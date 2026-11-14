@@ -3,11 +3,12 @@
 Semua biaya (modal/harga beli, potongan Shopee, iklan per unit, affiliate) adalah pengeluaran yang dihitung `shopee_fee.margin`.
 - Harga minimal (impas)      = harga jual terendah dengan margin bersih ≥ 0, termasuk iklan per unit sekarang.
 - Harga minimal sehat        = harga jual terendah dengan margin bersih ≥ batas acuan (margin rendah) toko.
-- Harga jual disarankan      = harga normal sekarang bila sudah ≥ harga impas; bila tidak, naik ke harga impas (tidak rugi).
+- Harga jual disarankan      = harga normal sekarang, dinaikkan bila perlu agar tidak rugi DAN setelah promo disarankan margin
+                               bersih tetap ≥ batas sehat (min. MIN_PROFIT_PCT).
 - Promo historis             = diskon dari harga awal (list price) di transaksi 90 hari terakhir: median diskon pada transaksi
                                yang berpromo, maksimum, dan porsi transaksi berpromo. Dianggap "perlu promo" bila ≥ 20% transaksi berpromo.
-- Promo disarankan           = sebesar promo historis (agar tetap bersaing) tetapi tidak membuat harga setelah promo di bawah harga
-                               sehat; bila ruang sehat tidak ada, maksimal sampai harga impas (promo tipis); bila tidak ada ruang, 0%.
+- Promo disarankan           = selalu ada (min. MIN_PROMO, maks. MAX_PROMO): kebiasaan promo transaksi bila ≥ 20% transaksi berpromo,
+                               selain itu ruang margin sehat (maks. 10%) atau promo minimal; harga normal disesuaikan agar tetap untung.
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ import pandas as pd
 from src.core import shopee_fee as fee
 
 HISTORY_DAYS = 90
+MIN_PROMO = 5.0          # promo minimal (%) agar tetap menarik; tidak pernah 0%
+MAX_PROMO = 30.0         # batas atas promo dari kebiasaan transaksi
+MIN_PROFIT_PCT = 2.0     # margin bersih minimal setelah promo (tetap untung)
 
 
 def price_history(orders: pd.DataFrame | None, *, days: int = HISTORY_DAYS, ref: date | None = None) -> pd.DataFrame:
@@ -72,31 +76,35 @@ def plan(inp: fee.Inputs, *, normal: float, target_pct: float, hist_disc: float 
     sehat = fee.min_price(base, target_pct) if np.isfinite(target_pct) and target_pct > 0 else impas
     if not np.isfinite(sehat):
         sehat = impas
+    # Harga setelah promo terendah: margin sehat (batas margin rendah toko), minimal tetap untung MIN_PROFIT_PCT.
+    floor = np.nanmax([fee.min_price(base, MIN_PROFIT_PCT), sehat]) if np.isfinite(sehat) else fee.min_price(base, MIN_PROFIT_PCT)
+    if not np.isfinite(floor):
+        floor = impas
     normal = float(normal) if normal and np.isfinite(normal) and normal > 0 else float(inp.harga)
-    suggested = max(normal, impas) if np.isfinite(impas) else normal
     notes: list[str] = []
-    if np.isfinite(impas) and normal < impas:
-        notes.append(f"harga normal {_rp(normal)} rugi: naikkan minimal ke {_rp(_ceil100(impas))}"
-                     + (f" (margin sehat di {_rp(_ceil100(sehat))})" if np.isfinite(sehat) and sehat > impas else ""))
-    suggested = _ceil100(suggested)
-    room_sehat = (1 - sehat / suggested) * 100 if np.isfinite(sehat) and suggested > 0 else float("nan")
-    room_impas = (1 - impas / suggested) * 100 if np.isfinite(impas) and suggested > 0 else float("nan")
-    # Promo historis dianggap kebutuhan bersaing bila ≥ 20% transaksi memakai promo.
+    # Promo selalu ada (0% tidak menarik): ikuti kebiasaan promo transaksi bila ≥ 20% transaksi berpromo, selain itu ruang sehat
+    # (maks. 10%), minimal MIN_PROMO, maksimal MAX_PROMO.
     want = hist_disc if np.isfinite(hist_disc) and hist_disc > 0 and hist_share >= 20 else 0.0
-    if np.isfinite(room_sehat) and room_sehat >= 1:
-        promo = math.floor(min(want, room_sehat)) if want > 0 else math.floor(min(room_sehat, 10.0))
-        why = "sesuai promo historis" if want > 0 and want <= room_sehat else ("dibatasi agar margin tetap sehat" if want > 0 else "ruang promo sehat (tanpa histori promo)")
-    elif np.isfinite(room_impas) and room_impas >= 1:
-        promo = math.floor(min(want, room_impas)) if want > 0 else 0
-        why = "promo tipis: margin di bawah batas sehat, hanya sampai impas" if promo > 0 else "tidak disarankan promo (tidak ada ruang margin sehat)"
+    room_sehat = (1 - sehat / normal) * 100 if np.isfinite(sehat) and normal > 0 else float("nan")
+    if want > 0:
+        promo, why = want, "sesuai kebiasaan promo transaksi"
+    elif np.isfinite(room_sehat) and room_sehat >= MIN_PROMO:
+        promo, why = min(room_sehat, 10.0), "ruang promo sehat (tanpa kebiasaan promo)"
     else:
-        promo, why = 0, "tidak ada ruang promo: harga setelah diskon akan rugi"
-    if want > 0 and promo < want - 5:
-        notes.append(f"promo historis {want:.0f}% lebih dalam dari ruang margin: penjualan bisa turun bila promo dikurangi")
+        promo, why = MIN_PROMO, f"promo minimal {MIN_PROMO:.0f}% agar tetap menarik"
+    if promo > MAX_PROMO:
+        notes.append(f"promo historis {promo:.0f}% dibatasi {MAX_PROMO:.0f}%")
+        promo = MAX_PROMO
+    promo = float(math.floor(max(promo, MIN_PROMO)))
+    # Harga normal disarankan: tidak rugi tanpa promo, dan setelah promo tetap untung dengan margin sehat.
+    need = max(impas, floor / (1 - promo / 100)) if np.isfinite(impas) else float("nan")
+    suggested = _ceil100(max(normal, need) if np.isfinite(need) else normal)
+    if np.isfinite(need) and need > normal:
+        notes.append(f"harga normal {_rp(normal)} dinaikkan ke {_rp(suggested)} agar setelah promo {promo:.0f}% margin tetap sehat")
     price_after = _ceil100(suggested * (1 - promo / 100))
     value, pct = fee.margin(replace(base, harga=price_after))
     notes.insert(0, why)
-    out.update({"harga_normal": normal, "harga_impas": impas, "harga_sehat": sehat, "harga_disarankan": suggested, "promo_pct": float(promo),
+    out.update({"harga_normal": normal, "harga_impas": impas, "harga_sehat": sehat, "harga_disarankan": suggested, "promo_pct": promo,
                 "harga_promo": price_after, "margin_promo": value, "margin_promo_pct": pct, "catatan": "; ".join(notes)})
     return out
 
