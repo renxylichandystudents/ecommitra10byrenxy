@@ -606,6 +606,8 @@ def _price_table(all_rows: pd.DataFrame, *, programs: dict, order_fee: float, md
             "Promo historis maks. (%)": h.get("diskon_maks", np.nan),
             "Promo disarankan (%)": plan["promo_pct"], "Harga setelah promo": plan["harga_promo"],
             "Margin setelah promo/unit": plan["margin_promo"], "Margin setelah promo (%)": plan["margin_promo_pct"], "Catatan": plan["catatan"],
+            "Ukuran khusus": "Ya" if inp.ukuran_khusus else "Tidak",
+            **_calc_detail(inp, plan, sumber=sumber, admin_pct=float(r.admin_pct)),
         })
     frame = pd.DataFrame(out)
     if frame.empty:
@@ -695,8 +697,9 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     with tab_sim:
         if not all_prices.empty:
             d1, d2 = st.columns([3, 1], vertical_alignment="center")
-            d1.markdown(f"<div class='field-hint'>Perhitungan <b>semua {fmt_num(len(all_prices))} SKU</b> (periode {html.escape(period_label)}): modal/harga beli, "
-                        "potongan Shopee, iklan, margin sekarang, harga impas, harga jual disarankan, promo disarankan, harga & margin setelah promo.</div>",
+            d1.markdown(f"<div class='field-hint'>Rincian <b>semua {fmt_num(len(all_prices))} SKU</b> (periode {html.escape(period_label)}): semua komponen kalkulator "
+                        "sekarang & rekomendasi (harga, promo, voucher, PPN, admin, tiap program Shopee, proses pesanan, iklan, nett diterima, harga beli, profit, margin), "
+                        "harga impas & sehat, histori promo, dan catatan.</div>",
                         unsafe_allow_html=True)
             with d2:
                 download_excel({"Semua SKU": all_prices}, f"kalkulator_harga_promo_semua_sku_{(end or date.today()).isoformat()}.xlsx",
@@ -809,6 +812,21 @@ def _calc_rows(inp, *, sumber: str, admin_pct: float) -> list[tuple[str, str, st
     return rows
 
 
+def _calc_detail(inp, plan: dict, *, sumber: str, admin_pct: float) -> dict:
+    """Semua komponen kalkulator (sekarang & rekomendasi) sebagai kolom unduhan, sama dengan tabel Kalkulator lengkap."""
+    from dataclasses import replace
+
+    out: dict = {}
+    pairs = [("Sekarang", inp)]
+    if np.isfinite(plan.get("harga_disarankan", np.nan)) and np.isfinite(plan.get("harga_promo", np.nan)):
+        pairs.append(("Rekomendasi", replace(inp, harga=plan["harga_disarankan"], diskon=plan["harga_disarankan"] - plan["harga_promo"])))
+    for tag, obj in pairs:
+        for kind, label, _note, value in _calc_rows(obj, sumber=sumber, admin_pct=admin_pct):
+            name = label.replace(" (ukuran khusus)", "")
+            out[f"{tag} · {name}" + (" (%)" if kind == "pct" else "")] = value
+    return out
+
+
 def _calc_table(inp, rec, *, sumber: str, roas, admin_pct: float, known: bool) -> str:
     now = _calc_rows(inp, sumber=sumber, admin_pct=admin_pct)
     after = {r[1]: r[3] for r in _calc_rows(rec, sumber=sumber, admin_pct=admin_pct)} if rec is not None else {}
@@ -879,49 +897,61 @@ def _simulation(features, table, data, rows, port, fees, programs, order_fee, ac
     roas = float(base_row["roas"]) if base_row is not None and base_row["roas"] == base_row["roas"] else None
 
     left, right = st.columns([1, 1.25], gap="large")
+    # Harga, voucher, dan iklan diambil dari data (sama dengan Ringkasan); yang bisa diatur hanya program Shopee & pengaturan biaya.
+    harga, iklan, diskon, voucher = harga0, iklan0, 0.0, voucher0
     with left:
         with st.container(border=True):
-            st.markdown("<div style='font-weight:700;margin-bottom:.2rem'>Atur simulasi</div>", unsafe_allow_html=True)
-            r1 = st.columns(2)
-            with r1[0]:
-                harga = float(input_rupiah("Harga jual", int(round(harga0)), key=f"calc-price-{sku}", help="Bawaan = harga transaksi rata-rata periode terpilih di Ringkasan (sudah setelah diskon), atau harga data produk"))
-            with r1[1]:
-                iklan = float(input_rupiah("Biaya iklan per unit", int(round(iklan0)), key=f"calc-ad-{sku}", help="Bawaan = biaya iklan SKU dari data iklan ÷ QTY bersih"))
-            r2 = st.columns(2)
-            with r2[0]:
-                diskon = float(input_rupiah("Diskon tambahan per unit", 0, key=f"calc-disc-{sku}"))
-            with r2[1]:
-                voucher = float(input_rupiah("Voucher penjual per unit", int(round(voucher0)), key=f"calc-vou-{sku}", help="Bawaan = rata-rata voucher penjual per unit di transaksi"))
+            chip = ("<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:.4rem .6rem'>"
+                    "<div style='font-size:var(--fs-xs);color:#64748b;font-weight:600'>{0}</div><div style='font-weight:800'>{1}</div>"
+                    "<div style='font-size:var(--fs-xs);color:#94a3b8'>{2}</div></div>")
+            st.markdown(
+                "<div style='font-weight:800;margin-bottom:.4rem'>Data SKU</div>"
+                "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem;margin-bottom:.2rem'>"
+                + chip.format("Harga transaksi", fmt_idr(harga0), "rata-rata periode, setelah diskon" if base_row is not None else "harga data produk")
+                + chip.format("Voucher penjual", fmt_idr(voucher0), "rata-rata per unit")
+                + chip.format("Iklan per unit", fmt_idr(iklan0), f"ROAS {fmt_num(roas, 1)}" if roas else "data iklan ÷ QTY bersih")
+                + "</div>", unsafe_allow_html=True)
             sim_programs = {k: dict(v) for k, v in programs.items()}
+            fixed = [k for k, v in programs.items() if v.get("wajib")]
             optional = [k for k, v in programs.items() if not v.get("wajib")]
-            on_count = sum(bool(programs[k].get("on")) for k in optional)
-            with st.expander(f"Program Shopee & pengaturan lain · {on_count} program aktif"):
-                cols = st.columns(2)
-                for i, key in enumerate(optional):
-                    prog = programs[key]
-                    label = prog["label"].replace(" (ukuran biasa)", "")
-                    sim_programs[key]["on"] = cols[i % 2].checkbox(f"{label} ({fmt_num(prog['pct'], 1)}%)", value=bool(prog.get("on")), key=f"calc-prog-{key}-{sku}")
-                big = st.checkbox("Barang ukuran khusus (tarif Gratis Ongkir khusus)", value=_is_big(product["product_name"]), key=f"calc-big-{sku}",
-                                  help="Otomatis tercentang untuk produk bertanda PACKING KAYU")
-                aff_on = st.checkbox(f"Terjual via affiliate (komisi {fmt_num(aff_pct, 1)}%)", value=False, key=f"calc-aff-{sku}")
-                qty_order = float(st.number_input("Unit per pesanan", 1, 100, 1, key=f"calc-qty-{sku}", help="Biaya Proses Pesanan dibagi ke jumlah unit ini"))
-                pick = st.selectbox(
-                    "Kategori Shopee (biaya administrasi)", list(range(len(fees))), index=default_index, key=f"calc-cat-{sku}",
-                    format_func=lambda i: f"{fees.loc[i, 'sub_kategori']} › {fees.loc[i, 'jenis_produk'][:40]} · {fmt_num(fees.loc[i, 'biaya_admin_pct'], 2)}%"
-                    if pd.notna(fees.loc[i, "biaya_admin_pct"]) else fees.loc[i, "label"],
-                    placeholder="Pilih kategori (bila tidak ada, pakai 11,70%)",
-                )
-                note = ("usulan otomatis dari nama produk" if suggested else "kategori tersimpan") if pick is not None else f"memakai {fmt_num(fee.DEFAULT_ADMIN_PCT, 2)}%"
-                if pick is not None and fees.loc[pick, "catatan"]:
-                    note += " · tarif perlu dicek"
-                st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
-                if may_edit and pick is not None and st.button("Simpan kategori SKU", key=f"calc-cat-save-{sku}"):
-                    require("setting_kalkulator_biaya", "edit")
-                    sku_cat[sku] = {"kategori": fees.loc[pick, "kategori"], "sub_kategori": fees.loc[pick, "sub_kategori"], "jenis_produk": fees.loc[pick, "jenis_produk"]}
-                    features.set_json(KEY_SKU_CAT, sku_cat, username=username)
-                    st.toast("Kategori SKU tersimpan.")
-                    st.rerun()
-            st.markdown("<div class='field-hint'>Simulasi tidak mengubah data apa pun.</div>", unsafe_allow_html=True)
+            st.markdown("<div style='font-weight:800;margin:.6rem 0 .3rem'>Program Shopee</div>", unsafe_allow_html=True)
+            if fixed:
+                st.markdown(
+                    "<div style='display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.4rem'>"
+                    + "".join(f"<span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:.15rem .6rem;font-size:var(--fs-xs)'>"
+                              f"🔒 {html.escape(programs[k]['label'].replace(' (ukuran biasa)', ''))} {fmt_num(programs[k]['pct'], 2)}%</span>" for k in fixed)
+                    + "</div>", unsafe_allow_html=True)
+            cols = st.columns(2)
+            for i, key in enumerate(optional):
+                prog = programs[key]
+                cap = f" · maks {fmt_idr(prog['cap'])}" if prog.get("cap") else ""
+                with cols[i % 2]:
+                    sim_programs[key]["on"] = st.toggle(prog["label"].replace(" (ukuran biasa)", ""), value=bool(prog.get("on")), key=f"calc-prog-{key}-{sku}",
+                                                        help=f"Tarif {fmt_num(prog['pct'], 2)}%{cap}")
+            st.markdown("<div style='font-weight:800;margin:.6rem 0 .3rem'>Pengaturan lain</div>", unsafe_allow_html=True)
+            o1, o2 = st.columns(2)
+            big = o1.toggle("Barang ukuran khusus", value=_is_big(product["product_name"]), key=f"calc-big-{sku}",
+                            help="Tarif Gratis Ongkir ukuran khusus. Otomatis aktif untuk produk bertanda PACKING KAYU")
+            aff_on = o2.toggle(f"Via affiliate ({fmt_num(aff_pct, 1)}%)", value=False, key=f"calc-aff-{sku}")
+            o3, o4 = st.columns([1, 2])
+            qty_order = float(o3.number_input("Unit per pesanan", 1, 100, 1, key=f"calc-qty-{sku}", help="Biaya Proses Pesanan dibagi ke jumlah unit ini"))
+            pick = o4.selectbox(
+                "Kategori Shopee (biaya administrasi)", list(range(len(fees))), index=default_index, key=f"calc-cat-{sku}",
+                format_func=lambda i: f"{fees.loc[i, 'sub_kategori']} › {fees.loc[i, 'jenis_produk'][:40]} · {fmt_num(fees.loc[i, 'biaya_admin_pct'], 2)}%"
+                if pd.notna(fees.loc[i, "biaya_admin_pct"]) else fees.loc[i, "label"],
+                placeholder="Pilih kategori (bila tidak ada, pakai 11,70%)",
+            )
+            note = ("usulan otomatis dari nama produk" if suggested else "kategori tersimpan") if pick is not None else f"memakai {fmt_num(fee.DEFAULT_ADMIN_PCT, 2)}%"
+            if pick is not None and fees.loc[pick, "catatan"]:
+                note += " · tarif perlu dicek"
+            st.markdown(f"<div class='field-hint'>{html.escape(note)}</div>", unsafe_allow_html=True)
+            if may_edit and pick is not None and st.button("Simpan kategori SKU", key=f"calc-cat-save-{sku}"):
+                require("setting_kalkulator_biaya", "edit")
+                sku_cat[sku] = {"kategori": fees.loc[pick, "kategori"], "sub_kategori": fees.loc[pick, "sub_kategori"], "jenis_produk": fees.loc[pick, "jenis_produk"]}
+                features.set_json(KEY_SKU_CAT, sku_cat, username=username)
+                st.toast("Kategori SKU tersimpan.")
+                st.rerun()
+            st.markdown("<div class='field-hint'>Program yang diubah di sini hanya untuk simulasi; bawaan semua SKU diatur di ⚙️ Parameter biaya.</div>", unsafe_allow_html=True)
     admin_pct = float(fees.loc[pick, "biaya_admin_pct"]) if pick is not None and pd.notna(fees.loc[pick, "biaya_admin_pct"]) else fee.DEFAULT_ADMIN_PCT
 
     hit = _margin_cols(md, sku, (harga0 - voucher0) if base_row is not None else float(product["price"]))
