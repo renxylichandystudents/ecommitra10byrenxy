@@ -765,3 +765,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - Harga normal = harga awal transaksi terakhir (bukan harga bersih rata-rata). `flash_offer`: target diskon per kelompok harga (<100 rb 20%, <500 rb 15%, <2 jt 12%, ≥2 jt 10%, habiskan stok +5), lebih murah dari harga transaksi terendah 90 hari, dibulatkan ke harga psikologis (`charm_price`), tidak di bawah bottom MD/impas, min. diskon 5%.
 - Kelompok baru 🏷️ Barang murah (≤ Rp 100 rb & laku) dengan porsi slot (bawaan 30%); SKU per hari bawaan 8. Data: 59 SKU / 115 slot (sebelumnya 38 SKU).
 - Tidak dijadwalkan diringkas per kelompok (kolom Kelompok), rincian tetap di kolom Alasan.
+
+## 2026-11-14 — Exposure media sosial: kalender per bulan, riwayat, potensi viral
+- Periode bawaan = bulan berjalan dari tanggal 1 s.d. akhir bulan (picker boleh mulai tanggal 1); konten baru dijadwalkan mulai hari ini, tanggal lewat tampil abu-abu "lewat". Campaign tersimpan menampilkan kalendernya sendiri; campaign selesai/dihentikan bisa dibuka di expander "📅 Konten yang sudah diset sebelumnya".
+- Segmen baru 🚀 Potensi viral (`exposure.viral_score`: demo visual, before–after, masalah→solusi, fitur unik dari nama+deskripsi, + harga terjangkau). Skor: 30% prediksi omzet, 15% nilai produk (harga, video di-crawl jangka panjang), 15% viral, 15% margin, 15% tren, 5% stok, 5% bonus naik/stok lebih/viral.

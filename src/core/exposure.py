@@ -5,8 +5,12 @@ yang tertarik tidak menemui stok habis):
 - Produk andalan   : prediksi omzet tertinggi (top 30).
 - Sedang naik      : penjualan 14 hari terakhir naik ≥ 30% dibanding 14 hari sebelumnya.
 - Stok lebih       : stok toko di atas SS cukup ≥ 90 hari → konten membantu memutar stok.
+- Potensi viral    : nama/deskripsi punya unsur yang mudah jadi konten viral (demo visual, before–after, masalah→solusi, fitur unik,
+                     harga terjangkau) → skor viral ≥ 0,5.
 - Banyak dilihat, jarang dibeli: klik iklan ≥ 50 tetapi konversi < 1% → konten demo/penjelasan untuk menaikkan konversi.
-Skor = 40% peringkat prediksi omzet + 20% margin + 20% tren 14 hari + 10% kesiapan stok + 10% bonus segmen naik/stok lebih.
+Video Shopee terus di-crawl selama produk tidak diturunkan, jadi produk bernilai tinggi diutamakan.
+Skor = 30% peringkat prediksi omzet + 15% nilai produk (harga) + 15% potensi viral + 15% margin + 15% tren 14 hari + 5% kesiapan
+stok + 5% bonus segmen naik/stok lebih/viral.
 Jadwal: tiap minggu `per_week` konten, ditaruh di hari & jam dengan pesanan terbanyak untuk kategori produk itu
 (dari riwayat pesanan), maks. 2 konten per hari, produk yang sama tidak diulang dalam 14 hari.
 """
@@ -24,7 +28,15 @@ HERO = "Produk andalan"
 RISING = "Sedang naik"
 OVERSTOCK = "Stok lebih"
 LOW_CONV = "Banyak dilihat, jarang dibeli"
-SEGMENTS = (HERO, RISING, OVERSTOCK, LOW_CONV)
+VIRAL = "Potensi viral"
+SEGMENTS = (HERO, RISING, OVERSTOCK, VIRAL, LOW_CONV)
+VIRAL_MIN = 0.5
+VIRAL_CUES = (
+    ("demo visual", r"otomatis|sensor|lipat|portable|portabel|magnet|led\b|lampu|semprot|jet|putar|spin|teleskopik|anti\s*air|kedap|waterproof|tahan\s*panas"),
+    ("before–after", r"estetik|minimalis|modern|motif|mewah|glossy|granit|granite|marmer|kayu|dekor"),
+    ("masalah → solusi", r"anti\s*(karat|rayap|bocor|mampet|bau|slip|jamur)|hemat\s*(air|listrik)|tanpa\s*bor|mudah\s*dipasang|praktis|cepat\s*kering|bersih"),
+    ("fitur unik", r"multifungsi|serbaguna|2\s*in\s*1|3\s*in\s*1|buy\s*\d|gratis|bonus|set\s*lengkap|garansi\s*\d+"),
+)
 READY_DAYS = 14
 HERO_TOP = 30
 REPEAT_DAYS = 14
@@ -139,6 +151,15 @@ def timing(orders: pd.DataFrame | None, category_by_key: dict[str, str], key: st
     return out
 
 
+def viral_score(name: str, description: str = "", price: float = 0.0) -> tuple[float, list[str]]:
+    """Skor 0–1 seberapa mudah produk dibuat konten yang viral: unsur demo visual, before–after, masalah→solusi, fitur unik
+    (dari nama + deskripsi), ditambah harga terjangkau (< Rp 500 rb mudah dibeli spontan dari video)."""
+    text = f"{name} {description}".lower()
+    hits = [label for label, pattern in VIRAL_CUES if re.search(pattern, text)]
+    score = len(hits) / len(VIRAL_CUES) * 0.8 + (0.2 if 0 < price < 500_000 else 0.1 if 0 < price < 1_500_000 else 0.0)
+    return min(score, 1.0), hits
+
+
 def pick(items: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(kandidat konten berskor & bersegmen, ditunda karena stok). items: sku, label, nama, harga, harian, m_sales, stok,
     ada_stok, ss, dc, terjual, momentum, margin_pct, klik, terjual_iklan, poin_deskripsi (list)."""
@@ -164,7 +185,10 @@ def pick(items: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     momentum, margin = num("momentum"), num("margin_pct", np.nan)
     m_sales = num("m_sales")
     rank = m_sales.rank(ascending=False, method="first")
-    work = work.assign(_ready=ready, _cover=cover, _excess=excess, _conv=conv, _mom=momentum, _rank=rank, _m=m_sales)
+    desc = work["deskripsi"].fillna("").astype(str) if "deskripsi" in work.columns else pd.Series("", index=work.index)
+    viral = [viral_score(n, d, p) for n, d, p in zip(work["nama"].astype(str), desc, num("harga"))]
+    work = work.assign(_ready=ready, _cover=cover, _excess=excess, _conv=conv, _mom=momentum, _rank=rank, _m=m_sales,
+                       _viral=[v for v, _h in viral], _viral_hits=[h for _v, h in viral])
     delayed = work.loc[~(work["_ready"] >= READY_DAYS)]
     skipped = pd.DataFrame({"SKU · produk · varian": delayed["label"],
                             "Alasan": [f"stok hanya cukup {r:.0f} hari (toko + DC): restock dulu sebelum dibuatkan konten" if r == r else "data stok belum ada"
@@ -178,6 +202,8 @@ def pick(items: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             return OVERSTOCK
         if r["_rank"] <= HERO_TOP:
             return HERO
+        if r["_viral"] >= VIRAL_MIN and r["_rank"] <= HERO_TOP * 6:
+            return VIRAL
         if klik.get(r.name, 0) >= 50 and r["_conv"] == r["_conv"] and r["_conv"] < 1:
             return LOW_CONV
         return ""
@@ -190,8 +216,9 @@ def pick(items: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     margin_n = (margin.reindex(work.index).clip(-10, 40).fillna(10) + 10) / 50
     mom_n = (work["_mom"].clip(-0.5, 1.0) + 0.5) / 1.5
     ready_n = (work["_ready"] / 60).clip(0, 1)
-    bonus = work["segmen"].isin([RISING, OVERSTOCK]).astype(float)
-    work["skor"] = (0.4 * rank_pct + 0.2 * margin_n + 0.2 * mom_n + 0.1 * ready_n + 0.1 * bonus) * 100
+    bonus = work["segmen"].isin([RISING, OVERSTOCK, VIRAL]).astype(float)
+    value_n = num("harga").reindex(work.index).clip(lower=1).map(math.log10).rank(pct=True)
+    work["skor"] = (0.30 * rank_pct + 0.15 * value_n + 0.15 * work["_viral"] + 0.15 * margin_n + 0.15 * mom_n + 0.05 * ready_n + 0.05 * bonus) * 100
     reasons = []
     for _i, r in work.iterrows():
         bits = [f"prediksi omzet peringkat {int(r['_rank'])}"]
@@ -199,6 +226,8 @@ def pick(items: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             bits.append(f"tren 14 hari {r['_mom'] * 100:+.0f}%")
         if r["segmen"] == OVERSTOCK:
             bits.append(f"stok cukup {r['_cover']:.0f} hari")
+        if r["_viral_hits"]:
+            bits.append("potensi viral: " + ", ".join(r["_viral_hits"]))
         if r["segmen"] == LOW_CONV:
             bits.append(f"{klik[r.name]:.0f} klik, konversi {r['_conv']:.1f}%".replace(".", ","))
         bits.append(f"stok siap {min(r['_ready'], 999):.0f} hari")
@@ -261,7 +290,7 @@ def calendar(cands: pd.DataFrame, start: date, *, weeks: int = 4, per_week: int 
         turn = 0
         while len(chosen) < per_week:
             progressed = False
-            for seg in (HERO, RISING, OVERSTOCK, LOW_CONV, HERO):
+            for seg in (HERO, VIRAL, OVERSTOCK, RISING, HERO, LOW_CONV, VIRAL):
                 if len(chosen) >= per_week:
                     break
                 for r in by_seg[seg]:

@@ -131,3 +131,13 @@ class FlashOfferTest(unittest.TestCase):
         cands, skipped = F.candidates(items, require_bottom=True)
         self.assertEqual(cands.set_index("sku").loc["murah", "tujuan"], F.HOOK)
         self.assertIn("Tidak ada bottom price MD", set(skipped["Kelompok"]))
+
+
+class ViralScoreTest(unittest.TestCase):
+    def test_viral_cues(self):
+        from src.core.exposure import viral_score
+        high, hits = viral_score("Lampu LED Buy 3 Get 1 Free Hemat Listrik", "", 29_000)
+        low, _ = viral_score("Baut 8mm", "", 2_000_000)
+        self.assertGreaterEqual(high, 0.5)
+        self.assertIn("demo visual", hits)
+        self.assertLess(low, 0.5)
