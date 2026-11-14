@@ -139,7 +139,7 @@ def _margin_from_file(features, table: pd.DataFrame, data: FeatureData) -> None:
             return
         programs, order_fee, _limit = _programs(features)
         values, typical = fee.net_margin_map(
-            product_frame(table), md.kotor_map(), programs=programs, order_fee=order_fee, fees=_category_fees(features),
+            product_frame(table), md.kotor_map(dict(zip(product_frame(table)["sku"], product_frame(table)["price"]))), programs=programs, order_fee=order_fee, fees=_category_fees(features),
             sku_cat=features.get_json(KEY_SKU_CAT, {}) or {}, ad_per_unit=data.ad_per_unit, inputs=data.margin_inputs,
         )
         data.margin_pct = values

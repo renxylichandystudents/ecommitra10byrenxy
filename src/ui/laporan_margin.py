@@ -136,7 +136,7 @@ def show_margin_report(features, table: pd.DataFrame, data, orders: pd.DataFrame
         unsafe_allow_html=True,
     )
     md = load_margin(features)
-    if not md.ready:
+    if md.lookup.empty:
         st.info("File margin belum diunggah. Unggah di **Upload data › Target & margin › File margin**.")
         return
     if orders is None or orders.empty:

@@ -95,7 +95,7 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
         snap = stock.loc[stock["_submitted_at"].astype(str).eq(stock["_submitted_at"].astype(str).max())] if "_submitted_at" in stock.columns else stock
         code_of = {sku_key(s): str(c).strip() for s, c in zip(snap["sku"].astype(str), snap["product_code"])}
     md = load_margin(features)
-    kotor = md.kotor_map() if md.ready else {}
+    kotor = md.kotor_map({sku_key(r.get("sku", "")): float(r.get("harga_bersih", 0) or 0) for r in table.to_dict("records")}) if md.ready else {}
     programs, order_fee, _ = _programs(features)
     fees = _category_fees(features)
     sku_cat = features.get_json(KEY_SKU_CAT, {}) or {} if features is not None else {}
@@ -157,7 +157,20 @@ def _flash_floor(data: FeatureData, sku: str, today: date) -> float:
     return float("nan")
 
 
-def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | None, today: date) -> pd.DataFrame:
+def _bottom_map(features) -> dict[str, float]:
+    """Bottom price merchandising per SKU (Upload data › Harga beli & bottom price); hanya untuk Flash sale & Exposure."""
+    try:
+        from src.ui.harga_beli_data import load_harga_beli
+
+        return load_harga_beli(features).bottom_map()
+    except Exception:
+        return {}
+
+
+def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | None, today: date, bottom: dict | None = None) -> pd.DataFrame:
+    from src.core.margin_file import sku_key
+
+    bottom = bottom or {}
     momentum = momentum_14d(orders.assign(sku=orders["sku"].astype(str)) if orders is not None and not orders.empty and "sku" in orders.columns else None, today)
     recent = pd.Timestamp(today) - pd.Timedelta(days=90)
     rows = []
@@ -171,7 +184,7 @@ def _flash_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame | 
             "harga": float(r.get("harga_bersih", 0) or 0), "stok": r.get("stok"), "ada_stok": bool(r.get("ada_data_stok", False)),
             "ss": float(r.get("ss", 0) or 0), "harian": float(r.get("pred_harian", 0) or 0), "dc": dc, "terjual": sold,
             "m_sales": float(r.get("m_sales", 0) or 0), "batal_pct": r.get("batal_pct"), "floor": _flash_floor(data, sku, today),
-            "momentum": momentum.get(sku, 0.0),
+            "momentum": momentum.get(sku, 0.0), "bottom": bottom.get(sku_key(sku), float("nan")),
         })
     return pd.DataFrame(rows)
 
@@ -253,7 +266,7 @@ def _flash_render(plan: pd.DataFrame, skipped: pd.DataFrame, start: date, end: d
                            **{"Kirim dari DC paling lambat": view["Kirim dari DC paling lambat"].map(lambda d: fmt_date(d) if isinstance(d, date) else "")})
         batched_view(
             len(view), key=f"{key}-plan", noun="slot",
-            render=lambda lo, hi: show_table(view.iloc[lo:hi], kinds={"Harga normal": "money", "Harga flash": "money", "Diskon (%)": "pct", "Kuota": "count",
+            render=lambda lo, hi: show_table(view.iloc[lo:hi], kinds={"Harga normal": "money", "Bottom price": "money", "Harga flash": "money", "Diskon (%)": "pct", "Kuota": "count",
                                                                      "Batas beli/pembeli": "count", "Estimasi omzet maks.": "money", "Margin/unit": "money"},
                                              max_height=10_000,
                                              column_config={"Produk": st.column_config.TextColumn(width="large"), "Alasan": st.column_config.TextColumn(width="large"),
@@ -300,7 +313,7 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
                "(stok toko → transfer DC → kuota kecil). Simpan sebagai campaign agar jadwal terkunci; tiap hari dicek ulang dengan stok terbaru.")
     cmp.flash_message("flash")
     mode, cur = cmp.panel("flash", features=features, today=today, can_edit=can_edit, username=username, describe=_flash_describe)
-    items = _flash_items(table, data, orders, today)
+    items = _flash_items(table, data, orders, today, _bottom_map(features))
     if mode == cmp.SAVED and cur is not None:
         start, end = as_date(cur["mulai"]), as_date(cur["selesai"])
         plan = cmp.frame_of(cur.get("jadwal"), ("Tanggal", "Kirim dari DC paling lambat"))
@@ -348,8 +361,10 @@ def show_flash_sale(table: pd.DataFrame, *, data: FeatureData, today: date, orde
             ("Tujuan", f"habiskan stok lebih bila stok di atas SS cukup ≥ {flash.OVERSTOCK_DAYS} hari; selain itu pendorong omzet (urut prediksi omzet × tren 14 hari)"),
             ("Kuota", "pendorong: maks(3, 3 × prediksi harian); habiskan stok: 20% kelebihan stok 30 hari (5–100 unit)"),
             ("Sumber stok", "stok toko di atas SS + kebutuhan 7 hari → transfer DC 10062/10036 (H-3) → kuota kecil maks. separuh stok di atas SS"),
-            ("Harga", "diskon terbesar yang masih ≥ harga impas (File margin, margin 0, tanpa biaya iklan): pendorong 10/7/5%, habiskan stok 20/15/10/5%. "
-                      "Prioritas omzet: bila tidak ada ruang, diskon minimal 5% dan rugi per unit tampil di kolom Margin/unit"),
+            ("Harga", "diskon terbesar yang masih ≥ harga impas (harga beli/File margin, margin 0, tanpa biaya iklan) dan ≥ bottom price merchandising: "
+                      "pendorong 10/7/5%, habiskan stok 20/15/10/5%; bila tidak ada, tepat di bottom price (min. diskon 5%). Bottom price tidak pernah dilanggar; "
+                      "SKU yang bottom price-nya ≥ harga normal tidak dijadwalkan. Prioritas omzet: bila impas tidak memberi ruang, diskon minimal 5% "
+                      "dan rugi per unit tampil di kolom Margin/unit"),
             ("Jadwal", "tiap hari, +3 SKU di tanggal kembar, gajian 25, Harbolnas; SKU sama berjarak ≥ 7 hari (≥ 3 hari bila kandidat kurang); "
                        "jam ramai 12.00–14.00 dan 20.00–22.00"),
             ("Batal", "batas = maks(15%, 1,5 × rata-rata batal toko tertimbang omzet), karena produk bulky wajar batal 25–35%; "
@@ -469,7 +484,9 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
         shown = plan.assign(Tanggal=plan["Tanggal"].map(fmt_date)).drop(columns=["Naskah 30 dtk"])
         batched_view(
             len(shown), key=f"{key}-plan", noun="konten",
-            render=lambda lo, hi: show_table(shown.iloc[lo:hi], kinds={"Prediksi omzet 30 hari": "money", "Stok siap (hari)": "count"}, max_height=10_000,
+            render=lambda lo, hi: show_table(shown.iloc[lo:hi], kinds={"Prediksi omzet 30 hari": "money", "Stok siap (hari)": "count", "Harga normal": "money",
+                                                                      "Bottom price": "money", "Harga promo (seller centre)": "money", "Diskon promo (%)": "pct"},
+                                             max_height=10_000,
                                              column_config={"Produk": st.column_config.TextColumn(width="large"), "Format": st.column_config.TextColumn(width="large"),
                                                             "Hook": st.column_config.TextColumn(width="large"), "Poin jual": st.column_config.TextColumn(width="large")}),
             download=lambda: download_excel({"Brief konten": plan, "Ditunda (stok)": delayed}, f"brief_konten_{start.isoformat()}.xlsx", key=f"xl-{key}"),
@@ -482,6 +499,31 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
                 render=lambda lo, hi: show_table(delayed.iloc[lo:hi], max_height=10_000, column_config={"SKU · produk · varian": st.column_config.TextColumn(width="large")}),
                 download=lambda: download_excel(delayed, f"konten_tidak_dijadwalkan_{start.isoformat()}.xlsx", key=f"xl-{key}-delay", label="Unduh SKU tidak dijadwalkan"),
             )
+
+
+def _with_promo(plan: pd.DataFrame, items: pd.DataFrame, bottom: dict) -> pd.DataFrame:
+    """Kolom harga untuk mensetting promo konten di Seller Centre: harga normal, bottom price merchandising, harga promo
+    (diskon 10/7/5% yang tidak di bawah harga impas maupun bottom price; bila tidak ada, tepat di bottom price)."""
+    from src.core.margin_file import sku_key
+
+    if plan is None or plan.empty or "SKU" not in plan.columns:
+        return plan
+    info = {str(r["sku"]): r for r in items.to_dict("records")} if items is not None and not items.empty else {}
+    normal, bottoms, promos, discs = [], [], [], []
+    for sku in plan["SKU"].astype(str):
+        r = info.get(sku) or {}
+        price = float(r.get("harga") or 0)
+        floor = float(r.get("floor")) if r.get("floor") is not None and r.get("floor") == r.get("floor") else float("nan")
+        b = bottom.get(sku_key(sku), float("nan"))
+        limit = max(v for v in (floor, b) if v == v) if (floor == floor or b == b) else None
+        priced = flash.flash_price(price, (0.10, 0.07, 0.05), limit) if price > 0 else None
+        if priced is None and price > 0 and b == b and (floor != floor or b >= floor):
+            priced = flash.bottom_price_cap(price, b)
+        normal.append(price if price > 0 else np.nan)
+        bottoms.append(b)
+        promos.append(priced[0] if priced else np.nan)
+        discs.append(priced[1] * 100 if priced else np.nan)
+    return plan.assign(**{"Harga normal": normal, "Bottom price": bottoms, "Harga promo (seller centre)": promos, "Diskon promo (%)": discs})
 
 
 def _exposure_describe(c: dict) -> str:
@@ -525,6 +567,7 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
             show_table(bad.assign(Tanggal=bad["Tanggal"].map(fmt_date))[["Tanggal", "Jam tayang", "SKU", "Produk", "Segmen"]],
                        column_config={"Produk": st.column_config.TextColumn(width="large")})
             st.button("Buat campaign baru dari saran", key="ex-renew", on_click=cmp.switch_to_new, args=("exposure",), type="primary")
+        plan = _with_promo(plan, items, _bottom_map(features))
         _exposure_render(plan, saved_delayed, start, end, key="ex-saved", per_week=int((cur.get("setelan") or {}).get("per_minggu", 5)), peak=peak)
     else:
         next_monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
@@ -537,6 +580,7 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
         plan = expo.calendar(cands, monday, weeks=(end - monday).days // 7 + 1, per_week=per_week, times=times)
         if not plan.empty:
             plan = plan.loc[(plan["Tanggal"] >= start) & (plan["Tanggal"] <= end)].reset_index(drop=True)
+        plan = _with_promo(plan, items, _bottom_map(features))
         _exposure_render(plan, delayed, start, end, key="ex-new", per_week=per_week, peak=peak)
         if not plan.empty and features is not None:
             def _to_schedule(campaign: dict) -> None:
