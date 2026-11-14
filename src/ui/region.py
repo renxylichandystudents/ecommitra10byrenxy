@@ -33,8 +33,8 @@ def show_region_analysis(source_raw: pd.DataFrame, start=None, end=None) -> None
     totals = region_total_row(prov, "Provinsi").iloc[0]
     st.info(
         f"Periode {period_text}: pesanan **batal** ({fmt_num(totals['Invoice batal'])} invoice) dan **retur** "
-        f"({fmt_num(totals['Invoice retur'])} invoice) **dikeluarkan** dari Invoice bersih, QTY bersih, dan Sales value bersih. "
-        f"Jumlahnya tetap terlihat di kolom Invoice batal dan Invoice retur.",
+        f"({fmt_num(totals['Invoice retur'])} invoice), serta pesanan **Belum Bayar** ({fmt_num(totals['Invoice Belum Bayar'])} invoice), "
+        "**dikeluarkan** dari Invoice bersih, QTY bersih, dan Sales produk bersih. Jumlahnya tetap terlihat di kolomnya masing-masing.",
         icon=":material/info:",
     )
     cols = st.columns(4)
@@ -42,7 +42,8 @@ def show_region_analysis(source_raw: pd.DataFrame, start=None, end=None) -> None
         cols[0],
         "Invoice bersih",
         fmt_num(totals["Invoice bersih"]),
-        hint=f"dari {fmt_num(totals['Invoice total'])} invoice · tanpa {fmt_num(totals['Invoice batal'])} batal & {fmt_num(totals['Invoice retur'])} retur",
+        hint=f"dari {fmt_num(totals['Invoice total'])} invoice · tanpa {fmt_num(totals['Invoice batal'])} batal, {fmt_num(totals['Invoice retur'])} retur "
+             f"& {fmt_num(totals['Invoice Belum Bayar'])} Belum Bayar",
     )
     card(cols[1], "Jumlah provinsi", fmt_num(len(prov)), hint=f"{fmt_num(len(city))} kota/kabupaten")
     if not prov.empty:
@@ -75,10 +76,13 @@ def show_region_analysis(source_raw: pd.DataFrame, start=None, end=None) -> None
     explain(
         [
             ("Invoice bersih", "No. Pesanan unik yang tidak batal dan tidak retur"),
-            ("Invoice batal / retur", "pesanan yang dikeluarkan dari angka bersih; % dihitung terhadap Invoice total"),
-            ("Invoice total", "semua No. Pesanan dari wilayah itu (bersih + batal + retur)"),
-            ("QTY bersih & Sales value bersih", "tanpa pesanan batal dan unit retur; sales value = harga setelah diskon × QTY"),
-            ("Kontribusi invoice bersih", "invoice bersih wilayah ÷ seluruh invoice bersih pada periode yang dipilih"),
+            ("Invoice batal / retur / Belum Bayar", "pesanan yang dikeluarkan dari angka bersih; % batal dan % retur dihitung terhadap Invoice total"),
+            ("Invoice total", "semua No. Pesanan dari wilayah itu = bersih + batal + retur + Belum Bayar"),
+            ("QTY bersih & Sales produk bersih", "unit yang tidak batal / Belum Bayar dikurangi unit retur; sales produk = Harga Setelah Diskon × QTY "
+             "(sama dengan tabel Prediksi). Pesanan retur sebagian tetap menyumbang unit yang tidak diretur"),
+            ("Kontribusi invoice bersih", "invoice bersih wilayah ÷ seluruh invoice bersih pada periode yang dipilih (jumlah pesanan)"),
+            ("Kontribusi sales bersih", "sales produk bersih wilayah ÷ seluruh sales produk bersih (nilai rupiah); bisa berbeda dari kontribusi invoice "
+             "bila nilai pesanan per wilayah berbeda"),
             ("Baris Total", "di paling atas tabel, menjumlahkan semua wilayah pada periode yang dipilih"),
         ]
     )
@@ -91,8 +95,8 @@ def show_region_analysis(source_raw: pd.DataFrame, start=None, end=None) -> None
             pd.concat([total_row, shown.iloc[lo:hi]], ignore_index=True),
             bold_label="Total",
             kinds={
-                "Rank": "count", "Invoice bersih": "count", "Invoice batal": "count", "Invoice retur": "count", "Invoice total": "count",
-                "% batal": "pct", "% retur": "pct", "QTY bersih": "count", "Sales value bersih": "money", "Kontribusi invoice bersih": "pct",
+                "Rank": "count", "Invoice bersih": "count", "Invoice batal": "count", "Invoice retur": "count", "Invoice Belum Bayar": "count", "Invoice total": "count",
+                "% batal": "pct", "% retur": "pct", "QTY bersih": "count", "Sales produk bersih": "money", "Kontribusi invoice bersih": "pct", "Kontribusi sales bersih": "pct",
             },
         ),
         noun=name_col.lower(),

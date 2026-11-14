@@ -606,8 +606,8 @@ def _region_title(name: str) -> str:
 
 
 REGION_COLUMNS = [
-    "Invoice bersih", "Invoice batal", "Invoice retur", "Invoice total", "% batal", "% retur",
-    "QTY bersih", "Sales value bersih", "Kontribusi invoice bersih",
+    "Invoice bersih", "Invoice batal", "Invoice retur", "Invoice Belum Bayar", "Invoice total", "% batal", "% retur",
+    "QTY bersih", "Sales produk bersih", "Kontribusi invoice bersih", "Kontribusi sales bersih",
 ]
 
 
@@ -631,11 +631,14 @@ def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
     )
     orders["retur"] = ~orders["cancelled"] & ~orders["menunggu"] & orders["returned"].gt(0)
     orders["bersih"] = ~orders["cancelled"] & ~orders["menunggu"] & ~orders["retur"]
+    orders["belum_bayar"] = orders["menunggu"] & ~orders["cancelled"]
     result = orders.groupby(keys).agg(
         total=("order_id", "nunique"), batal=("cancelled", "sum"), retur=("retur", "sum"), bersih=("bersih", "sum"),
+        belum_bayar=("belum_bayar", "sum"),
         qty=("net_qty", "sum"), sales=("net_sales", "sum"),
     ).reset_index()
     total_clean = float(result["bersih"].sum()) or 1.0
+    total_sales = float(result["sales"].sum()) or 1.0
     result = result.sort_values(["bersih", "sales"], ascending=False).reset_index(drop=True)
     out = pd.DataFrame({"Rank": range(1, len(result) + 1)})
     for key in keys:
@@ -643,12 +646,16 @@ def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
     out["Invoice bersih"] = result["bersih"].astype(int).to_numpy()
     out["Invoice batal"] = result["batal"].astype(int).to_numpy()
     out["Invoice retur"] = result["retur"].astype(int).to_numpy()
+    # Belum Bayar = pesanan yang belum dibayar (bukan batal/retur): sebelumnya tidak punya kolom sehingga
+    # Invoice bersih + batal + retur tidak sama dengan Invoice total.
+    out["Invoice Belum Bayar"] = result["belum_bayar"].astype(int).to_numpy()
     out["Invoice total"] = result["total"].astype(int).to_numpy()
     out["% batal"] = (result["batal"] / result["total"].replace(0, np.nan) * 100).fillna(0).to_numpy()
     out["% retur"] = (result["retur"] / result["total"].replace(0, np.nan) * 100).fillna(0).to_numpy()
     out["QTY bersih"] = result["qty"].to_numpy()
-    out["Sales value bersih"] = result["sales"].to_numpy()
+    out["Sales produk bersih"] = result["sales"].to_numpy()
     out["Kontribusi invoice bersih"] = (result["bersih"] / total_clean * 100).to_numpy()
+    out["Kontribusi sales bersih"] = (result["sales"] / total_sales * 100).to_numpy()
     return out[out_cols]
 
 
@@ -656,11 +663,12 @@ def region_total_row(table: pd.DataFrame, label_col: str) -> pd.DataFrame:
     """Satu baris Total (ditaruh di atas tabel)."""
     row = {column: "" for column in table.columns}
     row[label_col] = "Total"
-    row["Rank"] = None
-    for column in ("Invoice bersih", "Invoice batal", "Invoice retur", "Invoice total", "QTY bersih", "Sales value bersih"):
+    row["Rank"] = ""
+    for column in ("Invoice bersih", "Invoice batal", "Invoice retur", "Invoice Belum Bayar", "Invoice total", "QTY bersih", "Sales produk bersih"):
         row[column] = float(table[column].sum()) if not table.empty else 0.0
     total = row["Invoice total"] or 1.0
     row["% batal"] = row["Invoice batal"] / total * 100 if row["Invoice total"] else 0.0
     row["% retur"] = row["Invoice retur"] / total * 100 if row["Invoice total"] else 0.0
     row["Kontribusi invoice bersih"] = 100.0 if row["Invoice bersih"] else 0.0
+    row["Kontribusi sales bersih"] = 100.0 if row["Sales produk bersih"] else 0.0
     return pd.DataFrame([row], columns=table.columns)

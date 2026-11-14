@@ -645,3 +645,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 
 - Kolom Varian ikut dibekukan (Grafik, Rank, SKU, Produk, Varian); kolom Ambil dari DC dilebarkan ke 300 px.
 - `dc_take_label`: bila replenishment Site 10037 sudah diunggah, SKU yang perlu restock tanpa proses kini ditulis "… · Belum ada outstanding PO/TR/TO"; outstanding yang ada diberi umur "(sejak 05/11, 9 hari)". Tanpa unggahan replenishment, `attach_outstanding` tidak menambah kolom outstanding (tidak ada klaim "belum ada").
+
+## Tabel wilayah (provinsi/kota): angka & nama diselaraskan (14 Nov 2026)
+
+- Invoice total ternyata ≠ bersih + batal + retur (selisih = pesanan Belum Bayar, mis. 4.085 vs 4.060). Ditambah kolom **Invoice Belum Bayar** sehingga bersih + batal + retur + Belum Bayar = total; keterangan & kartu disesuaikan.
+- "Sales value bersih" → **Sales produk bersih** (istilah sama dengan tabel Prediksi); ditambah **Kontribusi sales bersih** di samping Kontribusi invoice bersih (keduanya bisa berbeda, mis. Jawa Timur 17,1% invoice vs ±19% sales).
+- Rank baris Total kosong (sebelumnya "None").
