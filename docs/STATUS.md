@@ -831,3 +831,19 @@ Diuji ulang dengan data transaksi lokal (Jan–8 Nov 2026, 721–800 SKU, 5 lipa
 - **Temuan akar masalah**: (1) MAPE agregat & bias didominasi lipatan Okt 2026 (permintaan +54,6% dari 30 hari sebelumnya; galat semua model −36% s.d. −42%) — kejutan kampanye/pesanan proyek yang tidak terlihat dari riwayat; (2) pemilihan model dengan WAPE condong ke median → prediksi cenderung kurang pada permintaan berekor tebal; (3) safety stock memakai σ 28 hari + asumsi galat normal → tingkat layanan 64,6% vs target ±94%; (4) simulasi SS (σ 28 hari) tidak sama dengan produksi (σ residual 28 hari); (5) kartu & gauge memakai model terbaik in-sample, uji kesesuaian memakai model produksi (angka berbeda, mis. 14,5% vs 15,8%).
 - **Perbaikan**: σ SS = simpangan harian 180 hari, sama di simulasi (`evaluate.SIGMA_DAYS`) dan produksi (`forecast.demand_sigma`): layanan 64,6% → 74,6% (stok 1,53× → 1,78× permintaan). Metode SS kedua "kuantil empiris" (split conformal per kelas ABC, `conformal_quantiles`): layanan 88,7% (stok 3,17×), dipilih di Setting › Kapasitas gudang › Parameter (`safety_stock.metode`, bawaan normal). Kartu/gauge/kerangka pengujian memakai model produksi. Tabel "Galat total toko per lipatan" (`record.per_lipatan`). Kekuatan/kelemahan/tindak lanjut dihitung dari angka (penyebab per uji). Tabel teks memakai `html_table` (tinggi baris mengikuti isi).
 - **Dicoba, tidak dipakai**: XGBoost Poisson (WAPE luar sampel Ensemble per segmen 80,5% → 76,6% tetapi bias −15,8% → −22,5% dan MAPE agregat 15,3% → 20,3%); Croston/TSB (WAPE 88%); pemisahan pesanan proyek ≥ 10 unit (bias −16% → −10%, MAPE agregat tidak membaik); capping lonjakan. Target uji tidak diubah.
+
+## 2026-11-14 · Uji pendorong permintaan eksternal (iklan, kalender kampanye)
+
+Diuji dengan walk-forward bersarang yang sama (5 lipatan Jun–Okt 2026, 721 SKU, data salinan cloud):
+
+| Varian XGBoost global | WAPE luar sampel | MAPE agregat | Bias |
+|---|---|---|---|
+| Tanpa fitur iklan (dasar) | 94,7% | 16,5% | −8,1% |
+| + biaya iklan 28 hari lalu & perubahannya | 95,5% | 20,6% | −7,6% |
+| + biaya iklan bulan target (oracle: biaya aktual dianggap rencana, 85% SKU terpetakan) | 96,5% | 22,3% | −6,9% |
+
+- Korelasi perubahan biaya iklan per produk vs perubahan qty bulan berikutnya lemah (0,07–0,34 bulan yang sama; ≈0 untuk lag).
+- Fitur kalender kampanye (tanggal kembar, gajian, harbolnas, Ramadan/Lebaran) dan momentum toko sudah diuji sebelumnya: tidak stabil (lipatan Juni +148%).
+- Pesanan proyek terkonfirmasi belum punya sumber data terstruktur di aplikasi, sehingga belum bisa diuji.
+
+Keputusan: tidak dipakai di produksi. Bahkan dengan informasi biaya iklan bulan depan yang sempurna, akurasi luar sampel tidak membaik. Model produksi tetap dipilih otomatis berdasarkan WAPE luar sampel terendah (saat ini Level terkini, 78,4%).
