@@ -601,3 +601,9 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - **Lanjutan (14 Nov)**: label batang diganti satu anotasi tegak per tanggal di atas batang tertinggi (hari lewat "terjual / prediksi sebelumnya", hari mendatang "prediksi") karena label per batang masih saling menimpa (mis. "0 0", angka sales 10–13 Nov). Keterangan cara baca ditambahkan di bawah grafik.
 - **QTY selalu bulat**: `fmt_qty` (src/ui/common.py) dan `format_qty` (app.py) kini selalu 0 desimal (mis. Prediksi sisa Nov 180,6 → 181 unit); laju harian di kartu SKU juga bulat (rata-rata 14,5 → 15 unit/hari, 11,36 → 11 unit/hari).
 - **Lanjutan 2 (14 Nov)**: label tegak panjang (mis. "682.500 / 5.669.562") masih menembus judul. Batas atas sumbu Y kini dihitung dari panjang tiap label (`label_headroom`: Y ≥ tinggi batang ÷ (1 − panjang label px ÷ tinggi panel px)), dan teks "◀ aktual | prediksi ▶" di dalam grafik dihapus (diganti keterangan garis putus-putus di bawah grafik).
+
+## Breakdown per tanggal: header beku, achievement & akurasi (14 Nov 2026)
+
+- Tabel Breakdown per tanggal (Prediksi vs aktual harian) kini bergulir di dalam (tinggi maks. 640 px) sehingga judul kolom tetap terlihat; kolom Tanggal disematkan di kiri (`pinned`). Sebelumnya `max_height=10_000` membuat tabel memanjang dan header ikut tergulir.
+- Kolom "% capaian" diberi nama **Achievement (% capaian)** (aktual ÷ prediksi) dan ditambah **Akurasi prediksi** (`prediksi_top.accuracy`: 100% − |aktual − prediksi| ÷ aktual per hari penuh; baris Total s.d. = 100% − Σ|selisih| ÷ Σ aktual).
+- Sel kosong tanggal mendatang tampil "-" (sebelumnya "None": kolom bertipe object).

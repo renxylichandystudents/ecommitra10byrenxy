@@ -607,6 +607,17 @@ def _month_chart(month: pd.DataFrame, last: date, target: dict | None = None) ->
         + target_text)
 
 
+def accuracy(actual, predicted) -> float:
+    """Akurasi prediksi harian: 100% − |aktual − prediksi| ÷ aktual (min. 0%). Aktual 0 → 100% bila prediksi juga 0, selain itu 0%."""
+    a = pd.to_numeric(pd.Series([actual]), errors="coerce").iat[0]
+    p = pd.to_numeric(pd.Series([predicted]), errors="coerce").iat[0]
+    if pd.isna(a) or pd.isna(p):
+        return np.nan
+    if a <= 0:
+        return 100.0 if p <= 0 else 0.0
+    return max(0.0, 100 - abs(a - p) / a * 100)
+
+
 def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) -> None:
     if month.empty:
         return
@@ -626,9 +637,13 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Belum Bayar": month["belum_bayar"],
         "Selisih": month["aktual"] - month["prediksi"],
         "% capaian": month["pct"],
+        "Akurasi prediksi": [accuracy(a, p) if s == "Selesai" else np.nan for a, p, s in zip(month["aktual"], month["prediksi"], month["status"])],
         "% bila Belum Bayar dibayar": month["pct_bayar"],
         "Sumber prediksi": month["sumber"],
     })
+    # Sel kosong (tanggal mendatang / belum ada data) sebagai NaN agar tampil "-" bukan "None".
+    for column in view.columns.drop(["Tanggal", "Jenis hari", "Pola hari", "Status", "Sumber prediksi"]):
+        view[column] = pd.to_numeric(view[column], errors="coerce")
     if not target:
         view = view.drop(columns=["Target harian", "Sales bersih toko", "% target"])
     done = month["status"].eq("Selesai")
@@ -637,6 +652,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
     total = {
         "Tanggal": label, "Jenis hari": "", "Pola hari": "", "Status": f"{int(done.sum())} hari penuh", "Prediksi sales produk": pred, "Aktual sales produk": act, "Belum Bayar": pend,
         "Selisih": act - pred, "% capaian": act / pred * 100 if pred else np.nan,
+        "Akurasi prediksi": max(0.0, 100 - float((month.loc[done, "aktual"].fillna(0) - month.loc[done, "prediksi"].fillna(0)).abs().sum()) / act * 100) if act else np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred * 100 if pred else np.nan, "Sumber prediksi": "",
     }
     goal_done = float(month.loc[done, "target"].fillna(0).sum())
@@ -651,6 +667,7 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
         "Status": f"Proyeksi {fmt_idr(projection)}",
         "Prediksi sales produk": pred_month, "Aktual sales produk": act, "Belum Bayar": pend,
         "Selisih": projection - pred_month, "% capaian": act / pred_month * 100 if pred_month else np.nan,
+        "Akurasi prediksi": np.nan,
         "% bila Belum Bayar dibayar": (act + pend) / pred_month * 100 if pred_month else np.nan,
         "Sumber prediksi": f"aktual s.d. {fmt_date(last)} + prediksi sisa",
     }
@@ -674,12 +691,19 @@ def _month_table(month: pd.DataFrame, last: date, target: dict | None = None) ->
             f"Baris **{month_label}**: Prediksi = jumlah prediksi semua tanggal; Aktual = terkumpul s.d. {fmt_date(last)}; "
             "% capaian = progres terhadap prediksi sebulan; Status = proyeksi akhir bulan (aktual + prediksi hari tersisa), "
             "Selisih = proyeksi − prediksi sebulan." + target_note)
+        st.caption(
+            "**Achievement (% capaian)** = aktual sales produk ÷ prediksi (100% = sesuai prediksi, >100% melebihi). "
+            "**Akurasi prediksi** = 100% − |aktual − prediksi| ÷ aktual, hanya hari penuh; baris Total s.d. = 100% − Σ|selisih harian| ÷ Σ aktual "
+            "(meleset ke atas maupun ke bawah sama-sama mengurangi akurasi). Judul kolom dan kolom Tanggal tetap terlihat saat tabel digulir.")
+        table = pd.concat([rows, view], ignore_index=True).rename(columns={"% capaian": "Achievement (% capaian)"})
         show_table(
-            pd.concat([rows, view], ignore_index=True),
+            table,
             bold_label=(month_label, label),
             kinds={"Target harian": "money", "Sales bersih toko": "money", "Prediksi sales produk": "money", "Aktual sales produk": "money", "Belum Bayar": "money", "Selisih": "money",
-                   "% target": "pct", "% capaian": "pct", "% bila Belum Bayar dibayar": "pct"},
-            max_height=10_000,
+                   "% target": "pct", "Achievement (% capaian)": "pct", "Akurasi prediksi": "pct", "% bila Belum Bayar dibayar": "pct"},
+            # Tinggi dibatasi agar tabel bergulir di dalam: judul kolom (header) tetap terlihat; kolom Tanggal disematkan di kiri.
+            max_height=640,
+            column_config={"Tanggal": st.column_config.TextColumn("Tanggal", pinned=True)},
         )
 
 
