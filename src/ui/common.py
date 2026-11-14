@@ -552,8 +552,79 @@ def lttb(x: np.ndarray, y: np.ndarray, threshold: int = 400) -> tuple[np.ndarray
     return np.asarray(x)[idx], ys[idx]
 
 
-def button_tabs(options: list[tuple[str, str]], current: str, *, key: str) -> str | None:
-    """Baris tombol sub-menu (gaya sama dengan menu utama); di HP berupa selectbox. Mengembalikan slug yang diklik, atau None."""
+def link_buttons(routes: dict[str, dict[str, str]]) -> None:
+    """Jadikan tombol navigasi (st.button) juga link sungguhan: klik kanan → Buka di tab baru, Ctrl/Cmd-klik, dan klik tengah
+    membuka halaman yang sama di tab baru (?page=…&tab=…). Klik biasa tetap memakai tombol Streamlit (tanpa memuat ulang halaman).
+
+    Caranya: lapisan <a href> transparan ditaruh di atas tombol (kunci `st-key-<key>`); klik kiri biasa diteruskan ke tombol."""
+    import json as _json
+    from urllib.parse import urlencode
+
+    links = {key: "?" + urlencode({k: v for k, v in route.items() if v}) for key, route in routes.items()}
+    # Kode dipasang sekali di dokumen utama (bukan di iframe komponen): iframe dibuang saat rerun/pindah halaman,
+    # dan fungsi/timer milik iframe yang sudah dibuang tidak berjalan lagi.
+    components.html(
+        """
+        <script>
+        const parent = window.parent;
+        const links = __LINKS__;
+        if (!parent.__mitraNav) {
+          const code = `
+            (() => {
+              const nav = { links: {}, timer: null };
+              const cls = (key) => 'st-key-' + key.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+              nav.apply = () => {
+                if (!document.getElementById('nav-link-css')) {
+                  const css = document.createElement('style');
+                  css.id = 'nav-link-css';
+                  css.textContent = '.nav-link-overlay{position:absolute;inset:0;z-index:5;display:block;border-radius:999px;background:transparent}'
+                    + '.nav-link-overlay:hover{background:rgba(238,77,45,0.08)}';
+                  document.head.appendChild(css);
+                }
+                Object.entries(nav.links).forEach(([key, href]) => {
+                  Array.from(document.getElementsByClassName(cls(key))).forEach((box) => {
+                    if (!box.querySelector('button')) return;
+                    let a = box.querySelector(':scope > a.nav-link-overlay');
+                    if (!a) {
+                      a = document.createElement('a');
+                      a.className = 'nav-link-overlay';
+                      a.setAttribute('aria-hidden', 'true');
+                      a.tabIndex = -1;
+                      a.addEventListener('click', (e) => {
+                        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          e.preventDefault();
+                          const button = box.querySelector('button');
+                          if (button) button.click();
+                        }
+                      });
+                      if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+                      box.appendChild(a);
+                    }
+                    a.href = location.pathname + href;
+                  });
+                });
+              };
+              nav.add = (links) => { Object.assign(nav.links, links); nav.apply(); };
+              new MutationObserver(() => { clearTimeout(nav.timer); nav.timer = setTimeout(nav.apply, 120); })
+                .observe(document.body, { childList: true, subtree: true });
+              window.__mitraNav = nav;
+            })();
+          `;
+          const tag = parent.document.createElement('script');
+          tag.textContent = code;
+          parent.document.head.appendChild(tag);
+        }
+        parent.__mitraNav.add(links);
+        </script>
+        """.replace("__LINKS__", _json.dumps(links)),
+        height=0,
+    )
+
+
+def button_tabs(options: list[tuple[str, str]], current: str, *, key: str, routes: dict[str, dict[str, str]] | None = None) -> str | None:
+    """Baris tombol sub-menu (gaya sama dengan menu utama); di HP berupa selectbox. Mengembalikan slug yang diklik, atau None.
+
+    routes: rute URL per slug ({"page":…, "tab":…, "sub":…}) agar klik kanan → Buka di tab baru membuka sub-menu yang sama."""
     clicked = None
     slugs = [slug for slug, _ in options]
     names = dict(options)
@@ -566,6 +637,8 @@ def button_tabs(options: list[tuple[str, str]], current: str, *, key: str) -> st
         for column, (slug, label) in zip(cols, options):
             if column.button(label, key=f"{key}-{slug}", type="primary" if slug == current else "secondary", use_container_width=True):
                 clicked = slug
+    if routes:
+        link_buttons({f"{key}-{slug}": routes[slug] for slug, _label in options if slug in routes})
     return clicked
 
 

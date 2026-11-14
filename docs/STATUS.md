@@ -678,3 +678,7 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - **Budget sebulan** (`src/core/ads_month.py`): biaya yang sudah keluar = laporan iklan keseluruhan diprorata tgl 1 s.d. data terakhir (`ad_spend`); sisa = budget − terpakai, dibagi hari tersisa. Evaluasi: % budget terpakai vs % hari, omzet iklan, sales per Rp iklan.
 - **Proyeksi & rekomendasi**: kurva respons toko `sales bersih bulanan = s0 + a·ln(1 + biaya bulanan/b)` dari bulan penuh (biaya iklan keseluruhan vs sales bersih; data lokal Mei–Okt 2026). Tambahan = (s(laju baru) − s(laju sekarang)) × porsi hari sisa. Rekomendasi = budget sebulan terkecil yang menutup 100% target; Target ROAS Shopee = ROAS yang menyerap sisa budget di rencana per iklan. Batas permintaan per iklan dilepas (`A.FREE_LIFT`), stok tetap membatasi; peringatan bila laju di luar riwayat, tidak terserap iklan yang ada, atau melebihi ruang stok.
 - Data lokal (s.d. 12 Nov): terpakai Rp 121,8 jt; budget bawaan Rp 418 jt → 75,0%; rekomendasi Rp 1,22 M sebulan (±Rp 61 jt/hari sisa, Target ROAS 11,5) → 100%.
+
+## 2026-11-14 — Buka di tab baru untuk sub-menu
+- `link_buttons` dipindah dari app.py ke `src/ui/common.py`; `button_tabs(..., routes=...)` memasang link sungguhan di tiap sub-menu.
+- Sub-menu Rekomendasi (Nama & deskripsi, Iklan, Flash sale toko, Exposure media sosial, Ranking kategori) → `?page=analisa&tab=rekomendasi&sub=<slug>`; tab Setting → `?page=setting&tab=<slug>`. Klik kanan → Buka di tab baru / Ctrl-klik / klik tengah kini membuka sub-menu yang sama.

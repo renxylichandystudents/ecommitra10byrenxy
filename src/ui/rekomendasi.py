@@ -428,7 +428,8 @@ def show_recommendations(
     if current not in slugs:
         current = slugs[0]
     st.session_state["rek-sub"] = current
-    clicked = button_tabs(list(SUB_TABS), current, key="rek-sub-btn")
+    clicked = button_tabs(list(SUB_TABS), current, key="rek-sub-btn",
+                          routes={slug: {"page": "analisa", "tab": "rekomendasi", "sub": slug} for slug, _label in SUB_TABS})
     if clicked and clicked != current:
         st.session_state["rek-sub"] = clicked
         st.rerun()

@@ -41,7 +41,8 @@ def show_setting(tab_slug: str, *, role: str, username: str, features, table: pd
     slugs = [slug for slug, _label, _menu in tabs]
     if tab_slug not in slugs:
         tab_slug = slugs[0]
-    clicked = button_tabs([(slug, label) for slug, label, _menu in tabs], tab_slug, key="setting-tab")
+    clicked = button_tabs([(slug, label) for slug, label, _menu in tabs], tab_slug, key="setting-tab",
+                          routes={slug: {"page": "setting", "tab": slug} for slug, _label, _menu in tabs})
     if clicked and clicked != tab_slug:
         st.session_state["setting-slug"] = clicked
         st.rerun()

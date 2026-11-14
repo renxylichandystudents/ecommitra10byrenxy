@@ -126,6 +126,7 @@ from src.core.pipeline import (
 from src.core.service_level import recommended_service_level, safety_impact
 from src.ui.analysis_dialog import analysis_markup, store_performance
 from src.core.labels import LABEL_ICONS
+from src.ui.common import link_buttons
 from src.ui.common import DEFAULT_NOTE, apply_saved_period, basis_guide, install_plotly_locale, batched_view, page_navigator, date_range_picker, excel_payload, reset_batches, cached_order_metrics, cached_sku_coverage, card, download_excel, exclude_status_card, explain, metric_card, period_filter, table_toolbar
 from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
@@ -2950,75 +2951,6 @@ def show_run_history() -> None:
             ("⚠️", "muncul bila analisa yang seharusnya sama berbeda lebih dari 0,5%"),
             f"Disimpan {storage_settings(current_params())['maks_riwayat_analisa']} analisa terbaru (maks. 90 hari); yang lebih lama dihapus otomatis agar database gratis tidak penuh.",
         ]
-    )
-
-
-def link_buttons(routes: dict[str, dict[str, str]]) -> None:
-    """Jadikan tombol navigasi (st.button) juga link sungguhan: klik kanan → Buka di tab baru, Ctrl/Cmd-klik, dan klik tengah
-    membuka halaman yang sama di tab baru (?page=…&tab=…). Klik biasa tetap memakai tombol Streamlit (tanpa memuat ulang halaman).
-
-    Caranya: lapisan <a href> transparan ditaruh di atas tombol (kunci `st-key-<key>`); klik kiri biasa diteruskan ke tombol."""
-    import json as _json
-    from urllib.parse import urlencode
-
-    links = {key: "?" + urlencode({k: v for k, v in route.items() if v}) for key, route in routes.items()}
-    # Kode dipasang sekali di dokumen utama (bukan di iframe komponen): iframe dibuang saat rerun/pindah halaman,
-    # dan fungsi/timer milik iframe yang sudah dibuang tidak berjalan lagi.
-    components.html(
-        """
-        <script>
-        const parent = window.parent;
-        const links = __LINKS__;
-        if (!parent.__mitraNav) {
-          const code = `
-            (() => {
-              const nav = { links: {}, timer: null };
-              const cls = (key) => 'st-key-' + key.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
-              nav.apply = () => {
-                if (!document.getElementById('nav-link-css')) {
-                  const css = document.createElement('style');
-                  css.id = 'nav-link-css';
-                  css.textContent = '.nav-link-overlay{position:absolute;inset:0;z-index:5;display:block;border-radius:999px;background:transparent}'
-                    + '.nav-link-overlay:hover{background:rgba(238,77,45,0.08)}';
-                  document.head.appendChild(css);
-                }
-                Object.entries(nav.links).forEach(([key, href]) => {
-                  Array.from(document.getElementsByClassName(cls(key))).forEach((box) => {
-                    if (!box.querySelector('button')) return;
-                    let a = box.querySelector(':scope > a.nav-link-overlay');
-                    if (!a) {
-                      a = document.createElement('a');
-                      a.className = 'nav-link-overlay';
-                      a.setAttribute('aria-hidden', 'true');
-                      a.tabIndex = -1;
-                      a.addEventListener('click', (e) => {
-                        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                          e.preventDefault();
-                          const button = box.querySelector('button');
-                          if (button) button.click();
-                        }
-                      });
-                      if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
-                      box.appendChild(a);
-                    }
-                    a.href = location.pathname + href;
-                  });
-                });
-              };
-              nav.add = (links) => { Object.assign(nav.links, links); nav.apply(); };
-              new MutationObserver(() => { clearTimeout(nav.timer); nav.timer = setTimeout(nav.apply, 120); })
-                .observe(document.body, { childList: true, subtree: true });
-              window.__mitraNav = nav;
-            })();
-          `;
-          const tag = parent.document.createElement('script');
-          tag.textContent = code;
-          parent.document.head.appendChild(tag);
-        }
-        parent.__mitraNav.add(links);
-        </script>
-        """.replace("__LINKS__", _json.dumps(links)),
-        height=0,
     )
 
 
