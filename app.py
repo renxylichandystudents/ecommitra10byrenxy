@@ -7746,8 +7746,17 @@ def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, pe
 
     lead = params.get("lead_time", {})
     impor = bool(lead.get("impor_aktif", False))
+    from src.core.inventory import service_level_to_z
+    from src.models.evaluate import SS_CLASS_KEY, ss_method
+
     levels = class_service_levels(service, params)
-    per_item = {key: levels[label] for key, label in abc_by_qty(base_history).items()}
+    classes = abc_by_qty(base_history)
+    per_item = {key: levels[label] for key, label in classes.items()}
+    # Metode SS "empiris": SS = q kelas × σ × √(L + R) (kuantil empiris galat walk-forward), ditulis sebagai pengali σ = q ÷ Z.
+    item_scale = None
+    q_class = (weights or {}).get(SS_CLASS_KEY) or {}
+    if ss_method(params) == "empiris" and q_class:
+        item_scale = {key: float(q_class.get(label, 0.0)) / max(service_level_to_z(levels[label]), 1e-6) for key, label in classes.items()}
     return recommend_stock(
         base_history,
         combined,
@@ -7762,6 +7771,7 @@ def stock_for_combined(base_history: pd.DataFrame, combined: pd.DataFrame, *, pe
         review_days=float(lead.get("review_hari", 7) or 0),
         sigma_scale=float((weights or {}).get(SS_CALIBRATION_KEY, 1.0) or 1.0),
         item_service_pct=per_item,
+        item_sigma_scale=item_scale,
     )
 
 

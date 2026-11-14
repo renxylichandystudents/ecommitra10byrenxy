@@ -927,3 +927,60 @@ def install_plotly_locale() -> None:
 
     plotly_chart._localized = True
     st.plotly_chart = plotly_chart
+
+
+STATUS_TONE = (("✅", "#ecfdf5", "#047857"), ("⚠️", "#fffbeb", "#b45309"), ("❌", "#fef2f2", "#b91c1c"),
+               ("Tercapai", "#ecfdf5", "#047857"), ("Belum", "#fffbeb", "#b45309"), ("Aktif", "#ecfdf5", "#047857"),
+               ("Dilewati", "#f1f5f9", "#475569"))
+
+
+def html_table(frame: pd.DataFrame, *, kinds: dict[str, str] | None = None, widths: dict[str, int] | None = None,
+               status: str | None = None, max_height: int | None = None, target=None) -> None:
+    """Tabel HTML dengan tinggi baris mengikuti isi (teks panjang dibungkus, baris pendek tetap pendek).
+
+    Dipakai untuk tabel yang banyak teksnya: st.dataframe memakai satu tinggi untuk semua baris, sehingga satu sel panjang
+    membuat seluruh tabel tinggi dan tidak proporsional. kinds: format angka per kolom (money/pct/dec/count);
+    status: kolom status yang diberi warna; max_height: tinggi maksimal (px) dengan header tetap terlihat saat digulir."""
+    from src.utils.format import EMPTY, column_kind, formatter_for
+
+    if frame is None or frame.empty:
+        (target or st).info("Belum ada data")
+        return
+    kinds, widths = kinds or {}, widths or {}
+    numeric = {c: pd.api.types.is_numeric_dtype(frame[c]) and not pd.api.types.is_bool_dtype(frame[c]) for c in frame.columns}
+    fmts = {c: formatter_for(kinds.get(c) or column_kind(c), frame[c]) for c in frame.columns if numeric[c]}
+
+    def cell(column, value) -> str:
+        if value is None or (isinstance(value, float) and not np.isfinite(value)) or (isinstance(value, str) and value.strip() in ("", "nan", "None")):
+            return EMPTY
+        if numeric[column]:
+            try:
+                return html.escape(fmts[column](value))
+            except Exception:  # noqa: BLE001
+                return html.escape(str(value))
+        return html.escape(str(value))
+
+    head = "".join(
+        f"<th style='text-align:{'right' if numeric[c] else 'left'};{f'min-width:{widths[c]}px;' if c in widths else ''}'>{html.escape(str(c))}</th>"
+        for c in frame.columns)
+    rows = []
+    for record in frame.to_dict("records"):
+        tds = []
+        for c in frame.columns:
+            style = "text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums" if numeric[c] else ""
+            text = cell(c, record[c])
+            if status and c == status:
+                tone = next(((bg, fg) for mark, bg, fg in STATUS_TONE if str(record[c]).startswith(mark)), None)
+                if tone:
+                    text = (f"<span style='background:{tone[0]};color:{tone[1]};border-radius:999px;padding:.1rem .55rem;font-weight:700;"
+                            f"white-space:nowrap'>{text}</span>")
+            tds.append(f"<td style='{style}'>{text}</td>")
+        rows.append(f"<tr>{''.join(tds)}</tr>")
+    box = f"max-height:{int(max_height)}px;overflow:auto;" if max_height else "overflow-x:auto;"
+    (target or st).markdown(
+        "<style>.htable{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--fs-sm);line-height:1.45}"
+        ".htable th{position:sticky;top:0;background:#f1f5f9;color:#334155;font-weight:700;padding:.5rem .65rem;border-bottom:1px solid #e2e8f0;z-index:1}"
+        ".htable td{padding:.45rem .65rem;border-bottom:1px solid #eef2f7;vertical-align:top;color:#0f172a}"
+        ".htable tbody tr:nth-child(even) td{background:#fafbfc}.htable tbody tr:hover td{background:#f1f5f9}</style>"
+        f"<div style='border:1px solid #e2e8f0;border-radius:12px;background:#fff;{box}'><table class='htable'><thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>", unsafe_allow_html=True)

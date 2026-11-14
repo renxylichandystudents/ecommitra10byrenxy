@@ -595,6 +595,22 @@ def _trend_state(series: np.ndarray) -> tuple[float, float]:
     return level, slope
 
 
+SIGMA_DAYS = 180  # jendela simpangan harian SS; sama dengan simulasi tingkat layanan (src.models.evaluate.SIGMA_DAYS)
+
+
+def demand_sigma(daily_qty: np.ndarray, days: int = SIGMA_DAYS) -> float:
+    """Simpangan permintaan harian SIGMA_DAYS hari terakhir (hari tanpa transaksi = 0), dasar safety stock.
+
+    Jendela panjang menangkap pesanan proyek/lonjakan yang jarang tetapi berulang; jendela 28 hari meremehkan sebaran SKU
+    yang lumpy (uji walk-forward: tingkat layanan naik dengan stok per permintaan yang lebih efisien). Sama dengan simulasi."""
+    series = np.asarray(daily_qty, dtype=float)
+    if len(series) < 2 or float(series.sum()) <= 0:
+        return 0.0
+    used = series[:-1] if _dense_incomplete_tail(series) else series
+    recent = used[-int(days):]
+    return float(np.std(recent)) if len(recent) >= 2 else 0.0
+
+
 def residual_sigma(
     daily_qty: np.ndarray,
     start: pd.Timestamp,
@@ -841,7 +857,7 @@ def forecast_items(
             by_day = item_hist.groupby(pd.to_datetime(item_hist["period_start"]).dt.normalize())["qty"].sum()
             daily = by_day.reindex(calendar, fill_value=0.0).to_numpy(dtype=float)
             raw = _robust_forecast(daily, calendar[0], horizon, weekday, forecast_start=forecast_start)
-            error_sigma[item_key] = residual_sigma(daily, calendar[0], weekday, horizon=horizon)
+            error_sigma[item_key] = demand_sigma(daily)
             forecast_value = float(max(int(np.floor(raw + 0.5)), 1 if sold > 0 else 0))
             rows.append(
                 ItemForecast(

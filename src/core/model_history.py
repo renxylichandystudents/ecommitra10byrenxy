@@ -126,8 +126,10 @@ def history_frame(runs_root: Path, db_runs: dict[str, dict] | None = None) -> tu
     return summary, pd.DataFrame(long_rows)
 
 
-def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Apakah algoritma & metode sudah sesuai: tiap uji punya target, nilai, status, dan arti untuk tesis."""
+def method_checks(record: dict, history: pd.DataFrame | None = None, ss_method: str | None = None) -> pd.DataFrame:
+    """Apakah algoritma & metode sudah sesuai: tiap uji punya target, nilai, status, dan arti untuk tesis.
+
+    ss_method: metode safety stock yang dipakai sekarang ("normal"/"empiris"); tingkat layanan diambil dari metode itu."""
     rows = []
     chosen = record.get("model_produksi") or record.get("best_model") or ""
     best = (record.get("models") or {}).get(chosen, {})
@@ -161,12 +163,30 @@ def method_checks(record: dict, history: pd.DataFrame | None = None) -> pd.DataF
     top = best.get("top50_tepat")
     add("Mengenali produk terlaris", "≥ 35 dari 50", "–" if top is None else f"{top:.1f}".replace(".", ","), top >= 35 if top is not None else None,
         "Top 50 prediksi yang benar masuk Top 50 aktual: penting untuk prioritas restock & iklan.")
-    sim = record.get("simulasi_ss") or {}
+    sim = dict(record.get("simulasi_ss") or {})
+    if ss_method in ("normal", "empiris") and sim.get("tingkat_layanan_empiris_pct") is not None and sim.get("metode_ss") != ss_method:
+        from src.models.evaluate import SS_METHODS
+
+        empiris = ss_method == "empiris"
+        sim.update({"metode_ss": ss_method, "metode_ss_label": SS_METHODS[ss_method],
+                    "tingkat_layanan_pct": sim["tingkat_layanan_empiris_pct" if empiris else "tingkat_layanan_normal_mad_pct"],
+                    "stok_per_permintaan": sim.get("stok_per_permintaan_empiris" if empiris else "stok_per_permintaan_normal_mad"),
+                    "rumus_ss": None,
+                    "per_kelas": {k: {**v, "tercapai_pct": v.get("tercapai_empiris_pct" if empiris else "tercapai_normal_pct")}
+                                  for k, v in (sim.get("per_kelas") or {}).items()}})
     service = sim.get("tingkat_layanan_pct")
     goal = float(sim.get("target_layanan_pct") or 90)
+    def times(v) -> str:
+        return "–" if v is None else f"{v:.2f}×".replace(".", ",")
+
     add("Tingkat layanan simulasi", f"≥ {goal:.0f}%".replace(".", ","), pct(service), service >= goal if service is not None else None,
-        "Cycle service level: stok = prediksi L + R hari + safety stock (rumus SS produksi" + (f": {sim['rumus_ss']}" if sim.get("rumus_ss") else "")
-        + ") cukup untuk permintaan aktual L + R hari; r dikalibrasi dari lipatan sebelumnya saja. "
+        "Cycle service level: stok = prediksi L + R hari + safety stock (metode " + str(sim.get("metode_ss_label") or "Normal Z × r")
+        + (f": {sim['rumus_ss']}" if sim.get("rumus_ss") else "")
+        + ") cukup untuk permintaan aktual L + R hari; pengali dikalibrasi dari lipatan sebelumnya saja. "
+        + (f"Stok {times(sim.get('stok_per_permintaan'))} permintaan. " if sim.get("stok_per_permintaan") is not None else "")
+        + (f"Pembanding: Normal {pct(sim.get('tingkat_layanan_normal_mad_pct'))} (stok {times(sim.get('stok_per_permintaan_normal_mad'))}), "
+           f"kuantil empiris {pct(sim.get('tingkat_layanan_empiris_pct'))} (stok {times(sim.get('stok_per_permintaan_empiris'))}). "
+           if sim.get("tingkat_layanan_empiris_pct") is not None else "")
         + (f"Tanpa kalibrasi {pct(sim.get('tingkat_layanan_tanpa_kalibrasi_pct'))}. " if sim.get("tingkat_layanan_tanpa_kalibrasi_pct") is not None else "")
         + "".join(f"Kelas {name}: {pct(info.get('tercapai_pct'))} dari target {pct(info.get('target_pct'))}. "
                   for name, info in (sim.get("per_kelas") or {}).items() if info.get("sku_lipatan"))
