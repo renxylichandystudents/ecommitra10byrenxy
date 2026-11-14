@@ -693,3 +693,8 @@ Bagian baru di halaman Prediksi (di bawah prediksi vs aktual): `src/core/month_t
 - `ads_strategy.potential_floors`: layak diiklankan bila potensi sales (maks. omzet iklan/hari 2 bulan, prediksi omzet/hari) ≥ omzet produk terakhir pembentuk 95% prediksi sales toko, ATAU prediksi qty ≥ maks(1 unit/hari, persentil 90).
 - Produk yang semula "Pertahankan di grup / iklan tunggal" tapi di bawah dua batas itu → saran baru **Stop iklan · sales kecil** (dilepas dari grup / iklan tunggal dijeda; budget dipindah ke iklan lain). Produk belum diiklankan yang tidak lolos batas tidak diusulkan.
 - Data 12 Nov: batas Rp 134 rb/hari atau 1,2 unit/hari; 479 produk distop (149 punya biaya, ±Rp 280 rb/hari, omzet iklan ±Rp 1,9 jt/hari). Kolom baru "Prediksi qty/hari" di Pemilihan produk.
+
+## 2026-11-14 — Iklan: interpretasi proyeksi diperjelas
+- Kartu "Proyeksi sales bersih akhir bulan" (seluruh penjualan toko, iklan + non-iklan, sesudah batal/Belum Bayar/retur) dan "Efek budget iklan setelan" (dulu "Tambahan sales bersih dari iklan") dengan penjelasan arah: sisa budget/hari vs laju iklan rata-rata bulan ini.
+- Langkah 2 Fitur khusus: tabel rincian Aktual + Prediksi sisa bulan (laju iklan rata-rata) + Efek budget = Proyeksi, Target, Kurang/Lebih.
+- Opsi rekomendasi: kolom "Efek budget iklan"; opsi A menyebut biaya iklan berjalan/hari.

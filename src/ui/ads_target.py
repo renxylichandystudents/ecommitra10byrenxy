@@ -62,7 +62,7 @@ def _progress_bar(actual: float, rest: float, extra: float, target: float) -> st
         "<div style='display:flex;flex-wrap:wrap;gap:1rem;font-size:var(--fs-xs);color:#475569;margin-top:.45rem'>"
         f"<span><i style='display:inline-block;width:10px;height:10px;background:#1e3a8a;border-radius:2px;margin-right:4px'></i>Aktual {fmt_idr(actual)}</span>"
         f"<span><i style='display:inline-block;width:10px;height:10px;background:#93c5fd;border-radius:2px;margin-right:4px'></i>Prediksi sisa bulan {fmt_idr(rest)}</span>"
-        f"<span><i style='display:inline-block;width:10px;height:10px;background:#ee4d2d;border-radius:2px;margin-right:4px'></i>Perubahan dari rencana iklan {_signed(extra)}</span>"
+        f"<span><i style='display:inline-block;width:10px;height:10px;background:#ee4d2d;border-radius:2px;margin-right:4px'></i>Efek budget iklan {_signed(extra)}</span>"
         "</div>"
     )
     return (
@@ -652,12 +652,12 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
         reach = final / target * 100 if target else 0.0
         lines = [f"Budget iklan {month_name} <b>{fmt_idr(budget)}</b> (terpakai {fmt_idr(spent)} + sisa {fmt_idr(max(budget - spent, 0))} ≈ "
                  f"<b>{fmt_idr(daily)}/hari</b> selama {days_left} hari), Target ROAS Shopee <b>{fmt_num(roas, 1)}</b>.",
-                 f"Hasil: proyeksi akhir bulan <b>{fmt_idr(final)}</b> ({fmt_pct(reach, 1)} target), tambahan sales bersih {_signed(extra)} dibanding proyeksi tanpa perubahan"
+                 f"Hasil: proyeksi akhir bulan <b>{fmt_idr(final)}</b> ({fmt_pct(reach, 1)} target), efek budget iklan {_signed(extra)} dibanding iklan berjalan dengan laju rata-rata bulan ini"
                  + (" (kurva respons toko)." if by_curve else " (rencana per iklan)."),
                  f"Yang dilakukan: {action}", *extra_lines]
         return {"nama": name, "budget": budget, "harian": daily, "roas": roas, "proyeksi": final, "tambahan": extra, "aksi": action, "rincian": lines, "utama": main}
 
-    out.append(make("A · Pertahankan laju sekarang", max(pace_total, spent),
+    out.append(make(f"A · Pertahankan iklan berjalan sekarang ({fmt_idr(cost_now)}/hari)", max(pace_total, spent),
                     "budget harian iklan tetap seperti sekarang; rapikan pemilihan produk & Target ROAS sesuai tabel di bawah.", []))
     res = M.month_plan(curve, target=target, projection=projection, spent=spent, cost_now_daily=spent_daily, days_left=days_left,
                        month_days=month_days, budget_total=None)
@@ -1151,10 +1151,13 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         reach = final / target * 100
         with result_slot:
             k = st.columns(4)
-            card(k[0], "Proyeksi akhir bulan", fmt_idr(final),
-                 hint=f"<b style='color:{_tone(final >= target)}'>{fmt_pct(reach, 1)}</b> dari target {fmt_idr(target)} · tanpa perubahan {fmt_pct(projection / target * 100, 1)}")
-            card(k[1], "Tambahan sales bersih dari iklan", _signed(extra),
-                 hint=("dibanding proyeksi tanpa perubahan · kurva respons toko" if by_curve else "dari rencana per iklan (kurva toko belum ada)"))
+            base_daily = spent_daily if by_curve else cost_now
+            card(k[0], "Proyeksi sales bersih akhir bulan", fmt_idr(final),
+                 hint=f"<b style='color:{_tone(final >= target)}'>{fmt_pct(reach, 1)}</b> dari target {fmt_idr(target)} · seluruh penjualan toko 1–{month_days} "
+                      f"{month_label(periode)} (dari iklan & non-iklan, setelah batal/Belum Bayar/retur), dengan budget iklan setelan ini")
+            card(k[1], "Efek budget iklan setelan", _signed(extra),
+                 hint=(f"sisa budget {fmt_idr(budget_daily)}/hari vs laju iklan rata-rata 1–{last.day} {month_label(periode)} {fmt_idr(base_daily)}/hari: "
+                       + (f"<b style='color:{UP}'>budget lebih besar → sales naik</b>" if extra > 0 else f"<b style='color:{DOWN}'>budget lebih kecil → sales turun</b>" if extra < 0 else "sama")))
             card(k[2], "Sisa budget", fmt_idr(remaining), hint=f"budget {fmt_idr(month_budget)} − terpakai {fmt_idr(spent)} · ≈ {fmt_idr(budget_daily)}/hari × {days_left} hari")
             card(k[3], "Target ROAS Shopee", fmt_num(roas, 1),
                  hint=("dipilih sistem: omzet iklan terbesar dengan sisa budget" if auto else "ditentukan Anda") + f" · ROAS iklan sekarang {fmt_num(current_roas, 1)}")
@@ -1179,8 +1182,28 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             _box("Budget sebulan sudah terlampaui", f"Biaya iklan yang sudah keluar {fmt_idr(spent)} melebihi setelan {fmt_idr(month_budget)} "
                  f"({fmt_idr(spent - month_budget)}). Sisa budget dihitung 0: rencana di bawah menjeda iklan dan proyeksi turun. Naikkan budget sebulan bila iklan tetap ingin berjalan.", DOWN)
 
-        _step(2, "Hasil setelan Anda", "· aktual + prediksi sisa bulan + perubahan dari setelan")
+        _step(2, "Hasil setelan Anda", "· cara proyeksi sales bersih akhir bulan dihitung")
         st.markdown(_progress_bar(mtd, projection - mtd, extra, target), unsafe_allow_html=True)
+        base_daily = spent_daily if by_curve else cost_now
+        rest_from = fmt_date(last + timedelta(days=1))
+        steps_tbl = pd.DataFrame([
+            {"Komponen": f"Aktual sales bersih 1–{last.day} {month_label(periode)}", "Nilai": mtd,
+             "Keterangan": "sudah terjadi (data pesanan)"},
+            {"Komponen": f"Prediksi sales bersih {rest_from} – {fmt_date(month_end)}", "Nilai": projection - mtd,
+             "Keterangan": f"{days_left} hari, bila iklan tetap jalan dengan laju rata-rata 1–{last.day} ({fmt_idr(base_daily)}/hari); dari model prediksi"},
+            {"Komponen": "Efek budget iklan setelan", "Nilai": extra,
+             "Keterangan": (f"sisa budget {fmt_idr(budget_daily)}/hari dibanding {fmt_idr(base_daily)}/hari; "
+                            + ("kurva respons toko: tambahan biaya iklan → tambahan sales bersih toko, makin kecil saat budget makin besar"
+                               if by_curve else "dari rencana per iklan"))},
+            {"Komponen": "Proyeksi sales bersih akhir bulan", "Nilai": final, "Keterangan": f"{fmt_pct(reach, 1)} target"},
+            {"Komponen": f"Target {month_label(periode)}", "Nilai": target, "Keterangan": "Upload data › Target sales bulanan" if target == goals.target_sales else "diisi di setelan"},
+            {"Komponen": "Kurang dari target" if final < target else "Lebih dari target", "Nilai": abs(target - final), "Keterangan": ""},
+        ])
+        show_table(steps_tbl, kinds={"Nilai": "money"}, bold_label=("Proyeksi sales bersih akhir bulan",),
+                   column_config={"Komponen": st.column_config.TextColumn(width="medium"), "Keterangan": st.column_config.TextColumn(width="large")})
+        st.caption("Cara membaca: proyeksi = aktual + prediksi sisa bulan + efek budget iklan. Prediksi sisa bulan sudah memuat iklan pada laju rata-rata bulan ini, "
+                   "jadi efek budget hanya mengukur selisihnya: positif bila sisa budget per hari lebih besar dari laju itu (sales bertambah), "
+                   "negatif bila lebih kecil (iklan dikurangi, sebagian sales yang biasa datang dari iklan hilang).")
         plan_section(3, target=target, month_budget=month_budget, roas=roas, auto=auto, final=final, extra=extra,
                      source="Fitur khusus · setelan Anda", key="custom")
         return
@@ -1197,7 +1220,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     card(k[0], f"Target {month_label(periode)}", fmt_idr(target), hint=f"sumber: {html.escape(goals.target_source)}")
     card(k[1], "Aktual sales bersih", fmt_idr(mtd), hint=f"<b style='color:{_tone(mtd / target >= last.day / month_days)}'>{fmt_pct(mtd / target * 100, 1)}</b> target "
                                                         f"pada {fmt_pct(last.day / month_days * 100, 0)} hari")
-    card(k[2], "Proyeksi tanpa perubahan", fmt_idr(projection), hint=f"<b style='color:{_tone(gap <= 0)}'>{fmt_pct(projection / target * 100, 1)}</b> target · "
+    card(k[2], "Proyeksi tanpa perubahan", fmt_idr(projection), hint=f"aktual + prediksi sisa bulan dengan laju iklan rata-rata {fmt_idr(spent_daily)}/hari · <b style='color:{_tone(gap <= 0)}'>{fmt_pct(projection / target * 100, 1)}</b> target · "
                                                                       + (f"kurang {fmt_idr(gap)}" if gap > 0 else f"lebih {fmt_idr(-gap)}"))
     card(k[3], "Biaya iklan terpakai", fmt_idr(spent), hint=(f"{fmt_idr(spent_daily)}/hari · omzet diklaim iklan {fmt_idr(spend['omzet'])} "
                                                              f"(ROAS {fmt_num(spend['omzet'] / spent if spent else 0, 1)})" if spent_days else "laporan iklan bulan ini belum ada"))
@@ -1225,10 +1248,10 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                             pace_total=pace_total, curve=curve, spent_daily=spent_daily, best_roas=best_roas, option=option, project=project, units=base_units,
                             factor=factor, month_name=month_name)
     table_opts = pd.DataFrame([{"Opsi": o["nama"], "Budget sebulan": o["budget"], "Sisa/hari": o["harian"], "Target ROAS": o["roas"],
-                                "Proyeksi akhir bulan": o["proyeksi"], "% target": o["proyeksi"] / target * 100, "Tambahan sales bersih": o["tambahan"],
+                                "Proyeksi sales bersih akhir bulan": o["proyeksi"], "% target": o["proyeksi"] / target * 100, "Efek budget iklan": o["tambahan"],
                                 "Yang dilakukan": o["aksi"]} for o in opts])
-    show_table(table_opts, kinds={"Budget sebulan": "money", "Sisa/hari": "money", "Target ROAS": "dec", "Proyeksi akhir bulan": "money", "% target": "pct",
-                                  "Tambahan sales bersih": "money"},
+    show_table(table_opts, kinds={"Budget sebulan": "money", "Sisa/hari": "money", "Target ROAS": "dec", "Proyeksi sales bersih akhir bulan": "money", "% target": "pct",
+                                  "Efek budget iklan": "money"},
                column_config={"Opsi": st.column_config.TextColumn(width="medium"), "Yang dilakukan": st.column_config.TextColumn(width="large")})
     names = [o["nama"] for o in opts]
     best = next((o["nama"] for o in opts if o.get("utama")), names[-1])
