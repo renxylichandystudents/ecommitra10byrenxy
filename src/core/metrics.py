@@ -114,7 +114,17 @@ def _text(frame: pd.DataFrame, column: str) -> pd.Series:
 
 
 def normalize_lines(frame: pd.DataFrame | None) -> pd.DataFrame:
-    """Satu baris per produk pada pesanan, dengan kolom baku untuk semua metrik."""
+    """Satu baris per produk pada pesanan, dengan kolom baku untuk semua metrik.
+
+    Frame yang sama dinormalkan sekali (cache per objek); pemanggil menerima salinan sehingga boleh mengubahnya."""
+    if frame is None or frame.empty:
+        return _normalize_lines(frame)
+    from src.core.memo import by_frame
+
+    return by_frame("normalize_lines", frame, (), lambda: _normalize_lines(frame)).copy()
+
+
+def _normalize_lines(frame: pd.DataFrame | None) -> pd.DataFrame:
     columns = [
         "order_id", "order_key", "order_time", "sku", "item_key", "product_name", "variation",
         "status", "is_cancel", "is_open", "cancel_reason", "buyer", "gross_qty", "returned_qty",
@@ -199,7 +209,25 @@ def _unpaid(lines: pd.DataFrame) -> tuple[int, int, int]:
 
 def order_metrics(frame: pd.DataFrame | None, start=None, end=None, *, normalized: bool = False) -> dict[str, float]:
     """Angka pesanan periode [start, end]. `frame` berisi semua status (batal & retur tidak dibuang)."""
-    lines = frame if normalized else normalize_lines(frame)
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return _order_metrics(frame, start, end, normalized=normalized)
+    from src.core.memo import by_frame
+
+    key = (str(start), str(end), bool(normalized))
+    return dict(by_frame("order_metrics", frame, key, lambda: _order_metrics(frame, start, end, normalized=normalized)))
+
+
+def _shared_lines(frame: pd.DataFrame | None) -> pd.DataFrame:
+    """normalize_lines tanpa salinan (hanya untuk pembaca yang tidak mengubah frame)."""
+    if frame is None or frame.empty:
+        return _normalize_lines(frame)
+    from src.core.memo import by_frame
+
+    return by_frame("normalize_lines", frame, (), lambda: _normalize_lines(frame))
+
+
+def _order_metrics(frame: pd.DataFrame | None, start=None, end=None, *, normalized: bool = False) -> dict[str, float]:
+    lines = frame if normalized else _shared_lines(frame)
     lines = slice_dates(lines, start, end)
     if lines is None or lines.empty:
         return dict(EMPTY_ORDER_METRICS)

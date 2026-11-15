@@ -238,8 +238,7 @@ def _snapshot_runs(features) -> pd.DataFrame:
 
     from src.core.feature_store import prediction_snapshot
 
-    with features.engine.connect() as conn:
-        rows = conn.execute(select(prediction_snapshot.c.run_id, func.min(prediction_snapshot.c.created_at)).group_by(prediction_snapshot.c.run_id)).all()
+    rows = features.fetch(select(prediction_snapshot.c.run_id, func.min(prediction_snapshot.c.created_at)).group_by(prediction_snapshot.c.run_id), tables=["prediction_snapshot"])
     return pd.DataFrame(rows, columns=["id", "run_at"])
 
 
@@ -347,16 +346,8 @@ def _backtest_snapshot(matrix: pd.DataFrame, table: pd.DataFrame | None, day: da
     return pd.DataFrame(rows, columns=columns)
 
 
-def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.DataFrame, orders_all: pd.DataFrame | None = None) -> None:
-    st.markdown("<div class='section-title'>Prediksi vs aktual harian</div>", unsafe_allow_html=True)
-    if features is None or orders is None or orders.empty:
-        st.write("Belum ada data.")
-        return
-    try:
-        runs = _snapshot_runs(features)
-    except Exception as exc:
-        st.info(f"Snapshot prediksi belum bisa dibaca: {exc}")
-        return
+def _pred_actual_bundle(features, runs, orders: pd.DataFrame, table: pd.DataFrame, orders_all: pd.DataFrame | None) -> dict:
+    """Bagian hitung Prediksi vs aktual harian (tanpa tampilan); hasilnya di-cache per objek data."""
     lines = orders.assign(sku=orders["sku"].astype(str))
     every = orders_all if orders_all is not None else orders
     # Hari penuh terakhir dari seluruh pesanan, sama dengan Pantauan harian: hari ini dan data < 23:00 belum dinilai.
@@ -372,8 +363,54 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
     sold = sold_lines(every)
     sold = sold.assign(sku=sold["sku"].astype(str))
     stock = {str(s): float(v) for s, v, k in zip(table["sku"], table["stok"], table["ada_data_stok"]) if k} if table is not None and not table.empty else {}
+    rows = _comparison_for(features, runs, lines, last, stock, table, shape=shape, sold=sold)
+    out = {"lines": lines, "every": every, "last": last, "last_stamp": last_stamp, "partial_note": partial_note,
+           "unpaid": unpaid, "rows": rows, "month": None, "diagnosed": rows, "support": None}
+    if rows.empty:
+        return out
+    out["month"] = _month_breakdown(features, runs, lines, last, last_stamp, table, unpaid, shape, sold=sold)
+    # Diagnosa penyebab per SKU (harga, stok, batal, pola jual, kondisi toko) + saran aksi.
+    dc = {}
+    if table is not None and not table.empty:
+        for code in ("10062", "10036"):
+            if f"stok_{code}" in table.columns:
+                for sku, value in zip(table["sku"].astype(str), pd.to_numeric(table[f"stok_{code}"], errors="coerce").fillna(0.0)):
+                    dc[sku] = dc.get(sku, 0.0) + float(value)
+    rows = diagnose(rows, lines, last, lines_all=orders_all, stock_by_sku=stock, dc_by_sku=dc)
+    rows["kelompok"] = rows["penyebab"].map(cause_group)
+    rows["selisih"] = rows["aktual_sales"] - rows["pred_sales"]
+    out["diagnosed"] = rows
+    out["support"] = store_support(lines, last)
+    return out
+
+
+def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.DataFrame, orders_all: pd.DataFrame | None = None) -> None:
+    st.markdown("<div class='section-title'>Prediksi vs aktual harian</div>", unsafe_allow_html=True)
+    if features is None or orders is None or orders.empty:
+        st.write("Belum ada data.")
+        return
+    try:
+        runs = _snapshot_runs(features)
+    except Exception as exc:
+        st.info(f"Snapshot prediksi belum bisa dibaca: {exc}")
+        return
+    from src.core.memo import by_frame, fingerprint
+
+    def sig(frame) -> tuple:
+        return (id(frame), getattr(frame, "shape", None))
+
+    # Katalog dibuat ulang tiap klik: kuncinya isi kolom yang dipakai (SKU, stok, harga), bukan identitas objek.
+    table_sig = fingerprint(table, ["sku", "item_key", "variasi_tampil", "product_name", "stok", "ada_data_stok", "stok_10062", "stok_10036",
+                                    "harga_bersih", "pred_harian"])
+    run_sig = tuple(runs["id"].astype(int).tolist()) if runs is not None and not runs.empty else ()
+    # Perbandingan, breakdown bulan dan diagnosa dihitung sekali per data yang sama (bukan di setiap klik filter/halaman).
     with st.spinner("Menyiapkan prediksi vs aktual..."):
-        rows = _comparison_for(features, runs, lines, last, stock, table, shape=shape, sold=sold)
+        bundle = by_frame(
+            "pred_vs_actual", orders, (sig(orders_all), table_sig, run_sig, str(date.today())),
+            lambda: _pred_actual_bundle(features, runs, orders, table, orders_all),
+        )
+    every, last, partial_note = bundle["every"], bundle["last"], bundle["partial_note"]
+    unpaid, rows = bundle["unpaid"], bundle["rows"]
     if rows.empty:
         st.info(f"Belum cukup riwayat penjualan untuk membandingkan prediksi dengan aktual {fmt_date(last)}.")
         return
@@ -382,8 +419,8 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
             f"Belum ada analisa tersimpan yang dibuat sebelum {fmt_date(last)}, jadi prediksi hari itu dihitung ulang (uji mundur): "
             "model harian yang sama, hanya memakai data s.d. sehari sebelumnya."
         )
-    with st.spinner("Menyiapkan breakdown per tanggal bulan ini..."):
-        month = _month_breakdown(features, runs, lines, last, last_stamp, table, unpaid, shape, sold=sold)
+    month = bundle["month"]
+    rows = bundle["diagnosed"]
     month, target = _with_target(features, month, every, last)
     pred_sales, actual_sales = float(rows["pred_sales"].sum()), float(rows["aktual_sales"].sum())
     hit = int(rows["status"].isin(["Melebihi", "Tercapai"]).sum())
@@ -414,17 +451,7 @@ def show_pred_vs_actual(features, *, orders: pd.DataFrame | None, table: pd.Data
         st.caption(partial_note.strip())
     _month_chart(month, last, target)
     _month_table(month, last, target)
-    # Diagnosa penyebab per SKU (harga, stok, batal, pola jual, kondisi toko) + saran aksi.
-    dc = {}
-    if table is not None and not table.empty:
-        for code in ("10062", "10036"):
-            if f"stok_{code}" in table.columns:
-                for sku, value in zip(table["sku"].astype(str), pd.to_numeric(table[f"stok_{code}"], errors="coerce").fillna(0.0)):
-                    dc[sku] = dc.get(sku, 0.0) + float(value)
-    rows = diagnose(rows, lines, last, lines_all=orders_all, stock_by_sku=stock, dc_by_sku=dc)
-    rows["kelompok"] = rows["penyebab"].map(cause_group)
-    rows["selisih"] = rows["aktual_sales"] - rows["pred_sales"]
-    _cause_summary(rows, last, support=store_support(lines, last))
+    _cause_summary(rows, last, support=bundle["support"])
 
     names = table.drop_duplicates("sku").set_index(table["sku"].astype(str).drop_duplicates())["product_name"].to_dict() if table is not None and not table.empty else {}
     view = rows.assign(Produk=rows["sku"].map(names).fillna(""))

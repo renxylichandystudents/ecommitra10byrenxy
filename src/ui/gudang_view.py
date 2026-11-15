@@ -119,13 +119,14 @@ def latest_prediction(features) -> tuple[dict, dict, object]:
 
         from src.core.feature_store import prediction_snapshot as snap
 
-        with features.engine.connect() as conn:
-            run = conn.execute(select(func.max(snap.c.run_id))).scalar()
-            if run is None:
-                return {}, {}, None
-            rows = conn.execute(
-                select(snap.c.sku, snap.c.target_date, snap.c.pred_qty, snap.c.pred_sales, snap.c.created_at).where(snap.c.run_id == run)
-            ).all()
+        found = features.fetch(select(func.max(snap.c.run_id)), tables=["prediction_snapshot"])
+        run = found[0][0] if found else None
+        if run is None:
+            return {}, {}, None
+        rows = features.fetch(
+            select(snap.c.sku, snap.c.target_date, snap.c.pred_qty, snap.c.pred_sales, snap.c.created_at).where(snap.c.run_id == run),
+            tables=["prediction_snapshot"],
+        )
     except Exception:
         return {}, {}, None
     frame = pd.DataFrame(rows, columns=["sku", "tanggal", "q", "s", "at"])
@@ -782,8 +783,8 @@ def _latest_run_id(features):
 
         from src.core.feature_store import prediction_snapshot as snap
 
-        with features.engine.connect() as conn:
-            return conn.execute(select(func.max(snap.c.run_id))).scalar()
+        found = features.fetch(select(func.max(snap.c.run_id)), tables=["prediction_snapshot"])
+        return found[0][0] if found else None
     except Exception:
         return None
 

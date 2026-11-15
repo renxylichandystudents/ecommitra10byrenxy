@@ -858,3 +858,23 @@ Keputusan: tidak dipakai di produksi. Bahkan dengan informasi biaya iklan bulan 
 - Panduan kerja diperbarui ke menu yang ada sekarang (follow up outstanding, Kalkulator prioritas, unggah ranking, SKU nonaktif). Tindak lanjut Evaluasi model tidak lagi menyarankan fitur iklan/kalender (sudah diuji, tidak membantu); yang tersisa: pesanan proyek terkonfirmasi.
 - Laporan tersimpan versi lama tetap bisa dibuka (bagian baru diberi keterangan).
 - Algoritma: run cloud terakhir (#16) menjalankan 7 model (Level terkini, MA28, ES, XGBoost global, Prophet, Ensemble, Ensemble per segmen); produksi = ES (WAPE luar sampel 60,9%). xgboost, lightgbm, prophet, statsmodels terpasang.
+
+## 2026-11-15 · Kinerja: aplikasi lebih ringan, muat data lebih cepat
+
+Diukur dengan data asli (analisa #16, 60 ribu baris transaksi, 803 SKU) di server uji; angka laptop/Cloud bisa berbeda, perbandingannya yang penting.
+
+| Kejadian | Sebelum | Sesudah |
+|---|---|---|
+| Query ke database per klik (Ringkasan) | 14 query (42 perintah SQL) | 0 (dibaca ulang paling lama tiap 30–60 detik) |
+| Klik di Ringkasan (filter, pindah halaman tabel) | 2,3 detik | 0,9 detik |
+| Klik di Prediksi | 3,2 detik | 0,6 detik |
+| Buka tab baru / refresh → Ringkasan | 7,9–10,5 detik | 1,5 detik |
+| Buka tab baru / refresh → Prediksi | 11,7 detik | 1,2 detik |
+| Buka tab baru / refresh → Rekomendasi | 8,2 detik | 0,6 detik |
+
+Perubahan:
+- `FeatureStore`: hasil baca tabel (dan query langsung lewat `features.fetch`) di-cache 60 detik, dibuang otomatis saat tabel itu ditulis.
+- `RunRepository`: satu objek per proses; daftar riwayat di-cache 30 detik (dibuang saat simpan/hapus); hasil analisa dibaca dari disk sekali per proses. Pembersihan riwayat & cek kuota database (8+ query) hanya sesudah analisa disimpan atau paling sering 10 menit sekali, bukan di setiap klik.
+- Salinan Cloud di laptop: cek pembaruan 5 menitan berjalan di latar belakang dan tidak meng-hash ulang file yang tidak berubah; server Cloud tidak membuka transaksi database bila tidak ada file yang berubah; ringkasan ukuran database (SUM seluruh isi file) dihitung 5 menit sekali.
+- `src/core/memo.py`: cache hasil hitung per objek frame (normalisasi transaksi, metrik pesanan, pola hari, aktual periode, iklan berjalan, Prediksi vs aktual + diagnosa) dan wadah bersama antar-sesi (katalog diperkaya, kolom aktual, ringkasan prediksi Top 50, rekomendasi nama). File Excel dengan isi sama tidak dibangun ulang.
+- Uji: `tests/test_performance_cache.py` (hasil cache = hitung langsung, data baru langsung terbaca setelah ditulis).

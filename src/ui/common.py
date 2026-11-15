@@ -216,8 +216,39 @@ def section(title: str, kicker: str | None = None) -> None:
     st.markdown(f"{kicker_html}<div class='section-title'>{html.escape(title)}</div>", unsafe_allow_html=True)
 
 
+_EXCEL_CACHE: dict[str, bytes] = {}
+
+
+def _frames_digest(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> str | None:
+    """Sidik isi tabel (nilai, kolom, index) untuk cache file Excel; None bila ada sel yang tidak bisa di-hash."""
+    import hashlib
+
+    items = {"": frames} if isinstance(frames, pd.DataFrame) else dict(frames)
+    digest = hashlib.sha1()
+    try:
+        for name, frame in items.items():
+            digest.update(str(name).encode())
+            if not isinstance(frame, pd.DataFrame):
+                digest.update(repr(frame).encode())
+                continue
+            digest.update(repr((list(map(str, frame.columns)), frame.shape)).encode())
+            digest.update(pd.util.hash_pandas_object(frame.astype(str), index=True).values.tobytes())
+    except Exception:  # noqa: BLE001
+        return None
+    return digest.hexdigest()
+
+
 def excel_bytes(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> bytes:
-    return numeric_excel_bytes(frames)
+    """File Excel; isi yang sama tidak dibangun ulang di setiap klik (membangun .xlsx jauh lebih lama dari menyidik isinya)."""
+    key = _frames_digest(frames)
+    if key is not None and key in _EXCEL_CACHE:
+        return _EXCEL_CACHE[key]
+    data = numeric_excel_bytes(frames)
+    if key is not None:
+        if len(_EXCEL_CACHE) >= 48:
+            _EXCEL_CACHE.pop(next(iter(_EXCEL_CACHE)))
+        _EXCEL_CACHE[key] = data
+    return data
 
 
 _COMPACT_DOWNLOAD = {"on": False}

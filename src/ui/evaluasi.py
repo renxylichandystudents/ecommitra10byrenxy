@@ -623,8 +623,7 @@ def _forward(features, orders: pd.DataFrame | None) -> dict:
     from src.core.feature_store import prediction_snapshot as snap
 
     try:
-        with features.engine.connect() as conn:
-            rows = conn.execute(select(snap.c.run_id, snap.c.target_date, func.sum(snap.c.pred_qty), func.min(snap.c.created_at)).group_by(snap.c.run_id, snap.c.target_date)).all()
+        rows = features.fetch(select(snap.c.run_id, snap.c.target_date, func.sum(snap.c.pred_qty), func.min(snap.c.created_at)).group_by(snap.c.run_id, snap.c.target_date), tables=["prediction_snapshot"])
     except Exception as exc:
         st.info(f"Prediksi tersimpan belum bisa dibaca: {exc}")
         return {}

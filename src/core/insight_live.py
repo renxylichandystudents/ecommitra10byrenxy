@@ -73,6 +73,20 @@ def running_ads(ads: dict[str, pd.DataFrame], stock: pd.DataFrame | None, cutoff
     ads: {"ads_group", "ads_overall", "ads_auto"}. Grup: anggota grup Berjalan; produk tunggal: baris Berjalan di Semua Laporan Iklan;
     otomatis: produk yang berbiaya di laporan iklan otomatis bila iklan otomatis Berjalan (status dari Semua Laporan Iklan).
     """
+    from src.core.memo import by_frame
+
+    def sig(frame) -> tuple:
+        return (id(frame), getattr(frame, "shape", None))
+
+    anchor = ads.get("ads_group")
+    extra = (tuple((name, sig(frame)) for name, frame in sorted(ads.items())), sig(stock), str(cutoff))
+    if not isinstance(anchor, pd.DataFrame):
+        return _running_ads(ads, stock, cutoff)
+    found = by_frame("running_ads", anchor, extra, lambda: _running_ads(ads, stock, cutoff))
+    return dict(found) if isinstance(found, dict) else found
+
+
+def _running_ads(ads: dict[str, pd.DataFrame], stock: pd.DataFrame | None, cutoff=None) -> dict | None:
     from src.core.ads import _variant_pairs
     from src.core.ads_strategy import parse_units
 
