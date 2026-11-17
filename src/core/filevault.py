@@ -87,6 +87,25 @@ class FileVault:
             return None
         return root / rel
 
+    def _local_digest(self, path: Path) -> str:
+        """SHA-1 file lokal; dihitung ulang hanya bila ukuran/waktu ubah file berbeda dari terakhir dibaca."""
+        memo = self.__dict__.setdefault("_digests", {})
+        info = path.stat()
+        stamp = (info.st_size, info.st_mtime_ns)
+        hit = memo.get(str(path))
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+        digest = _sha1(path.read_bytes())
+        memo[str(path)] = (stamp, digest)
+        return digest
+
+    def _remember_digest(self, path: Path, digest: str) -> None:
+        try:
+            info = path.stat()
+        except OSError:
+            return
+        self.__dict__.setdefault("_digests", {})[str(path)] = ((info.st_size, info.st_mtime_ns), digest)
+
     def restore(self, *, refresh: bool = False) -> int:
         """Tulis ulang file yang ada di database tetapi tidak ada di disk. Hasil: jumlah file dipulihkan.
 
@@ -99,7 +118,7 @@ class FileVault:
                 if target is None:
                     continue
                 self._hashes[key] = digest
-                if target.exists() and (not refresh or _sha1(target.read_bytes()) == digest):
+                if target.exists() and (not refresh or self._local_digest(target) == digest):
                     continue
                 data = conn.execute(select(VAULT.c.data).where(VAULT.c.path == key)).scalar()
                 if data is None:
@@ -108,6 +127,7 @@ class FileVault:
                 partial = target.with_name(target.name + ".tmp")
                 partial.write_bytes(unpack(bytes(data)))
                 partial.replace(target)
+                self._remember_digest(target, digest)
                 restored += 1
         return restored
 
@@ -118,15 +138,22 @@ class FileVault:
             return changes
         with self._lock:
             files = self._local_files()
+            # Cek perubahan di disk dulu; database jauh hanya dihubungi bila memang ada yang perlu dikirim/dihapus.
+            pending: list[tuple[str, Path, tuple[int, int]]] = []
+            for key, path in files.items():
+                try:
+                    info = path.stat()
+                except OSError:
+                    continue
+                stamp = (info.st_size, info.st_mtime_ns)
+                if self._seen.get(key) == stamp or info.st_size > MAX_FILE_BYTES:
+                    continue
+                pending.append((key, path, stamp))
+            gone = [key for key in self._seen if key not in files]
+            if not pending and not gone:
+                return 0
             with self.engine.begin() as conn:
-                for key, path in files.items():
-                    try:
-                        info = path.stat()
-                    except OSError:
-                        continue
-                    stamp = (info.st_size, info.st_mtime_ns)
-                    if self._seen.get(key) == stamp or info.st_size > MAX_FILE_BYTES:
-                        continue
+                for key, path, stamp in pending:
                     data = path.read_bytes()
                     digest = _sha1(data)
                     self._seen[key] = stamp
@@ -138,7 +165,7 @@ class FileVault:
                         conn.execute(insert(VAULT).values(path=key, **values))
                     self._hashes[key] = digest
                     changes += 1
-                for key in [key for key in self._seen if key not in files]:
+                for key in gone:
                     conn.execute(delete(VAULT).where(VAULT.c.path == key))
                     self._seen.pop(key, None)
                     self._hashes.pop(key, None)

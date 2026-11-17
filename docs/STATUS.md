@@ -831,3 +831,50 @@ Diuji ulang dengan data transaksi lokal (Jan–8 Nov 2026, 721–800 SKU, 5 lipa
 - **Temuan akar masalah**: (1) MAPE agregat & bias didominasi lipatan Okt 2026 (permintaan +54,6% dari 30 hari sebelumnya; galat semua model −36% s.d. −42%) — kejutan kampanye/pesanan proyek yang tidak terlihat dari riwayat; (2) pemilihan model dengan WAPE condong ke median → prediksi cenderung kurang pada permintaan berekor tebal; (3) safety stock memakai σ 28 hari + asumsi galat normal → tingkat layanan 64,6% vs target ±94%; (4) simulasi SS (σ 28 hari) tidak sama dengan produksi (σ residual 28 hari); (5) kartu & gauge memakai model terbaik in-sample, uji kesesuaian memakai model produksi (angka berbeda, mis. 14,5% vs 15,8%).
 - **Perbaikan**: σ SS = simpangan harian 180 hari, sama di simulasi (`evaluate.SIGMA_DAYS`) dan produksi (`forecast.demand_sigma`): layanan 64,6% → 74,6% (stok 1,53× → 1,78× permintaan). Metode SS kedua "kuantil empiris" (split conformal per kelas ABC, `conformal_quantiles`): layanan 88,7% (stok 3,17×), dipilih di Setting › Kapasitas gudang › Parameter (`safety_stock.metode`, bawaan normal). Kartu/gauge/kerangka pengujian memakai model produksi. Tabel "Galat total toko per lipatan" (`record.per_lipatan`). Kekuatan/kelemahan/tindak lanjut dihitung dari angka (penyebab per uji). Tabel teks memakai `html_table` (tinggi baris mengikuti isi).
 - **Dicoba, tidak dipakai**: XGBoost Poisson (WAPE luar sampel Ensemble per segmen 80,5% → 76,6% tetapi bias −15,8% → −22,5% dan MAPE agregat 15,3% → 20,3%); Croston/TSB (WAPE 88%); pemisahan pesanan proyek ≥ 10 unit (bias −16% → −10%, MAPE agregat tidak membaik); capping lonjakan. Target uji tidak diubah.
+
+## 2026-11-14 · Uji pendorong permintaan eksternal (iklan, kalender kampanye)
+
+Diuji dengan walk-forward bersarang yang sama (5 lipatan Jun–Okt 2026, 721 SKU, data salinan cloud):
+
+| Varian XGBoost global | WAPE luar sampel | MAPE agregat | Bias |
+|---|---|---|---|
+| Tanpa fitur iklan (dasar) | 94,7% | 16,5% | −8,1% |
+| + biaya iklan 28 hari lalu & perubahannya | 95,5% | 20,6% | −7,6% |
+| + biaya iklan bulan target (oracle: biaya aktual dianggap rencana, 85% SKU terpetakan) | 96,5% | 22,3% | −6,9% |
+
+- Korelasi perubahan biaya iklan per produk vs perubahan qty bulan berikutnya lemah (0,07–0,34 bulan yang sama; ≈0 untuk lag).
+- Fitur kalender kampanye (tanggal kembar, gajian, harbolnas, Ramadan/Lebaran) dan momentum toko sudah diuji sebelumnya: tidak stabil (lipatan Juni +148%).
+- Pesanan proyek terkonfirmasi belum punya sumber data terstruktur di aplikasi, sehingga belum bisa diuji.
+
+Keputusan: tidak dipakai di produksi. Bahkan dengan informasi biaya iklan bulan depan yang sempurna, akurasi luar sampel tidak membaik. Model produksi tetap dipilih otomatis berdasarkan WAPE luar sampel terendah (saat ini Level terkini, 78,4%).
+
+## 2026-11-14 · Laporan v2: lengkap, angka bersih konsisten, SWOT & fishbone visual
+
+- Bagian laporan jadi 16: ditambah **Margin & profitabilitas** (mesin hitung Kalkulator: status rugi/rendah/tinggi, prioritas perbaikan, SKU margin tinggi, SKU nonaktif), **Akurasi model prediksi** (perbandingan 7 model, uji kesesuaian, galat per lipatan, kekuatan/kelemahan/tindak lanjut; sama dengan Evaluasi model › Ringkasan), **Gudang 10037 & outstanding** (status stok, outstanding PO/TR/TO, umur & follow up > 7 hari), **Ranking kompetitor** (periode tersimpan yang beririsan dengan rentang laporan, naik/turun vs periode sebelumnya).
+- Angka bersih satu definisi: Ringkasan memuat kartu Sales bersih, **Sales produk bersih**, **QTY bersih**, Pesanan bersih + tabel jembatan Sales produk bersih → Sales bersih (`metrics.sales_bridge`). Produk terlaris kini dari `sold_lines` (semua status → tanpa batal/Belum Bayar, setelah retur), jadi jumlahnya = kartu Sales produk bersih; tabel bulanan memuat Sales produk bersih, Sales bersih, QTY bersih, pesanan bersih. Cek konsistensi margin: SKU aktif + nonaktif = Sales produk bersih.
+- Diverifikasi pada data Okt 2026: Sales bersih Rp 2.848.905.957, Sales produk bersih Rp 3.285.099.861, QTY bersih 10.967 — kartu, harian, bulanan, produk terlaris, dan jembatan sama.
+- SWOT (`src/core/report_analysis.swot`) & fishbone (`fishbone`) disusun dari fakta laporan (penjualan, target, margin, iklan, performa, ranking, stok, gudang, batal, akurasi model). Fishbone 6 tulang (Produk, Harga & Promosi, Tempat/Saluran, Pemasaran & Pengguna, Proses, Lingkungan/Eksternal) digambar SVG seperti contoh referensi, butir diberi tingkat masalah/waspada/aman; SWOT 4 kuadran berwarna dengan judul di tengah (`src/ui/report_visuals.py`).
+- Semua tabel laporan memakai `html_table` (tinggi baris mengikuti isi, baris Total tebal, kolom panjang dibungkus) sehingga proporsional dan muat tanpa digulir mendatar. Grafik produk/iklan memakai label unik (nomor urut) agar SKU bernama mirip tidak tertumpuk; konversi mingguan ditimbang pengunjung (= kartu Konversi).
+- Panduan kerja diperbarui ke menu yang ada sekarang (follow up outstanding, Kalkulator prioritas, unggah ranking, SKU nonaktif). Tindak lanjut Evaluasi model tidak lagi menyarankan fitur iklan/kalender (sudah diuji, tidak membantu); yang tersisa: pesanan proyek terkonfirmasi.
+- Laporan tersimpan versi lama tetap bisa dibuka (bagian baru diberi keterangan).
+- Algoritma: run cloud terakhir (#16) menjalankan 7 model (Level terkini, MA28, ES, XGBoost global, Prophet, Ensemble, Ensemble per segmen); produksi = ES (WAPE luar sampel 60,9%). xgboost, lightgbm, prophet, statsmodels terpasang.
+
+## 2026-11-15 · Kinerja: aplikasi lebih ringan, muat data lebih cepat
+
+Diukur dengan data asli (analisa #16, 60 ribu baris transaksi, 803 SKU) di server uji; angka laptop/Cloud bisa berbeda, perbandingannya yang penting.
+
+| Kejadian | Sebelum | Sesudah |
+|---|---|---|
+| Query ke database per klik (Ringkasan) | 14 query (42 perintah SQL) | 0 (dibaca ulang paling lama tiap 30–60 detik) |
+| Klik di Ringkasan (filter, pindah halaman tabel) | 2,3 detik | 0,9 detik |
+| Klik di Prediksi | 3,2 detik | 0,6 detik |
+| Buka tab baru / refresh → Ringkasan | 7,9–10,5 detik | 1,5 detik |
+| Buka tab baru / refresh → Prediksi | 11,7 detik | 1,2 detik |
+| Buka tab baru / refresh → Rekomendasi | 8,2 detik | 0,6 detik |
+
+Perubahan:
+- `FeatureStore`: hasil baca tabel (dan query langsung lewat `features.fetch`) di-cache 60 detik, dibuang otomatis saat tabel itu ditulis.
+- `RunRepository`: satu objek per proses; daftar riwayat di-cache 30 detik (dibuang saat simpan/hapus); hasil analisa dibaca dari disk sekali per proses. Pembersihan riwayat & cek kuota database (8+ query) hanya sesudah analisa disimpan atau paling sering 10 menit sekali, bukan di setiap klik.
+- Salinan Cloud di laptop: cek pembaruan 5 menitan berjalan di latar belakang dan tidak meng-hash ulang file yang tidak berubah; server Cloud tidak membuka transaksi database bila tidak ada file yang berubah; ringkasan ukuran database (SUM seluruh isi file) dihitung 5 menit sekali.
+- `src/core/memo.py`: cache hasil hitung per objek frame (normalisasi transaksi, metrik pesanan, pola hari, aktual periode, iklan berjalan, Prediksi vs aktual + diagnosa) dan wadah bersama antar-sesi (katalog diperkaya, kolom aktual, ringkasan prediksi Top 50, rekomendasi nama). File Excel dengan isi sama tidak dibangun ulang.
+- Uji: `tests/test_performance_cache.py` (hasil cache = hitung langsung, data baru langsung terbaca setelah ditulis).

@@ -6,6 +6,8 @@ import hashlib
 import json
 import pickle
 import shutil
+import threading
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -143,6 +145,28 @@ class RunRepository:
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS analysis_runs_hash ON analysis_runs (data_hash, run_at)"))
 
+    # Daftar riwayat dibaca di hampir setiap klik (status analisa, tombol Buka). Database jauh: hasil baca
+    # disimpan paling lama CACHE_TTL detik dan dibuang saat analisa disimpan/dihapus lewat repository ini.
+    CACHE_TTL = 30.0
+
+    def _memo(self, key, compute):
+        cache = self.__dict__.setdefault("_read_cache", {})
+        lock = self.__dict__.setdefault("_read_lock", threading.Lock())
+        now = time.monotonic()
+        with lock:
+            hit = cache.get(key)
+        if hit is not None and now - hit[0] < self.CACHE_TTL:
+            return hit[1]
+        value = compute()
+        with lock:
+            cache[key] = (now, value)
+        return value
+
+    def invalidate(self) -> None:
+        cache = self.__dict__.setdefault("_read_cache", {})
+        with self.__dict__.setdefault("_read_lock", threading.Lock()):
+            cache.clear()
+
     @staticmethod
     def _record(row) -> RunRecord | None:
         if row is None:
@@ -203,6 +227,7 @@ class RunRepository:
                 },
             )
             run_id = int(conn.execute(text("SELECT MAX(id) FROM analysis_runs")).scalar())
+        self.invalidate()
         folder = self.runs_root / str(run_id)
         try:
             save_result(folder, result)
@@ -210,9 +235,11 @@ class RunRepository:
             shutil.rmtree(folder, ignore_errors=True)
             with self.engine.begin() as conn:
                 conn.execute(text("UPDATE analysis_runs SET status = :s WHERE id = :i"), {"s": STATUS_FAILED, "i": run_id})
+            self.invalidate()
             raise
         with self.engine.begin() as conn:
             conn.execute(text("UPDATE analysis_runs SET result_path = :p WHERE id = :i"), {"p": str(folder), "i": run_id})
+        self.invalidate()
         return self.get(run_id)
 
     def save_extra(self, run_id: int, name: str, frame: pd.DataFrame) -> None:
@@ -241,14 +268,20 @@ class RunRepository:
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     def get(self, run_id: int) -> RunRecord | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(text("SELECT * FROM analysis_runs WHERE id = :i"), {"i": int(run_id)}).first()
-        return self._record(row)
+        def run() -> RunRecord | None:
+            with self.engine.connect() as conn:
+                row = conn.execute(text("SELECT * FROM analysis_runs WHERE id = :i"), {"i": int(run_id)}).first()
+            return self._record(row)
+
+        return self._memo(("get", int(run_id)), run)
 
     def list_runs(self, limit: int = 50) -> list[RunRecord]:
-        with self.engine.connect() as conn:
-            rows = conn.execute(text("SELECT * FROM analysis_runs ORDER BY run_at DESC, id DESC LIMIT :n"), {"n": int(limit)}).all()
-        return [self._record(r) for r in rows]
+        def run() -> list[RunRecord]:
+            with self.engine.connect() as conn:
+                rows = conn.execute(text("SELECT * FROM analysis_runs ORDER BY run_at DESC, id DESC LIMIT :n"), {"n": int(limit)}).all()
+            return [self._record(r) for r in rows]
+
+        return list(self._memo(("list", int(limit)), run))
 
     def folder_of(self, record: RunRecord) -> Path:
         folder = Path(record.result_path) if record.result_path else self.runs_root / str(record.id)
@@ -259,11 +292,14 @@ class RunRepository:
         return record.status == STATUS_OK and (self.folder_of(record) / MANIFEST_FILE).exists()
 
     def last_success(self) -> RunRecord | None:
-        with self.engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT * FROM analysis_runs WHERE status = :s AND result_path <> '' ORDER BY run_at DESC, id DESC LIMIT 20"),
-                {"s": STATUS_OK},
-            ).all()
+        def run():
+            with self.engine.connect() as conn:
+                return conn.execute(
+                    text("SELECT * FROM analysis_runs WHERE status = :s AND result_path <> '' ORDER BY run_at DESC, id DESC LIMIT 20"),
+                    {"s": STATUS_OK},
+                ).all()
+
+        rows = self._memo(("last_success",), run)
         for row in rows:
             record = self._record(row)
             if self.available(record):
@@ -307,7 +343,25 @@ class RunRepository:
         record = self.get(run_id)
         if record is None or not self.available(record):
             raise FileNotFoundError("file hasil tidak ditemukan (server mungkin sudah restart).")
-        return record, load_result(self.folder_of(record))
+        folder = self.folder_of(record)
+        # Hasil analisa tidak berubah setelah disimpan (kecuali tambahan katalog/blob yang mengubah manifest):
+        # dibaca dari disk sekali per proses, lalu tiap sesi menerima salinan dict-nya. Frame di dalamnya
+        # dipakai bersama sehingga cache hitungan per frame juga berlaku untuk tab/sesi lain.
+        try:
+            stamp = tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in sorted(folder.iterdir()) if p.is_file())
+        except OSError:
+            stamp = ()
+        cache = self.__dict__.setdefault("_result_cache", {})
+        key = (str(folder), stamp)
+        result = cache.get(key)
+        if result is None:
+            result = load_result(folder)
+            for old in [k for k in cache if k[0] == str(folder)]:
+                cache.pop(old, None)
+            cache[key] = result
+            while len(cache) > 2:
+                cache.pop(next(iter(cache)))
+        return record, dict(result)
 
     def delete(self, run_id: int) -> None:
         record = self.get(run_id)
@@ -318,6 +372,7 @@ class RunRepository:
             shutil.rmtree(record.result_path, ignore_errors=True)
         with self.engine.begin() as conn:
             conn.execute(text("DELETE FROM analysis_runs WHERE id = :i"), {"i": record.id})
+        self.invalidate()
 
     def cleanup(self, *, days: int = RETENTION_DAYS, now: datetime | None = None) -> int:
         cutoff = ((now or datetime.now()) - timedelta(days=days)).isoformat(sep=" ")

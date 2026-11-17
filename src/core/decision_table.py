@@ -214,6 +214,14 @@ def period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today:
     bersih (qty/sales) = tanpa batal & Belum Bayar, setelah retur; sales = Harga Setelah Diskon × QTY (sales produk);
     store_net = sales bersih seluruh toko (Total Pembayaran − batal − Belum Bayar − retur, dasar target).
     """
+    from src.core.memo import by_frame
+
+    keys = [str(key) for key in keys]
+    signature = (hash(tuple(keys)), len(keys), str(period), str(today))
+    return by_frame("period_actuals", orders, signature, lambda: _period_actuals(orders, keys, period=period, today=today))
+
+
+def _period_actuals(orders: pd.DataFrame, keys: list[str], *, period: str, today: date) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     if orders is None or orders.empty:
         return out

@@ -643,8 +643,7 @@ def past_predictions(features, sku: str, varian: str, start: date, end: date) ->
         query = select(snap.c.run_id, snap.c.created_at, snap.c.target_date, snap.c.varian, snap.c.pred_qty, snap.c.pred_sales).where(
             and_(snap.c.sku == str(sku), snap.c.target_date >= start, snap.c.target_date <= end)
         )
-        with features.engine.connect() as conn:
-            frame = pd.DataFrame(conn.execute(query).all(), columns=["run_id", "created_at", "date", "varian", "pred_qty", "pred_sales"])
+        frame = pd.DataFrame(features.fetch(query, tables=["prediction_snapshot"]), columns=["run_id", "created_at", "date", "varian", "pred_qty", "pred_sales"])
     except Exception:
         return empty
     if frame.empty:

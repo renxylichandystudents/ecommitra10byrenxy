@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from datetime import datetime
 from typing import Iterable, Mapping
 
@@ -376,6 +378,50 @@ class FeatureStore:
             _add_missing_columns(engine, table)
         self._ready: set[str] = set(TABLES)
 
+    # ------------------------------------------------------------------ cache baca
+    # Database jauh (Supabase) dibaca ulang di setiap klik oleh banyak bagian halaman. Hasil baca disimpan
+    # paling lama CACHE_TTL detik dan langsung dibuang saat tabel itu ditulis lewat store ini.
+    CACHE_TTL = 60.0
+
+    def _cache_state(self) -> tuple[dict, threading.Lock]:
+        cache = self.__dict__.setdefault("_read_cache", {})
+        lock = self.__dict__.setdefault("_read_lock", threading.Lock())
+        return cache, lock
+
+    def _memo(self, tables: Iterable[str], key, compute):
+        cache, lock = self._cache_state()
+        full = (tuple(sorted(tables)), key)
+        now = time.monotonic()
+        with lock:
+            hit = cache.get(full)
+        if hit is not None and now - hit[0] < self.CACHE_TTL:
+            return hit[1]
+        value = compute()
+        with lock:
+            cache[full] = (now, value)
+        return value
+
+    def invalidate(self, *names: str) -> None:
+        """Buang cache baca tabel tertentu (tanpa nama: semua)."""
+        cache, lock = self._cache_state()
+        with lock:
+            if not names:
+                cache.clear()
+                return
+            for key in [key for key in cache if set(key[0]) & set(names)]:
+                cache.pop(key, None)
+
+    def fetch(self, query, *, tables: Iterable[str]) -> list[tuple]:
+        """Jalankan SELECT dan simpan hasilnya di cache baca (dipakai modul lain yang query langsung)."""
+        compiled = query.compile(self.engine)
+        key = (str(compiled), repr(sorted(compiled.params.items(), key=lambda item: item[0])))
+
+        def run() -> list[tuple]:
+            with self.engine.connect() as conn:
+                return [tuple(row) for row in conn.execute(query).all()]
+
+        return list(self._memo(tables, key, run))
+
     def _table(self, name: str) -> Table:
         if name not in TABLES:
             raise KeyError(f"Tabel fitur tidak dikenal: {name}")
@@ -395,6 +441,7 @@ class FeatureStore:
             return
         with self.engine.begin() as own:
             own.execute(insert(audit_log), [row])
+        self.invalidate("audit_log")
 
     def insert(self, name: str, rows, *, username: str = "", action: str | None = None) -> int:
         table = self._table(name)
@@ -405,6 +452,7 @@ class FeatureStore:
             conn.execute(insert(table), records)
             if name != "audit_log":
                 self.audit(username, action or f"tambah:{name}", {"baris": len(records)}, conn=conn)
+        self.invalidate(name, "audit_log")
         return len(records)
 
     def replace(self, name: str, rows, *, keys: Iterable[str], username: str = "", action: str | None = None) -> int:
@@ -424,6 +472,7 @@ class FeatureStore:
                     conn.execute(delete(table).where(_where(table, {key: record.get(key) for key in keys})))
             conn.execute(insert(table), records)
             self.audit(username, action or f"simpan:{name}", {"baris": len(records)}, conn=conn)
+        self.invalidate(name, "audit_log")
         return len(records)
 
     def remove(self, name: str, filters: Mapping, *, username: str = "", action: str | None = None) -> int:
@@ -433,6 +482,7 @@ class FeatureStore:
         with self.engine.begin() as conn:
             count = conn.execute(delete(table).where(_where(table, filters))).rowcount or 0
             self.audit(username, action or f"hapus:{name}", {"filter": dict(filters), "baris": count}, conn=conn)
+        self.invalidate(name, "audit_log")
         return int(count)
 
     def clear(self, name: str, *, username: str = "", action: str | None = None) -> int:
@@ -441,6 +491,7 @@ class FeatureStore:
         with self.engine.begin() as conn:
             count = conn.execute(delete(table)).rowcount or 0
             self.audit(username, action or f"kosongkan:{name}", {"baris": count}, conn=conn)
+        self.invalidate(name, "audit_log")
         return int(count)
 
     def read(self, name: str, filters: Mapping | None = None) -> pd.DataFrame:
@@ -449,17 +500,21 @@ class FeatureStore:
         clause = _where(table, filters)
         if clause is not None:
             query = query.where(clause)
-        with self.engine.connect() as conn:
-            rows = conn.execute(query).mappings().all()
-        return pd.DataFrame(rows, columns=list(table.columns.keys()))
+
+        def run() -> pd.DataFrame:
+            with self.engine.connect() as conn:
+                rows = conn.execute(query).mappings().all()
+            return pd.DataFrame(rows, columns=list(table.columns.keys()))
+
+        key = ("read", repr(sorted((filters or {}).items(), key=lambda item: str(item[0]))))
+        # Salinan: pemanggil boleh mengubah frame tanpa merusak isi cache.
+        return self._memo([name], key, run).copy()
 
     def snapshot_dates(self, name: str, column: str = "snapshot_date") -> list:
         """Tanggal snapshot yang tersimpan (terbaru di depan)."""
-        from sqlalchemy import distinct
 
         table = self._table(name)
-        with self.engine.connect() as conn:
-            rows = conn.execute(select(distinct(table.c[column])).order_by(table.c[column].desc())).all()
+        rows = self.fetch(select(table.c[column]).distinct().order_by(table.c[column].desc()), tables=[name])
         return [row[0] for row in rows if row[0] is not None]
 
     def prune_snapshots(self, name: str, keep: int, column: str = "snapshot_date") -> int:
@@ -470,6 +525,7 @@ class FeatureStore:
         table = self._table(name)
         with self.engine.begin() as conn:
             count = conn.execute(delete(table).where(table.c[column] < dates[keep - 1])).rowcount or 0
+        self.invalidate(name)
         return int(count)
 
     def get_json(self, key: str, default=None):
@@ -501,6 +557,7 @@ class FeatureStore:
             records = _records(work, prediction_snapshot)
             conn.execute(insert(prediction_snapshot), records)
             self.audit(username, "simpan:prediction_snapshot", {"run_id": int(run_id), "baris": len(records)}, conn=conn)
+        self.invalidate("prediction_snapshot", "audit_log")
         return len(records)
 
     def set_report_period(self, run_id: int, period: str, *, username: str = "") -> None:

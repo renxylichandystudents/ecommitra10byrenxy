@@ -65,9 +65,17 @@ def _product_frame(table: pd.DataFrame, frames) -> pd.DataFrame:
 def _name_recs(table: pd.DataFrame, frames, params: dict) -> tuple[pd.DataFrame, str]:
     products = _product_frame(table, frames)
     stamp = (len(products), float(pd.to_numeric(products.get("qty_total"), errors="coerce").fillna(0).sum()), len(frames.descriptions), len(frames.competitors), "v4")
+    from src.core.memo import remember, shared
+
     cached = st.session_state.get("_name-recs")
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1], cached[2]
+    # Hasil sama untuk semua sesi/tab selama data produk & kompetitor sama: dihitung sekali per proses server.
+    box = shared("name-recs", limit=4)
+    if stamp in box:
+        recs, note = box[stamp]
+        st.session_state["_name-recs"] = (stamp, recs, note)
+        return recs, note
     reasons: dict[str, list[str]] = {}
     if "skus" in products.columns and table is not None and "alasan_batal" in table.columns:
         from src.core.margin_file import sku_key
@@ -81,6 +89,7 @@ def _name_recs(table: pd.DataFrame, frames, params: dict) -> tuple[pd.DataFrame,
     if not recs.empty and "qty_total" in products.columns:
         recs["Terjual"] = recs["item_key"].map(dict(zip(products["item_key"], products["qty_total"]))).fillna(0)
     st.session_state["_name-recs"] = (stamp, recs, note)
+    remember(box, stamp, (recs, note))
     return recs, note
 
 

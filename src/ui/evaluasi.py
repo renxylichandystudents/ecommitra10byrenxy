@@ -145,8 +145,9 @@ def _diagnosis(record: dict, checks: pd.DataFrame) -> tuple[list[str], list[str]
                      f"galat model produksi {fmt_pct(shock['galat_pct'], 1, signed=True)} (MA28 {fmt_pct(shock.get('galat_ma28_pct'), 1, signed=True)}). "
                      "Lonjakan seperti ini (kampanye tanggal kembar, pesanan proyek) tidak terlihat dari riwayat penjualan saja.")
         weaknesses.append(text)
-        actions.append("Tambahkan pendorong permintaan yang sudah diketahui sebelum bulan berjalan (rencana budget iklan bulanan, jadwal kampanye "
-                       "Shopee, pesanan proyek yang sudah dikonfirmasi) sebagai fitur model global agar lonjakan bulan kampanye ikut terprediksi.")
+        actions.append("Biaya iklan bulanan dan kalender kampanye sudah diuji sebagai fitur model global (walk-forward 5 lipatan) dan tidak "
+                       "memperbaiki akurasi luar sampel, bahkan bila biaya iklan bulan depan diketahui pasti. Informasi yang masih bisa menambah "
+                       "akurasi: daftar pesanan proyek terkonfirmasi (tanggal, SKU, QTY) sebelum bulan berjalan.")
     if "Tidak bias sistematis" in failed and "Akurasi total toko" in failed:
         weaknesses.append(f"Tidak bias sistematis: {failed['Tidak bias sistematis']['Hasil']}. Model dipilih dengan WAPE (galat mutlak) yang secara matematis "
                           "condong ke median; untuk permintaan berekor tebal median < rata-rata sehingga prediksi cenderung kurang. Faktor koreksi bias "
@@ -622,8 +623,7 @@ def _forward(features, orders: pd.DataFrame | None) -> dict:
     from src.core.feature_store import prediction_snapshot as snap
 
     try:
-        with features.engine.connect() as conn:
-            rows = conn.execute(select(snap.c.run_id, snap.c.target_date, func.sum(snap.c.pred_qty), func.min(snap.c.created_at)).group_by(snap.c.run_id, snap.c.target_date)).all()
+        rows = features.fetch(select(snap.c.run_id, snap.c.target_date, func.sum(snap.c.pred_qty), func.min(snap.c.created_at)).group_by(snap.c.run_id, snap.c.target_date), tables=["prediction_snapshot"])
     except Exception as exc:
         st.info(f"Prediksi tersimpan belum bisa dibaca: {exc}")
         return {}

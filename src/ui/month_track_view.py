@@ -18,9 +18,41 @@ ID_MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Ag
 STATUS_TONE = {"Melebihi": "#15803d", "Tercapai": "#15803d", "Hampir": "#b45309", "Tidak": "#dc2626"}
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
 def _daily_series(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, object]:
-    """(sales bersih per tanggal, sales produk bersih per tanggal, waktu pesanan terakhir) dari seluruh data pesanan."""
+    """(sales bersih per tanggal, sales produk bersih per tanggal, waktu pesanan terakhir) dari seluruh data pesanan.
+
+    Cache per objek frame (bukan hash isi 60 ribu baris di setiap panggilan)."""
+    from src.core.memo import by_frame
+
+    return by_frame("daily_series", frame, (), lambda: _daily_series_raw(frame))
+
+
+def _year_profile(orders_all: pd.DataFrame, today: date | None):
+    """(profil musiman 364 hari s.d. hari penuh terakhir, cutoff, waktu pesanan terakhir); None bila tanpa data."""
+    from src.core.memo import by_frame
+
+    def compute():
+        net, _product, last_stamp = _daily_series(orders_all)
+        if last_stamp is None:
+            return None
+        cutoff = full_day_cutoff(last_stamp, today)
+        profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
+        return profile, cutoff, last_stamp
+
+    return by_frame("year_profile", orders_all, (str(today or date.today()),), compute)
+
+
+def _month_shape(orders_all: pd.DataFrame, today: date | None, first: date) -> dict:
+    from src.core.memo import by_frame
+
+    def compute():
+        found = _year_profile(orders_all, today)
+        return {} if found is None else M.month_shape(found[0], first)
+
+    return by_frame("month_shape", orders_all, (str(today or date.today()), str(first)), compute)
+
+
+def _daily_series_raw(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, object]:
     from src.core.metrics import normalize_lines
 
     lines = normalize_lines(frame)
@@ -45,12 +77,9 @@ def day_multiplier(orders_all: pd.DataFrame | None, day: date, today: date | Non
     """Pengali pola hari untuk tanggal `day` (rata-rata sebulan = 1), sama dengan Pantauan harian dan breakdown per tanggal."""
     if orders_all is None or orders_all.empty:
         return 1.0
-    net, _product, last_stamp = _daily_series(orders_all)
-    if last_stamp is None:
+    if _year_profile(orders_all, today) is None:
         return 1.0
-    cutoff = full_day_cutoff(last_stamp, today)
-    profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
-    value = float(M.month_shape(profile, day.replace(day=1)).get(day, 1.0))
+    value = float(_month_shape(orders_all, today, day.replace(day=1)).get(day, 1.0))
     return value if np.isfinite(value) and value > 0 else 1.0
 
 
@@ -58,18 +87,11 @@ def day_weight_fn(orders_all: pd.DataFrame | None, today: date | None = None):
     """Fungsi tanggal → pengali pola hari (rata-rata tiap bulan = 1), sama dengan Pantauan harian; None bila tanpa data."""
     if orders_all is None or orders_all.empty:
         return None
-    net, _product, last_stamp = _daily_series(orders_all)
-    if last_stamp is None:
+    if _year_profile(orders_all, today) is None:
         return None
-    cutoff = full_day_cutoff(last_stamp, today)
-    profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
-    shapes: dict = {}
 
     def weight(day: date) -> float:
-        first = day.replace(day=1)
-        if first not in shapes:
-            shapes[first] = M.month_shape(profile, first)
-        value = float(shapes[first].get(day, 1.0))
+        value = float(_month_shape(orders_all, today, day.replace(day=1)).get(day, 1.0))
         return value if np.isfinite(value) and value > 0 else 1.0
 
     return weight
@@ -86,9 +108,13 @@ def month_remaining_weight(orders_all: pd.DataFrame | None, today: date) -> tupl
     cutoff = today - timedelta(days=1)
     shape: dict = {}
     if orders_all is not None and not orders_all.empty:
-        net, _product, last_stamp = _daily_series(orders_all)
-        if last_stamp is not None:
-            cutoff = min(full_day_cutoff(last_stamp, today), cutoff)
+        found = _year_profile(orders_all, today)
+        if found is not None and found[1] <= cutoff:
+            cutoff = found[1]
+            shape = _month_shape(orders_all, today, month_first)
+        elif found is not None:
+            # Hari penuh terakhir sesudah kemarin tidak mungkin; tetap hitung profil s.d. kemarin seperti sebelumnya.
+            net, _product, _last = _daily_series(orders_all)
             profile = M.seasonal_profile(net.loc[pd.Timestamp(cutoff - timedelta(days=364)):pd.Timestamp(cutoff)])
             shape = M.month_shape(profile, month_first)
     start = max(month_first, cutoff + timedelta(days=1))
@@ -174,12 +200,12 @@ def _prediction_runs(features, first: date, last: date) -> pd.DataFrame:
 
         from src.core.feature_store import prediction_snapshot as snap
 
-        with features.engine.connect() as conn:
-            rows = conn.execute(
-                select(snap.c.run_id, snap.c.target_date, func.sum(snap.c.pred_sales), func.min(snap.c.created_at))
-                .where(snap.c.target_date >= first, snap.c.target_date <= last)
-                .group_by(snap.c.run_id, snap.c.target_date)
-            ).all()
+        rows = features.fetch(
+            select(snap.c.run_id, snap.c.target_date, func.sum(snap.c.pred_sales), func.min(snap.c.created_at))
+            .where(snap.c.target_date >= first, snap.c.target_date <= last)
+            .group_by(snap.c.run_id, snap.c.target_date),
+            tables=["prediction_snapshot"],
+        )
     except Exception:
         return pd.DataFrame(columns=["run_id", "target_date", "pred", "run_at"])
     frame = pd.DataFrame(rows, columns=["run_id", "target_date", "pred", "run_at"])

@@ -216,8 +216,39 @@ def section(title: str, kicker: str | None = None) -> None:
     st.markdown(f"{kicker_html}<div class='section-title'>{html.escape(title)}</div>", unsafe_allow_html=True)
 
 
+_EXCEL_CACHE: dict[str, bytes] = {}
+
+
+def _frames_digest(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> str | None:
+    """Sidik isi tabel (nilai, kolom, index) untuk cache file Excel; None bila ada sel yang tidak bisa di-hash."""
+    import hashlib
+
+    items = {"": frames} if isinstance(frames, pd.DataFrame) else dict(frames)
+    digest = hashlib.sha1()
+    try:
+        for name, frame in items.items():
+            digest.update(str(name).encode())
+            if not isinstance(frame, pd.DataFrame):
+                digest.update(repr(frame).encode())
+                continue
+            digest.update(repr((list(map(str, frame.columns)), frame.shape)).encode())
+            digest.update(pd.util.hash_pandas_object(frame.astype(str), index=True).values.tobytes())
+    except Exception:  # noqa: BLE001
+        return None
+    return digest.hexdigest()
+
+
 def excel_bytes(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> bytes:
-    return numeric_excel_bytes(frames)
+    """File Excel; isi yang sama tidak dibangun ulang di setiap klik (membangun .xlsx jauh lebih lama dari menyidik isinya)."""
+    key = _frames_digest(frames)
+    if key is not None and key in _EXCEL_CACHE:
+        return _EXCEL_CACHE[key]
+    data = numeric_excel_bytes(frames)
+    if key is not None:
+        if len(_EXCEL_CACHE) >= 48:
+            _EXCEL_CACHE.pop(next(iter(_EXCEL_CACHE)))
+        _EXCEL_CACHE[key] = data
+    return data
 
 
 _COMPACT_DOWNLOAD = {"on": False}
@@ -931,16 +962,20 @@ def install_plotly_locale() -> None:
 
 STATUS_TONE = (("✅", "#ecfdf5", "#047857"), ("⚠️", "#fffbeb", "#b45309"), ("❌", "#fef2f2", "#b91c1c"),
                ("Tercapai", "#ecfdf5", "#047857"), ("Belum", "#fffbeb", "#b45309"), ("Aktif", "#ecfdf5", "#047857"),
-               ("Dilewati", "#f1f5f9", "#475569"))
+               ("Dilewati", "#f1f5f9", "#475569"), ("🔴", "#fef2f2", "#b91c1c"), ("🟠", "#fff7ed", "#c2410c"), ("🟢", "#ecfdf5", "#047857"),
+               ("⏳", "#eff6ff", "#1d4ed8"), ("🟦", "#eff6ff", "#1d4ed8"), ("🟩", "#ecfdf5", "#047857"), ("🟧", "#fff7ed", "#c2410c"),
+               ("🟥", "#fef2f2", "#b91c1c"), ("⚪", "#f1f5f9", "#475569"), ("⬜", "#f1f5f9", "#475569"), ("🟣", "#f5f3ff", "#6d28d9"))
 
 
 def html_table(frame: pd.DataFrame, *, kinds: dict[str, str] | None = None, widths: dict[str, int] | None = None,
-               status: str | None = None, max_height: int | None = None, target=None) -> None:
+               status: str | None = None, max_height: int | None = None, target=None, total_label: str | None = None,
+               nowrap: tuple[str, ...] = ()) -> None:
     """Tabel HTML dengan tinggi baris mengikuti isi (teks panjang dibungkus, baris pendek tetap pendek).
 
     Dipakai untuk tabel yang banyak teksnya: st.dataframe memakai satu tinggi untuk semua baris, sehingga satu sel panjang
     membuat seluruh tabel tinggi dan tidak proporsional. kinds: format angka per kolom (money/pct/dec/count);
-    status: kolom status yang diberi warna; max_height: tinggi maksimal (px) dengan header tetap terlihat saat digulir."""
+    status: kolom status yang diberi warna; max_height: tinggi maksimal (px) dengan header tetap terlihat saat digulir;
+    total_label: baris yang salah satu selnya bertuliskan teks ini dicetak tebal (baris Total); nowrap: kolom teks yang tidak dibungkus."""
     from src.utils.format import EMPTY, column_kind, formatter_for
 
     if frame is None or frame.empty:
@@ -967,7 +1002,7 @@ def html_table(frame: pd.DataFrame, *, kinds: dict[str, str] | None = None, widt
     for record in frame.to_dict("records"):
         tds = []
         for c in frame.columns:
-            style = "text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums" if numeric[c] else ""
+            style = "text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums" if numeric[c] else ("white-space:nowrap" if c in nowrap else "")
             text = cell(c, record[c])
             if status and c == status:
                 tone = next(((bg, fg) for mark, bg, fg in STATUS_TONE if str(record[c]).startswith(mark)), None)
@@ -975,12 +1010,14 @@ def html_table(frame: pd.DataFrame, *, kinds: dict[str, str] | None = None, widt
                     text = (f"<span style='background:{tone[0]};color:{tone[1]};border-radius:999px;padding:.1rem .55rem;font-weight:700;"
                             f"white-space:nowrap'>{text}</span>")
             tds.append(f"<td style='{style}'>{text}</td>")
-        rows.append(f"<tr>{''.join(tds)}</tr>")
+        bold = total_label is not None and any(str(v) == total_label for v in record.values())
+        rows.append(("<tr class='tot'>" if bold else "<tr>") + "".join(tds) + "</tr>")
     box = f"max-height:{int(max_height)}px;overflow:auto;" if max_height else "overflow-x:auto;"
     (target or st).markdown(
         "<style>.htable{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--fs-sm);line-height:1.45}"
         ".htable th{position:sticky;top:0;background:#f1f5f9;color:#334155;font-weight:700;padding:.5rem .65rem;border-bottom:1px solid #e2e8f0;z-index:1}"
         ".htable td{padding:.45rem .65rem;border-bottom:1px solid #eef2f7;vertical-align:top;color:#0f172a}"
-        ".htable tbody tr:nth-child(even) td{background:#fafbfc}.htable tbody tr:hover td{background:#f1f5f9}</style>"
+        ".htable tbody tr:nth-child(even) td{background:#fafbfc}.htable tbody tr:hover td{background:#f1f5f9}"
+        ".htable tr.tot td{font-weight:800;background:#f1f5f9;border-top:2px solid #cbd5e1}</style>"
         f"<div style='border:1px solid #e2e8f0;border-radius:12px;background:#fff;{box}'><table class='htable'><thead><tr>{head}</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>", unsafe_allow_html=True)

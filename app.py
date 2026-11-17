@@ -5,6 +5,7 @@ import hashlib
 import html
 import os
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta
 
@@ -268,14 +269,25 @@ def file_vault() -> FileVault | None:
     return vault
 
 
+def _refresh_mirror(vault: FileVault) -> None:
+    try:
+        vault.restore(refresh=True)
+    except Exception as exc:  # noqa: BLE001
+        vault.refresh_error = str(exc)
+    finally:
+        vault.refreshed_at = time.time()
+        vault.refreshing = False
+
+
 def sync_file_vault() -> None:
     """Salin file data/hasil yang baru berubah ke database. Gagal sinkron tidak menghentikan halaman."""
     try:
         vault = file_vault()
         if vault is not None and CLOUD_MIRROR:
-            if time.time() - getattr(vault, "refreshed_at", 0.0) > 300:
-                vault.restore(refresh=True)
-                vault.refreshed_at = time.time()
+            # Salinan baca-saja: cek pembaruan dari Cloud di latar belakang, jadi klik pengguna tidak ikut menunggu.
+            if time.time() - getattr(vault, "refreshed_at", 0.0) > 300 and not getattr(vault, "refreshing", False):
+                vault.refreshing = True
+                threading.Thread(target=_refresh_mirror, args=(vault,), daemon=True).start()
         elif vault is not None:
             vault.push()
     except Exception as exc:  # noqa: BLE001
@@ -303,9 +315,13 @@ def show_vault_status() -> None:
     if CLOUD_MIRROR:
         st.caption("Localhost ini salinan baca-saja dari Cloud: data dan hasil analisa diambil dari database, tidak dikirim balik.")
         return
-    files, size, stored = vault.summary()
+    # Ringkasan ukuran (SUM seluruh isi file di database + ukuran database) berat di Postgres: dihitung ulang tiap 5 menit.
+    cached = getattr(vault, "summary_cache", None)
+    if not cached or time.time() - cached[0] > 300:
+        cached = (time.time(), vault.summary(), database_size_mb(get_engine()))
+        vault.summary_cache = cached
+    (files, size, stored), used = cached[1], cached[2]
     cfg = storage_settings(current_params())
-    used = database_size_mb(get_engine())
     usage = f" Database terpakai {format_number(used, 0)} dari {format_number(cfg['kuota_mb'])} MB." if used is not None else ""
     st.caption(
         f"Data latih dan hasil analisa tersimpan permanen di database: {format_number(files)} file · "
@@ -2641,10 +2657,29 @@ def show_data_status(status: dict) -> None:
 
 
 @st.cache_resource(show_spinner=False)
-def run_repository() -> RunRepository:
-    repo = RunRepository(get_engine(), runs_root=RUNS_ROOT)
-    repo.cleanup()
-    guard_storage(repo)
+@st.cache_resource(show_spinner=False)
+def _run_repository(runs_root: str, url_key: str) -> RunRepository:
+    """Satu repository per proses server: pembuatan tabel & cache daftar riwayat tidak diulang di setiap klik."""
+    del url_key
+    repo = RunRepository(get_engine(), runs_root=Path(runs_root))
+    repo.last_guard = 0.0
+    return repo
+
+
+GUARD_INTERVAL = 600  # detik; pembersihan riwayat lama & cek kuota database cukup sesekali
+
+
+def run_repository(*, guard: bool = False) -> RunRepository:
+    repo = _run_repository(str(RUNS_ROOT), str(getattr(get_engine(), "url", "")))
+    # Pembersihan (riwayat > 90 hari, kuota database) memakai beberapa query ke database jauh: jalankan saat
+    # diminta (sesudah analisa disimpan) atau paling sering sekali per GUARD_INTERVAL, bukan di setiap klik.
+    if guard or time.time() - float(getattr(repo, "last_guard", 0.0)) > GUARD_INTERVAL:
+        repo.last_guard = time.time()
+        try:
+            repo.cleanup()
+        except Exception as exc:  # noqa: BLE001
+            st.session_state["_storage-error"] = str(exc)
+        guard_storage(repo)
     return repo
 
 
@@ -2874,10 +2909,10 @@ def run_daily_totals() -> dict[int, float]:
 
         from src.core.feature_store import prediction_snapshot
 
-        with get_features().engine.connect() as conn:
-            rows = conn.execute(
-                select(prediction_snapshot.c.run_id, func.sum(prediction_snapshot.c.pred_qty), func.count(func.distinct(prediction_snapshot.c.target_date))).group_by(prediction_snapshot.c.run_id)
-            ).all()
+        rows = get_features().fetch(
+            select(prediction_snapshot.c.run_id, func.sum(prediction_snapshot.c.pred_qty), func.count(func.distinct(prediction_snapshot.c.target_date))).group_by(prediction_snapshot.c.run_id),
+            tables=["prediction_snapshot"],
+        )
         return {int(run): float(total) / max(int(days), 1) for run, total, days in rows if total is not None}
     except Exception:
         return {}
@@ -4967,11 +5002,18 @@ def show_qty_forecast_board(
         period,
     )
     actual_cache = st.session_state.get("_qty-actuals")
+    shared_actuals = _shared_recent("qty-actuals")
     if isinstance(actual_cache, tuple) and actual_cache[0] == actual_key:
         board_actuals = actual_cache[1]
+    elif actual_key in shared_actuals:
+        board_actuals = shared_actuals[actual_key]
+        st.session_state["_qty-actuals"] = (actual_key, board_actuals)
     else:
         board_actuals = _board_actuals(source, as_of, period)
         st.session_state["_qty-actuals"] = (actual_key, board_actuals)
+        shared_actuals[actual_key] = board_actuals
+        while len(shared_actuals) > 8:
+            shared_actuals.pop(next(iter(shared_actuals)))
     yesterday_map = _basis_map(board_actuals.get("yesterday"), basis)
     month_ago_map = _basis_map(board_actuals.get("month_ago"), basis)
     last_month = None
@@ -5032,6 +5074,9 @@ def show_qty_forecast_board(
     )
     brief_cache = st.session_state.get("_qty-briefs")
     briefs = brief_cache[1] if isinstance(brief_cache, tuple) and brief_cache[0] == brief_key else {}
+    shared_briefs = _shared_recent("qty-briefs")
+    if not briefs and brief_key in shared_briefs:
+        briefs = shared_briefs[brief_key]
     for _, row in work.iterrows() if not briefs else ():
         key = str(row["item_key"])
         today_qty = (
@@ -5060,6 +5105,9 @@ def show_qty_forecast_board(
         if last_month is not None:
             briefs[key]["month_actual_sales"] = last_month[2].get(key, 0.0)
     st.session_state["_qty-briefs"] = (brief_key, briefs)
+    shared_briefs[brief_key] = briefs
+    while len(shared_briefs) > 8:
+        shared_briefs.pop(next(iter(shared_briefs)))
     counts = {"naik": 0, "turun": 0, "tetap": 0}
     for brief in briefs.values():
         counts[brief["direction"]] += 1
@@ -8060,15 +8108,22 @@ def _with_table_extras(
             sold_span = (days.min().date(), days.max().date())
     cache_key = (stamp, len(table), len(orders_all) if isinstance(orders_all, pd.DataFrame) else 0, today, basis, sold_span,
                  int(pd.util.hash_pandas_object(table["item_key"].astype(str), index=False).sum()))
+    shared = _shared_recent("table-extras")
     cached = st.session_state.get("_table-extras")
+    if not (isinstance(cached, tuple) and cached[0] == cache_key) and cache_key in shared:
+        cached = (cache_key, *shared[cache_key])
     if isinstance(cached, tuple) and cached[0] == cache_key:
         extras, meta = cached[1], cached[2]
+        st.session_state["_table-extras"] = cached
     else:
         cutoff, rest_weight = month_remaining_weight(orders_all, today)
         extras = table_extras(table, orders_all, today, basis=basis, sold_span=sold_span, cutoff=cutoff, rest_weight=rest_weight,
                               day_weight=day_weight_fn(orders_all, today))
         meta = {"basis": basis, "sold_span": sold_span, "first": today.replace(day=1), "cutoff": cutoff, "month_end": month_end(today)}
         st.session_state["_table-extras"] = (cache_key, extras, meta)
+        shared[cache_key] = (extras, meta)
+        while len(shared) > 8:
+            shared.pop(next(iter(shared)))
     keep = [c for c in table.columns if c not in extras.columns]
     return pd.concat([table[keep], extras.reindex(table.index)], axis=1), meta
 
@@ -8681,6 +8736,16 @@ def removed_counts(raw: pd.DataFrame | None) -> tuple[int, float]:
     return orders_count, units
 
 
+@st.cache_resource(show_spinner=False)
+def _shared_store() -> dict:
+    return {}
+
+
+def _shared_recent(name: str) -> dict:
+    """Wadah hasil hitung bersama antar-sesi (per proses server)."""
+    return _shared_store().setdefault(name, {})
+
+
 def enriched_catalog(
     catalog: pd.DataFrame,
     *,
@@ -8713,8 +8778,9 @@ def enriched_catalog(
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1]
     # Beberapa menu memakai periode penjualan berbeda (stamp berbeda): simpan 8 hasil terakhir agar
-    # bolak-balik menu tidak menghitung ulang katalog.
-    recent = st.session_state.setdefault("_enriched-recent", {})
+    # bolak-balik menu tidak menghitung ulang katalog. Disimpan per proses server (bukan per sesi), jadi
+    # tab baru, refresh browser, atau pengguna lain dengan analisa & setelan yang sama tidak menghitung ulang.
+    recent = _shared_recent("enriched")
     if stamp in recent:
         st.session_state["_enriched"] = (stamp, recent[stamp])
         return recent[stamp]
@@ -9457,10 +9523,17 @@ with PAGE_ROOT.container(key="page-root"):
             pages = max((total - 1) // page_size + 1, 1)
             page = min(max(int(st.session_state.get("pred-page-n", 1)), 1), pages)
             def _allpred_excel() -> None:
+                from src.core.memo import fingerprint
                 from src.ui.decision_view import table_parts
 
-                export = table_parts(work, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label, meta=TABLE_META)[3]
-                download_excel(export, "prediksi_semua_produk.xlsx", key="xl-allpred")
+                # Tabel ekspor semua SKU dibangun ulang hanya bila isi/saringan berubah (bukan di setiap klik).
+                sig = (fingerprint(work), period, str(today), metric, resume_label, window_label, repr(TABLE_META))
+                cache = st.session_state.setdefault("_allpred-export", {})
+                if cache.get("sig") != sig:
+                    cache.clear()
+                    cache["sig"] = sig
+                    cache["frame"] = table_parts(work, period=period, today=today, metric=metric, resume_label=resume_label, window_label=window_label, meta=TABLE_META)[3]
+                download_excel(cache["frame"], "prediksi_semua_produk.xlsx", key="xl-allpred")
 
             # Tombol Excel di bilah navigasi (sejajar nomor halaman), berisi semua SKU sesuai saringan, bukan hanya halaman ini.
             page = page_navigator(page, pages, key="pred-page", total=total, page_size=page_size, noun="SKU", download=_allpred_excel)
@@ -9530,6 +9603,8 @@ with PAGE_ROOT.container(key="page-root"):
             run_id=int((st.session_state.get("active-run") or (0,))[0] or 0),
             username=AUTH_USER.username,
             can_edit=allowed_access(AUTH_USER.role, "laporan", "edit"),
+            outcome=outcome,
+            repo=run_repository(),
         )
 
     elif sheet == "Evaluasi model":

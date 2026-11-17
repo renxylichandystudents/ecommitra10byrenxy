@@ -408,6 +408,68 @@ def _inactive_section(inactive: pd.DataFrame | None) -> None:
     )
 
 
+def margin_snapshot(features, table: pd.DataFrame, data, orders: pd.DataFrame | None, start: date, end: date) -> dict:
+    """Ringkasan margin untuk laporan, dengan mesin hitung yang sama dengan Kalkulator › Ringkasan & prioritas
+    (sold_lines bersih, potongan Shopee, iklan, PPN, harga beli / file margin) pada rentang [start, end]."""
+    from src.ui.margin_data import load_margin
+
+    fees = _category_fees(features)
+    programs, order_fee, _limit = _programs(features)
+    md = load_margin(features)
+    rows = _portfolio_rows(features, table, data, orders, fees, md, start, end)
+    if rows.empty:
+        return {"ada": False, "file_margin": bool(md.ready)}
+    port = fee.portfolio(rows, programs=programs, order_fee=order_fee, fallback_kotor_pct=md.store_kotor_pct)
+    acuan = port.attrs.get("acuan_pct", float("nan"))
+    known = port.loc[port["bersih_30"].notna()]
+    sales_all, sales_known = float(port["omzet_30"].sum()), float(known["omzet_30"].sum())
+    kotor_rp = float((known["harga_akhir"] * known["qty_30"] * known["kotor_pct"] / 100).sum())
+    bersih_rp = float(known["bersih_30"].sum())
+    status_rows = []
+    for status in ("Rugi", "Rendah", "Tinggi", "Tanpa data"):
+        part = port.loc[port["status"] == status]
+        if part.empty:
+            continue
+        status_rows.append({"Status": STATUS_ICON[status], "Jumlah SKU": len(part), "QTY bersih": float(part["qty_30"].sum()),
+                            "Sales produk bersih": float(part["omzet_30"].sum()),
+                            "Porsi sales (%)": float(part["omzet_30"].sum()) / sales_all * 100 if sales_all else 0.0,
+                            "Margin bersih": float(part["bersih_30"].sum(min_count=1)) if part["bersih_30"].notna().any() else np.nan})
+    status_rows.append({"Status": "Total", "Jumlah SKU": len(port), "QTY bersih": float(port["qty_30"].sum()), "Sales produk bersih": sales_all,
+                        "Porsi sales (%)": 100.0, "Margin bersih": bersih_rp})
+
+    def pick(frame: pd.DataFrame, n: int = 10) -> pd.DataFrame:
+        return pd.DataFrame({
+            "Status": frame["status"].map(STATUS_ICON), "SKU": frame["sku"], "Nama": frame["nama"], "QTY bersih": frame["qty_30"],
+            "Sales produk bersih": frame["omzet_30"], "Margin kotor (%)": frame["kotor_pct"], "Shopee (%)": frame["shopee_pct"],
+            "Iklan (%)": frame["iklan_pct"], "Margin bersih (%)": frame["bersih_pct"], "Margin bersih": frame["bersih_30"],
+            "Perbaikan": [("; ".join(p) if isinstance(p, (list, tuple)) else str(p)) for p in frame["perbaikan"]],
+        }).head(n).reset_index(drop=True)
+
+    fix = port.loc[port["status"].isin(["Rugi", "Rendah"])]
+    best = port.loc[port["status"] == "Tinggi"].sort_values("bersih_30", ascending=False)
+    recon = rows.attrs.get("rekonsiliasi") or {}
+    inactive = _inactive_impact(features, table, data, orders, fees, md, programs=programs, order_fee=order_fee, acuan=acuan)
+    lost = inactive.loc[inactive["Margin bersih per bulan"] > 0] if not inactive.empty else inactive
+    return {
+        "ada": True, "file_margin": bool(md.ready), "acuan_pct": acuan, "overall_pct": port.attrs.get("overall_pct", float("nan")),
+        "sku_aktif": len(port), "qty": float(port["qty_30"].sum()), "sales_produk": sales_all, "sales_dinilai": sales_known,
+        "kotor_rp": kotor_rp, "kotor_pct": kotor_rp / sales_known * 100 if sales_known else float("nan"), "bersih_rp": bersih_rp,
+        "shopee_pct": float((known["omzet_30"] * known["shopee_pct"]).sum() / sales_known) if sales_known else float("nan"),
+        "iklan_pct": float((known["omzet_30"] * known["iklan_pct"]).sum() / sales_known) if sales_known else float("nan"),
+        "rugi": int((port["status"] == "Rugi").sum()), "rendah": int((port["status"] == "Rendah").sum()),
+        "tinggi": int((port["status"] == "Tinggi").sum()), "tanpa_data": int((port["status"] == "Tanpa data").sum()),
+        "rugi_rp": float(port.loc[port["status"] == "Rugi", "rugi_30"].sum()), "selisih_rp": float(port.loc[port["status"] == "Rendah", "selisih_30"].sum()),
+        "tinggi_porsi": float(port.loc[port["status"] == "Tinggi", "omzet_30"].sum()) / sales_all * 100 if sales_all else 0.0,
+        "sku_nonaktif_periode": int(recon.get("sku_nonaktif", 0) or 0), "sales_nonaktif_periode": float(recon.get("sales_nonaktif", 0) or 0),
+        "nonaktif_n": int(len(inactive)), "nonaktif_untung": int(len(lost)),
+        "nonaktif_hilang_rp": float(lost["Margin bersih per bulan"].sum()) if len(lost) else 0.0,
+        "status": pd.DataFrame(status_rows), "perbaiki": pick(fix, 15), "terbaik": pick(best, 10),
+        "nonaktif": inactive.head(15).reset_index(drop=True) if not inactive.empty else pd.DataFrame(),
+        "sebaran": port.loc[port["bersih_pct"].notna(), ["nama", "omzet_30", "bersih_pct", "status"]].rename(
+            columns={"nama": "Nama", "omzet_30": "Sales produk bersih", "bersih_pct": "Margin bersih (%)", "status": "Status"}).reset_index(drop=True),
+    }
+
+
 def _section(title: str, sub: str = "") -> None:
     st.markdown(f"<div class='section-title' style='margin-top:.9rem'>{html.escape(title)}"
                 + (f"<span style='font-weight:500;color:#64748b;font-size:var(--fs-sm)'> · {html.escape(sub)}</span>" if sub else "") + "</div>",
