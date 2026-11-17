@@ -1,6 +1,14 @@
 # Status terbaru aplikasi
 
-Diperbarui: 13 November 2026.
+Diperbarui: 17 November 2026.
+
+## 2026-11-17 · Pantau rencana tersimpan: matching Seller Center + strategi minggu depan
+
+- Masalah: menu Pantau menandai banyak iklan "tidak sesuai rencana" padahal budget sudah diisi di Seller Center — usulan di bawah **minimum Shopee** (iklan tunggal **Rp 25.000/hari**, iklan grup **Rp 100.000/hari**) tidak bisa dijalankan apa adanya, sehingga banding ±40% vs usulan mentah salah.
+- Perbaikan matching: `ads_strategy.implementable_budget` / `evaluate` memakai **budget efektif Shopee** (max usulan, minimum jenis iklan). Status baru: Sesuai, Sesuai (batas Shopee), Budget terlalu tinggi/rendah. `compare_budgets` juga membandingkan budget efektif agar saran hari ini tidak salah tandai "berubah".
+- Alokasi rencana baru: `round_budget(..., min_floor=)` menaikkan usulan aktif ke minimum Seller Center (tetap hormati batas naik 2×).
+- UI Pantau dirombak (`src/ui/ads_monitor_view.py` + `src/core/ads_monitor.py`): hero status satu verdict, KPI jalur sales, pelaksanaan Seller Center + **tindakan prioritas**, tabel Status goals/Tindakan/Saran, **strategi minggu depan** (pertahankan / buat iklan / jangan iklan dari prediksi+stok+ROAS), rincian rencana terkunci.
+- Uji: `tests/test_ads_monitor.py`; suite penuh lolos.
 
 ## Ringkasan: Outstanding Site 10037 untuk SKU kosong/kurang padahal DC ada stok (14 Nov 2026)
 

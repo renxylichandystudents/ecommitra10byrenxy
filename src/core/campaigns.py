@@ -69,23 +69,40 @@ def remove(campaigns: list[dict], cid: int) -> list[dict]:
 def compare_budgets(saved, fresh, *, tolerance: float = 0.2):
     """Budget harian per iklan: campaign tersimpan vs saran hari ini (pandas DataFrame, kolom Iklan & Budget harian usulan).
 
-    Berubah = selisih > tolerance × budget tersimpan, atau iklan hanya ada di salah satu sisi dengan budget > 0. Tindakan
-    tidak dibandingkan karena relatif terhadap budget saat itu (iklan yang sudah dinaikkan akan disarankan "Pertahankan")."""
+    Berubah = selisih budget **efektif Seller Center** > tolerance × tersimpan efektif. Usulan di bawah minimum Shopee
+    (25 rb tunggal / 100 rb grup) dianggap sama dengan minimum, supaya pantauan tidak salah tandai "berubah" hanya karena
+    batas implementasi. Tindakan tidak dibandingkan."""
     import pandas as pd
+
+    from src.core.ads_strategy import implementable_budget
 
     col = "Budget harian usulan"
 
     def side(frame):
         if frame is None or frame.empty or not {"Iklan", col} <= set(frame.columns):
-            return pd.Series(dtype=float)
-        return pd.to_numeric(frame[col], errors="coerce").fillna(0.0).groupby(frame["Iklan"].astype(str)).sum()
+            return pd.DataFrame(columns=["budget", "jenis"])
+        work = frame.copy()
+        work["_b"] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+        work["_j"] = work["Jenis"].astype(str) if "Jenis" in work.columns else "Produk tunggal"
+        g = work.groupby(work["Iklan"].astype(str), sort=False)
+        return pd.DataFrame({"budget": g["_b"].sum(), "jenis": g["_j"].first()})
 
     a, b = side(saved), side(fresh)
-    out = pd.DataFrame({"Budget tersimpan/hari": a, "Budget saran hari ini/hari": b}).fillna(0.0)
-    out["Selisih/hari"] = out["Budget saran hari ini/hari"] - out["Budget tersimpan/hari"]
-    base = out["Budget tersimpan/hari"]
-    out["Berubah"] = (out["Selisih/hari"].abs() > tolerance * base) & ~((base == 0) & (out["Budget saran hari ini/hari"] == 0))
-    return out.rename_axis("Iklan").reset_index().sort_values(["Berubah", "Selisih/hari"], ascending=[False, False], key=lambda s: s.abs() if s.dtype != bool else s)
+    names = sorted(set(a.index) | set(b.index))
+    rows = []
+    for name in names:
+        sa = float(a.loc[name, "budget"]) if name in a.index else 0.0
+        sb = float(b.loc[name, "budget"]) if name in b.index else 0.0
+        kind = str(a.loc[name, "jenis"]) if name in a.index else (str(b.loc[name, "jenis"]) if name in b.index else "Produk tunggal")
+        ea, eb = implementable_budget(sa, kind), implementable_budget(sb, kind)
+        delta = eb - ea
+        changed = abs(delta) > tolerance * max(ea, 1.0) and not (ea == 0 and eb == 0)
+        rows.append({"Iklan": name, "Jenis": kind, "Budget tersimpan/hari": sa, "Budget saran hari ini/hari": sb,
+                     "Efektif tersimpan/hari": ea, "Efektif saran/hari": eb, "Selisih/hari": delta, "Berubah": changed})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values(["Berubah", "Selisih/hari"], ascending=[False, False], key=lambda s: s.abs() if s.dtype != bool else s)
 
 
 class Store:

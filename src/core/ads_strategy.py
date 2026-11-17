@@ -333,19 +333,46 @@ def ad_sales(u: Unit, cost: float) -> float:
     return max(_now_sales(u) + min(delta, uplift_cap(u)), 0.0)
 
 
-BUDGET_STEP = 25_000.0   # budget harian per iklan dibulatkan ke kelipatan ini (mudah diisi di Shopee)
+BUDGET_STEP = 25_000.0        # budget harian per iklan dibulatkan ke kelipatan ini (mudah diisi di Shopee)
+SHOPEE_MIN_SINGLE = 25_000.0  # minimum budget harian iklan produk tunggal di Seller Center
+SHOPEE_MIN_GROUP = 100_000.0  # minimum budget harian iklan grup di Seller Center
 
 
-def round_budget(value: float, *, lo: float = 0.0, hi: float = float("inf"), step: float = BUDGET_STEP) -> float:
+def seller_min_budget(key_or_jenis: str | None) -> float:
+    """Batas bawah budget harian yang bisa diisi di Seller Center (0 = jeda / tidak diiklankan)."""
+    text = str(key_or_jenis or "").strip().lower()
+    if text.startswith("grup") or text == "grup":
+        return SHOPEE_MIN_GROUP
+    return SHOPEE_MIN_SINGLE
+
+
+def implementable_budget(plan: float, key_or_jenis: str | None) -> float:
+    """Budget harian yang realistis di Seller Center: 0 (jeda) atau max(usulan, minimum Shopee)."""
+    if not plan or plan <= 0:
+        return 0.0
+    return max(float(plan), seller_min_budget(key_or_jenis))
+
+
+def round_budget(value: float, *, lo: float = 0.0, hi: float = float("inf"), step: float = BUDGET_STEP,
+                 min_floor: float = 0.0) -> float:
     """Budget harian per iklan ke kelipatan `step` terdekat (min. satu kelipatan bila > 0), tetap dalam batas Shopee:
-    tidak di atas `hi` (naik maks. 2×) dan tidak di bawah `lo` (turun ke ≥ ½) bila kelipatan terdekat melanggarnya."""
+    tidak di atas `hi` (naik maks. 2×) dan tidak di bawah `lo` (turun ke ≥ ½) bila kelipatan terdekat melanggarnya.
+    `min_floor` = minimum Seller Center (25 rb tunggal / 100 rb grup) bila nilai > 0."""
     if not value or value <= 0:
         return 0.0
+    floor = max(lo, min_floor, step)
     out = max(round(value / step) * step, step)
+    if min_floor > 0:
+        out = max(out, min_floor)
     if out > hi + 1e-6:
         out = max(math.floor(hi / step) * step, step)
-    if out < lo - 1e-6:
-        out = math.ceil(lo / step) * step
+        if min_floor > 0 and out + 1e-6 < min_floor:
+            # Tidak bisa naik ke minimum Seller Center dalam satu evaluasi (batas 2×): biarkan di plafon Shopee.
+            return float(out)
+    if out < floor - 1e-6:
+        out = math.ceil(floor / step) * step
+        if out > hi + 1e-6:
+            return float(max(math.floor(hi / step) * step, step))
     return float(out)
 
 
@@ -471,7 +498,12 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
         if best is None or (total_sales + best_gain) < target_roas * (total_cost + best_step) or best_gain * weight[best.key] < min_marginal * best_step:
             break
         move(best, best_step)
-    return Plan("Kejar target", {u.key: round_budget(cost[u.key], lo=lower[u.key], hi=caps[u.key]) for u in units}, floor)
+    return Plan(
+        "Kejar target",
+        {u.key: round_budget(cost[u.key], lo=lower[u.key], hi=caps[u.key],
+                             min_floor=seller_min_budget(u.jenis) if cost[u.key] > 0 else 0.0) for u in units},
+        floor,
+    )
 
 
 def plan_effect(units: list[Unit], plan: Plan, *, days: int) -> dict:
@@ -1205,14 +1237,20 @@ def month_totals(units: list[Unit]) -> dict[str, dict]:
     return out
 
 
-def evaluate(baseline: dict[str, dict], current: dict[str, dict], planned: dict[str, float], *, target_roas: float) -> tuple[pd.DataFrame, dict]:
+def evaluate(baseline: dict[str, dict], current: dict[str, dict], planned: dict[str, float], *, target_roas: float,
+             jenis: dict[str, str] | None = None) -> tuple[pd.DataFrame, dict]:
     """Pelaksanaan campaign dari laporan iklan terbaru: biaya & omzet harian sejak campaign disimpan (selisih laporan kumulatif).
 
-    planned: budget harian usulan per iklan (kunci unit). Dijalankan = biaya aktual 60–140% budget usulan (atau ≈ 0 bila dijeda)."""
+    planned: budget harian usulan per iklan (kunci unit). Dijalankan = biaya aktual 60–140% **budget yang bisa diisi di
+    Seller Center** (usulan dinaikkan ke minimum 25 rb tunggal / 100 rb grup bila perlu), atau ≈ 0 bila dijeda.
+    kolom `Budget efektif Shopee/hari` = acuan matching; `Catatan batas` menjelaskan bila usulan di bawah minimum."""
     rows = []
     base_days = {v.get("periode"): int(v.get("hari", 0)) for v in baseline.values()}
+    kinds = jenis or {}
     for key, plan_cost in planned.items():
         report_key = "produk:" + key.split(":", 1)[1] if key.startswith(("pisah:", "baru:")) else key
+        kind = kinds.get(key) or ("Grup" if str(key).startswith("grup:") else "Produk tunggal")
+        expected = implementable_budget(plan_cost, kind if kind else key)
         cur, base = current.get(key) or current.get(report_key), baseline.get(key) or baseline.get(report_key)
         if cur is None:
             continue
@@ -1226,16 +1264,44 @@ def evaluate(baseline: dict[str, dict], current: dict[str, dict], planned: dict[
         if days <= 0:
             continue
         cost_d, sales_d = cost / days, sales / days
-        if plan_cost <= 0:
+        if expected <= 0:
             done = cost_d <= max(5_000.0, 0.1 * float((base or {}).get("biaya", 0)) / max(int((base or {}).get("hari", 1)), 1))
+            note = "dijeda (budget usulan 0)"
         else:
-            done = 0.6 <= cost_d / plan_cost <= 1.4
-        rows.append({"_key": key, "Hari dievaluasi": days, "Budget usulan/hari": plan_cost, "Biaya aktual/hari": cost_d, "Omzet iklan aktual/hari": sales_d,
-                     "ROAS aktual": sales_d / cost_d if cost_d > 0 else np.nan, "Rekomendasi dijalankan": "Ya" if done else "Belum"})
+            done = 0.6 <= cost_d / expected <= 1.4
+            note = (f"usulan {plan_cost:,.0f} → min Shopee {expected:,.0f}".replace(",", ".")
+                    if expected > plan_cost + 1 else "")
+        ratio = cost_d / expected if expected > 0 else float("nan")
+        if expected <= 0:
+            status = "Sesuai (dijeda)" if done else "Masih berbiaya (harusnya dijeda)"
+        elif done and expected > plan_cost + 1:
+            status = "Sesuai (batas Shopee)"
+        elif done:
+            status = "Sesuai"
+        elif cost_d > expected * 1.4:
+            status = "Budget terlalu tinggi"
+        else:
+            status = "Budget terlalu rendah"
+        roas = sales_d / cost_d if cost_d > 0 else np.nan
+        rows.append({
+            "_key": key, "Jenis": kind, "Hari dievaluasi": days,
+            "Budget usulan/hari": float(plan_cost), "Budget efektif Shopee/hari": expected,
+            "Biaya aktual/hari": cost_d, "Omzet iklan aktual/hari": sales_d, "ROAS aktual": roas,
+            "Rasio vs efektif": ratio, "Status pelaksanaan": status,
+            "Rekomendasi dijalankan": "Ya" if done else "Belum", "Catatan batas": note,
+        })
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame, {}
     cost, sales = frame["Biaya aktual/hari"].sum(), frame["Omzet iklan aktual/hari"].sum()
-    return frame, {"hari": int(frame["Hari dievaluasi"].max()), "dijalankan": int((frame["Rekomendasi dijalankan"] == "Ya").sum()), "iklan": len(frame),
-                   "biaya_harian": cost, "omzet_harian": sales, "roas": sales / cost if cost > 0 else float("nan"), "target_roas": target_roas,
-                   "budget_usulan_harian": float(frame["Budget usulan/hari"].sum())}
+    floor_hits = int((frame["Budget efektif Shopee/hari"] > frame["Budget usulan/hari"] + 1).sum())
+    return frame, {
+        "hari": int(frame["Hari dievaluasi"].max()),
+        "dijalankan": int((frame["Rekomendasi dijalankan"] == "Ya").sum()),
+        "iklan": len(frame),
+        "biaya_harian": cost, "omzet_harian": sales,
+        "roas": sales / cost if cost > 0 else float("nan"), "target_roas": target_roas,
+        "budget_usulan_harian": float(frame["Budget usulan/hari"].sum()),
+        "budget_efektif_harian": float(frame["Budget efektif Shopee/hari"].sum()),
+        "batas_shopee": floor_hits,
+    }
