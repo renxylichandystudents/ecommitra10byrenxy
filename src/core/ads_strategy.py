@@ -1286,22 +1286,33 @@ def evaluate(baseline: dict[str, dict], current: dict[str, dict], planned: dict[
         rows.append({
             "_key": key, "Jenis": kind, "Hari dievaluasi": days,
             "Budget usulan/hari": float(plan_cost), "Budget efektif Shopee/hari": expected,
-            "Biaya aktual/hari": cost_d, "Omzet iklan aktual/hari": sales_d, "ROAS aktual": roas,
+            "Biaya aktual/hari": cost_d, "Omzet iklan aktual/hari": sales_d,
+            "Biaya sejak disimpan": cost, "Omzet iklan sejak disimpan": sales, "ROAS aktual": roas,
             "Rasio vs efektif": ratio, "Status pelaksanaan": status,
             "Rekomendasi dijalankan": "Ya" if done else "Belum", "Catatan batas": note,
         })
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame, {}
-    cost, sales = frame["Biaya aktual/hari"].sum(), frame["Omzet iklan aktual/hari"].sum()
+    # Ringkasan harian hanya dari iklan yang diusulkan aktif (budget efektif > 0) agar tidak menggelembung
+    # oleh iklan yang direncana dijeda tetapi masih punya sisa biaya kecil.
+    active = frame.loc[frame["Budget efektif Shopee/hari"] > 0]
+    use = active if not active.empty else frame
+    cost_d = float(use["Biaya aktual/hari"].sum())
+    sales_d = float(use["Omzet iklan aktual/hari"].sum())
+    cost_t = float(use["Biaya sejak disimpan"].sum())
+    sales_t = float(use["Omzet iklan sejak disimpan"].sum())
     floor_hits = int((frame["Budget efektif Shopee/hari"] > frame["Budget usulan/hari"] + 1).sum())
     return frame, {
         "hari": int(frame["Hari dievaluasi"].max()),
         "dijalankan": int((frame["Rekomendasi dijalankan"] == "Ya").sum()),
         "iklan": len(frame),
-        "biaya_harian": cost, "omzet_harian": sales,
-        "roas": sales / cost if cost > 0 else float("nan"), "target_roas": target_roas,
-        "budget_usulan_harian": float(frame["Budget usulan/hari"].sum()),
-        "budget_efektif_harian": float(frame["Budget efektif Shopee/hari"].sum()),
+        "iklan_aktif_rencana": int(len(use)),
+        "biaya_harian": cost_d, "omzet_harian": sales_d,
+        "biaya_total": cost_t, "omzet_total": sales_t,
+        "roas": sales_t / cost_t if cost_t > 0 else (sales_d / cost_d if cost_d > 0 else float("nan")),
+        "target_roas": target_roas,
+        "budget_usulan_harian": float(use["Budget usulan/hari"].sum()),
+        "budget_efektif_harian": float(use["Budget efektif Shopee/hari"].sum()),
         "batas_shopee": floor_hits,
     }

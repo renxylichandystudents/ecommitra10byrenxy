@@ -741,6 +741,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     cost_now = sum(u.daily_cost for u in running)
     sales_now = sum(u.daily_sales for u in running)
     projection, mtd = float(outlook["projection"]), float(outlook["mtd"])
+    mtd_produk = float(outlook.get("mtd_produk") or 0.0)
     factor = float(outlook.get("faktor") or 1.0)
 
     # ---------------- Data bulan berjalan: biaya iklan terpakai (laporan iklan keseluruhan) & kurva respons toko
@@ -760,7 +761,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     current_roas = min(math.floor(sales_now / cost_now * 2) / 2, A.MAX_SHOPEE_ROAS) if cost_now > 0 else 0.0
 
     # ---------------- Pantauan jalur rencana (untuk banner & tab Pantau)
-    track = M.plan_track(cur.get("setelan") or {}, mtd=mtd, last=last, spent=spent, periode=periode) if cur is not None else None
+    track = (M.plan_track(cur.get("setelan") or {}, mtd=mtd, last=last, spent=spent, periode=periode, mtd_produk=mtd_produk)
+             if cur is not None else None)
 
     # ---------------- Periode campaign (dipakai rencana mana pun yang disimpan)
     hi = max(month_end, today + timedelta(days=6))
@@ -863,7 +865,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         render_monitor(
             cur, units=units, members=members, products=products, contribution=contribution, projection=projection, mtd=mtd,
             target_now=float(goals.target_sales), today=today, factor=factor, first_open=first_open, month_end=month_end,
-            periode=periode, has_ads=has_ads, track=track, project_fn=project_fn,
+            periode=periode, has_ads=has_ads, track=track, project_fn=project_fn, ads_overall=ads_overall,
+            spent_month=spent, mtd_produk=mtd_produk,
         )
         return
 
@@ -1066,7 +1069,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 default_name=f"Iklan {month_name} · {source.split(' · ')[-1]} · ROAS {fmt_num(roas, 1)} · {fmt_date(start)} – {fmt_date(end)}",
                 payload={"setelan": {"periode_target": periode, "target": target, "roas": roas, "budget": budget, "budget_bulan": month_budget, "terpakai": spent, "budget_harian": budget_daily, "biaya_harian_rencana": eff["biaya_total"] / max(run_days, 1),
                                      "budget_rencana_harian": used_daily, "proyeksi": final, "capaian": reach, "hari_hitung": run_days, "daya_dorong": lift,
-                                     "strategi_budget_tetap": fixed_used, "sumber": source, "mtd": mtd, "data_sampai": last.isoformat(), "hari_sisa": days_left,
+                                     "strategi_budget_tetap": fixed_used, "sumber": source, "mtd": mtd, "mtd_produk": mtd_produk,
+                                     "data_sampai": last.isoformat(), "hari_sisa": days_left,
                                      "proyeksi_tanpa": projection, "roas_otomatis": auto, "efisiensi_min": mm},
                          "kalender_harian": cmp.records_of(fixed["kalender"]) if fixed_used else [],
                          "jadwal_minggu": cmp.records_of(week_table),

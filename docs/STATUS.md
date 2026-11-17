@@ -2,6 +2,17 @@
 
 Diperbarui: 17 November 2026.
 
+## 2026-11-17 · Pantau iklan: TACoS sales produk, dompet budget, review harian, wajib iklan
+
+- Masukan review: TACoS salah pakai sales bersih; budget 1 angka membingungkan; poin 1 harus performa sejak disimpan (bukan hanya /hari); angka ≠ Seller Center; strategi penuh "jangan iklan"; 616 pemilihan produk & "tidak diiklankan" berisik; butuh review harian tanpa tunggu seminggu.
+- **TACoS sejak disimpan** = biaya iklan ÷ **sales produk** sejak disimpan (sejajar performa iklan Shopee yang menghitung pesanan belum bayar). Jalur target tetap sales bersih. Rencana baru menyimpan `mtd_produk`.
+- **Dompet budget** 4 kartu: total campaign → terpakai bulan → sisa → rencana harian (+ realisasi sejak disimpan vs jalur).
+- **Hasil sejak campaign**: biaya & omzet iklan dari laporan **Keseluruhan iklan** (keluarga angka SC) + ROAS SC; per iklan menampilkan total sejak disimpan + Status SC.
+- Ringkasan per iklan hanya menghitung iklan **aktif di rencana** (budget efektif > 0) agar tidak menggelembung.
+- Poin 2 diganti **Yang harus diiklankan** (pertahankan kuat / buat baru / jeda lemah maks 3) — bukan daftar "jangan iklan".
+- Poin 3: cuplikan iklan berbudget (≤40) + pemilihan produk prioritas (≤25), hapus blok produk tidak diiklankan di pantau.
+- Uji: `tests/test_ads_monitor.py` (TACoS, wallet, must_advertise, evaluate aktif).
+
 ## 2026-11-17 · Pantau rencana tersimpan: matching Seller Center + strategi minggu depan
 
 - Masalah: menu Pantau menandai banyak iklan "tidak sesuai rencana" padahal budget sudah diisi di Seller Center — usulan di bawah **minimum Shopee** (iklan tunggal **Rp 25.000/hari**, iklan grup **Rp 100.000/hari**) tidak bisa dijalankan apa adanya, sehingga banding ±40% vs usulan mentah salah.
