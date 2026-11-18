@@ -47,14 +47,27 @@ class EvaluateSellerFloorTest(unittest.TestCase):
 
 
 class TacosSalesProdukTest(unittest.TestCase):
-    def test_tacos_uses_product_sales_not_net(self):
+    def test_tacos_versus_produk_and_bersih(self):
         s = {"periode_target": "2026-11", "data_sampai": "2026-11-13", "hari_sisa": 17, "mtd": 1_600.0, "mtd_produk": 2_000.0,
              "terpakai": 130.0, "proyeksi": 5_000.0, "proyeksi_tanpa": 3_400.0, "budget_harian": 60.0}
         # 3 hari: sales bersih 2200 (+600), produk 2800 (+800), biaya 310 (+180)
         out = M.plan_track(s, mtd=2_200.0, last=date(2026, 11, 16), spent=310.0, periode="2026-11", mtd_produk=2_800.0)
         self.assertAlmostEqual(out["produk_baru"], 800.0)
+        self.assertAlmostEqual(out["sales_baru"], 600.0)
         self.assertAlmostEqual(out["tacos"], 180.0 / 800.0 * 100)
-        self.assertNotAlmostEqual(out["tacos"], 180.0 / 600.0 * 100)
+        self.assertAlmostEqual(out["tacos_bersih"], 180.0 / 600.0 * 100)
+        self.assertNotAlmostEqual(out["tacos"], out["tacos_bersih"])
+
+    def test_period_sales_helper_shows_both_tacos(self):
+        from src.ui.ads_monitor_view import _period_sales
+
+        track = {"status": "On track", "biaya_baru": 180.0, "produk_baru": 800.0, "sales_baru": 600.0,
+                 "tacos_bersih": 180.0 / 600.0 * 100}
+        out = _period_sales(track, factor=0.8)
+        self.assertAlmostEqual(out["produk"], 800.0)
+        self.assertAlmostEqual(out["bersih"], 600.0)
+        self.assertAlmostEqual(out["tacos_produk"], 180.0 / 800.0 * 100)
+        self.assertAlmostEqual(out["tacos_bersih"], 180.0 / 600.0 * 100)
 
 
 class BudgetWalletTest(unittest.TestCase):

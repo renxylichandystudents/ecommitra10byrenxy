@@ -1,6 +1,15 @@
 # Status terbaru aplikasi
 
-Diperbarui: 17 November 2026.
+Diperbarui: 18 November 2026.
+
+## 2026-11-18 · Pantau iklan A: sales produk/bersih periode + TACoS versus + MTD berpasangan
+
+- Masukan: kartu A rancu — sales produk hanya di bawah, TACoS satu angka, MTD hanya bersih.
+- **Baris 1**: Biaya iklan · Omzet iklan · **Sales produk sejak disimpan** · **Sales bersih sejak disimpan**.
+- **Baris 2**: ROAS SC · **TACoS vs sales produk** (sejajar performa iklan) · **TACoS vs sales bersih** (target toko) · Jalur sales bersih.
+- **Baris 3**: **Sales produk MTD** + **Sales bersih MTD** (pasangan sama menu lain). Kartu "Sales produk sejak disimpan" yang dulu di bawah dihapus.
+- `plan_track` menambah `tacos_bersih`; helper `_period_sales` di UI.
+- Uji: `tests/test_ads_monitor.py` (versus produk/bersih + helper).
 
 ## 2026-11-17 · Pantau iklan: TACoS sales produk, dompet budget, review harian, wajib iklan
 

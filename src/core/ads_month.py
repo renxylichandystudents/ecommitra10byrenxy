@@ -141,8 +141,9 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
     - biaya iklan s.d. hari ini = terpakai saat disimpan + budget harian rencana × hari_berjalan
     On track = sales aktual ≥ sales_tol × jalur. None bila rencana tidak menyimpan titik awal (rencana lama) atau bulan sudah berganti.
 
-    TACoS sejak disimpan = biaya iklan baru ÷ **sales produk** baru (bukan sales bersih): performa iklan Shopee menghitung
-    pesanan belum bayar sebagai omzet iklan, jadi pembanding toko yang sejajar adalah sales produk."""
+    TACoS sejak disimpan (versus):
+    - **TACoS sales produk** = biaya iklan baru ÷ sales produk baru (sejajar performa iklan Shopee: pesanan belum bayar ikut).
+    - **TACoS sales bersih** = biaya iklan baru ÷ sales bersih baru (definisi toko: tanpa batal / Belum Bayar / retur)."""
     s = setelan or {}
     if not s.get("data_sampai") or s.get("periode_target") != periode or not s.get("hari_sisa"):
         return None
@@ -159,7 +160,8 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
            "mtd_produk_awal": produk0, "proyeksi_rencana": final}
     if days <= 0:
         out.update({"status": "Menunggu data", "jalur_sales": mtd0, "jalur_biaya": spent0, "sales": mtd, "biaya": spent,
-                    "produk": produk_now if produk_now == produk_now else 0.0, "produk_baru": 0.0, "tacos": float("nan")})
+                    "produk": produk_now if produk_now == produk_now else 0.0, "produk_baru": 0.0, "sales_baru": 0.0,
+                    "tacos": float("nan"), "tacos_bersih": float("nan")})
         return out
     frac = min(days / left, 1.0)
     path_sales = mtd0 + (final - mtd0) * frac
@@ -170,6 +172,7 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
         produk_now if produk_now == produk_now and produk0 <= 0 else float("nan"))
     # Bila titik awal produk tidak tersimpan, pakai sales produk MTD penuh sebagai pendekatan kasar hanya untuk label, bukan TACoS.
     tacos = cost_new / produk_baru * 100 if produk_baru == produk_baru and produk_baru > 0 else float("nan")
+    tacos_bersih = cost_new / sales_new * 100 if sales_new > 0 else float("nan")
     sales_pct = mtd / path_sales * 100 if path_sales > 0 else float("nan")
     cost_pct = cost_new / (path_cost - spent0) * 100 if path_cost > spent0 else float("nan")
     on = path_sales <= 0 or mtd >= sales_tol * path_sales
@@ -184,7 +187,7 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
         "sales": mtd, "biaya": spent, "sales_baru": sales_new, "biaya_baru": cost_new, "pct_sales": sales_pct, "pct_biaya": cost_pct,
         "selisih_sales": mtd - path_sales, "biaya_status": spend_status,
         "produk": produk_now if produk_now == produk_now else float("nan"),
-        "produk_baru": produk_baru, "tacos": tacos,
+        "produk_baru": produk_baru, "tacos": tacos, "tacos_bersih": tacos_bersih,
         "roas_baru": sales_new / cost_new if cost_new > 0 else float("nan"),
     })
     return out

@@ -100,20 +100,37 @@ def _planned_budgets(cur: dict, *, start: date, report_end: date | None) -> dict
     return planned
 
 
-def _tacos_value(track: dict | None, factor: float) -> tuple[float, str]:
-    """TACoS = biaya iklan sejak disimpan ÷ sales produk sejak disimpan."""
+def _period_sales(track: dict | None, factor: float) -> dict:
+    """Sales & TACoS sejak campaign disimpan: produk (sejajar performa iklan) vs bersih (definisi toko)."""
+    empty = {"produk": float("nan"), "bersih": float("nan"), "tacos_produk": float("nan"), "tacos_bersih": float("nan"),
+             "produk_hint": "menunggu data baru", "bersih_hint": "menunggu data baru",
+             "tacos_produk_hint": "menunggu data baru", "tacos_bersih_hint": "menunggu data baru", "est": False}
     if not track or track.get("status") == "Menunggu data":
-        return float("nan"), "menunggu data baru"
+        return empty
     cost = float(track.get("biaya_baru") or 0)
+    bersih = float(track.get("sales_baru") or 0)
     produk = track.get("produk_baru")
+    est = False
     if produk == produk and produk is not None and float(produk) > 0:
-        return cost / float(produk) * 100, "biaya iklan ÷ sales produk sejak disimpan"
-    # rencana lama tanpa mtd_produk: taksiran sales produk dari sales bersih ÷ faktor
-    sales = float(track.get("sales_baru") or 0)
-    if sales > 0 and factor > 0:
-        est = sales / factor
-        return cost / est * 100, "biaya iklan ÷ sales produk (taksiran dari bersih ÷ faktor; simpan rencana baru agar tepat)"
-    return float("nan"), "sales produk sejak disimpan belum tersedia"
+        produk_v = float(produk)
+        produk_hint = "semua pesanan produk sejak disimpan (termasuk belum bayar & batal) · sejajar performa iklan"
+    elif bersih > 0 and factor > 0:
+        produk_v = bersih / factor
+        est = True
+        produk_hint = "taksiran dari sales bersih ÷ faktor (rencana lama tanpa mtd_produk) · simpan rencana baru agar tepat"
+    else:
+        produk_v = float("nan")
+        produk_hint = "sales produk sejak disimpan belum tersedia"
+    tacos_produk = cost / produk_v * 100 if produk_v == produk_v and produk_v > 0 else float("nan")
+    tacos_bersih = float(track["tacos_bersih"]) if track.get("tacos_bersih") == track.get("tacos_bersih") else (
+        cost / bersih * 100 if bersih > 0 else float("nan"))
+    return {
+        "produk": produk_v, "bersih": bersih, "tacos_produk": tacos_produk, "tacos_bersih": tacos_bersih, "est": est,
+        "produk_hint": produk_hint,
+        "bersih_hint": "Total Pembayaran − batal − Belum Bayar − retur · sama definisi di seluruh menu",
+        "tacos_produk_hint": "biaya iklan ÷ sales produk · sejajar klaim performa iklan (batal/belum bayar ikut)",
+        "tacos_bersih_hint": "biaya iklan ÷ sales bersih · hemat biaya terhadap target toko",
+    }
 
 
 def render_monitor(cur: dict, *, units, members, products, contribution, projection: float, mtd: float, target_now: float,
@@ -183,29 +200,50 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     st.caption(
         f"Sumber biaya & omzet iklan: laporan **Keseluruhan iklan** (sama keluarga angka Seller Center). "
         f"Periode: {fmt_date(since_start)} – {fmt_date(last_data) if store_since.get('hari') else '–'} "
-        f"({fmt_num(store_since.get('hari') or days_since)} hari)."
+        f"({fmt_num(store_since.get('hari') or days_since)} hari). "
+        "Sales produk = semua pesanan produk (sejajar performa iklan); sales bersih = tanpa batal / Belum Bayar / retur."
     )
-    tacos, tacos_hint = _tacos_value(track, factor)
+    period = _period_sales(track, factor)
     a = st.columns(4)
     card(a[0], "Biaya iklan sejak disimpan", fmt_idr(spent_since),
          hint=f"jalur rencana {fmt_idr(wallet['jalur_sejak'])} · <b>{(track or {}).get('biaya_status', '–')}</b>")
     card(a[1], "Omzet iklan sejak disimpan", fmt_idr(omzet_since),
          hint="klaim Shopee (termasuk pesanan belum bayar) · dari laporan keseluruhan")
-    card(a[2], "ROAS iklan (SC)", fmt_num(store_roas, 1) if store_roas == store_roas else "–",
+    card(a[2], "Sales produk sejak disimpan",
+         fmt_idr(period["produk"]) if period["produk"] == period["produk"] else "–",
+         hint=period["produk_hint"])
+    card(a[3], "Sales bersih sejak disimpan",
+         fmt_idr(period["bersih"]) if period["bersih"] == period["bersih"] else "–",
+         hint=period["bersih_hint"])
+
+    b = st.columns(4)
+    card(b[0], "ROAS iklan (SC)", fmt_num(store_roas, 1) if store_roas == store_roas else "–",
          hint=f"target {fmt_num(roas, 1)} · <b style='color:{_tone(store_roas >= roas * 0.9 if store_roas == store_roas else False)}'>"
               f"{'sesuai' if store_roas == store_roas and store_roas >= roas * 0.9 else 'di bawah / menunggu'}</b>")
-    card(a[3], "TACoS sejak disimpan", fmt_pct(tacos, 1) if tacos == tacos else "–",
-         hint=tacos_hint + " · makin kecil makin hemat")
+    card(b[1], "TACoS vs sales produk",
+         fmt_pct(period["tacos_produk"], 1) if period["tacos_produk"] == period["tacos_produk"] else "–",
+         hint=period["tacos_produk_hint"] + " · makin kecil makin hemat")
+    card(b[2], "TACoS vs sales bersih",
+         fmt_pct(period["tacos_bersih"], 1) if period["tacos_bersih"] == period["tacos_bersih"] else "–",
+         hint=period["tacos_bersih_hint"] + " · makin kecil makin hemat")
     if track and track.get("status") not in (None, "Menunggu data"):
-        b = st.columns(3)
         on = track["status"] == "On track"
-        card(b[0], "Jalur sales bersih", "✅ On track" if on else "⚠️ Tertinggal",
+        card(b[3], "Jalur sales bersih", "✅ On track" if on else "⚠️ Tertinggal",
              hint=f"{track['hari']} hari · {fmt_pct(track['pct_sales'], 1)} jalur · target toko memakai sales bersih")
-        card(b[1], "Sales bersih MTD", fmt_idr(track["sales"]),
-             hint=f"jalur {fmt_idr(track['jalur_sales'])} · {_signed(track['selisih_sales'])}")
-        card(b[2], "Sales produk sejak disimpan",
-             fmt_idr(track["produk_baru"]) if track.get("produk_baru") == track.get("produk_baru") else "–",
-             hint="pembanding TACoS · sejajar performa iklan (pesanan belum bayar ikut di sales produk)")
+    else:
+        card(b[3], "Jalur sales bersih", "–", hint="menunggu data baru setelah campaign disimpan")
+
+    # MTD: pasangan sales produk & sales bersih (konsisten menu lain)
+    c = st.columns(2)
+    produk_mtd = float(mtd_produk) if mtd_produk is not None else float("nan")
+    bersih_mtd = float(mtd) if mtd is not None else float("nan")
+    card(c[0], "Sales produk MTD", fmt_idr(produk_mtd) if produk_mtd == produk_mtd else "–",
+         hint="bulan berjalan · semua pesanan produk (termasuk belum bayar & batal) · pembanding performa iklan")
+    jalur_hint = ""
+    if track and track.get("status") not in (None, "Menunggu data"):
+        jalur_hint = f"jalur {fmt_idr(track['jalur_sales'])} · {_signed(track['selisih_sales'])} · "
+    card(c[1], "Sales bersih MTD", fmt_idr(bersih_mtd) if bersih_mtd == bersih_mtd else "–",
+         hint=f"{jalur_hint}tanpa batal / Belum Bayar / retur · acuan target toko")
 
     tip = Mon.spend_gap_tip(wallet, store_since, summary)
     if tip:
