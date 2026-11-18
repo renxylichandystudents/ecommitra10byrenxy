@@ -2,6 +2,11 @@
 
 Diperbarui: 18 November 2026.
 
+## 2026-11-18 · Pantau poin 1: hapus kartu biaya/omzet/ROAS (sudah di A)
+
+- Empat kartu ringkasan di **1 · Pelaksanaan per iklan** (aktif, biaya per iklan, omzet, ROAS) dihapus karena angka toko sudah di bagian A.
+- Poin 1 tinggal caption ringkas (berapa iklan sesuai) + **Tindakan hari ini** + tabel fokus.
+
 ## 2026-11-18 · Pantau iklan A: sales produk/bersih periode + TACoS versus + MTD berpasangan
 
 - Masukan: kartu A rancu — sales produk hanya di bawah, TACoS satu angka, MTD hanya bersih.

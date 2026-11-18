@@ -279,13 +279,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         st.button("Buka Rekomendasi sistem", key="adt-renew", type="primary",
                   on_click=st.session_state.__setitem__, args=("adt-view-next", VIEW_REC))
 
-    # -------- 1. Pelaksanaan per iklan
+    # -------- 1. Pelaksanaan per iklan (kartu biaya/omzet/ROAS dihapus — sudah di bagian A)
     st.markdown("### 1 · Pelaksanaan per iklan (sejak disimpan)")
-    st.caption(
-        "Angka per iklan dari laporan **produk tunggal + grup** (selisih sejak baseline campaign). "
-        f"Minimum Shopee: {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal · {fmt_idr(A.SHOPEE_MIN_GROUP)} grup. "
-        "Status SC = terlihat berjalan di laporan terbaru."
-    )
     if not base:
         st.info("Campaign tanpa baseline evaluasi. Simpan ulang sebagai campaign baru agar bisa dibanding harian.")
     elif report_end is None or report_end < start:
@@ -293,18 +288,14 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     elif not summary:
         st.info("Belum ada hari baru sejak campaign disimpan. Unggah laporan iklan esok hari.")
     else:
-        c = st.columns(4)
-        card(c[0], "Iklan aktif di rencana", f"{fmt_num(summary.get('dijalankan', 0))} / {fmt_num(summary.get('iklan_aktif_rencana', summary['iklan']))}",
-             hint=f"laporan s.d. {fmt_date(report_end)} · {fmt_num(summary['hari'])} hari"
-                  + (f" · {fmt_num(summary.get('batas_shopee', 0))} di min. Shopee" if summary.get("batas_shopee") else ""))
-        card(c[1], "Biaya sejak disimpan (per iklan)", fmt_idr(summary.get("biaya_total", summary["biaya_harian"] * summary["hari"])),
-             hint=f"≈ {fmt_idr(summary['biaya_harian'])}/hari · acuan efektif {fmt_idr(summary.get('budget_efektif_harian', 0))}/hari")
-        card(c[2], "Omzet iklan sejak disimpan", fmt_idr(summary.get("omzet_total", summary["omzet_harian"] * summary["hari"])),
-             hint=f"≈ {fmt_idr(summary['omzet_harian'])}/hari · hanya iklan di rencana aktif")
-        ok_roas = summary["roas"] >= roas * 0.9 if summary.get("roas") == summary.get("roas") else False
-        card(c[3], "ROAS per iklan (rencana)", fmt_num(summary["roas"], 1),
-             hint=f"target {fmt_num(roas, 1)} · <b style='color:{_tone(ok_roas)}'>{'sesuai' if ok_roas else 'di bawah'}</b>")
-
+        aktif = fmt_num(summary.get("dijalankan", 0))
+        rencana = fmt_num(summary.get("iklan_aktif_rencana", summary["iklan"]))
+        st.caption(
+            f"Fokus tindakan & tabel per iklan (laporan produk tunggal + grup). "
+            f"{aktif}/{rencana} iklan aktif sesuai acuan · laporan s.d. {fmt_date(report_end)} · {fmt_num(summary['hari'])} hari"
+            + (f" · {fmt_num(summary.get('batas_shopee', 0))} di min. Shopee" if summary.get("batas_shopee") else "")
+            + f". Minimum Shopee: {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal · {fmt_idr(A.SHOPEE_MIN_GROUP)} grup."
+        )
         # tampilkan dulu yang perlu tindakan + yang aktif
         focus = classified.loc[
             (classified["Tindakan"] != "Pertahankan") | (classified.get("Budget efektif Shopee/hari", 0) > 0)
