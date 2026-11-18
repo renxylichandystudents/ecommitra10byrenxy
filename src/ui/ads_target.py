@@ -761,7 +761,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     current_roas = min(math.floor(sales_now / cost_now * 2) / 2, A.MAX_SHOPEE_ROAS) if cost_now > 0 else 0.0
 
     # ---------------- Pantauan jalur rencana (untuk banner & tab Pantau)
-    track = (M.plan_track(cur.get("setelan") or {}, mtd=mtd, last=last, spent=spent, periode=periode, mtd_produk=mtd_produk)
+    track = (M.plan_track(cur.get("setelan") or {}, mtd=mtd, last=last, spent=spent, periode=periode, mtd_produk=mtd_produk,
+                          factor=factor)
              if cur is not None else None)
 
     # ---------------- Periode campaign (dipakai rencana mana pun yang disimpan)
@@ -866,7 +867,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             cur, units=units, members=members, products=products, contribution=contribution, projection=projection, mtd=mtd,
             target_now=float(goals.target_sales), today=today, factor=factor, first_open=first_open, month_end=month_end,
             periode=periode, has_ads=has_ads, track=track, project_fn=project_fn, ads_overall=ads_overall,
-            spent_month=spent, mtd_produk=mtd_produk,
+            spent_month=spent, mtd_produk=mtd_produk, features=features, username=username or "",
         )
         return
 

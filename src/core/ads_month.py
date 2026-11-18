@@ -133,7 +133,7 @@ def month_plan(curve: StoreCurve | None, *, target: float, projection: float, sp
 
 
 def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: str, sales_tol: float = 0.97, spend_tol: float = 0.15,
-               mtd_produk: float | None = None) -> dict | None:
+               mtd_produk: float | None = None, factor: float | None = None) -> dict | None:
     """Pantauan rencana iklan tersimpan: apakah sales bersih & biaya iklan sejak rencana disimpan sesuai jalur rencana.
 
     Jalur rencana (dibagi rata ke hari tersisa saat disimpan):
@@ -141,9 +141,10 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
     - biaya iklan s.d. hari ini = terpakai saat disimpan + budget harian rencana × hari_berjalan
     On track = sales aktual ≥ sales_tol × jalur. None bila rencana tidak menyimpan titik awal (rencana lama) atau bulan sudah berganti.
 
-    TACoS sejak disimpan (versus):
-    - **TACoS sales produk** = biaya iklan baru ÷ sales produk baru (sejajar performa iklan Shopee: pesanan belum bayar ikut).
-    - **TACoS sales bersih** = biaya iklan baru ÷ sales bersih baru (definisi toko: tanpa batal / Belum Bayar / retur)."""
+    TACoS **sejak campaign** (bukan MTD):
+    - **TACoS sales produk** = biaya iklan baru ÷ sales produk baru (sejajar performa iklan Shopee).
+    - **TACoS sales bersih** = biaya iklan baru ÷ sales bersih baru.
+    Bila `mtd_produk` awal tidak tersimpan, sales produk sejak ditaksir `sales_baru / factor` (bukan MTD penuh)."""
     s = setelan or {}
     if not s.get("data_sampai") or s.get("periode_target") != periode or not s.get("hari_sisa"):
         return None
@@ -161,16 +162,22 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
     if days <= 0:
         out.update({"status": "Menunggu data", "jalur_sales": mtd0, "jalur_biaya": spent0, "sales": mtd, "biaya": spent,
                     "produk": produk_now if produk_now == produk_now else 0.0, "produk_baru": 0.0, "sales_baru": 0.0,
-                    "tacos": float("nan"), "tacos_bersih": float("nan")})
+                    "tacos": float("nan"), "tacos_bersih": float("nan"), "produk_est": False})
         return out
     frac = min(days / left, 1.0)
     path_sales = mtd0 + (final - mtd0) * frac
     path_base = mtd0 + (base - mtd0) * frac
     path_cost = spent0 + daily_budget * min(days, left)
     sales_new, cost_new = mtd - mtd0, spent - spent0
-    produk_baru = (produk_now - produk0) if produk_now == produk_now and produk0 > 0 else (
-        produk_now if produk_now == produk_now and produk0 <= 0 else float("nan"))
-    # Bila titik awal produk tidak tersimpan, pakai sales produk MTD penuh sebagai pendekatan kasar hanya untuk label, bukan TACoS.
+    produk_est = False
+    if produk_now == produk_now and produk0 > 0:
+        produk_baru = produk_now - produk0
+    elif sales_new > 0 and factor and float(factor) > 0:
+        # Jangan pakai MTD penuh — itu mencampur sebelum campaign.
+        produk_baru = sales_new / float(factor)
+        produk_est = True
+    else:
+        produk_baru = float("nan")
     tacos = cost_new / produk_baru * 100 if produk_baru == produk_baru and produk_baru > 0 else float("nan")
     tacos_bersih = cost_new / sales_new * 100 if sales_new > 0 else float("nan")
     sales_pct = mtd / path_sales * 100 if path_sales > 0 else float("nan")
@@ -187,7 +194,7 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
         "sales": mtd, "biaya": spent, "sales_baru": sales_new, "biaya_baru": cost_new, "pct_sales": sales_pct, "pct_biaya": cost_pct,
         "selisih_sales": mtd - path_sales, "biaya_status": spend_status,
         "produk": produk_now if produk_now == produk_now else float("nan"),
-        "produk_baru": produk_baru, "tacos": tacos, "tacos_bersih": tacos_bersih,
+        "produk_baru": produk_baru, "produk_est": produk_est, "tacos": tacos, "tacos_bersih": tacos_bersih,
         "roas_baru": sales_new / cost_new if cost_new > 0 else float("nan"),
     })
     return out

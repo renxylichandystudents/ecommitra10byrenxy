@@ -327,3 +327,176 @@ def spend_gap_tip(wallet: dict, store_since: dict, summary: dict) -> str:
     if summary.get("batas_shopee"):
         bits.append(f"{summary['batas_shopee']} iklan di min. Shopee 25 rb/100 rb (bukan gagal rencana)")
     return " · ".join(bits)
+
+
+def complete_plan_rows(classified: pd.DataFrame, planned: dict[str, float], *, names: dict[str, tuple[str, str]],
+                       target_roas: float, running_keys: set[str] | None = None) -> pd.DataFrame:
+    """Pastikan semua kunci campaign tersimpan muncul, meski belum ada di laporan terbaru."""
+    have = set(classified["_key"].astype(str)) if isinstance(classified, pd.DataFrame) and not classified.empty and "_key" in classified.columns else set()
+    rows = []
+    for key, plan in (planned or {}).items():
+        if str(key) in have:
+            continue
+        kind = (names.get(str(key)) or ("", "Grup" if str(key).startswith("grup:") else "Produk tunggal"))[1]
+        nama = (names.get(str(key)) or (str(key), kind))[0]
+        expected = A.implementable_budget(float(plan or 0), kind)
+        rows.append({
+            "_key": str(key), "Iklan": nama, "Jenis": kind, "Hari dievaluasi": 0,
+            "Budget usulan/hari": float(plan or 0), "Budget efektif Shopee/hari": expected,
+            "Biaya aktual/hari": 0.0, "Omzet iklan aktual/hari": 0.0,
+            "Biaya sejak disimpan": 0.0, "Omzet iklan sejak disimpan": 0.0, "ROAS aktual": float("nan"),
+            "Rasio vs efektif": float("nan"), "Status pelaksanaan": "Belum ada di laporan",
+            "Rekomendasi dijalankan": "Belum", "Catatan batas": "",
+        })
+    extra = pd.DataFrame(rows)
+    if extra.empty:
+        frame = classified.copy() if isinstance(classified, pd.DataFrame) else pd.DataFrame()
+    elif classified is None or classified.empty:
+        frame = classify_rows(extra, target_roas=target_roas, running_keys=running_keys)
+    else:
+        frame = pd.concat([classified, classify_rows(extra, target_roas=target_roas, running_keys=running_keys)],
+                          ignore_index=True)
+    return sort_by_omzet(frame)
+
+
+def sort_by_omzet(frame: pd.DataFrame) -> pd.DataFrame:
+    """Urut omzet iklan sejak disimpan terbesar (prioritas sales)."""
+    if frame is None or frame.empty:
+        return pd.DataFrame() if frame is None else frame
+    out = frame.copy()
+    col = "Omzet iklan sejak disimpan"
+    if col not in out.columns:
+        return out
+    out["_omz"] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    return out.sort_values("_omz", ascending=False).drop(columns=["_omz"]).reset_index(drop=True)
+
+
+def split_in_out_plan(classified: pd.DataFrame, planned: dict[str, float], current: dict[str, dict],
+                     baseline: dict[str, dict], *, names: dict[str, tuple[str, str]], kinds: dict[str, str],
+                     target_roas: float, running_keys: set[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Pisah iklan di dalam rencana campaign vs yang berbiaya di laporan tetapi tidak ada di plan."""
+    plan_keys = {str(k) for k in (planned or {})}
+    in_plan = complete_plan_rows(classified, planned or {}, names=names, target_roas=target_roas, running_keys=running_keys)
+
+    # Di luar plan: ada di laporan sekarang, tidak ada di kunci campaign, dan ada biaya sejak baseline
+    outsider_planned = {}
+    for key, cur in (current or {}).items():
+        k = str(key)
+        if k in plan_keys:
+            continue
+        base = (baseline or {}).get(k) or {}
+        if base and base.get("periode") == cur.get("periode"):
+            days = int(cur.get("hari", 0)) - int(base.get("hari", 0))
+            cost = float(cur.get("biaya", 0)) - float(base.get("biaya", 0))
+        else:
+            days, cost = int(cur.get("hari", 0)), float(cur.get("biaya", 0))
+        if days > 0 and cost > 5_000:
+            outsider_planned[k] = 0.0  # tidak di plan → acuan jeda
+
+    out_frame = pd.DataFrame()
+    if outsider_planned:
+        frame, _ = A.evaluate(baseline or {}, current or {}, outsider_planned, target_roas=target_roas, jenis=kinds)
+        if not frame.empty:
+            frame.insert(1, "Iklan", frame["_key"].map(lambda k: (names.get(str(k)) or (str(k), ""))[0]))
+            if "Jenis" not in frame.columns or frame["Jenis"].isna().all():
+                frame["Jenis"] = frame["_key"].map(
+                    lambda k: kinds.get(str(k)) or ((names.get(str(k)) or ("", "Produk tunggal"))[1]))
+            out_frame = sort_by_omzet(classify_rows(frame, target_roas=target_roas, running_keys=running_keys))
+    return in_plan, out_frame
+
+
+def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: pd.DataFrame) -> tuple[dict, bool]:
+    """Simpan/timpa checkpoint harian per iklan di campaign['pantau_harian']. True bila ada perubahan."""
+    if report_date is None or rows is None or (isinstance(rows, pd.DataFrame) and rows.empty):
+        return campaign, False
+    day = report_date.isoformat()
+    items = []
+    for _, r in rows.iterrows():
+        key = str(r.get("_key") or "")
+        if not key:
+            continue
+        biaya = float(r.get("Biaya sejak disimpan") or 0)
+        omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
+        items.append({
+            "key": key,
+            "iklan": str(r.get("Iklan") or key),
+            "biaya": round(biaya, 2),
+            "omzet": round(omzet, 2),
+            "roas": round(omzet / biaya, 4) if biaya > 0 else None,
+            "biaya_hari": round(float(r.get("Biaya aktual/hari") or 0), 2),
+            "budget_plan": round(float(r.get("Budget usulan/hari") or 0), 2),
+            "budget_setup": round(float(r.get("Budget efektif Shopee/hari") or 0), 2),
+            "tindakan": str(r.get("Tindakan") or ""),
+        })
+    entry = {"tanggal": day, "items": items}
+    log = list(campaign.get("pantau_harian") or [])
+    prev = next((e for e in log if str(e.get("tanggal") or "")[:10] == day), None)
+    if prev is not None and prev.get("items") == items:
+        return campaign, False
+    log = [e for e in log if str(e.get("tanggal") or "")[:10] != day]
+    log.append(entry)
+    log = sorted(log, key=lambda e: str(e.get("tanggal") or ""))[-60:]
+    return {**campaign, "pantau_harian": log}, True
+
+
+def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = None,
+                      today_row: dict | None = None) -> pd.DataFrame:
+    """Riwayat harian satu iklan: checkpoint tersimpan + titik baseline/hari ini bila belum ada log."""
+    rows = []
+    for entry in campaign.get("pantau_harian") or []:
+        day = str(entry.get("tanggal") or "")[:10]
+        for it in entry.get("items") or []:
+            if str(it.get("key")) != str(key):
+                continue
+            roas = it.get("roas")
+            rows.append({
+                "Tanggal": day,
+                "Biaya sejak disimpan": float(it.get("biaya") or 0),
+                "Omzet iklan sejak disimpan": float(it.get("omzet") or 0),
+                "ROAS": float(roas) if roas is not None and roas == roas else float("nan"),
+                "Actual pemakaian/hari": float(it.get("biaya_hari") or 0),
+                "Budget plan": float(it.get("budget_plan") or 0),
+                "Budget setup SC": float(it.get("budget_setup") or 0),
+                "Tindakan": str(it.get("tindakan") or ""),
+            })
+    if not rows and baseline_row is not None:
+        rows.append({
+            "Tanggal": str(baseline_row.get("tanggal") or "baseline")[:10],
+            "Biaya sejak disimpan": 0.0,
+            "Omzet iklan sejak disimpan": 0.0,
+            "ROAS": float("nan"),
+            "Actual pemakaian/hari": 0.0,
+            "Budget plan": float(baseline_row.get("budget_plan") or 0),
+            "Budget setup SC": float(baseline_row.get("budget_setup") or 0),
+            "Tindakan": "titik saat campaign disimpan",
+        })
+    if today_row is not None:
+        day = str(today_row.get("tanggal") or "")[:10]
+        if not any(r["Tanggal"] == day for r in rows):
+            rows.append({
+                "Tanggal": day or "hari ini",
+                "Biaya sejak disimpan": float(today_row.get("biaya") or 0),
+                "Omzet iklan sejak disimpan": float(today_row.get("omzet") or 0),
+                "ROAS": float(today_row["roas"]) if today_row.get("roas") == today_row.get("roas") else float("nan"),
+                "Actual pemakaian/hari": float(today_row.get("biaya_hari") or 0),
+                "Budget plan": float(today_row.get("budget_plan") or 0),
+                "Budget setup SC": float(today_row.get("budget_setup") or 0),
+                "Tindakan": str(today_row.get("tindakan") or ""),
+            })
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values("Tanggal").reset_index(drop=True)
+
+
+def rename_budget_triad(frame: pd.DataFrame) -> pd.DataFrame:
+    """Label baku: Budget plan · Budget setup SC · Actual pemakaian."""
+    if frame is None or frame.empty:
+        return frame if frame is not None else pd.DataFrame()
+    out = frame.copy()
+    rename = {
+        "Budget usulan/hari": "Budget plan/hari",
+        "Budget efektif Shopee/hari": "Budget setup SC/hari",
+        "Biaya aktual/hari": "Actual pemakaian/hari",
+    }
+    return out.rename(columns={k: v for k, v in rename.items() if k in out.columns})

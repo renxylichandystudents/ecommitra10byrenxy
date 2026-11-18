@@ -2,6 +2,15 @@
 
 Diperbarui: 18 November 2026.
 
+## 2026-11-18 · Pantau: MTD vs campaign + poin 1 lengkap + checkpoint harian
+
+- Bug: sales produk “sejak” = MTD penuh bila rencana lama tanpa `mtd_produk` → TACoS produk salah. `plan_track` kini menaksir `sales_baru / factor`, tidak pernah memakai MTD penuh.
+- Bagian A: kartu sales produk sejak dihapus; diganti **2 kolom** MTD vs sejak campaign (sales produk, sales bersih, TACoS produk, TACoS bersih) — pembagi selalu seperiode dengan biaya.
+- Poin 1: semua iklan campaign urut omzet; triad **Budget plan / Budget setup SC / Actual pemakaian**; short insight + rekomendasi; **Detailed** = historis harian.
+- Checkpoint `campaign["pantau_harian"]` tiap buka Pantau (satu entri per tanggal laporan); hari sebelum fitur = baseline + hari ini.
+- Blok terpisah **Di luar rencana campaign** (berbiaya di laporan, tidak ada di plan).
+- Uji: `tests/test_ads_monitor.py` (produk_baru tanpa mtd_produk, split in/out, checkpoint, urut omzet).
+
 ## 2026-11-18 · Pantau poin 1: hapus kartu biaya/omzet/ROAS (sudah di A)
 
 - Empat kartu ringkasan di **1 · Pelaksanaan per iklan** (aktif, biaya per iklan, omzet, ROAS) dihapus karena angka toko sudah di bagian A.
