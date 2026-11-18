@@ -1,6 +1,21 @@
 # Status terbaru aplikasi
 
-Diperbarui: 18 November 2026.
+Diperbarui: 18 November 2026 (malam) · **lanjut besok**.
+
+## Lanjut besok (18→19 Nov) · Pantau iklan
+
+Sesi berhenti malam 18 Nov. Kode sudah di `main` (`1965fa2`). Naskah tesis: `docs/Tesis_Renxy_Lichandy.docx` (belum dikoreksi malam ini — user minta buka file lalu pindah ke pantau iklan).
+
+**Sudah selesai hari ini**
+- Bagian A: pembanding 2 kolom MTD vs sejak campaign; TACoS seperiode dengan biaya; perbaikan bug sales produk = MTD.
+- Poin 1: semua iklan urut omzet; triad Budget plan / setup SC / actual; Detailed + `pantau_harian`; blok di luar plan.
+- Kartu KPI redundant poin 1 dihapus.
+
+**Catatan diskusi terakhir (belum ubah kode)**
+- User tanya kenapa **Omzet iklan sejak** (Rp 643 jt, laporan SC) ≠ **Sales produk sejak** (Rp 466 jt, taksiran transaksi). Dijelaskan: beda sumber/arti, tidak harus sama. Sales produk sejak masih **taksiran** karena campaign lama tanpa `mtd_produk` — saran: simpan rencana baru agar delta nyata.
+- Bila besok ingin lanjut: (1) koreksi naskah tesis, atau (2) rapikan label/hint Pantau supaya omzet iklan vs sales produk tidak rancu, atau (3) simpan campaign baru lalu cek angka sales produk sejak tanpa taksiran.
+
+**Cek lokal:** `streamlit run app.py` → localhost:8501 · Pantau rencana tersimpan.
 
 ## 2026-11-18 · Pantau: MTD vs campaign + poin 1 lengkap + checkpoint harian
 
