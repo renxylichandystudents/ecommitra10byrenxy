@@ -15,7 +15,7 @@ from __future__ import annotations
 import calendar
 import math
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -44,6 +44,118 @@ def ad_spend(ads_overall: pd.DataFrame | None, start: date, end: date) -> dict:
     if "_uhi" in rows.columns and rows["_uhi"].notna().any():
         covered_hi = min(pd.Timestamp(rows["_uhi"].max()).date(), end)
     return {"biaya": float(rows["biaya_iklan"].sum()), "omzet": float(rows["omzet_iklan"].sum()), "hari": int(days), "sampai": covered_hi}
+
+
+def overall_upload_snapshots(ads_overall: pd.DataFrame | None) -> pd.DataFrame:
+    """Setiap unggahan laporan *all iklan* sebagai snapshot utuh (tanpa prorata/tumpang-tindih).
+
+    Satu file overall: jumlah semua baris = total toko pada rentang Periode laporan.
+    Kolom: lo, hi, hari, biaya, omzet, submitted.
+    """
+    from src.core import ads as A
+
+    cols = ["lo", "hi", "hari", "biaya", "omzet", "submitted"]
+    if ads_overall is None or not isinstance(ads_overall, pd.DataFrame) or ads_overall.empty:
+        return pd.DataFrame(columns=cols)
+    work = ads_overall.copy()
+    if "cost" in work.columns:
+        work["_b"] = A._number(work["cost"])
+    elif "biaya_iklan" in work.columns:
+        work["_b"] = pd.to_numeric(work["biaya_iklan"], errors="coerce").fillna(0.0)
+    else:
+        work["_b"] = 0.0
+    if "ad_sales" in work.columns:
+        work["_o"] = A._number(work["ad_sales"])
+    elif "omzet_iklan" in work.columns:
+        work["_o"] = pd.to_numeric(work["omzet_iklan"], errors="coerce").fillna(0.0)
+    else:
+        work["_o"] = 0.0
+    lo, hi = A._ranges(work)
+    work["_lo"], work["_hi"] = lo, hi
+    work = work.loc[work["_lo"].notna() & work["_hi"].notna()].copy()
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+    work["_sub"] = work["_submitted_at"].astype(str) if "_submitted_at" in work.columns else ""
+    work["_src"] = work["_source_key"].fillna("").astype(str) if "_source_key" in work.columns else "ads_overall"
+    # Identitas unggahan: sumber + rentang + waktu submit
+    keys = ["_src", "_lo", "_hi", "_sub"]
+    rows = []
+    for key, part in work.groupby(keys, sort=False):
+        a = pd.Timestamp(key[1]).date()
+        b = pd.Timestamp(key[2]).date()
+        rows.append({
+            "lo": a, "hi": b, "hari": (b - a).days + 1,
+            "biaya": float(part["_b"].sum()), "omzet": float(part["_o"].sum()),
+            "submitted": str(key[3] or ""),
+        })
+    out = pd.DataFrame(rows, columns=cols)
+    if out.empty:
+        return out
+    # Satu rentang boleh terunggah ulang: ambil submit terakhir
+    out = out.sort_values(["hi", "submitted"]).drop_duplicates(["lo", "hi"], keep="last")
+    return out.reset_index(drop=True)
+
+
+def daily_ad_totals(
+    ads_overall: pd.DataFrame | None,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> pd.DataFrame:
+    """Biaya & omzet **per tanggal kalender** dari laporan all iklan — tanpa bagi rata bulanan.
+
+    Cara baca (sejajar filter tanggal di Seller Center):
+    1. Laporan 1 hari (lo=hi=D) → angka D langsung.
+    2. Beberapa unggahan MTD dengan lo sama dan hi berturut (D, D+1, …) →
+       angka hari hi = total(hi) − total(hi−1).
+    Hari tanpa bukti laporan harian/MTD beruntun → tidak diisi (bukan prorata).
+    """
+    cols = ["Tanggal", "Biaya", "Omzet", "Sumber"]
+    snaps = overall_upload_snapshots(ads_overall)
+    if snaps.empty:
+        return pd.DataFrame(columns=cols)
+    by_day: dict[date, dict] = {}
+
+    # 1) Laporan tepat 1 hari
+    for row in snaps.itertuples(index=False):
+        if int(row.hari) == 1:
+            d = row.lo
+            by_day[d] = {"Biaya": float(row.biaya), "Omzet": float(row.omzet), "Sumber": "laporan 1 hari"}
+
+    # 2) MTD / rentang sama-lo: selisih kumulatif antar hi berurutan 1 hari
+    for lo, part in snaps.groupby("lo", sort=True):
+        part = part.sort_values("hi")
+        prev = None
+        for row in part.itertuples(index=False):
+            if prev is not None and row.hi == prev.hi + timedelta(days=1):
+                d = row.hi
+                # Jangan timpa angka dari laporan 1 hari yang lebih eksplisit
+                if d not in by_day or by_day[d].get("Sumber") != "laporan 1 hari":
+                    by_day[d] = {
+                        "Biaya": float(row.biaya) - float(prev.biaya),
+                        "Omzet": float(row.omzet) - float(prev.omzet),
+                        "Sumber": f"selisih MTD {lo.isoformat()}→{d.isoformat()}",
+                    }
+            prev = row
+            # hi pertama dengan hari=1 sudah tertangani; bila MTD panjang tanpa pasangan
+            # sebelumnya, hari di dalamnya tidak diarang.
+
+    if not by_day:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for d in sorted(by_day):
+        if start is not None and d < start:
+            continue
+        if end is not None and d > end:
+            continue
+        item = by_day[d]
+        rows.append({
+            "Tanggal": d.isoformat(),
+            "Biaya": item["Biaya"],
+            "Omzet": item["Omzet"],
+            "Sumber": item["Sumber"],
+        })
+    return pd.DataFrame(rows, columns=cols)
 
 
 @dataclass

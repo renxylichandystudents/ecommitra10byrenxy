@@ -38,6 +38,42 @@ def test_ad_spend_prorates_month_to_date():
     assert round(out["biaya"]) == 10e6 and out["hari"] == 10
 
 
+def test_daily_ad_totals_from_single_day_uploads():
+    # Sejajar SC filter 1 hari / Kemarin — jangan bagi rata bulanan
+    ov = pd.DataFrame([
+        {"Periode laporan (teks)": "17/11/2026 - 17/11/2026", "period": "2026-11-17",
+         "cost": 7e6, "ad_sales": 100e6, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-18T08:00:00+07:00", "_source_key": "ads_overall"},
+        {"Periode laporan (teks)": "18/11/2026 - 18/11/2026", "period": "2026-11-18",
+         "cost": 8_154_135, "ad_sales": 128_168_508, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-19T08:00:00+07:00", "_source_key": "ads_overall"},
+    ])
+    daily = M.daily_ad_totals(ov, start=date(2026, 11, 17), end=date(2026, 11, 18))
+    assert list(daily["Tanggal"]) == ["2026-11-17", "2026-11-18"]
+    assert round(daily.iloc[1]["Biaya"]) == 8_154_135
+    assert daily.iloc[0]["Biaya"] != daily.iloc[1]["Biaya"]
+
+
+def test_daily_ad_totals_from_consecutive_mtd():
+    ov = pd.DataFrame([
+        {"Periode laporan (teks)": "01/11/2026 - 17/11/2026", "period": "2026-11-01",
+         "cost": 100e6, "ad_sales": 1000e6, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-18T08:00:00+07:00", "_source_key": "ads_overall"},
+        {"Periode laporan (teks)": "01/11/2026 - 18/11/2026", "period": "2026-11-01",
+         "cost": 108_154_135, "ad_sales": 1128_168_508, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-19T08:00:00+07:00", "_source_key": "ads_overall"},
+    ])
+    daily = M.daily_ad_totals(ov, start=date(2026, 11, 18), end=date(2026, 11, 18))
+    assert len(daily) == 1
+    assert round(daily.iloc[0]["Biaya"]) == 8_154_135
+
+
+def test_daily_ad_totals_does_not_invent_prorata_from_month_blob():
+    ov = _overall([("01/11/2026", "18/11/2026", 18e6, 200e6)])
+    daily = M.daily_ad_totals(ov, start=date(2026, 11, 1), end=date(2026, 11, 18))
+    assert daily.empty  # tidak mengarang 1 jt/hari
+
+
 class PlanTrackTest(unittest.TestCase):
     def setUp(self):
         self.s = {"periode_target": "2026-11", "data_sampai": "2026-11-13", "hari_sisa": 17, "mtd": 1_600.0, "terpakai": 130.0,

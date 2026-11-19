@@ -523,25 +523,18 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             contribution=contribution, planned_singles=singles,
         )
         classified = in_plan
-        # Checkpoint harian + ringkasan toko (sales kotor/bersih/MTD) — setelah hygiene anggota
-        if features is not None and not in_plan.empty and report_end is not None:
+        # Checkpoint hanya untuk hari laporan yang sudah penuh (bukan hari ini)
+        checkpoint_day = report_end
+        if checkpoint_day is not None and checkpoint_day >= today:
+            checkpoint_day = today - timedelta(days=1)
+        if features is not None and not in_plan.empty and checkpoint_day is not None and checkpoint_day >= start:
             merged = in_plan if out_plan.empty else pd.concat([in_plan, out_plan], ignore_index=True)
             period_now = _period_sales(track, factor)
             plan_hari = float(pd.to_numeric(merged.get("Budget usulan/hari"), errors="coerce").fillna(0).sum()) if "Budget usulan/hari" in merged.columns else 0.0
             actual_hari = float(pd.to_numeric(merged.get("Budget efektif Shopee/hari"), errors="coerce").fillna(0).sum()) if "Budget efektif Shopee/hari" in merged.columns else 0.0
-            # Utamakan angka toko (Keseluruhan iklan + track), sama dengan kartu ringkasan — bukan rumus baru
-            prev_biaya = float("nan")
-            for entry in sorted(list(cur.get("pantau_harian") or []), key=lambda e: str(e.get("tanggal") or "")):
-                day_e = str(entry.get("tanggal") or "")[:10]
-                if day_e and day_e < report_end.isoformat():
-                    t = entry.get("toko") or {}
-                    if t.get("biaya_sejak") is not None:
-                        prev_biaya = float(t["biaya_sejak"])
-                    else:
-                        prev_biaya = float(sum(float(it.get("biaya") or 0) for it in (entry.get("items") or [])))
-            realisasi_hari = (
-                float(spent_since or 0) - prev_biaya if prev_biaya == prev_biaya else float("nan")
-            )
+            # Realisasi hari checkpoint dari laporan all iklan 1 tanggal (bukan prorata)
+            day_tot = M.daily_ad_totals(ads_overall, start=checkpoint_day, end=checkpoint_day)
+            realisasi_hari = float(day_tot.iloc[0]["Biaya"]) if not day_tot.empty else float("nan")
             toko_snap = Mon.build_toko_snapshot(
                 budget_plan_hari=plan_hari,
                 budget_actual_hari=actual_hari,
@@ -556,7 +549,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 target_roas=roas,
             )
             updated, changed = Mon.record_daily_checkpoint(
-                cur, report_date=report_end, rows=merged, toko=toko_snap,
+                cur, report_date=checkpoint_day, rows=merged, toko=toko_snap,
             )
             if changed:
                 store = C.Store(features, "iklan")
@@ -756,33 +749,38 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             iklan_tercatat=len(in_plan) if not in_plan.empty else 0,
             target_roas=roas,
         )
+        progress_end = report_end
+        if progress_end is None or progress_end >= today:
+            progress_end = today - timedelta(days=1)
         progress = Mon.campaign_daily_progress(
             cur, plan_keys,
-            live_toko=live_toko, live_tanggal=report_end, target_roas=roas,
+            live_toko=live_toko, live_tanggal=progress_end, target_roas=roas,
             ads_overall=ads_overall, window_start=window_start, factor=float(factor or 0),
+            today=today,
         )
         st.markdown("#### Progress harian · sejak rencana disimpan di fitur")
         period_caption = ""
-        if window_start and report_end:
+        if window_start and progress_end and progress_end >= window_start:
             period_caption = (
-                f" **Mulai hitung: {fmt_date(window_start)}** (sehari setelah data saat Simpan rencana di app) "
-                f"s.d. **{fmt_date(report_end)}**. Bukan tanggal buat iklan di Seller Center."
+                f" **Mulai: {fmt_date(window_start)}** (sehari setelah Simpan rencana di app) "
+                f"s.d. **{fmt_date(progress_end)}** (hari terakhir penuh — hari ini belum dihitung). "
+                "Bukan tanggal buat iklan di Seller Center."
             )
         if progress.empty:
             st.info(
-                "Belum ada catatan harian. Buka Pantau lagi setelah unggah laporan — "
-                "setiap tanggal laporan tersimpan sebagai titik progress."
+                "Belum ada angka harian dari laporan **Keseluruhan iklan**. "
+                "Di Seller Center unduh all iklan dengan filter **1 tanggal** (atau unggah MTD setiap hari berurutan), "
+                "lalu unggah ke app — baru realisasi per tanggal bisa dibaca (contoh kemarin ≈ angka SC «Kemarin»)."
             )
         else:
             st.caption(
-                "Tiap baris = satu **catatan Pantau**."
+                "Tiap baris = **satu tanggal kalender** dari laporan all iklan."
                 + period_caption
-                + " **Realisasi biaya iklan (hari itu)** = pengeluaran iklan dari catatan sebelumnya ke tanggal ini "
-                "(selisih biaya kumulatif sejak rencana disimpan; catatan pertama = total sejak simpan). "
-                "Bukan bagi rata laporan bulanan per hari. "
-                "**Sales dari iklan** = omzet iklan **bruto** kumulatif sejak rencana disimpan. "
-                "**Sales produk all** = omzet iklan **bersih** (bruto × faktor toko) sejak rencana disimpan. "
-                "**MTD** = sama dengan ringkasan di atas."
+                + " **Realisasi biaya (hari itu)** = biaya all iklan pada tanggal itu "
+                "(sama cara baca filter 1 hari / Kemarin di SC — bukan bagi rata bulanan). "
+                "**Sales dari iklan** = akumulasi omzet all iklan **bruto** sejak rencana disimpan s.d. tanggal itu. "
+                "**Sales produk all** = akumulasi omzet **bersih** (bruto × faktor toko). "
+                "**Hari ini tidak ditampilkan** karena hasil belum penuh."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=False):
                 show_table(

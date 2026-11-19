@@ -7,21 +7,26 @@ Diperbarui: 19 November 2026 (malam).
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai malam ini**
-- Clarified: **campaign = rencana disimpan di fitur** (`data_sampai`+1), bukan tanggal buat iklan di SC.
-- Realisasi ≠ bagi rata laporan bulanan per hari; = selisih biaya kumulatif antar catatan Pantau.
-- Sales bruto/bersih = kumulatif sejak rencana app (naik antar tanggal).
+- Progress baca **all iklan per tanggal** (laporan 1 hari atau selisih MTD beruntun) — bukan prorata.
+- **Hari ini tidak ditampilkan** (hasil belum penuh). Contoh 18 Nov ≈ SC «Kemarin» bila laporan 1 hari diunggah.
+- Campaign = simpan rencana di fitur.
 
 **Cek saat lanjut**
-- Progress: realisasi 18 vs 19 harus beda; sales kumulatif naik; caption sebut “rencana disimpan di fitur”.
+- Unggah laporan Keseluruhan iklan filter **18/11–18/11** (atau MTD 1–17 lalu 1–18) agar realisasi 18 ≈ Rp 8,15 jt.
+- Pastikan baris 19 Nov tidak muncul.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 
+## 2026-11-19 · Progress: all iklan per tanggal + skip hari ini
+
+- `daily_ad_totals` / `overall_upload_snapshots`: angka harian dari unggahan 1 hari atau Δ MTD hi berurutan.
+- Tidak mengarang bagi rata dari blob bulanan; hari ini excluded.
+- Sales bruto/bersih = akumulasi harian sejak `campaign_eval_start`.
+
 ## 2026-11-19 · Progress: campaign = simpan di fitur, realisasi = selisih kumulatif
 
-- Bug: `ad_spend(hari,hari)` pada laporan rentang panjang → realisasi sama tiap tanggal.
-- Bug definisi: “sejak campaign” disamakan dengan SC; yang benar = sejak Simpan rencana di app.
-- Perbaikan: `campaign_eval_start`; kumulatif `ad_spend(start_app, tanggal)`; realisasi = Δ kumulatif.
+- Diganti pendekatan malam (lihat entri all iklan per tanggal di atas).
 
 ## 2026-11-19 · koreksi2: realisasi harian + sales bruto/bersih konsisten
 
