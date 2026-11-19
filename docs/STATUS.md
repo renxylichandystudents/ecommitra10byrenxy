@@ -2,24 +2,29 @@
 
 Diperbarui: 19 November 2026 (siang).
 
-## Lanjut nanti · Pantau iklan (grup belum setup)
+## Lanjut nanti · Pantau iklan
 
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai siang ini**
-- Kelayakan setup grup diperketat: prediksi sales yang **tidak mendorong target** (di bawah batas 95% sales toko / qty laku) → **Tidak perlu di-setup**.
-- Saran **Layak** wajib menjelaskan kenapa harus diiklankan (prediksi vs batas target, histori ROAS, stok toko, belum di tempat lain).
-- Urutan tabel/ringkasan: **Layak (belum di-setting)** → Tidak perlu → Sudah diiklankan di tempat lain; kolom Prediksi omzet/hari ditambah.
+- Kelayakan setup grup: prediksi tidak mendorong target → Tidak perlu; Layak + alasan jelas; urut Layak dulu.
+- **Jeda tertinggal angka dibenahi tampilan:** header omzet · biaya · ROAS · N hari; Di Shopee tidak lagi menempel rata-rata terpakai seolah budget SC; saran memisahkan biaya vs omzet.
 
 **Cek saat lanjut**
-- Refresh keras Pantau → buka Grup Iklan 01: baris Layak di atas; saran diawali “Kenapa harus diiklankan…”.
-- Produk prediksi kecil (stok ada tapi tidak mendorong target) harus **Tidak perlu**, bukan Layak.
-- Water Heater / item layak: pastikan alasan menyebut prediksi atau histori ROAS + stok 10037.
+- Blok Jeda tertinggal (Shower Column / Hand Shower): header “omzet … · biaya …” (bukan satu angka “Hasil”); Di Shopee = “masih berbiaya — pause belum efektif” tanpa Rp/hari; terpakai × hari ≈ biaya total.
+- Grup Iklan 01: Layak di atas + “Kenapa harus diiklankan…”.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 - Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” (edge).
 - Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0.
+
+## 2026-11-19 · Jeda tertinggal: omzet vs biaya + Di Shopee bukan rata-rata terpakai
+
+- Angka Shower Column (omzet ~200 jt, biaya ~33 jt, 5 hari × 6,59 jt, ROAS 6,1×) konsisten; yang menyesatkan = label.
+- Kartu: “Sejak campaign (N hari): omzet · biaya · ROAS”; Terpakai sejak + N hari.
+- `_plan_setup_labels`: setup 0 + masih ada biaya → “masih berbiaya — pause belum efektif” (tanpa Rp/hari).
+- Tip jeda: biaya total / N hari (rata-rata), bulan ini, omzet — terpisah jelas.
 
 ## 2026-11-19 · Grup belum setup: urut Layak + alasan jelas + prediksi kejar target
 

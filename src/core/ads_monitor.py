@@ -27,6 +27,10 @@ def _rp_hari(value: float) -> str:
     return f"Rp {value:,.0f}/hari".replace(",", ".")
 
 
+def _rp(value: float) -> str:
+    return f"Rp {value:,.0f}".replace(",", ".")
+
+
 def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[str] | None = None) -> pd.DataFrame:
     """Lengkapi baris evaluasi dengan Status goals, Status SC, Tindakan, Saran (bahasa manajer)."""
     if frame is None or frame.empty:
@@ -54,6 +58,10 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
             spend_bits = f"Terpakai bulan ini {_rp_hari(month_v)}; sejak campaign {_rp_hari(cost)}"
         nama = str(r.get("Iklan") or key)
         total_sejak = float(r.get("Biaya sejak disimpan") or 0)
+        omzet_sejak = float(r.get("Omzet iklan sejak disimpan") or 0)
+        days_eval = int(r.get("Hari dievaluasi") or 0)
+        if days_eval <= 0 and cost > 0 and total_sejak > 0:
+            days_eval = max(int(round(total_sejak / cost)), 1)
 
         if expected <= 0:
             if done or cost <= 5_000:
@@ -62,18 +70,25 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
                     "(sengaja dihentikan). Tidak perlu diubah."
                 )
             else:
+                # Jangan campur omzet dengan biaya; sebutkan hari agar rata-rata × hari = total masuk akal.
+                biaya_bit = (
+                    f"biaya {_rp(total_sejak)}"
+                    + (f" / {days_eval} hari" if days_eval > 0 else "")
+                    + f" (rata-rata {_rp_hari(cost)})"
+                    if total_sejak > 0 else spend_bits
+                )
+                month_bit = f"; bulan ini rata-rata {_rp_hari(month_v)}" if month_v == month_v else ""
+                omzet_bit = f"; omzet {_rp(omzet_sejak)}" if omzet_sejak > 0 else ""
                 window_note = ""
                 if month_v == month_v and cost > 0 and month_v + 1 < cost:
                     window_note = (
-                        " Angka bulan ini bisa lebih kecil dari sejak campaign: "
-                        "bulan dihitung dari tanggal 1 (termasuk hari sebelum campaign), "
-                        "sedangkan sejak campaign hanya setelah campaign disimpan."
+                        " Bulan ini boleh lebih kecil: dihitung dari tgl 1 "
+                        "(termasuk hari sebelum campaign disimpan)."
                     )
                 goal, act, tip = "Tidak sesuai rencana", "Jeda / hentikan", (
-                    f"Budget rencana Rp 0 (sengaja dihentikan), tetapi biaya masih tercatat "
-                    f"pada iklan «{nama}» di Seller Center — {spend_bits}"
-                    + (f" · total sejak campaign Rp {total_sejak:,.0f}".replace(",", ".") if total_sejak > 0 else "")
-                    + f". Pause / hentikan iklan «{nama}» di SC (cari nama yang sama)."
+                    f"Budget rencana Rp 0 (sengaja dihentikan), tetapi laporan masih mencatat "
+                    f"biaya pada iklan «{nama}» di Seller Center — {biaya_bit}{month_bit}{omzet_bit}. "
+                    f"Pause / hentikan iklan «{nama}» di SC (cari nama yang sama)."
                     + window_note
                 )
         elif sc_label.startswith("Tidak") and expected > 0:

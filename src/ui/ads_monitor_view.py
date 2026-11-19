@@ -149,12 +149,15 @@ def _plan_setup_labels(
     actual_since: float = 0.0,
     actual_month: float = float("nan"),
 ) -> tuple[str, str]:
-    """Budget 0 di campaign = sengaja dihentikan. Jika masih ada biaya di laporan, jangan bilang 'tidak diisi'."""
+    """Budget 0 di campaign = sengaja dihentikan.
+
+    Di Shopee = budget yang diisi di SC, bukan rata-rata terpakai. Jika rencana/setup 0 tetapi
+    laporan masih mencatat biaya, label 'masih berbiaya' tanpa menempelkan Rp/hari (itu ada di Terpakai).
+    """
     spending = (actual_since or 0) > 5_000 or (actual_month == actual_month and actual_month > 5_000)
     if plan <= 0 and setup <= 0:
         if spending:
-            rate = actual_since if (actual_since or 0) > 5_000 else actual_month
-            return "dihentikan (Rp 0)", f"masih berbiaya {_fmt_hari(rate)} — pause belum efektif"
+            return "dihentikan (Rp 0)", "masih berbiaya — pause belum efektif"
         return "dihentikan (Rp 0)", "tidak diisi (sesuai jeda)"
     if plan <= 0:
         return "dihentikan (Rp 0)", _fmt_hari(setup)
@@ -215,9 +218,15 @@ def _ad_row_card(
     omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
     biaya = float(r.get("Biaya sejak disimpan") or 0)
     roas = float(r["ROAS aktual"]) if r.get("ROAS aktual") == r.get("ROAS aktual") else float("nan")
+    days = int(r.get("Hari dievaluasi") or 0)
+    if days <= 0 and since > 0 and biaya > 0:
+        days = max(int(round(biaya / since)), 1)
     plan_txt, setup_txt = _plan_setup_labels(plan, setup, actual_since=since, actual_month=month_v)
+    # Omzet ≠ biaya: tampilkan keduanya agar 200 jt vs 33 jt tidak terlihat kontradiksi.
     hasil = (
-        f"Hasil iklan sejak campaign: {fmt_idr(omzet)}"
+        "Sejak campaign"
+        + (f" ({fmt_num(days)} hari)" if days > 0 else "")
+        + f": omzet {fmt_idr(omzet)} · biaya {fmt_idr(biaya)}"
         + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
     )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
@@ -251,10 +260,13 @@ def _ad_row_card(
             "</div>"
         )
     if plan <= 0 and since > 5_000:
+        day_bit = f" / {fmt_num(days)} hari = {_fmt_hari(since)}" if days > 0 else f" · rata-rata {_fmt_hari(since)}"
+        month_bit = f" · bulan ini {_fmt_hari(month_v)}" if month_v == month_v else ""
         spend_note += (
             f"<div style='color:#991b1b;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.45'>"
-            f"<b>Biaya masih dari iklan ini:</b> «{html.escape(name)}» di Seller Center"
-            f" · total sejak campaign {fmt_idr(biaya)}. Pause iklan dengan nama yang sama di SC."
+            f"<b>Biaya masih tercatat di SC:</b> «{html.escape(name)}»"
+            f" · biaya {fmt_idr(biaya)}{day_bit}{month_bit}."
+            f" Pause iklan dengan nama yang sama di Seller Center."
             f"</div>"
         )
     stock_color = (
@@ -282,7 +294,9 @@ def _ad_row_card(
         f"<span><b>Di rencana</b> {html.escape(plan_txt)}</span>"
         f"<span><b>Di Shopee</b> {html.escape(setup_txt)}</span>"
         f"<span><b>Terpakai bulan ini</b> {_fmt_hari(month_v)}</span>"
-        f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}</span></div>"
+        f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}"
+        + (f" · {fmt_num(days)} hari" if days > 0 else "")
+        + f"</span></div>"
         f"{spend_note}</div>",
         unsafe_allow_html=True,
     )

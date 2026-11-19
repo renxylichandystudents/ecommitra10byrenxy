@@ -418,12 +418,15 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertAlmostEqual(out.iloc[0]["Biaya aktual/hari"], 50_000)
 
     def test_paused_plan_zero_budget_tip_explains_intentional(self):
+        # 5 hari × 6.592.242 = 32.961.210 biaya; omzet 200 jt → ROAS ≈ 6,1× (bukan biaya 200 jt)
         frame = pd.DataFrame([{
             "_key": "produk:9", "Iklan": "Shower Column Set Tidy", "Jenis": "Produk tunggal",
             "Budget usulan/hari": 0, "Budget efektif Shopee/hari": 0,
+            "Hari dievaluasi": 5,
             "Biaya aktual/hari": 6_592_242, "Biaya bulan ini/hari": 4_073_599,
-            "Biaya sejak disimpan": 200_142_652,
-            "Omzet iklan aktual/hari": 40_000_000, "ROAS aktual": 6.1,
+            "Biaya sejak disimpan": 32_961_210,
+            "Omzet iklan sejak disimpan": 200_142_652,
+            "Omzet iklan aktual/hari": 40_028_530, "ROAS aktual": 6.1,
             "Rekomendasi dijalankan": "Belum",
         }])
         out = Mon.classify_rows(frame, target_roas=22)
@@ -433,7 +436,11 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertIn("budget rencana rp 0", tip_l)
         self.assertIn("sengaja dihentikan", tip_l)
         self.assertIn("shower column set tidy", tip_l)
-        self.assertIn("tanggal 1", tip_l)  # jelaskan kenapa bulan < sejak campaign
+        self.assertIn("biaya", tip_l)
+        self.assertIn("5 hari", tip_l)
+        self.assertIn("omzet", tip_l)
+        self.assertIn("tgl 1", tip_l)  # jelaskan kenapa bulan < sejak campaign
+        self.assertNotIn("200.142.652/hari", tip)  # jangan tampilkan omzet sebagai seolah biaya/hari
         from src.ui.ads_monitor_view import _plan_setup_labels
         plan_txt, setup_ok = _plan_setup_labels(0.0, 0.0)
         self.assertIn("dihentikan", plan_txt)
@@ -441,6 +448,9 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         _, setup_spend = _plan_setup_labels(0.0, 0.0, actual_since=6_592_242, actual_month=4_073_599)
         self.assertIn("masih berbiaya", setup_spend)
         self.assertIn("pause belum efektif", setup_spend)
+        # Di Shopee ≠ rata-rata terpakai (jangan tempel Rp/hari di label setup)
+        self.assertNotIn("6.592.242", setup_spend)
+        self.assertNotIn("/hari", setup_spend)
 
     def test_turunkan_tip_mentions_shopee_budget_not_duplicate_acuan(self):
         frame = pd.DataFrame([{
