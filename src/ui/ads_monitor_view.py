@@ -644,12 +644,12 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     card(right, "Sales bruto sejak campaign",
          fmt_idr(sum_bruto) if sum_bruto == sum_bruto and camp_sales else "–",
          hint="Sales bruto: transaksi semua status, atau performa Pesanan Dibuat bila transaksi hari itu belum ada")
-    card(right, "Sales bersih sejak campaign",
-         fmt_idr(sum_bersih) if sum_bersih == sum_bersih and camp_sales else "–",
-         hint="Sales bersih: Total Pembayaran − batal − Belum Bayar − retur, atau performa Pesanan Dibayar bila transaksi belum ada")
     card(right, "Sales produk sejak campaign",
          fmt_idr(sum_produk) if has_produk else "–",
          hint="Sales produk = Harga Setelah Diskon × QTY (sama Ringkasan). Hanya dari transaksi.")
+    card(right, "Sales bersih sejak campaign",
+         fmt_idr(sum_bersih) if sum_bersih == sum_bersih and camp_sales else "–",
+         hint="Sales bersih: Total Pembayaran − batal − Belum Bayar − retur, atau performa Pesanan Dibayar bila transaksi belum ada")
     tacos_p, tacos_b = _tacos_pair(float(spent_since or 0), sum_produk if has_produk else float("nan"), sum_bersih if camp_sales else float("nan"))
     card(right, "Persentase biaya vs sales bersih",
          fmt_pct(tacos_b, 1) if tacos_b == tacos_b else "–",
@@ -782,7 +782,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 + period_caption
                 + " **Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** terkumpul sejak tanggal campaign; baris terakhir sama dengan kartu di atas. "
                 "ROAS iklan = Omzet iklan ÷ Biaya iklan, sama dengan ROAS aktual di analisa iklan. "
-                "**Sales bruto**, **Sales bersih**, dan **Sales produk** sama Ringkasan, juga terkumpul sejak tanggal campaign. "
+                "**Sales bruto**, **Sales produk**, dan **Sales bersih** sama Ringkasan, juga terkumpul sejak tanggal campaign. "
                 "**Saran** memakai aturan yang sama dengan analisa di bawah: Sesuai rencana, Tidak sesuai rencana, ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=True):
@@ -801,8 +801,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                         "Omzet iklan": "money",
                         "ROAS iklan": "dec",
                         "Sales bruto": "money",
-                        "Sales bersih": "money",
                         "Sales produk": "money",
+                        "Sales bersih": "money",
                     },
                     wrap=("Saran",),
                     pin=("Tanggal",),
@@ -813,8 +813,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                         "Omzet iklan": 150,
                         "ROAS iklan": 110,
                         "Sales bruto": 140,
-                        "Sales bersih": 140,
                         "Sales produk": 140,
+                        "Sales bersih": 140,
                         "Saran": 420,
                     },
                 )

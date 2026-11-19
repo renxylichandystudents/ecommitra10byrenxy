@@ -767,14 +767,14 @@ PROGRESS_COLS = [
     "Omzet iklan",
     "ROAS iklan",
     "Sales bruto",
-    "Sales bersih",
     "Sales produk",
+    "Sales bersih",
     "Saran",
 ]
 # Nama kelompok dan kolom memakai istilah yang sudah ada di kartu dan analisa iklan.
 PROGRESS_GROUPS = {
     "Di rencana": ("Budget di rencana/hari",),
-    "Sejak campaign": ("Biaya iklan", "Omzet iklan", "ROAS iklan", "Sales bruto", "Sales bersih", "Sales produk"),
+    "Sejak campaign": ("Biaya iklan", "Omzet iklan", "ROAS iklan", "Sales bruto", "Sales produk", "Sales bersih"),
 }
 
 
@@ -1092,8 +1092,8 @@ def campaign_daily_progress(
             "Omzet iklan": omzet_show,
             "ROAS iklan": roas_iklan,
             "Sales bruto": sales_bruto,
-            "Sales bersih": sales_bersih,
             "Sales produk": sales_produk,
+            "Sales bersih": sales_bersih,
             "Saran": note,
         })
     if rows and ringkas:

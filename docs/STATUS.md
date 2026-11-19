@@ -4,7 +4,7 @@ Diperbarui: 19 November 2026 (malam, progress = analisa).
 
 ## Lanjut nanti · Pantau iklan
 
-- Progress memakai istilah yang sudah ada: Budget di rencana/hari, Biaya iklan, Omzet iklan, ROAS iklan, Sales bruto, Sales bersih, Sales produk, Saran.
+- Progress memakai istilah yang sudah ada: Budget di rencana/hari, Biaya iklan, Omzet iklan, ROAS iklan, Sales bruto, Sales produk, Sales bersih, Saran. Urutan kartu sejak campaign sama: Sales produk lalu Sales bersih.
 - Angka iklan di baris terakhir = kartu Biaya iklan / Omzet iklan / ROAS iklan. Saran memakai aturan analisa di bawah (Sesuai rencana, Tidak sesuai rencana, ROAS lemah, Naikkan/Turunkan budget, Naikkan Target ROAS) plus jumlah Efektif, Tidak efektif, Boros, Belum di-setup, Di luar plan.
 
 ## Lanjut nanti · Pantau iklan
