@@ -278,25 +278,12 @@ def _with_lengkap_units(snapshots: list[dict]) -> list[dict]:
     return list(by_hi.values())
 
 
-def daily_unit_totals(
-    ads_overall: pd.DataFrame | None,
-    *,
-    start: date | None = None,
-    end: date | None = None,
-) -> pd.DataFrame:
-    """Biaya & omzet **per iklan per tanggal** dari laporan all iklan.
-
-    Aturan sama dengan `daily_ad_totals`: laporan 1 hari dipakai langsung;
-    unggahan MTD berurutan 1 hari → selisih kumulatif iklan itu.
-    Iklan yang tidak ada di snapshot sebelumnya tidak diisi (bukan total MTD
-    yang ditumpuk ke satu hari, dan bukan prorata), kecuali Tanggal Mulai
-    iklan itu sama dengan hari snapshot: kumulatifnya memang biaya hari pertama.
-    """
+def _unit_snapshots(ads_overall: pd.DataFrame | None) -> list[dict]:
+    """Satu snapshot kumulatif per rentang laporan (pemenang = unggahan terbesar)."""
     from src.core import ads as A
 
-    cols = ["Tanggal", "key", "Biaya", "Omzet"]
     if ads_overall is None or not isinstance(ads_overall, pd.DataFrame) or ads_overall.empty:
-        return pd.DataFrame(columns=cols)
+        return []
     work = ads_overall.copy()
     if "cost" in work.columns:
         work["_b"] = A._number(work["cost"])
@@ -315,12 +302,12 @@ def daily_unit_totals(
     work["_hi"] = pd.to_datetime(hi).dt.date
     work = work.loc[work["_lo"].notna() & work["_hi"].notna()].copy()
     if work.empty:
-        return pd.DataFrame(columns=cols)
+        return []
     codes = work["product_code"] if "product_code" in work.columns else pd.Series("", index=work.index)
     work["_key"] = [_unit_key(c, n) for c, n in zip(codes, _ad_name(work))]
     work = work.loc[work["_key"].astype(str).ne("")].copy()
     if work.empty:
-        return pd.DataFrame(columns=cols)
+        return []
     work["_sub"] = work["_submitted_at"].astype(str) if "_submitted_at" in work.columns else ""
     work["_src"] = work["_source_key"].fillna("").astype(str) if "_source_key" in work.columns else "ads_overall"
     snap = (
@@ -343,7 +330,6 @@ def daily_unit_totals(
         .sum()
         .reset_index()
     )
-    # Tanggal mulai hanya dari baris yang membawa biaya/omzet (iklan lama Rp 0 diabaikan).
     mulai_by: dict[tuple, date] = {}
     active = part.loc[(part["_b"] > 0) | (part["_o"] > 0)]
     for rec in active.loc[active["_mulai"].notna()].to_dict("records"):
@@ -372,9 +358,50 @@ def daily_unit_totals(
             "mulai": mulai,
         })
     snapshots = _with_lengkap_units(snapshots)
+    snapshots.sort(key=lambda s: (s["lo"], s["hi"]))
+    return snapshots
+
+
+def mtd_unit_as_of(ads_overall: pd.DataFrame | None, as_of: date) -> dict[str, dict]:
+    """Total MTD per iklan pada laporan terakhir yang berakhir pada atau sebelum `as_of`.
+
+    Hari yang belum penuh (hari ini) tidak masuk penyebut "terpakai bulan ini".
+    """
+    snaps = [s for s in _unit_snapshots(ads_overall) if s.get("hi") is not None and s["hi"] <= as_of and int(s.get("hari") or 0) > 1]
+    if not snaps:
+        return {}
+    best = max(snaps, key=lambda s: (s["hi"], float(s["biaya"]), float(s["omzet"])))
+    hari = int(best["hari"])
+    out: dict[str, dict] = {}
+    for key, pair in (best.get("keys") or {}).items():
+        biaya, omzet = float(pair[0]), float(pair[1])
+        out[str(key)] = {
+            "periode": best["lo"].isoformat(),
+            "hari": hari,
+            "biaya": biaya,
+            "omzet": omzet,
+        }
+    return out
+
+
+def daily_unit_totals(
+    ads_overall: pd.DataFrame | None,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> pd.DataFrame:
+    """Biaya & omzet **per iklan per tanggal** dari laporan all iklan.
+
+    Aturan sama dengan `daily_ad_totals`: laporan 1 hari dipakai langsung;
+    unggahan MTD berurutan 1 hari → selisih kumulatif iklan itu.
+    Iklan yang tidak ada di snapshot sebelumnya tidak diisi (bukan total MTD
+    yang ditumpuk ke satu hari, dan bukan prorata), kecuali Tanggal Mulai
+    iklan itu sama dengan hari snapshot: kumulatifnya memang biaya hari pertama.
+    """
+    cols = ["Tanggal", "key", "Biaya", "Omzet"]
+    snapshots = _unit_snapshots(ads_overall)
     if not snapshots:
         return pd.DataFrame(columns=cols)
-    snapshots.sort(key=lambda s: (s["lo"], s["hi"]))
     by_day: dict[date, dict[str, dict]] = {}
 
     for snap_row in snapshots:

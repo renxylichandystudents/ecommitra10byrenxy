@@ -1,5 +1,11 @@
 # Status terbaru aplikasi
 
+Diperbarui: 19 November 2026 (malam, angka campaign dipisah dari bulan dan dari tanggal 14).
+
+- Evaluasi mulai sehari setelah `data_sampai` bila tanggal mulai campaign jatuh di hari data itu. Campaign yang disimpan 14 Nov (data s.d. 14) dihitung dari 15 Nov. Tanggal 14 tidak masuk tabel riwayat maupun resume. Hari ini tetap tidak dihitung.
+- Terpakai bulan ini = total biaya laporan MTD ÷ jumlah hari laporan, sampai hari penuh terakhir (18 Nov bila hari ini 19). Terpakai sejak campaign = jumlah selisih harian hanya di dalam jendela campaign. Contoh FSA0089 dari file 15–18 Nov: bulan ini Rp 2.693.215/hari (Rp 48.477.868 ÷ 18), sejak campaign Rp 2.411.786/hari (Rp 9.647.144 ÷ 4).
+- Budget di Shopee dikosongkan. File all iklan tidak punya Modal Harian Seller Center. Angka Rp 7.510.784 adalah rata-rata biaya lama, bukan budget yang di-set. Saran membandingkan terpakai dengan budget di rencana, dan menyebutnya rencana.
+
 Diperbarui: 19 November 2026 (malam, hari pertama iklan baru ikut dihitung).
 
 - Iklan yang Tanggal Mulainya sama dengan hari snapshot (contoh mulai 15 Nov) memakai kumulatif file itu sebagai biaya/omzet hari pertama. Jumlah sejak campaign jadi sama dengan laporan all iklan. Iklan lama tetap selisih antar hari, tidak menumpuk MTD.

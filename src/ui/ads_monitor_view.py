@@ -243,11 +243,9 @@ def _ad_row_card(
     jenis = str(r.get("Jenis") or "")
     act = str(r.get("Tindakan") or "–")
     plan = float(r.get("Budget usulan/hari") or r.get("Budget di rencana/hari") or 0)
-    sekarang_raw = r.get("Budget harian sekarang")
-    sekarang = float(sekarang_raw) if sekarang_raw == sekarang_raw and sekarang_raw is not None else float("nan")
-    # Di Shopee = budget yang tercatat saat rencana disimpan. Jangan salin usulan
-    # bila catatan itu tidak ada — laporan all iklan tidak memuat budget yang diubah di SC.
-    setup = sekarang
+    # Laporan all iklan tidak punya kolom Modal Harian. Jangan isi dari rata-rata biaya
+    # (itu yang tampil Rp 7,5 jt) dan jangan salin usulan.
+    setup = float("nan")
     since = float(r.get("Biaya aktual/hari") or r.get("Terpakai sejak campaign/hari") or 0)
     month = r.get("Biaya bulan ini/hari")
     month_v = float(month) if month == month and month is not None else float("nan")
@@ -443,9 +441,8 @@ def _ad_row_card(
             + "**Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** = angka hari itu di laporan all iklan, "
             "bukan jumlah yang ditumpuk dan bukan budget harian. "
             "Jumlah semua tanggal ada di kartu di atas. "
-            "**Budget di rencana** = usulan campaign. **Budget di Shopee** = budget yang tercatat "
-            "saat rencana disimpan. Laporan all iklan tidak memuat perubahan budget di Seller Center "
-            "setelah itu, jadi kolom ini tidak menyalin usulan. "
+            "**Budget di rencana** = usulan campaign. **Budget di Shopee** kosong: file all iklan "
+            "tidak memuat Modal Harian yang diisi di Seller Center (bukan rata-rata biaya, bukan usulan). "
             "**Saran** membandingkan biaya hari itu dengan rencana: Sesuai rencana, Tidak sesuai rencana, "
             "ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
         )
@@ -539,6 +536,9 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     # ---- Angka campaign: all iklan per tanggal + transaksi (Ringkasan) / performa bila transaksi belum ada
     # Contoh Campaign 15–22 Nov, hari ini 19 → ambil 15 s.d. 18 (hari penuh; 19 belum dihitung)
     since_start = Mon.campaign_eval_start(cur) or start
+    # Resume, progress, dan jendela angka memakai hari pertama evaluasi.
+    # Hari data terakhir saat simpan (mis. 14 Nov) tidak ikut tampil.
+    start = since_start
     eval_end = Mon.campaign_eval_end(cur, today=today)
     last_data = eval_end
     store_since = {"biaya": 0.0, "omzet": 0.0, "hari": 0}
@@ -580,6 +580,12 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     planned: dict[str, float] = {}
     base = cur.get("baseline") or {}
     current = A.month_totals(units) if units else {}
+    # Produk: bulan ini dari MTD sampai hari penuh terakhir. File hari ini tidak masuk.
+    # Grup tetap dari month_totals (laporan grup tidak ada di all iklan).
+    if ads_overall is not None and eval_end is not None:
+        capped = M.mtd_unit_as_of(ads_overall, eval_end)
+        if capped:
+            current = {**current, **capped}
     report_end = _report_end(current)
     weekly = cmp.frame_of(cur.get("iklan_minggu"))
     running_keys = {u.key for u in (units or []) if A._running(u) and u.daily_cost > 0}

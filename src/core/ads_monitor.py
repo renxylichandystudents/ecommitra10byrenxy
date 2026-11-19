@@ -162,8 +162,8 @@ def classify_rows(
             )
         elif not done and cost > expected * 1.4:
             goal, act, tip = "Tidak sesuai rencana", "Turunkan budget", (
-                f"{spend_bits} — lebih tinggi dari budget di Shopee ({_rp_hari(expected)}). "
-                f"Di Seller Center, turunkan budget harian menjadi {_rp_hari(expected)}."
+                f"{spend_bits} — lebih tinggi dari budget di rencana ({_rp_hari(expected)}). "
+                f"Di Seller Center, turunkan Modal Harian menjadi {_rp_hari(expected)}."
             )
         elif not done and cost < expected * 0.6:
             floor_note = (
@@ -171,8 +171,8 @@ def classify_rows(
                 if expected > plan + 1 else ""
             )
             goal, act, tip = "Tidak sesuai rencana", "Naikkan budget", (
-                f"{spend_bits} — masih di bawah budget di Shopee ({_rp_hari(expected)}){floor_note}. "
-                "Naikkan budget harian di Seller Center, atau longgarkan Target ROAS agar budget terserap."
+                f"{spend_bits} — masih di bawah budget di rencana ({_rp_hari(expected)}){floor_note}. "
+                "Naikkan Modal Harian di Seller Center, atau longgarkan Target ROAS agar budget terserap."
             )
         elif weak:
             goal, act, tip = "ROAS lemah", "Naikkan Target ROAS", (
@@ -809,10 +809,14 @@ def campaign_eval_start(campaign: dict | None) -> date | None:
     if not campaign:
         return None
     mulai = _as_day(campaign.get("mulai"))
-    if mulai is not None:
-        return mulai
     s = campaign.get("setelan") or {}
     d0 = _as_day(s.get("data_sampai"))
+    # data_sampai = hari terakhir yang sudah lewat saat rencana disimpan.
+    # Hari itu bukan hari campaign (baseline). Evaluasi mulai sehari sesudahnya.
+    if mulai is not None and d0 is not None:
+        return max(mulai, d0 + timedelta(days=1))
+    if mulai is not None:
+        return mulai
     if d0 is not None:
         return d0 + timedelta(days=1)
     return None
@@ -1147,9 +1151,9 @@ def apply_daily_ad_window(
     out = frame.copy()
     daily = unit_daily.copy()
     daily["Tanggal"] = daily["Tanggal"].astype(str).str[:10]
-    month_lo = month_start or date(end.year, end.month, 1)
+    # Bulan ini diisi attach_month_daily dari MTD utuh, bukan dari hari campaign saja.
+    _ = month_start
     lo, hi = start.isoformat(), end.isoformat()
-    month_lo_s = month_lo.isoformat()
     biaya_s, omzet_s, hari_s, rate_s, sales_s, roas_s = [], [], [], [], [], []
     month_s, done_s, notes, ratios = [], [], [], []
     for _, row in out.iterrows():
@@ -1181,8 +1185,6 @@ def apply_daily_ad_window(
             done = rate <= _ACTIVE_SPEND
         else:
             done = 0.6 <= rate / expected <= 1.4
-        mon = part.loc[(part["Tanggal"] >= month_lo_s) & (part["Tanggal"] <= hi)] if not part.empty else part
-        month_rate = float(mon["Biaya"].sum()) / len(mon) if not mon.empty else float("nan")
         note = str(row.get("Catatan batas") or "")
         for phrase in (
             "baseline iklan tidak terekam — porsi proporsional bulan berjalan",
@@ -1196,7 +1198,8 @@ def apply_daily_ad_window(
         rate_s.append(rate)
         sales_s.append(sales_d)
         roas_s.append(omzet / biaya if biaya > 0 else float("nan"))
-        month_s.append(month_rate)
+        month_raw = row.get("Biaya bulan ini/hari")
+        month_s.append(float(month_raw) if month_raw == month_raw and month_raw is not None else float("nan"))
         done_s.append("Ya" if done else "Belum")
         notes.append(note)
         ratios.append(rate / expected if expected > 0 else float("nan"))
@@ -2319,16 +2322,11 @@ def attach_month_daily(frame: pd.DataFrame, current: dict[str, dict] | None) -> 
                 return v
         return None
 
-    existing = (
-        pd.to_numeric(out["Biaya bulan ini/hari"], errors="coerce")
-        if "Biaya bulan ini/hari" in out.columns else None
-    )
+    # Selalu dari laporan MTD utuh (biaya ÷ hari laporan), bukan rata-rata hari campaign.
+    # Kalau tidak ditimpa, "bulan ini" ikut jadi sama dengan "sejak campaign".
     vals = []
     keys = list(out["_key"].astype(str)) if "_key" in out.columns else []
-    for i, key in enumerate(keys):
-        if existing is not None and pd.notna(existing.iloc[i]):
-            vals.append(float(existing.iloc[i]))
-            continue
+    for key in keys:
         cur = lookup(str(key))
         days = int((cur or {}).get("hari") or 0)
         vals.append(float(cur["biaya"]) / days if cur and days > 0 else float("nan"))

@@ -51,6 +51,29 @@ def test_lengkap_units_fill_daily_when_only_nov19_anchor_remains():
     assert int(fsa["Omzet"].sum()) == 62_755_186
 
 
+def test_mtd_unit_as_of_stops_on_the_last_full_day():
+    rows = []
+    for hi, cost in (("18/11/2026", 1_800), ("19/11/2026", 1_950)):
+        rows.append({
+            "Nama Iklan": "Kloset",
+            "product_code": "89",
+            "cost": cost,
+            "ad_sales": cost * 10,
+            "period": "2026-11-01",
+            "Periode laporan (teks)": f"01/11/2026 - {hi}",
+            "_submitted_at": "2026-11-19T20:00:00+07:00",
+            "_source_key": "ads_overall",
+        })
+    got = M.mtd_unit_as_of(pd.DataFrame(rows), date(2026, 11, 18))
+    row = got["produk:89"]
+    assert row["hari"] == 18
+    assert row["biaya"] == 1_800
+    assert row["periode"] == "2026-11-01"
+    later = M.mtd_unit_as_of(pd.DataFrame(rows), date(2026, 11, 19))
+    assert later["produk:89"]["hari"] == 19
+    assert later["produk:89"]["biaya"] == 1_950
+
+
 def test_daily_unit_totals_diff_only_when_ad_is_in_both_snapshots():
     rows = []
     for hi, code, cost, sales in (

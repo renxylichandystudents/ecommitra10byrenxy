@@ -263,6 +263,14 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
             Mon.campaign_eval_start({"setelan": {"data_sampai": "2026-11-14"}}),
             date(2026, 11, 15),
         )
+        # mulai = hari data terakhir (14) tetap dievaluasi mulai 15, hari baseline tidak masuk tabel
+        self.assertEqual(
+            Mon.campaign_eval_start({
+                "mulai": "2026-11-14", "selesai": "2026-11-22",
+                "setelan": {"data_sampai": "2026-11-14"},
+            }),
+            date(2026, 11, 15),
+        )
 
     def test_campaign_daily_progress_from_daily_overall_reports(self):
         # Campaign 15–22; hari ini 19 → baris 15..18; biaya+omzet dari all iklan per tanggal
@@ -635,6 +643,11 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         out = Mon.attach_month_daily(frame, current)
         self.assertAlmostEqual(out.iloc[0]["Biaya bulan ini/hari"], 100_000)
         self.assertAlmostEqual(out.iloc[0]["Biaya aktual/hari"], 50_000)
+        # Nilai lama yang menyalin rata-rata campaign harus ditimpa MTD utuh.
+        copied = frame.copy()
+        copied["Biaya bulan ini/hari"] = 50_000
+        fixed = Mon.attach_month_daily(copied, current)
+        self.assertAlmostEqual(fixed.iloc[0]["Biaya bulan ini/hari"], 100_000)
 
     def test_paused_plan_zero_budget_tip_explains_intentional(self):
         # 5 hari × 6.592.242 = 32.961.210 biaya; omzet 200 jt → ROAS ≈ 6,1× (bukan biaya 200 jt)
@@ -684,7 +697,7 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertEqual(out.iloc[0]["Tindakan"], "Turunkan budget")
         self.assertIn("sejak campaign", tip)
         self.assertIn("Terpakai bulan ini", tip)
-        self.assertIn("budget di Shopee", tip)
+        self.assertIn("budget di rencana", tip)
         self.assertNotIn("acuan", tip)
         self.assertNotIn("±", tip)
         self.assertIn("Seller Center", tip)
