@@ -1056,8 +1056,7 @@ def campaign_daily_progress(
         )
         if hit is None or realisasi != realisasi:
             note = (
-                "Belum ada angka all iklan untuk tanggal ini. "
-                "Unggah laporan Keseluruhan iklan MTD berurutan (atau filter 1 tanggal)."
+                "Belum ada selisih harian dari all iklan yang sudah tersimpan untuk tanggal ini."
             )
         else:
             note = day_decision_note(

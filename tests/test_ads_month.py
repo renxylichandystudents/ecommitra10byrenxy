@@ -87,6 +87,40 @@ def test_daily_ad_totals_skips_shrinking_snapshot():
     assert daily.iloc[0]["Biaya"] > 0 and daily.iloc[0]["Omzet"] > 0
 
 
+def test_same_range_keeps_larger_snapshot_not_later_partial():
+    ov = pd.DataFrame([
+        {"Periode laporan (teks)": "01/11/2026 - 15/11/2026", "period": "2026-11-01",
+         "cost": 150_819_653, "ad_sales": 2_445_061_768, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-15T20:00:00+07:00", "_source_key": "ads_overall"},
+        {"Periode laporan (teks)": "01/11/2026 - 15/11/2026", "period": "2026-11-01",
+         "cost": 192_737, "ad_sales": 1_779_798, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-15T22:00:00+07:00", "_source_key": "ads_overall"},
+        {"Periode laporan (teks)": "01/11/2026 - 14/11/2026", "period": "2026-11-01",
+         "cost": 142_070_246, "ad_sales": 2_314_769_068, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-14T07:00:00+07:00", "_source_key": "ads_overall"},
+    ])
+    daily = M.daily_ad_totals(ov, start=date(2026, 11, 15), end=date(2026, 11, 15))
+    assert len(daily) == 1
+    assert round(daily.iloc[0]["Biaya"]) == 8_749_407
+
+
+def test_truncated_mtd_restored_when_nov19_anchor_is_stored():
+    # Data latih: sisa baris 15 Nov + file 19 Nov utuh. Jangan minta unggah ulang.
+    ov = pd.DataFrame([
+        {"Periode laporan (teks)": "01/11/2026 - 15/11/2026", "period": "2026-11-01",
+         "cost": 192_737, "ad_sales": 1_779_798, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-15T07:09:27+07:00", "_source_key": "ads_overall"},
+        {"Periode laporan (teks)": "01/11/2026 - 19/11/2026", "period": "2026-11-01",
+         "cost": 184_003_414, "ad_sales": 2_995_964_550, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-19T06:57:37+07:00", "_source_key": "ads_overall"},
+    ])
+    daily = M.daily_ad_totals(ov, start=date(2026, 11, 14), end=date(2026, 11, 18))
+    assert list(daily["Tanggal"]) == ["2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18"]
+    assert round(daily.iloc[0]["Biaya"]) == 8_749_407
+    assert round(daily.iloc[3]["Biaya"]) == 7_082_955
+    assert round(daily["Omzet"].sum()) == 579_292_111
+
+
 def test_daily_ad_totals_does_not_invent_prorata_from_month_blob():
     ov = _overall([("01/11/2026", "18/11/2026", 18e6, 200e6)])
     daily = M.daily_ad_totals(ov, start=date(2026, 11, 1), end=date(2026, 11, 18))

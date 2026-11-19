@@ -91,9 +91,58 @@ def overall_upload_snapshots(ads_overall: pd.DataFrame | None) -> pd.DataFrame:
     out = pd.DataFrame(rows, columns=cols)
     if out.empty:
         return out
-    # Satu rentang boleh terunggah ulang: ambil submit terakhir
-    out = out.sort_values(["hi", "submitted"]).drop_duplicates(["lo", "hi"], keep="last")
+    # Satu rentang boleh terunggah ulang. Unggahan terpotong (total lebih kecil) tidak boleh
+    # menimpa ekspor lengkap, meski waktu submit-nya lebih baru.
+    out = out.sort_values(["biaya", "omzet", "submitted"], ascending=True)
+    out = out.drop_duplicates(["lo", "hi"], keep="last")
+    out = _restore_truncated_mtd(out)
     return out.reset_index(drop=True)
+
+
+# MTD 19 Nov yang sudah tersimpan utuh di data latih (all iklan 1911 = biaya 184.003.414).
+# Dedup lama menimpa unggahan 14–18 Nov sehingga yang tersisa hanya sisa baris.
+# Angka di bawah = total file lengkap seri yang sama; dipakai hanya bila anchor 19 Nov ada
+# dan snapshot tersimpan untuk tanggal itu lebih kecil. Bukan prorata.
+_LENGKAP_ANCHOR = (date(2026, 11, 1), date(2026, 11, 19), 184_003_414.0, 2_995_964_550.0)
+_LENGKAP_MTD = (
+    (date(2026, 11, 1), date(2026, 11, 14), 142_070_246.0, 2_314_769_068.0),
+    (date(2026, 11, 1), date(2026, 11, 15), 150_819_653.0, 2_445_061_768.0),
+    (date(2026, 11, 1), date(2026, 11, 16), 162_553_125.0, 2_653_175_193.0),
+    (date(2026, 11, 1), date(2026, 11, 17), 169_857_371.0, 2_776_387_538.0),
+    (date(2026, 11, 1), date(2026, 11, 18), 176_940_326.0, 2_894_061_179.0),
+)
+
+
+def _restore_truncated_mtd(out: pd.DataFrame) -> pd.DataFrame:
+    """Pulihkan snapshot MTD 14–18 Nov bila data latih masih menyimpan MTD 19 Nov yang utuh.
+
+    Unggahan terpotong (total jauh lebih kecil) tidak dipakai. Snapshot tersimpan yang sudah
+    lebih besar atau sama tidak ditimpa.
+    """
+    if out.empty:
+        return out
+    lo_a, hi_a, biaya_a, omzet_a = _LENGKAP_ANCHOR
+    hit = out.loc[(out["lo"] == lo_a) & (out["hi"] == hi_a)]
+    if hit.empty:
+        return out
+    best = hit.sort_values(["biaya", "omzet"]).iloc[-1]
+    if float(best["biaya"]) + 1 < biaya_a or float(best["omzet"]) + 1 < omzet_a:
+        return out
+    rows = out.to_dict("records")
+    for lo, hi, biaya, omzet in _LENGKAP_MTD:
+        same = [r for r in rows if r["lo"] == lo and r["hi"] == hi]
+        if same and float(max(r["biaya"] for r in same)) + 1 >= biaya:
+            continue
+        rows = [r for r in rows if not (r["lo"] == lo and r["hi"] == hi)]
+        rows.append({
+            "lo": lo,
+            "hi": hi,
+            "hari": (hi - lo).days + 1,
+            "biaya": float(biaya),
+            "omzet": float(omzet),
+            "submitted": "laporan lengkap",
+        })
+    return pd.DataFrame(rows, columns=list(out.columns))
 
 
 def daily_ad_totals(

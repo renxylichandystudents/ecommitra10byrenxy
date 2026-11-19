@@ -1,13 +1,12 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (malam, angka campaign).
+Diperbarui: 19 November 2026 (malam, biaya/omzet kosong).
 
 ## Lanjut nanti · Pantau iklan
 
-- Biaya iklan & Omzet iklan = selisih all iklan MTD yang naik (unggahan totalnya mengecil diabaikan, supaya tidak minus).
-- Sales bruto / Sales bersih / Sales produk memakai istilah Ringkasan. Sales produk hanya dari transaksi.
-- File all iklan 15–19 Nov dan selisih performa 15–18 sudah masuk vault lokal.
-- Hari ini (19) tidak dihitung. Campaign yang tampil mengikuti tanggal yang tersimpan (bila 14–30, baris mulai 14).
+- Biaya & omzet kosong karena unggahan all iklan 15–18 Nov di data latih terpotong (dedup lama). File 19 Nov utuh tetap jadi jangkar; total lengkap 14–18 dipakai lagi tanpa unggah ulang.
+- Snapshot rentang yang sama: yang totalnya lebih besar yang dipakai, bukan unggahan terpotong yang lebih baru.
+- Hari ini (19) tidak dihitung. Sales bruto / bersih / produk tetap istilah Ringkasan.
 
 ## Lanjut nanti · Pantau iklan
 

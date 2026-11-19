@@ -399,7 +399,13 @@ def import_lead_time() -> tuple[float, float] | None:
 def store_frames() -> StoreFrames:
     """Data stok, iklan, performa, deskripsi, kompetitor dari 9 menu upload; dibaca ulang bila ada upload baru."""
     path = DATA_STORE.registry_path
-    stamp = (str(DATA_STORE.root), path.stat().st_mtime if path.exists() else 0.0)
+    sources = DATA_STORE.root / "sources"
+    file_stamp = []
+    if sources.exists():
+        for item in sorted(sources.glob("*.parquet")):
+            info = item.stat()
+            file_stamp.append((item.name, info.st_mtime_ns, info.st_size))
+    stamp = (str(DATA_STORE.root), path.stat().st_mtime_ns if path.exists() else 0, tuple(file_stamp))
     cached = st.session_state.get("_store-frames")
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1]
