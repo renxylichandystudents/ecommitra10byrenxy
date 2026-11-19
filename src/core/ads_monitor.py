@@ -196,7 +196,7 @@ def must_advertise(products: pd.DataFrame, classified: pd.DataFrame | None, sel_
     Urutan: (1) iklan berjalan ROAS kuat → pertahankan/naikkan, (2) produk prediksi tinggi + stok → buat baru,
     (3) iklan ROAS lemah berbiaya → jeda (maks 3 baris di akhir sebagai penghematan)."""
     cols = ["Prioritas", "Produk", "Kode / iklan", "Jenis", "Keputusan", "Budget/hari", "Alasan",
-            "Prediksi omzet/hari", "Stok", "ROAS terkini", "Biaya kini/hari"]
+            "Prediksi omzet/hari", "Stok 10037", "Stok 10062", "Stok 10036", "ROAS terkini", "Biaya kini/hari"]
     rows: list[dict] = []
 
     # Peta performa iklan tunggal
@@ -232,21 +232,32 @@ def must_advertise(products: pd.DataFrame, classified: pd.DataFrame | None, sel_
         bump = A.round_budget(max(cost, expected) * 1.15, min_floor=A.seller_min_budget(jenis))
         if room > 0 and spent + max(bump - cost, 0) > room + 1:
             bump = A.implementable_budget(cost, jenis)
+        stock = stock_summary_for_ad(products, key)
         rows.append({
             "Prioritas": len(rows) + 1, "Produk": name, "Kode / iklan": key, "Jenis": jenis,
             "Keputusan": "Pertahankan / naikkan", "Budget/hari": bump,
-            "Alasan": f"ROAS {roas:.1f} ≥ target · iklan ini yang menopang omzet; naikkan bertahap hanya di Senin.",
-            "Prediksi omzet/hari": np.nan, "Stok": np.nan, "ROAS terkini": roas, "Biaya kini/hari": cost,
+            "Alasan": (
+                f"ROAS {roas:.1f} ≥ target · iklan ini yang menopang omzet; naikkan bertahap hanya di Senin. "
+                + stock["teks"]
+            ),
+            "Prediksi omzet/hari": np.nan,
+            "Stok 10037": stock["stok_10037"], "Stok 10062": stock["stok_10062"], "Stok 10036": stock["stok_10036"],
+            "ROAS terkini": roas, "Biaya kini/hari": cost,
         })
         spent += max(bump - cost, 0)
 
-    # 2) Produk baru layak iklan (prediksi tinggi + stok)
+    # 2) Produk baru layak iklan (prediksi tinggi + stok toko 10037)
     if isinstance(products, pd.DataFrame) and not products.empty and "product_code" in products.columns:
         work = products.copy()
         work["product_code"] = work["product_code"].astype(str)
         work["omzet_harian"] = pd.to_numeric(work.get("omzet_harian"), errors="coerce").fillna(0.0)
-        work["stok"] = pd.to_numeric(work.get("stok"), errors="coerce").fillna(0.0)
+        work["stok"] = pd.to_numeric(work.get("stok_10037", work.get("stok")), errors="coerce").fillna(0.0)
         work["stok_room"] = pd.to_numeric(work.get("stok_room"), errors="coerce").fillna(work["stok"])
+        for col in ("stok_10062", "stok_10036"):
+            if col not in work.columns:
+                work[col] = np.nan
+            else:
+                work[col] = pd.to_numeric(work[col], errors="coerce")
         q = float(work["omzet_harian"].quantile(0.80)) if len(work) else 0.0
         cand = work.loc[(work["stok"] > 0) & (work["stok_room"] > 0) & (work["omzet_harian"] >= max(q, 1.0))]
         cand = cand.sort_values("omzet_harian", ascending=False)
@@ -259,27 +270,36 @@ def must_advertise(products: pd.DataFrame, classified: pd.DataFrame | None, sel_
             start = A.SHOPEE_MIN_SINGLE
             if room > 0 and spent + start > room + 1:
                 break
+            sig = _product_signal(products, code)
             rows.append({
                 "Prioritas": len(rows) + 1, "Produk": str(getattr(r, "nama", code) or code),
                 "Kode / iklan": code, "Jenis": "Produk tunggal (baru)",
                 "Keputusan": "Buat iklan tunggal", "Budget/hari": start,
                 "Alasan": (
-                    f"Prediksi omzet tinggi (±{float(r.omzet_harian):,.0f}/hari), stok ada"
+                    f"Prediksi omzet tinggi (±{float(r.omzet_harian):,.0f}/hari), stok toko ada"
                     + (", belum di pemilihan rencana" if code not in in_plan else ", sudah di rencana tetapi belum aktif")
-                    + f". Mulai {start:,.0f}/hari, Target ROAS {target_roas:.0f}."
+                    + f". Mulai {start:,.0f}/hari, Target ROAS {target_roas:.0f}. "
+                    + stock_sites_text(sig, short=False)
                 ).replace(",", "."),
-                "Prediksi omzet/hari": float(r.omzet_harian), "Stok": int(r.stok),
+                "Prediksi omzet/hari": float(r.omzet_harian),
+                "Stok 10037": sig["stok_10037"], "Stok 10062": sig["stok_10062"], "Stok 10036": sig["stok_10036"],
                 "ROAS terkini": roas_by_code.get(code, np.nan), "Biaya kini/hari": cost_by_code.get(code, 0.0),
             })
             spent += start
 
     # 3) Penghematan: max 3 iklan lemah
     for name, key, jenis, cost, roas, expected in sorted(weak_ads, key=lambda x: x[4])[:3]:
+        stock = stock_summary_for_ad(products, key)
         rows.append({
             "Prioritas": len(rows) + 1, "Produk": name, "Kode / iklan": key, "Jenis": jenis,
             "Keputusan": "Jeda / alihkan budget", "Budget/hari": 0.0,
-            "Alasan": f"ROAS {roas:.1f} jauh di bawah target {target_roas:.1f} · pindahkan budget ke item di atas.",
-            "Prediksi omzet/hari": np.nan, "Stok": np.nan, "ROAS terkini": roas, "Biaya kini/hari": cost,
+            "Alasan": (
+                f"ROAS {roas:.1f} jauh di bawah target {target_roas:.1f} · pindahkan budget ke item di atas. "
+                + stock["teks"]
+            ),
+            "Prediksi omzet/hari": np.nan,
+            "Stok 10037": stock["stok_10037"], "Stok 10062": stock["stok_10062"], "Stok 10036": stock["stok_10036"],
+            "ROAS terkini": roas, "Biaya kini/hari": cost,
         })
 
     # rapikan prioritas 1..n dan potong
@@ -723,19 +743,152 @@ def _elsewhere_for_codes(
     return out
 
 
+def _num_cell(row, *names: str) -> float:
+    for name in names:
+        if name in getattr(row, "index", []) or (hasattr(row, "__contains__") and name in row):
+            try:
+                val = row[name]
+            except Exception:
+                continue
+            if val is not None and val == val:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    continue
+    return float("nan")
+
+
 def _product_signal(products: pd.DataFrame | None, code: str) -> dict:
-    empty = {"omzet_harian": float("nan"), "stok": float("nan"), "stok_room": float("nan"), "nama": ""}
+    """Sinyal produk + triad stok Site 10037 (toko) / 10062 (DC Cikupa) / 10036 (DC Cipeucang)."""
+    empty = {
+        "omzet_harian": float("nan"), "stok": float("nan"), "stok_room": float("nan"), "nama": "",
+        "stok_10037": float("nan"), "stok_10062": float("nan"), "stok_10036": float("nan"),
+    }
     if products is None or getattr(products, "empty", True) or "product_code" not in products.columns:
         return empty
     hit = products.loc[products["product_code"].astype(str) == str(code)]
     if hit.empty:
         return empty
     row = hit.iloc[0]
+    s37 = _num_cell(row, "stok_10037", "stok")
+    s62 = _num_cell(row, "stok_10062")
+    s36 = _num_cell(row, "stok_10036")
     return {
-        "omzet_harian": float(row["omzet_harian"]) if "omzet_harian" in hit.columns and row["omzet_harian"] == row["omzet_harian"] else float("nan"),
-        "stok": float(row["stok"]) if "stok" in hit.columns and row["stok"] == row["stok"] else float("nan"),
-        "stok_room": float(row["stok_room"]) if "stok_room" in hit.columns and row["stok_room"] == row["stok_room"] else float("nan"),
+        "omzet_harian": _num_cell(row, "omzet_harian"),
+        "stok": s37,
+        "stok_room": _num_cell(row, "stok_room"),
         "nama": str(row["nama"]) if "nama" in hit.columns else "",
+        "stok_10037": s37,
+        "stok_10062": s62,
+        "stok_10036": s36,
+    }
+
+
+def stock_sites_text(sig: dict | None, *, short: bool = False) -> str:
+    """Teks stok 10037/10062/10036 untuk kartu & saran kelayakan iklan."""
+    if not sig:
+        return "Stok 10037/10062/10036: belum ada data"
+    def _u(v: float) -> str:
+        if v != v:
+            return "–"
+        return f"{v:,.0f}".replace(",", ".")
+
+    s37, s62, s36 = sig.get("stok_10037", float("nan")), sig.get("stok_10062", float("nan")), sig.get("stok_10036", float("nan"))
+    if short:
+        return f"10037 {_u(s37)} · 10062 {_u(s62)} · 10036 {_u(s36)}"
+    return f"Stok Site 10037 {_u(s37)} · Site 10062 {_u(s62)} · Site 10036 {_u(s36)}"
+
+
+def stock_worthiness(sig: dict | None) -> tuple[str, str]:
+    """(status, penjelasan singkat) kelayakan iklan dari triad stok harian.
+
+    status: ada_toko | isi_dari_dc | kosong | belum_data
+    """
+    if not sig:
+        return "belum_data", "Stok 10037/10062/10036 belum terbaca — unggah Data stok harian."
+    s37 = sig.get("stok_10037", float("nan"))
+    s62 = sig.get("stok_10062", float("nan"))
+    s36 = sig.get("stok_10036", float("nan"))
+    if s37 != s37 and s62 != s62 and s36 != s36:
+        return "belum_data", "Stok 10037/10062/10036 belum terbaca — unggah Data stok harian."
+    toko = s37 if s37 == s37 else 0.0
+    dc = (s62 if s62 == s62 else 0.0) + (s36 if s36 == s36 else 0.0)
+    if toko > 0:
+        return "ada_toko", f"{stock_sites_text(sig, short=True)} — stok toko ada, iklan bisa jalan."
+    if dc > 0:
+        return "isi_dari_dc", (
+            f"{stock_sites_text(sig, short=True)} — toko kosong, tetapi DC ada. "
+            "Restock/TR dulu ke Site 10037 sebelum naikkan budget iklan."
+        )
+    return "kosong", (
+        f"{stock_sites_text(sig, short=True)} — toko & DC kosong. "
+        "Iklan tidak layak diaktifkan sampai ada stok."
+    )
+
+
+def codes_for_ad_key(key: str, units=None, members: pd.DataFrame | None = None) -> list[str]:
+    """Kode produk yang terkait satu kunci iklan (tunggal / anggota grup)."""
+    k = str(key or "")
+    if k.startswith(("produk:", "pisah:", "baru:")):
+        return [k.split(":", 1)[1]]
+    if units:
+        for u in units:
+            if getattr(u, "key", "") == k and getattr(u, "members", None):
+                return [str(c) for c in u.members]
+    if members is not None and not getattr(members, "empty", True) and k.startswith("grup:"):
+        work = _member_unit_slice(members, k)
+        if not work.empty and "product_code" in work.columns:
+            return sorted({str(c) for c in work["product_code"].astype(str) if c and c != "nan"})
+    return []
+
+
+def stock_summary_for_ad(
+    products: pd.DataFrame | None,
+    key: str,
+    *,
+    units=None,
+    members: pd.DataFrame | None = None,
+) -> dict:
+    """Ringkasan triad stok untuk satu iklan (agregat anggota bila grup)."""
+    codes = codes_for_ad_key(key, units=units, members=members)
+    if not codes:
+        return {
+            "stok_10037": float("nan"), "stok_10062": float("nan"), "stok_10036": float("nan"),
+            "status": "belum_data", "teks": "Stok 10037/10062/10036: belum terpetakan ke produk",
+            "n": 0, "kosong": 0, "dc_only": 0,
+        }
+    s37 = s62 = s36 = 0.0
+    known37 = known62 = known36 = False
+    kosong = dc_only = 0
+    for code in codes:
+        sig = _product_signal(products, code)
+        st, _ = stock_worthiness(sig)
+        if st == "kosong":
+            kosong += 1
+        elif st == "isi_dari_dc":
+            dc_only += 1
+        if sig["stok_10037"] == sig["stok_10037"]:
+            s37 += sig["stok_10037"]; known37 = True
+        if sig["stok_10062"] == sig["stok_10062"]:
+            s62 += sig["stok_10062"]; known62 = True
+        if sig["stok_10036"] == sig["stok_10036"]:
+            s36 += sig["stok_10036"]; known36 = True
+    sig = {
+        "stok_10037": s37 if known37 else float("nan"),
+        "stok_10062": s62 if known62 else float("nan"),
+        "stok_10036": s36 if known36 else float("nan"),
+    }
+    status, _tip = stock_worthiness(sig)
+    bits = [stock_sites_text(sig, short=False)]
+    if len(codes) > 1:
+        bits.append(f"{len(codes)} produk")
+        if kosong:
+            bits.append(f"{kosong} kosong total")
+        if dc_only:
+            bits.append(f"{dc_only} hanya ada di DC")
+    return {
+        **sig, "status": status, "teks": " · ".join(bits),
+        "n": len(codes), "kosong": kosong, "dc_only": dc_only,
     }
 
 
@@ -769,7 +922,9 @@ def group_members_review(
       setup dari histori grup / prediksi / stok (campaign sebelumnya tidak otomatis layak).
     """
     cols = [
-        "Produk", "Kode produk", "Biaya/hari", "Omzet/hari", "ROAS",
+        "Produk", "Kode produk",
+        "Stok 10037", "Stok 10062", "Stok 10036",
+        "Biaya/hari", "Omzet/hari", "ROAS",
         "Porsi omzet grup", "Porsi biaya grup", "Iklan lain", "Tindakan", "Saran",
     ]
     if members is None or getattr(members, "empty", True) or not group_key:
@@ -824,44 +979,53 @@ def group_members_review(
             for a in alts[:3]
         ) if alts else "–"
 
+        sig = _product_signal(products, code)
+        stock_status, stock_tip = stock_worthiness(sig)
+
         if not group_active:
             # Mode belum di-setup: jangan bilang "pertahankan" — bandingkan setup & kelayakan
             if alts:
                 act = "Sudah diiklankan di tempat lain"
                 tip = (
                     f"Sudah aktif di: {alt_label}. "
-                    "Jangan masukkan lagi ke grup ini agar budget tidak dobel."
+                    "Jangan masukkan lagi ke grup ini agar budget tidak dobel. "
+                    + stock_tip
                 )
             else:
-                sig = _product_signal(products, code)
                 hist_b, hist_o, hist_roas = _hist_perf_for_code(work, code)
-                stok = sig["stok"]
                 demand = sig["omzet_harian"]
                 if margin is not None and margin <= 0:
                     act = "Tidak perlu di-setup"
-                    tip = "Margin kotor di bawah potongan Shopee — rugi bila diiklankan. Jangan masukkan ke grup baru."
-                elif stok == stok and stok <= 0:
+                    tip = "Margin kotor di bawah potongan Shopee — rugi bila diiklankan. Jangan masukkan ke grup baru. " + stock_tip
+                elif stock_status == "kosong":
                     act = "Tidak perlu di-setup"
-                    tip = "Stok 0 — tidak layak di-setup sekarang. Aktifkan lagi setelah restock."
+                    tip = stock_tip
                 elif hist_b > 0 and hist_o <= 0:
                     act = "Tidak perlu di-setup"
                     tip = (
                         f"Di campaign/grup sebelumnya berbiaya {_rp_hari(hist_b)} tanpa omzet. "
-                        "Jangan ikut di-setup di grup ini."
+                        "Jangan ikut di-setup di grup ini. " + stock_tip
                     )
                 elif hist_b > 0 and hist_roas == hist_roas and target_roas > 0 and hist_roas < target_roas * 0.5:
                     act = "Tidak perlu di-setup"
                     tip = (
                         f"Histori di grup ini ROAS {hist_roas:.1f}× jauh di bawah target {target_roas:.1f}×. "
-                        "Tidak layak di-setup ulang di grup ini."
+                        "Tidak layak di-setup ulang di grup ini. " + stock_tip
                     )
                 elif demand == demand and demand <= 0 and hist_o <= 0:
                     act = "Tidak perlu di-setup"
-                    tip = "Prediksi omzet rendah dan belum ada bukti omzet iklan — prioritaskan produk lain."
+                    tip = "Prediksi omzet rendah dan belum ada bukti omzet iklan — prioritaskan produk lain. " + stock_tip
+                elif stock_status == "isi_dari_dc":
+                    act = "Tidak perlu di-setup"
+                    tip = (
+                        stock_tip
+                        + " Setelah stok masuk Site 10037, baru masukkan ke grup."
+                    )
                 elif (
                     (hist_roas == hist_roas and target_roas > 0 and hist_roas >= target_roas * 0.8)
-                    or (demand == demand and demand > 0 and (stok != stok or stok > 0))
-                    or (hist_o > 0 and (hist_roas != hist_roas or hist_roas >= max(target_roas * 0.5, 1.0)))
+                    or (demand == demand and demand > 0 and stock_status == "ada_toko")
+                    or (hist_o > 0 and (hist_roas != hist_roas or hist_roas >= max(target_roas * 0.5, 1.0))
+                        and stock_status == "ada_toko")
                 ):
                     act = "Layak di-setup di grup ini"
                     bits = []
@@ -869,8 +1033,7 @@ def group_members_review(
                         bits.append(f"histori ROAS {hist_roas:.1f}×")
                     if demand == demand and demand > 0:
                         bits.append(f"prediksi omzet {_rp_hari(demand)}")
-                    if stok == stok and stok > 0:
-                        bits.append(f"stok {stok:,.0f}".replace(",", "."))
+                    bits.append(stock_sites_text(sig, short=True))
                     tip = (
                         "Belum ada iklan aktif di tempat lain. "
                         + (("Bukti: " + "; ".join(bits) + ". ") if bits else "")
@@ -879,23 +1042,29 @@ def group_members_review(
                 else:
                     act = "Tidak perlu di-setup"
                     tip = (
-                        "Belum ada bukti kuat (histori/prediksi/stok) bahwa produk ini layak ikut grup baru. "
-                        "Tunda dulu; fokus ke item yang sudah jelas."
+                        "Belum ada bukti kuat (histori/prediksi/stok 10037·10062·10036) bahwa produk ini layak ikut grup baru. "
+                        "Tunda dulu; fokus ke item yang sudah jelas. " + stock_tip
                     )
+        elif stock_status == "kosong" and biaya > 0:
+            act = "Keluarkan dari grup"
+            tip = (
+                f"Masih berbiaya {_rp_hari(biaya)} padahal {stock_tip} "
+                "Keluarkan dari grup / jeda sampai ada stok."
+            )
         elif alts and biaya <= 0 and omzet <= 0:
             act = "Sudah diiklankan di tempat lain"
-            tip = f"Di grup ini belum berbiaya, tetapi sudah aktif di: {alt_label}. Hindari dobel budget."
+            tip = f"Di grup ini belum berbiaya, tetapi sudah aktif di: {alt_label}. Hindari dobel budget. {stock_tip}"
         elif biaya > 0 and omzet <= 0:
             act = "Keluarkan dari grup"
             tip = (
                 f"Ada biaya {_rp_hari(biaya)} tanpa omzet di laporan terakhir. "
-                "Keluarkan dari grup agar tidak menyerap budget anggota lain."
+                "Keluarkan dari grup agar tidak menyerap budget anggota lain. " + stock_tip
             )
         elif margin is not None and margin <= 0 and biaya > 0:
             act = "Keluarkan dari grup"
             tip = (
                 "Margin kotor di bawah potongan Shopee (rugi per unit) tetapi masih berbiaya di grup. "
-                "Keluarkan dari grup."
+                "Keluarkan dari grup. " + stock_tip
             )
         elif (
             biaya > 0
@@ -910,7 +1079,8 @@ def group_members_review(
                 f"ROAS {roas:.1f}× jauh di bawah "
                 + (f"target {target_roas:.1f}×" if target_roas > 0 else "acuan")
                 + (f" dan rata-rata grup {group_roas:.1f}×" if group_roas == group_roas else "")
-                + f". Porsi biaya {share_c * 100:.0f}% — keluarkan agar grup tidak menopang item lemah."
+                + f". Porsi biaya {share_c * 100:.0f}% — keluarkan agar grup tidak menopang item lemah. "
+                + stock_tip
             )
         elif (
             biaya > 0
@@ -924,7 +1094,8 @@ def group_members_review(
             tip = (
                 f"ROAS {roas:.1f}× masih lemah vs grup"
                 + (f" ({group_roas:.1f}×)" if group_roas == group_roas else "")
-                + ". Jangan naikkan budget grup demi item ini; tinjau di Seller Center atau keluarkan bila tetap lemah."
+                + ". Jangan naikkan budget grup demi item ini; tinjau di Seller Center atau keluarkan bila tetap lemah. "
+                + stock_tip
             )
         elif (
             share_o >= 0.3
@@ -938,23 +1109,28 @@ def group_members_review(
             act = "Pisahkan jadi iklan tunggal"
             tip = (
                 f"Andalan grup ({share_o * 100:.0f}% omzet, ROAS {roas:.1f}×). "
-                "Pertimbangkan iklan produk tunggal agar budget & Target ROAS dikendalikan sendiri."
+                "Pertimbangkan iklan produk tunggal agar budget & Target ROAS dikendalikan sendiri. "
+                + stock_tip
             )
         else:
             act = "Pertahankan di grup"
             if biaya <= 0 and omzet <= 0:
-                tip = "Belum ada biaya/omzet di laporan terakhir — belum menyerap budget grup."
+                tip = "Belum ada biaya/omzet di laporan terakhir — belum menyerap budget grup. " + stock_tip
             elif roas == roas:
                 tip = (
                     f"ROAS {roas:.1f}× sejalan dengan grup"
                     + (f" ({group_roas:.1f}×)" if group_roas == group_roas else "")
-                    + f". Porsi omzet {share_o * 100:.0f}% — aman dilanjutkan di grup."
+                    + f". Porsi omzet {share_o * 100:.0f}% — aman dilanjutkan di grup. "
+                    + stock_tip
                 )
             else:
-                tip = "Belum cukup data ROAS; pantau lagi setelah laporan berikutnya."
+                tip = "Belum cukup data ROAS; pantau lagi setelah laporan berikutnya. " + stock_tip
         rows.append({
             "Produk": str(r.nama or code),
             "Kode produk": code,
+            "Stok 10037": sig.get("stok_10037", float("nan")),
+            "Stok 10062": sig.get("stok_10062", float("nan")),
+            "Stok 10036": sig.get("stok_10036", float("nan")),
             "Biaya/hari": biaya,
             "Omzet/hari": omzet,
             "ROAS": roas,

@@ -306,6 +306,40 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         out = Mon.group_members_review(members, "produk:1", target_roas=8.0)
         self.assertTrue(out.empty)
 
+    def test_stock_worthiness_triad(self):
+        ada, tip = Mon.stock_worthiness({"stok_10037": 10, "stok_10062": 0, "stok_10036": 5})
+        self.assertEqual(ada, "ada_toko")
+        self.assertIn("10037", tip)
+        dc, tip2 = Mon.stock_worthiness({"stok_10037": 0, "stok_10062": 8, "stok_10036": 0})
+        self.assertEqual(dc, "isi_dari_dc")
+        self.assertIn("DC", tip2)
+        kosong, tip3 = Mon.stock_worthiness({"stok_10037": 0, "stok_10062": 0, "stok_10036": 0})
+        self.assertEqual(kosong, "kosong")
+        self.assertIn("kosong", tip3.lower())
+
+    def test_group_member_shows_stock_columns(self):
+        members = pd.DataFrame([
+            {"unit": "grup:G1", "periode": "2026-11", "product_code": "A", "nama": "Ada",
+             "biaya": 10_000, "omzet": 200_000, "terjual": 2},
+            {"unit": "grup:G1", "periode": "2026-11", "product_code": "B", "nama": "Kosong",
+             "biaya": 10_000, "omzet": 0, "terjual": 0},
+        ])
+        products = pd.DataFrame([
+            {"product_code": "A", "nama": "Ada", "omzet_harian": 100_000,
+             "stok": 5, "stok_10037": 5, "stok_10062": 20, "stok_10036": 3, "stok_room": 1e6},
+            {"product_code": "B", "nama": "Kosong", "omzet_harian": 50_000,
+             "stok": 0, "stok_10037": 0, "stok_10062": 0, "stok_10036": 0, "stok_room": 0},
+        ])
+        out = Mon.group_members_review(members, "grup:G1", target_roas=8.0, products=products)
+        self.assertIn("Stok 10037", out.columns)
+        self.assertIn("Stok 10062", out.columns)
+        self.assertIn("Stok 10036", out.columns)
+        by = out.set_index("Kode produk")
+        self.assertAlmostEqual(by.loc["A", "Stok 10037"], 5)
+        self.assertAlmostEqual(by.loc["A", "Stok 10062"], 20)
+        self.assertEqual(by.loc["B", "Tindakan"], "Keluarkan dari grup")
+        self.assertIn("10037", str(by.loc["B", "Saran"]))
+
     def test_group_members_review_pending_setup_compares_elsewhere(self):
         members = pd.DataFrame([
             # Grup belum setup: periode terakhir semua 0

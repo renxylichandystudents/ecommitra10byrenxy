@@ -2,6 +2,12 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Pantau: triad stok 10037/10062/10036 di semua laporan iklan
+
+- Setiap kartu iklan menampilkan **Stok harian** Site 10037 (toko) · 10062 (DC Cikupa) · 10036 (DC Cipeucang) sebagai faktor layak/tidak.
+- Tabel anggota grup & daftar wajib iklan punya kolom Stok 10037/10062/10036; saran memakai status ada_toko / isi_dari_dc / kosong.
+- `_ads_inputs` meneruskan stok DC ke `products` agar Pantau tidak hanya melihat stok toko.
+
 ## 2026-11-19 · Highlight blok + jeda sebut nama iklan + beda jendela biaya
 
 - Pembatas **Belum setup / Jeda tertinggal / Pantau / Di luar rencana** diganti banner menonjol (bukan teks kecil).

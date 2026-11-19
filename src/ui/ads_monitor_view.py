@@ -220,21 +220,6 @@ def _ad_row_card(
         f"Hasil iklan sejak campaign: {fmt_idr(omzet)}"
         + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
     )
-    spend_note = ""
-    if month_v == month_v and since > 0 and month_v + 1 < since:
-        spend_note = (
-            "<div style='color:#64748b;font-size:var(--fs-xs);margin-top:.35rem;line-height:1.4'>"
-            "Terpakai bulan ini boleh lebih kecil dari sejak campaign: bulan = rata-rata dari tanggal 1 "
-            "(termasuk hari sebelum campaign), sejak campaign = hanya setelah campaign disimpan."
-            "</div>"
-        )
-    if plan <= 0 and since > 5_000:
-        spend_note += (
-            f"<div style='color:#991b1b;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.45'>"
-            f"<b>Biaya masih dari iklan ini:</b> «{html.escape(name)}» di Seller Center"
-            f" · total sejak campaign {fmt_idr(biaya)}. Pause iklan dengan nama yang sama di SC."
-            f"</div>"
-        )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
     group_active = not (
         act == "Buat / aktifkan"
@@ -251,6 +236,36 @@ def _ad_row_card(
     saran_txt = str(r.get("Saran") or "")
     if member_note:
         saran_txt = f"{saran_txt} {member_note}".strip() if saran_txt else member_note
+    stock_sum = Mon.stock_summary_for_ad(products, key, units=units, members=members)
+    if stock_sum.get("kosong"):
+        saran_txt = (
+            f"{saran_txt} {stock_sum['kosong']} produk stok toko+DC kosong — "
+            "jangan naikkan budget demi item kosong."
+        ).strip()
+    spend_note = ""
+    if month_v == month_v and since > 0 and month_v + 1 < since:
+        spend_note = (
+            "<div style='color:#64748b;font-size:var(--fs-xs);margin-top:.35rem;line-height:1.4'>"
+            "Terpakai bulan ini boleh lebih kecil dari sejak campaign: bulan = rata-rata dari tanggal 1 "
+            "(termasuk hari sebelum campaign), sejak campaign = hanya setelah campaign disimpan."
+            "</div>"
+        )
+    if plan <= 0 and since > 5_000:
+        spend_note += (
+            f"<div style='color:#991b1b;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.45'>"
+            f"<b>Biaya masih dari iklan ini:</b> «{html.escape(name)}» di Seller Center"
+            f" · total sejak campaign {fmt_idr(biaya)}. Pause iklan dengan nama yang sama di SC."
+            f"</div>"
+        )
+    stock_color = (
+        DOWN if stock_sum["status"] == "kosong"
+        else (WARN if stock_sum["status"] == "isi_dari_dc" else MUTED)
+    )
+    spend_note += (
+        f"<div style='color:{stock_color};font-size:var(--fs-sm);margin-top:.35rem;line-height:1.45'>"
+        f"<b>Stok harian (faktor layak iklan):</b> {html.escape(stock_sum['teks'])}"
+        f"</div>"
+    )
     scope_color = MUTED if scope.startswith("Dalam") else DOWN
     st.markdown(
         f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.75rem .9rem;margin:.4rem 0;background:#fff'>"
@@ -287,16 +302,16 @@ def _ad_row_card(
             if group_active:
                 st.caption(
                     "Angka dari laporan iklan grup (bulan terakhir). "
-                    "Item lemah sebaiknya dikeluarkan agar budget grup tidak terpakai untuk produk yang tidak menghasilkan. "
-                    "Andalan bisa dipertimbangkan jadi iklan tunggal. "
+                    "Stok 10037/10062/10036 = faktor layak iklan harian (toko · DC Cikupa · DC Cipeucang). "
+                    "Item lemah/kosong stok sebaiknya dikeluarkan. "
                     "Kolom Iklan lain = apakah produk yang sama sudah jalan di iklan lain."
                 )
             else:
                 st.caption(
                     "Grup ini belum aktif di Seller Center. Tiap produk dicek: "
                     "sudahkah diiklankan di tempat lain, dan apakah masih layak di-setup "
-                    "(histori campaign sebelumnya, prediksi omzet, stok). "
-                    "Jangan aktifkan semua anggota lama secara buta."
+                    "(histori, prediksi, stok 10037/10062/10036). "
+                    "Toko kosong tapi DC ada → restock dulu, jangan langsung setup."
                 )
             if member_frame.empty:
                 st.info(
@@ -307,6 +322,7 @@ def _ad_row_card(
                 show_table(
                     member_frame,
                     kinds={
+                        "Stok 10037": "count", "Stok 10062": "count", "Stok 10036": "count",
                         "Biaya/hari": "money", "Omzet/hari": "money", "ROAS": "dec",
                         "Porsi omzet grup": "pct", "Porsi biaya grup": "pct",
                     },
@@ -689,7 +705,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         card(k[1], "Buat iklan baru", fmt_num(int(go["Keputusan"].str.contains("Buat", case=False).sum())),
              hint="prediksi tinggi + stok · mulai 25 rb")
         card(k[2], "Jeda / alihkan", fmt_num(len(stop)), hint="ROAS lemah — pindahkan budget")
-        show_table(week, kinds={"Budget/hari": "money", "Prediksi omzet/hari": "money", "Stok": "count",
+        show_table(week, kinds={"Budget/hari": "money", "Prediksi omzet/hari": "money",
+                                "Stok 10037": "count", "Stok 10062": "count", "Stok 10036": "count",
                                 "ROAS terkini": "dec", "Biaya kini/hari": "money", "Prioritas": "count"},
                    column_config={"Produk": st.column_config.TextColumn(width="medium"), "Alasan": st.column_config.TextColumn(width="large")})
         download_excel(week, f"wajib_iklan_{horizon_start}.xlsx", key="xl-adt-week", label="Unduh daftar wajib iklan")
