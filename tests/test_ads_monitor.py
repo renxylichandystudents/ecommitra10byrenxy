@@ -260,10 +260,11 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
                         {"key": "produk:2", "biaya": 50_000, "omzet": 200_000, "budget_plan": 25_000, "budget_setup": 25_000},
                     ],
                     "toko": {
-                        "budget_plan_hari": 75_000, "budget_actual_hari": 75_000,
+                        "budget_plan_hari": 75_000,
                         "biaya_sejak": 150_000, "omzet_kotor_sejak": 1_200_000,
-                        "bersih_sejak": 900_000, "produk_sejak": 1_100_000,
+                        "produk_sejak": 1_100_000,
                         "produk_mtd": 5_000_000, "bersih_mtd": 4_000_000,
+                        "realisasi_biaya_hari": 150_000,
                     },
                 },
                 {
@@ -273,34 +274,33 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
                         {"key": "produk:2", "biaya": 90_000, "omzet": 300_000, "budget_plan": 25_000, "budget_setup": 30_000},
                     ],
                     "toko": {
-                        "budget_plan_hari": 75_000, "budget_actual_hari": 85_000,
+                        "budget_plan_hari": 75_000,
                         "biaya_sejak": 270_000, "omzet_kotor_sejak": 2_100_000,
-                        "bersih_sejak": 1_500_000, "produk_sejak": 1_900_000,
+                        "produk_sejak": 1_900_000,
                         "produk_mtd": 5_500_000, "bersih_mtd": 4_400_000,
                     },
                 },
             ],
         }
-        prog = Mon.campaign_daily_progress(campaign, {"produk:1", "produk:2"})
+        prog = Mon.campaign_daily_progress(campaign, {"produk:1", "produk:2"}, target_roas=20.0)
         self.assertEqual(len(prog), 2)
         self.assertAlmostEqual(prog.iloc[0]["Budget plan/hari"], 75_000)
-        self.assertAlmostEqual(prog.iloc[0]["Budget actual/hari"], 75_000)
-        self.assertAlmostEqual(prog.iloc[0]["Biaya sejak campaign"], 150_000)
-        self.assertAlmostEqual(prog.iloc[0]["Omzet kotor sejak campaign"], 1_200_000)
-        self.assertAlmostEqual(prog.iloc[0]["ROAS kotor"], 8.0)
-        self.assertAlmostEqual(prog.iloc[0]["Sales bersih sejak campaign"], 900_000)
-        self.assertAlmostEqual(prog.iloc[0]["ROAS bersih"], 6.0)
-        self.assertAlmostEqual(prog.iloc[1]["Budget actual/hari"], 85_000)
-        self.assertAlmostEqual(prog.iloc[1]["Omzet produk MTD"], 5_500_000)
-        self.assertIn("klaim iklan", str(prog.iloc[1]["Dampak iklan ke sales all"]).lower())
+        self.assertAlmostEqual(prog.iloc[0]["Realisasi biaya iklan (hari itu)"], 150_000)
+        self.assertAlmostEqual(prog.iloc[0]["Sales produk dari iklan sejak campaign"], 1_200_000)
+        self.assertAlmostEqual(prog.iloc[0]["ROAS iklan"], 8.0)
+        self.assertAlmostEqual(prog.iloc[0]["Sales produk all sejak campaign"], 1_100_000)
+        self.assertAlmostEqual(prog.iloc[1]["Realisasi biaya iklan (hari itu)"], 120_000)
+        self.assertAlmostEqual(prog.iloc[1]["Sales MTD produk"], 5_500_000)
+        self.assertAlmostEqual(prog.iloc[1]["Sales MTD bersih"], 4_400_000)
+        self.assertIn("roas", str(prog.iloc[1]["Analisa keputusan hari itu"]).lower())
 
-    def test_ads_impact_note_organic_share(self):
-        note = Mon.ads_impact_note(
-            biaya=100_000, omzet_kotor=800_000, produk_sejak=1_000_000, bersih_sejak=700_000,
+    def test_day_decision_note_organic_share(self):
+        note = Mon.day_decision_note(
+            plan_hari=100_000, realisasi_hari=90_000,
+            biaya_sejak=100_000, sales_iklan=800_000, sales_all=1_000_000, target_roas=10.0,
         )
         self.assertIn("80%", note)
         self.assertIn("organik", note.lower())
-        self.assertIn("biaya", note.lower())
 
     def test_checkpoint_and_history(self):
         campaign = {"id": 1, "setelan": {"data_sampai": "2026-11-13"}}
@@ -321,7 +321,7 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
             today_row=None,
         )
         self.assertGreaterEqual(len(hist), 1)
-        self.assertEqual(hist.iloc[-1]["Tanggal catatan"], "2026-11-17")
+        self.assertEqual(hist.iloc[-1]["Tanggal catatan Pantau"], "2026-11-17")
         self.assertIn("Total biaya sejak campaign", hist.columns)
         self.assertIn("Rata-rata biaya/hari bulan ini", hist.columns)
         self.assertAlmostEqual(hist.iloc[-1]["Rata-rata biaya/hari bulan ini"], 80_000)
