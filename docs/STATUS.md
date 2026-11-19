@@ -2,6 +2,29 @@
 
 Diperbarui: 19 November 2026.
 
+## Lanjut nanti (disimpan 19 Nov pagi) · Pantau iklan
+
+Semua perubahan Pantau hari ini sudah di `main` (commit terakhir: triad stok 10037/10062/10036). Localhost:8501 / Cloud ikut push.
+
+**Sudah selesai hari ini**
+- Rombak tabel riwayat evaluasi (patokan / tambahan harian / total sejak campaign / rata-rata MTD).
+- Split ketat dalam rencana vs di luar rencana + banner blok (Belum setup / Jeda tertinggal / Pantau / Di luar).
+- Grup belum setup: bandingkan anggota vs iklan aktif lain + kelayakan setup.
+- Jeda masih berbiaya: sebut nama iklan di SC; label Shopee tidak bilang “tidak diisi”.
+- Dompet: “di atas patokan” bila rata-rata terpakai melebihi (bukan “mendekati”).
+- Stok harian 10037 · 10062 · 10036 di kartu, anggota grup, dan daftar wajib iklan.
+
+**Cek saat lanjut**
+- Refresh keras Pantau bila label lama masih muncul.
+- Buka Grup Iklan 01 (belum setup): kolom stok + saran Sudah diiklankan / Layak / Tidak perlu.
+- Buka blok Jeda tertinggal: pastikan nama iklan SC + triad stok terbaca.
+- Bila stok DC tampil “–”, pastikan unggahan Data stok Site 10062/10036 terbaru ada.
+
+**Belum dikerjakan / bisa lanjut**
+- Tesis docx (sempat dibuka, diprioritaskan Pantau).
+- Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” untuk kasus edge (penjelasan UI sudah ada).
+- Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0 — pantau apakah alias kunci/laporan perlu diperhalus.
+
 ## 2026-11-19 · Pantau: triad stok 10037/10062/10036 di semua laporan iklan
 
 - Setiap kartu iklan menampilkan **Stok harian** Site 10037 (toko) · 10062 (DC Cikupa) · 10036 (DC Cipeucang) sebagai faktor layak/tidak.
