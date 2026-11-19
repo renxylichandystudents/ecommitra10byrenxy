@@ -129,15 +129,21 @@ def _tacos_pair(cost: float, produk: float, bersih: float) -> tuple[float, float
     return tp, tb
 
 
+def _fmt_hari(value: float) -> str:
+    return f"{fmt_idr(value)}/hari" if value == value else "–"
+
+
 def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: str, cid: int) -> None:
-    """Satu baris rekap iklan: insight singkat + triad budget + expander Detailed historis."""
+    """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis."""
     name = str(r.get("Iklan") or r.get("_key") or "")
     key = str(r.get("_key") or "")
     act = str(r.get("Tindakan") or "–")
     color = DOWN if act.startswith(("Jeda", "Turunkan")) else (UP if act == "Pertahankan" else WARN)
-    plan = float(r.get("Budget usulan/hari") or r.get("Budget plan/hari") or 0)
-    setup = float(r.get("Budget efektif Shopee/hari") or r.get("Budget setup SC/hari") or 0)
-    actual = float(r.get("Biaya aktual/hari") or r.get("Actual pemakaian/hari") or 0)
+    plan = float(r.get("Budget usulan/hari") or r.get("Budget di rencana/hari") or 0)
+    setup = float(r.get("Budget efektif Shopee/hari") or r.get("Budget di Shopee/hari") or 0)
+    since = float(r.get("Biaya aktual/hari") or r.get("Terpakai sejak campaign/hari") or 0)
+    month = r.get("Biaya bulan ini/hari")
+    month_v = float(month) if month == month and month is not None else float("nan")
     omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
     biaya = float(r.get("Biaya sejak disimpan") or 0)
     roas = float(r["ROAS aktual"]) if r.get("ROAS aktual") == r.get("ROAS aktual") else float("nan")
@@ -154,9 +160,10 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         f"<div style='color:#475569;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.5'>"
         f"{html.escape(str(r.get('Saran') or r.get('Status goals') or ''))}</div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-top:.45rem;font-size:var(--fs-sm)'>"
-        f"<span><b>Di rencana</b> {fmt_idr(plan)}/hari</span>"
-        f"<span><b>Di Shopee</b> {fmt_idr(setup)}/hari</span>"
-        f"<span><b>Terpakai</b> {fmt_idr(actual)}/hari</span></div></div>",
+        f"<span><b>Di rencana</b> {_fmt_hari(plan)}</span>"
+        f"<span><b>Di Shopee</b> {_fmt_hari(setup)}</span>"
+        f"<span><b>Terpakai bulan ini</b> {_fmt_hari(month_v)}</span>"
+        f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}</span></div></div>",
         unsafe_allow_html=True,
     )
     with st.expander("Lihat riwayat harian", expanded=False):
@@ -173,7 +180,7 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         today_row = {
             "tanggal": report_end.isoformat() if report_end else "",
             "biaya": biaya, "omzet": omzet, "roas": (omzet / biaya) if biaya > 0 else float("nan"),
-            "biaya_hari": actual, "budget_plan": plan, "budget_setup": setup, "tindakan": act,
+            "biaya_hari": since, "budget_plan": plan, "budget_setup": setup, "tindakan": act,
         }
         hist = Mon.daily_history_for(
             cur, key,
@@ -257,6 +264,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             classified = Mon.classify_rows(frame, target_roas=roas, running_keys=running_keys)
         in_plan, out_plan = Mon.split_in_out_plan(
             classified, planned, current, base, names=names, kinds=kinds, target_roas=roas, running_keys=running_keys)
+        in_plan = Mon.attach_month_daily(in_plan, current)
+        out_plan = Mon.attach_month_daily(out_plan, current)
         classified = in_plan
         # Checkpoint harian ke depan (satu entri per tanggal laporan)
         if features is not None and not in_plan.empty and report_end is not None:
@@ -413,9 +422,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             f"Daftar semua iklan di campaign, diurut dari omzet terbesar. "
             f"{aktif}/{rencana} sudah sesuai rencana · data s.d. {fmt_date(report_end)} "
             f"({fmt_num(summary.get('hari', 0) if summary else 0)} hari). "
-            f"Budget plan = yang disimpan di campaign · Budget setup = yang harus diisi di Shopee "
-            f"(minimal {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup) · "
-            "Actual = pemakaian nyata per hari sejak campaign."
+            f"Di rencana = budget campaign · Di Shopee = yang harus diisi "
+            f"(minimal {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup). "
+            "Terpakai bulan ini = rata-rata sejak tanggal 1. "
+            "Terpakai sejak campaign = rata-rata setelah campaign disimpan."
         )
         cid = int(cur.get("id") or 0)
         if in_plan.empty:
@@ -430,14 +440,15 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             view = Mon.rename_budget_triad(in_plan)
             view_cols = [c for c in [
                 "Iklan", "Jenis", "Status SC", "Status goals", "Tindakan",
-                "Budget plan/hari", "Budget setup SC/hari", "Actual pemakaian/hari",
+                "Budget di rencana/hari", "Budget di Shopee/hari",
+                "Terpakai bulan ini/hari", "Terpakai sejak campaign/hari",
                 "Biaya sejak disimpan", "Omzet iklan sejak disimpan", "ROAS aktual", "Saran",
             ] if c in view.columns]
+            money_kinds = {c: "money" for c in view_cols if c.endswith("/hari") or c.startswith(("Biaya", "Omzet"))}
+            money_kinds["ROAS aktual"] = "dec"
             with st.expander(f"Tabel ringkas rencana · {fmt_num(len(view))} iklan", expanded=False):
                 show_table(
-                    view[view_cols],
-                    kinds={"Budget plan/hari": "money", "Budget setup SC/hari": "money", "Actual pemakaian/hari": "money",
-                           "Biaya sejak disimpan": "money", "Omzet iklan sejak disimpan": "money", "ROAS aktual": "dec"},
+                    view[view_cols], kinds=money_kinds,
                     column_config={"Iklan": st.column_config.TextColumn(width="large"),
                                    "Saran": st.column_config.TextColumn(width="large")},
                 )
@@ -454,14 +465,15 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             out_view = Mon.rename_budget_triad(out_plan)
             out_cols = [c for c in [
                 "Iklan", "Jenis", "Status SC", "Status goals", "Tindakan",
-                "Budget plan/hari", "Budget setup SC/hari", "Actual pemakaian/hari",
+                "Budget di rencana/hari", "Budget di Shopee/hari",
+                "Terpakai bulan ini/hari", "Terpakai sejak campaign/hari",
                 "Biaya sejak disimpan", "Omzet iklan sejak disimpan", "ROAS aktual", "Saran",
             ] if c in out_view.columns]
+            out_kinds = {c: "money" for c in out_cols if c.endswith("/hari") or c.startswith(("Biaya", "Omzet"))}
+            out_kinds["ROAS aktual"] = "dec"
             with st.expander(f"Tabel di luar plan · {fmt_num(len(out_view))} iklan", expanded=False):
                 show_table(
-                    out_view[out_cols],
-                    kinds={"Budget plan/hari": "money", "Budget setup SC/hari": "money", "Actual pemakaian/hari": "money",
-                           "Biaya sejak disimpan": "money", "Omzet iklan sejak disimpan": "money", "ROAS aktual": "dec"},
+                    out_view[out_cols], kinds=out_kinds,
                     column_config={"Iklan": st.column_config.TextColumn(width="large"),
                                    "Saran": st.column_config.TextColumn(width="large")},
                 )

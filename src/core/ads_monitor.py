@@ -493,14 +493,43 @@ def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = N
     return out.sort_values("Tanggal").reset_index(drop=True)
 
 
+def attach_month_daily(frame: pd.DataFrame, current: dict[str, dict] | None) -> pd.DataFrame:
+    """Tambah `Biaya bulan ini/hari` = total biaya laporan bulan berjalan ÷ hari laporan.
+
+    Berbeda dari `Biaya aktual/hari` (rata-rata sejak campaign disimpan)."""
+    if frame is None or frame.empty:
+        return frame if frame is not None else pd.DataFrame()
+    out = frame.copy()
+    cur_map = current or {}
+
+    def lookup(key: str) -> dict | None:
+        if key in cur_map:
+            return cur_map[key]
+        tail = key.split(":", 1)[-1]
+        for k, v in cur_map.items():
+            if str(k).split(":", 1)[-1] == tail:
+                return v
+        return None
+
+    vals = []
+    for key in out["_key"].astype(str) if "_key" in out.columns else []:
+        cur = lookup(str(key))
+        days = int((cur or {}).get("hari") or 0)
+        vals.append(float(cur["biaya"]) / days if cur and days > 0 else float("nan"))
+    if "_key" in out.columns:
+        out["Biaya bulan ini/hari"] = vals
+    return out
+
+
 def rename_budget_triad(frame: pd.DataFrame) -> pd.DataFrame:
-    """Label baku: Budget plan · Budget setup SC · Actual pemakaian."""
+    """Label baku untuk tabel unduhan."""
     if frame is None or frame.empty:
         return frame if frame is not None else pd.DataFrame()
     out = frame.copy()
     rename = {
-        "Budget usulan/hari": "Budget plan/hari",
-        "Budget efektif Shopee/hari": "Budget setup SC/hari",
-        "Biaya aktual/hari": "Actual pemakaian/hari",
+        "Budget usulan/hari": "Budget di rencana/hari",
+        "Budget efektif Shopee/hari": "Budget di Shopee/hari",
+        "Biaya bulan ini/hari": "Terpakai bulan ini/hari",
+        "Biaya aktual/hari": "Terpakai sejak campaign/hari",
     }
     return out.rename(columns={k: v for k, v in rename.items() if k in out.columns})

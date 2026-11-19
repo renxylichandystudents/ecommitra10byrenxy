@@ -200,12 +200,23 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
 
     def test_rename_budget_triad(self):
         frame = pd.DataFrame([{
-            "Budget usulan/hari": 1, "Budget efektif Shopee/hari": 2, "Biaya aktual/hari": 3,
+            "Budget usulan/hari": 1, "Budget efektif Shopee/hari": 2,
+            "Biaya bulan ini/hari": 4, "Biaya aktual/hari": 3,
         }])
         out = Mon.rename_budget_triad(frame)
-        self.assertIn("Budget plan/hari", out.columns)
-        self.assertIn("Budget setup SC/hari", out.columns)
-        self.assertIn("Actual pemakaian/hari", out.columns)
+        self.assertIn("Budget di rencana/hari", out.columns)
+        self.assertIn("Budget di Shopee/hari", out.columns)
+        self.assertIn("Terpakai bulan ini/hari", out.columns)
+        self.assertIn("Terpakai sejak campaign/hari", out.columns)
+
+    def test_attach_month_daily_differs_from_since_campaign(self):
+        frame = pd.DataFrame([{
+            "_key": "produk:1", "Biaya aktual/hari": 50_000,  # sejak campaign
+        }])
+        current = {"produk:1": {"periode": "2026-11-01", "hari": 10, "biaya": 1_000_000, "omzet": 5_000_000}}
+        out = Mon.attach_month_daily(frame, current)
+        self.assertAlmostEqual(out.iloc[0]["Biaya bulan ini/hari"], 100_000)
+        self.assertAlmostEqual(out.iloc[0]["Biaya aktual/hari"], 50_000)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,11 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Poin 1: terpakai bulan ini + sejak campaign (dua angka)
+
+- “Actual pemakaian” satu angka ambigu diganti dua: **Terpakai bulan ini/hari** (laporan kumulatif bulan ÷ hari) dan **Terpakai sejak campaign/hari** (selisih baseline).
+- Kartu juga: Di rencana · Di Shopee · dua terpakai; caption menjelaskan bedanya.
+
 ## 2026-11-19 · Poin 1 kartu iklan: wording hasil + triad budget
 
 - “Omzet sejak · ROAS” diganti **Hasil iklan sejak campaign: Rp … · ROAS …×**.
