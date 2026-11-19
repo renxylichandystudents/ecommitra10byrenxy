@@ -321,9 +321,13 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         # Tiap baris = angka hari itu, bukan tumpukan. Jumlah ada di kartu.
         self.assertAlmostEqual(prog.iloc[2]["Biaya iklan"], 7_000_000)
         self.assertAlmostEqual(prog.iloc[3]["Biaya iklan"], 8_154_135)
-        self.assertAlmostEqual(prog.iloc[2]["Omzet iklan"], 100_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Omzet iklan"], 128_168_508)
+        self.assertNotIn("Omzet iklan", prog.columns)
+        self.assertNotIn("Sales bruto", prog.columns)
         self.assertAlmostEqual(prog.iloc[3]["ROAS iklan"], 128_168_508 / 8_154_135)
+        tot = prog.attrs["total"]
+        self.assertEqual(tot["Tanggal"], "Total")
+        self.assertAlmostEqual(tot["Biaya iklan"], 15_154_135)
+        self.assertAlmostEqual(tot["ROAS iklan"], 228_168_508 / 15_154_135)
         self.assertIn("Saran", prog.columns)
         # Sales produk/bersih dari orders (Ringkasan) — tanpa orders tetap NaN, bukan omzet×faktor
         self.assertTrue(pd.isna(prog.iloc[3]["Sales produk"]))

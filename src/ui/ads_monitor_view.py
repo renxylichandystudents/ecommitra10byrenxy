@@ -885,10 +885,9 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             st.caption(
                 "Tiap baris = satu tanggal."
                 + period_caption
-                + " **Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** = angka hari itu di laporan all iklan, bukan tumpukan. "
-                "Jumlah semua tanggal ada di kartu di atas. "
-                "ROAS iklan = Omzet iklan ÷ Biaya iklan hari itu. "
-                "**Sales bruto**, **Sales produk**, dan **Sales bersih** = angka hari itu, istilah sama Ringkasan. "
+                + " **Baris Total** di atas = jumlah tanggal di bawah, sama dengan kartu Biaya iklan, ROAS iklan, Sales produk, dan Sales bersih. "
+                "**Biaya iklan** dan **ROAS iklan** = angka hari itu. ROAS Total = jumlah omzet ÷ jumlah biaya. "
+                "**Sales produk** dan **Sales bersih** = angka hari itu, istilah sama Ringkasan. "
                 "**Saran** memakai aturan yang sama dengan analisa di bawah: Sesuai rencana, Tidak sesuai rencana, ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=True):
@@ -901,12 +900,11 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     first=max(len(progress), 1),
                     height=520,
                     groups=Mon.PROGRESS_GROUPS,
+                    total=progress.attrs.get("total") or {},
                     kinds={
                         "Budget di rencana/hari": "money",
                         "Biaya iklan": "money",
-                        "Omzet iklan": "money",
                         "ROAS iklan": "dec",
-                        "Sales bruto": "money",
                         "Sales produk": "money",
                         "Sales bersih": "money",
                     },
@@ -916,9 +914,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                         "Tanggal": 118,
                         "Budget di rencana/hari": 170,
                         "Biaya iklan": 140,
-                        "Omzet iklan": 150,
                         "ROAS iklan": 110,
-                        "Sales bruto": 140,
                         "Sales produk": 140,
                         "Sales bersih": 140,
                         "Saran": 420,

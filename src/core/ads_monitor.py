@@ -764,9 +764,7 @@ PROGRESS_COLS = [
     "Tanggal",
     "Budget di rencana/hari",
     "Biaya iklan",
-    "Omzet iklan",
     "ROAS iklan",
-    "Sales bruto",
     "Sales produk",
     "Sales bersih",
     "Saran",
@@ -774,8 +772,28 @@ PROGRESS_COLS = [
 # Nama kelompok dan kolom memakai istilah yang sudah ada di kartu dan analisa iklan.
 PROGRESS_GROUPS = {
     "Di rencana": ("Budget di rencana/hari",),
-    "Sejak campaign": ("Biaya iklan", "Omzet iklan", "ROAS iklan", "Sales bruto", "Sales produk", "Sales bersih"),
+    "Sejak campaign": ("Biaya iklan", "ROAS iklan", "Sales produk", "Sales bersih"),
 }
+
+
+def _progress_total(rows: list[dict], omzet_vals: list[float]) -> dict:
+    """Jumlah baris harian. ROAS = jumlah omzet ÷ jumlah biaya, sama dengan kartu di atas."""
+
+    def _sum(key: str) -> float:
+        vals = [float(r[key]) for r in rows if isinstance(r.get(key), (int, float)) and r[key] == r[key]]
+        return float(sum(vals)) if vals else float("nan")
+
+    biaya = _sum("Biaya iklan")
+    omzet_ok = [float(v) for v in omzet_vals if isinstance(v, (int, float)) and v == v]
+    omzet = float(sum(omzet_ok)) if omzet_ok else float("nan")
+    roas = omzet / biaya if biaya == biaya and biaya > 0 and omzet == omzet else float("nan")
+    return {
+        "Tanggal": "Total",
+        "Biaya iklan": biaya,
+        "ROAS iklan": roas,
+        "Sales produk": _sum("Sales produk"),
+        "Sales bersih": _sum("Sales bersih"),
+    }
 
 
 def _finite(value, default: float = float("nan")) -> float:
@@ -1037,6 +1055,7 @@ def campaign_daily_progress(
     if plan_default != plan_default or plan_default <= 0:
         plan_default = _finite(setelan.get("budget_harian"), 0.0)
     rows = []
+    omzet_hari_vals: list[float] = []
     for day in day_list:
         day_d = _as_day(day)
         if day_d is None or day_d > last_full:
@@ -1055,11 +1074,9 @@ def campaign_daily_progress(
             omzet_hari = float("nan")
         store = store_daily.get(day)
         if store is not None:
-            sales_bruto = float(store.get("bruto") or 0.0)
             sales_bersih = float(store.get("bersih") or 0.0)
             sales_produk = float(store.get("produk") or 0.0) if store.get("sumber") == "transaksi" else float("nan")
         else:
-            sales_bruto = float("nan")
             sales_bersih = float("nan")
             sales_produk = float("nan")
         roas_iklan = (
@@ -1082,16 +1099,17 @@ def campaign_daily_progress(
             "Tanggal": day,
             "Budget di rencana/hari": plan,
             "Biaya iklan": realisasi,
-            "Omzet iklan": omzet_hari,
             "ROAS iklan": roas_iklan,
-            "Sales bruto": sales_bruto,
             "Sales produk": sales_produk,
             "Sales bersih": sales_bersih,
             "Saran": note,
         })
+        omzet_hari_vals.append(omzet_hari)
     if rows and ringkas:
         rows[-1]["Saran"] = f"{rows[-1]['Saran']} {ringkas}".strip()
-    return pd.DataFrame(rows, columns=cols)
+    out = pd.DataFrame(rows, columns=cols)
+    out.attrs["total"] = _progress_total(rows, omzet_hari_vals)
+    return out
 
 
 AD_DAILY_COLS = [

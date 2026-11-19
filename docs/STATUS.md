@@ -1,5 +1,9 @@
 # Status terbaru aplikasi
 
+Diperbarui: 19 November 2026 (malam, baris Total di progress harian).
+
+- Tabel progress punya baris Total di atas tanggal. Biaya, ROAS, Sales produk, dan Sales bersih di baris itu sama dengan kartu di atas. Omzet iklan dan Sales bruto tidak ditampilkan di tabel.
+
 Diperbarui: 19 November 2026 (malam, tabel progress harian = angka per tanggal).
 
 - Progress harian tidak lagi menumpuk biaya, omzet, ROAS, dan sales. Tiap baris = hari itu. Jumlah ada di kartu di atas.
