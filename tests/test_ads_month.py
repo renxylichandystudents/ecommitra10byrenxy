@@ -32,6 +32,32 @@ def test_curve_needs_three_months_and_positive_slope():
     assert M.fit_store_curve([("a", 1e8, 3e9), ("b", 2e8, 2e9), ("c", 3e8, 1e9)]) is None
 
 
+def test_daily_unit_totals_diff_only_when_ad_is_in_both_snapshots():
+    rows = []
+    for hi, code, cost, sales in (
+        ("15/11/2026", "1", 100, 1_000),
+        ("16/11/2026", "1", 250, 3_000),
+        ("16/11/2026", "2", 50, 500),
+    ):
+        rows.append({
+            "Nama Iklan": f"Ad {code}",
+            "product_code": code,
+            "cost": cost,
+            "ad_sales": sales,
+            "period": "2026-11-01",
+            "Periode laporan (teks)": f"01/11/2026 - {hi}",
+            "_submitted_at": "2026-11-16T08:00:00+07:00",
+            "_source_key": "ads_overall",
+        })
+    out = M.daily_unit_totals(pd.DataFrame(rows), start=date(2026, 11, 15), end=date(2026, 11, 16))
+    hit = out.loc[out["key"] == "produk:1"]
+    assert list(hit["Tanggal"]) == ["2026-11-16"]
+    assert hit.iloc[0]["Biaya"] == 150
+    assert hit.iloc[0]["Omzet"] == 2_000
+    # Iklan baru di snapshot 16 tidak boleh menumpuk total MTD ke tanggal itu.
+    assert out.loc[out["key"] == "produk:2"].empty
+
+
 def test_ad_spend_prorates_month_to_date():
     ov = _overall([("01/10/2026", "31/10/2026", 31e6, 400e6), ("01/11/2026", "10/11/2026", 10e6, 150e6)])
     out = M.ad_spend(ov, date(2026, 11, 1), date(2026, 11, 10))

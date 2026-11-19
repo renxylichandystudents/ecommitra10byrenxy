@@ -219,6 +219,167 @@ def daily_ad_totals(
     return pd.DataFrame(rows, columns=cols)
 
 
+def _unit_key(code, name) -> str:
+    """Kunci iklan yang sama dengan rencana: produk:kode, grup:nama, atau auto."""
+    text = str(code or "").strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    if text.isdigit():
+        return f"produk:{text}"
+    nama = str(name or "").strip()
+    low = nama.lower()
+    if not nama or low in {"-", "nan", "none", "null"}:
+        return ""
+    if "otomatis" in low:
+        return "auto"
+    return f"grup:{nama}"
+
+
+def _ad_name(work: pd.DataFrame) -> pd.Series:
+    for col in ("Nama Iklan", "Nama Produk", "product_name"):
+        if col in work.columns:
+            return work[col]
+    return pd.Series("", index=work.index)
+
+
+def daily_unit_totals(
+    ads_overall: pd.DataFrame | None,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+) -> pd.DataFrame:
+    """Biaya & omzet **per iklan per tanggal** dari laporan all iklan.
+
+    Aturan sama dengan `daily_ad_totals`: laporan 1 hari dipakai langsung;
+    unggahan MTD berurutan 1 hari → selisih kumulatif iklan itu.
+    Iklan yang tidak ada di snapshot sebelumnya tidak diisi (bukan total MTD
+    yang ditumpuk ke satu hari, dan bukan prorata).
+    """
+    from src.core import ads as A
+
+    cols = ["Tanggal", "key", "Biaya", "Omzet"]
+    if ads_overall is None or not isinstance(ads_overall, pd.DataFrame) or ads_overall.empty:
+        return pd.DataFrame(columns=cols)
+    work = ads_overall.copy()
+    if "cost" in work.columns:
+        work["_b"] = A._number(work["cost"])
+    elif "biaya_iklan" in work.columns:
+        work["_b"] = pd.to_numeric(work["biaya_iklan"], errors="coerce").fillna(0.0)
+    else:
+        work["_b"] = 0.0
+    if "ad_sales" in work.columns:
+        work["_o"] = A._number(work["ad_sales"])
+    elif "omzet_iklan" in work.columns:
+        work["_o"] = pd.to_numeric(work["omzet_iklan"], errors="coerce").fillna(0.0)
+    else:
+        work["_o"] = 0.0
+    lo, hi = A._ranges(work)
+    work["_lo"] = pd.to_datetime(lo).dt.date
+    work["_hi"] = pd.to_datetime(hi).dt.date
+    work = work.loc[work["_lo"].notna() & work["_hi"].notna()].copy()
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+    codes = work["product_code"] if "product_code" in work.columns else pd.Series("", index=work.index)
+    work["_key"] = [_unit_key(c, n) for c, n in zip(codes, _ad_name(work))]
+    work = work.loc[work["_key"].astype(str).ne("")].copy()
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+    work["_sub"] = work["_submitted_at"].astype(str) if "_submitted_at" in work.columns else ""
+    work["_src"] = work["_source_key"].fillna("").astype(str) if "_source_key" in work.columns else "ads_overall"
+    snap = (
+        work.groupby(["_src", "_lo", "_hi", "_sub"], sort=False)[["_b", "_o"]]
+        .sum()
+        .reset_index()
+        .rename(columns={"_b": "biaya", "_o": "omzet"})
+    )
+    snap = snap.sort_values(["biaya", "omzet", "_sub"], ascending=True)
+    winners = snap.drop_duplicates(["_lo", "_hi"], keep="last")
+    part = work.merge(winners[["_src", "_lo", "_hi", "_sub"]], on=["_src", "_lo", "_hi", "_sub"], how="inner")
+    by_key = (
+        part.groupby(["_lo", "_hi", "_key"], sort=False)[["_b", "_o"]]
+        .sum()
+        .reset_index()
+    )
+    snapshots = []
+    for (lo_d, hi_d), group in by_key.groupby(["_lo", "_hi"], sort=False):
+        keys = {
+            str(rec["_key"]): (float(rec["_b"]), float(rec["_o"]))
+            for rec in group.to_dict("records")
+        }
+        snapshots.append({
+            "lo": lo_d,
+            "hi": hi_d,
+            "hari": (hi_d - lo_d).days + 1,
+            "biaya": float(group["_b"].sum()),
+            "omzet": float(group["_o"].sum()),
+            "keys": keys,
+        })
+    if not snapshots:
+        return pd.DataFrame(columns=cols)
+    snapshots.sort(key=lambda s: (s["lo"], s["hi"]))
+    by_day: dict[date, dict[str, dict]] = {}
+
+    for snap_row in snapshots:
+        if int(snap_row["hari"]) != 1:
+            continue
+        d = snap_row["hi"]
+        slot = by_day.setdefault(d, {})
+        for key, (biaya, omzet) in snap_row["keys"].items():
+            slot[key] = {"Biaya": biaya, "Omzet": omzet, "Sumber": "1hari"}
+
+    by_lo: dict[date, list] = {}
+    for snap_row in snapshots:
+        by_lo.setdefault(snap_row["lo"], []).append(snap_row)
+    for _lo_d, part_snaps in by_lo.items():
+        part_snaps = sorted(part_snaps, key=lambda s: s["hi"])
+        kept = []
+        for snap_row in part_snaps:
+            if snap_row["biaya"] <= 0 and snap_row["omzet"] <= 0:
+                continue
+            if kept and (
+                snap_row["biaya"] + 1 < kept[-1]["biaya"]
+                or snap_row["omzet"] + 1 < kept[-1]["omzet"]
+            ):
+                continue
+            if kept and snap_row["hi"] <= kept[-1]["hi"]:
+                continue
+            kept.append(snap_row)
+        prev = None
+        for snap_row in kept:
+            if prev is not None and snap_row["hi"] == prev["hi"] + timedelta(days=1):
+                d = snap_row["hi"]
+                slot = by_day.setdefault(d, {})
+                for key, (cur_b, cur_o) in snap_row["keys"].items():
+                    prev_pair = prev["keys"].get(key)
+                    if prev_pair is None:
+                        continue
+                    biaya = cur_b - prev_pair[0]
+                    omzet = cur_o - prev_pair[1]
+                    if biaya < 0 or omzet < 0:
+                        continue
+                    if slot.get(key, {}).get("Sumber") == "1hari":
+                        continue
+                    slot[key] = {"Biaya": biaya, "Omzet": omzet, "Sumber": "mtd"}
+            prev = snap_row
+
+    rows = []
+    for d in sorted(by_day):
+        if start is not None and d < start:
+            continue
+        if end is not None and d > end:
+            continue
+        for key, item in by_day[d].items():
+            rows.append({
+                "Tanggal": d.isoformat(),
+                "key": key,
+                "Biaya": item["Biaya"],
+                "Omzet": item["Omzet"],
+            })
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    return pd.DataFrame(rows, columns=cols).sort_values(["Tanggal", "key"]).reset_index(drop=True)
+
+
 @dataclass
 class StoreCurve:
     s0: float

@@ -1101,6 +1101,208 @@ def campaign_daily_progress(
     return pd.DataFrame(rows, columns=cols)
 
 
+AD_DAILY_COLS = [
+    "Tanggal",
+    "Budget di rencana/hari",
+    "Budget di Shopee/hari",
+    "Biaya iklan",
+    "Omzet iklan",
+    "ROAS iklan",
+    "Saran",
+]
+
+
+def _daily_keys_for(key: str) -> set[str]:
+    k = str(key or "")
+    keys = {k, report_alias(k)}
+    return {item for item in keys if item}
+
+
+def _rows_for_key(unit_daily: pd.DataFrame, key: str) -> pd.DataFrame:
+    if unit_daily is None or unit_daily.empty or "key" not in unit_daily.columns:
+        return pd.DataFrame(columns=getattr(unit_daily, "columns", []))
+    wanted = _daily_keys_for(key)
+    return unit_daily.loc[unit_daily["key"].astype(str).isin(wanted)]
+
+
+def apply_daily_ad_window(
+    frame: pd.DataFrame,
+    unit_daily: pd.DataFrame,
+    *,
+    start: date | None,
+    end: date | None,
+    month_start: date | None = None,
+) -> pd.DataFrame:
+    """Ganti biaya/omzet sejak campaign dengan jumlah harian all iklan pada jendela yang sama dengan progress.
+
+    Hari tanpa selisih laporan tidak dijumlah. Rata-rata = jumlah ÷ tanggal yang ada angkanya.
+    `Rekomendasi dijalankan` ikut dihitung ulang (60–140% budget di Shopee) supaya saran tidak
+    memakai jendela baseline yang mencakup hari ini.
+    """
+    if (
+        frame is None or frame.empty or unit_daily is None or unit_daily.empty
+        or start is None or end is None or end < start or "_key" not in frame.columns
+    ):
+        return frame if frame is not None else pd.DataFrame()
+    out = frame.copy()
+    daily = unit_daily.copy()
+    daily["Tanggal"] = daily["Tanggal"].astype(str).str[:10]
+    month_lo = month_start or date(end.year, end.month, 1)
+    lo, hi = start.isoformat(), end.isoformat()
+    month_lo_s = month_lo.isoformat()
+    biaya_s, omzet_s, hari_s, rate_s, sales_s, roas_s = [], [], [], [], [], []
+    month_s, done_s, notes, ratios = [], [], [], []
+    for _, row in out.iterrows():
+        part = _rows_for_key(daily, str(row.get("_key") or ""))
+        win = part.loc[(part["Tanggal"] >= lo) & (part["Tanggal"] <= hi)] if not part.empty else part
+        biaya = float(win["Biaya"].sum()) if not win.empty else 0.0
+        omzet = float(win["Omzet"].sum()) if not win.empty else 0.0
+        hari = int(len(win))
+        rate = biaya / hari if hari else 0.0
+        sales_d = omzet / hari if hari else 0.0
+        expected = float(row.get("Budget efektif Shopee/hari") or 0)
+        if expected <= 0:
+            done = rate <= _ACTIVE_SPEND
+        else:
+            done = 0.6 <= rate / expected <= 1.4
+        mon = part.loc[(part["Tanggal"] >= month_lo_s) & (part["Tanggal"] <= hi)] if not part.empty else part
+        month_rate = float(mon["Biaya"].sum()) / len(mon) if not mon.empty else float("nan")
+        note = str(row.get("Catatan batas") or "")
+        for phrase in (
+            "baseline iklan tidak terekam — porsi proporsional bulan berjalan",
+            "baseline tanpa biaya terekam — porsi proporsional bulan berjalan",
+        ):
+            note = note.replace(phrase, "")
+        note = note.strip(" ;")
+        biaya_s.append(biaya)
+        omzet_s.append(omzet)
+        hari_s.append(hari)
+        rate_s.append(rate)
+        sales_s.append(sales_d)
+        roas_s.append(omzet / biaya if biaya > 0 else float("nan"))
+        month_s.append(month_rate)
+        done_s.append("Ya" if done else "Belum")
+        notes.append(note)
+        ratios.append(rate / expected if expected > 0 else float("nan"))
+    out["Biaya sejak disimpan"] = biaya_s
+    out["Omzet iklan sejak disimpan"] = omzet_s
+    out["Hari dievaluasi"] = hari_s
+    out["Biaya aktual/hari"] = rate_s
+    if "Omzet iklan aktual/hari" in out.columns:
+        out["Omzet iklan aktual/hari"] = sales_s
+    out["ROAS aktual"] = roas_s
+    out["Biaya bulan ini/hari"] = month_s
+    if "Rekomendasi dijalankan" in out.columns:
+        out["Rekomendasi dijalankan"] = done_s
+    if "Catatan batas" in out.columns:
+        out["Catatan batas"] = notes
+    if "Rasio vs efektif" in out.columns:
+        out["Rasio vs efektif"] = ratios
+    return out
+
+
+def execution_summary(frame: pd.DataFrame, summary: dict | None) -> dict:
+    """Hitung ulang ringkasan pelaksanaan dari baris yang sudah memakai angka harian."""
+    out = dict(summary or {})
+    if frame is None or frame.empty:
+        return out
+    if "Rekomendasi dijalankan" in frame.columns:
+        out["dijalankan"] = int((frame["Rekomendasi dijalankan"].astype(str) == "Ya").sum())
+    active = frame
+    if "Budget efektif Shopee/hari" in frame.columns:
+        expected = pd.to_numeric(frame["Budget efektif Shopee/hari"], errors="coerce").fillna(0)
+        picked = frame.loc[expected > 0]
+        if not picked.empty:
+            active = picked
+    if "Biaya aktual/hari" in active.columns:
+        out["biaya_harian"] = float(pd.to_numeric(active["Biaya aktual/hari"], errors="coerce").fillna(0).sum())
+    if "Omzet iklan aktual/hari" in active.columns:
+        out["omzet_harian"] = float(pd.to_numeric(active["Omzet iklan aktual/hari"], errors="coerce").fillna(0).sum())
+    if "Biaya sejak disimpan" in active.columns:
+        out["biaya_total"] = float(pd.to_numeric(active["Biaya sejak disimpan"], errors="coerce").fillna(0).sum())
+    if "Omzet iklan sejak disimpan" in active.columns:
+        out["omzet_total"] = float(pd.to_numeric(active["Omzet iklan sejak disimpan"], errors="coerce").fillna(0).sum())
+    biaya_t = float(out.get("biaya_total") or 0)
+    omzet_t = float(out.get("omzet_total") or 0)
+    out["roas"] = omzet_t / biaya_t if biaya_t > 0 else float("nan")
+    if "Hari dievaluasi" in frame.columns:
+        hari = pd.to_numeric(frame["Hari dievaluasi"], errors="coerce")
+        out["hari"] = int(hari.max()) if hari.notna().any() else 0
+    return out
+
+
+def ad_daily_progress(
+    unit_daily: pd.DataFrame | None,
+    key: str,
+    *,
+    start: date | None,
+    end: date | None,
+    budget_plan: float = 0.0,
+    budget_setup: float = 0.0,
+    target_roas: float = 0.0,
+) -> pd.DataFrame:
+    """Satu baris per tanggal penuh sejak campaign, untuk satu iklan.
+
+    Biaya iklan, Omzet iklan, dan ROAS iklan terkumpul sejak tanggal campaign
+    (baris terakhir = angka di kartu iklan). Saran memakai aturan yang sama
+    dengan progress toko dan analisa iklan.
+    """
+    cols = list(AD_DAILY_COLS)
+    if start is None or end is None or end < start:
+        return pd.DataFrame(columns=cols)
+    part = _rows_for_key(unit_daily if unit_daily is not None else pd.DataFrame(), key)
+    by_day: dict[str, tuple[float, float]] = {}
+    if not part.empty:
+        for row in part.itertuples(index=False):
+            by_day[str(row.Tanggal)[:10]] = (float(row.Biaya), float(row.Omzet))
+    plan_hari = float(budget_setup or 0) if float(budget_setup or 0) > 0 else float(budget_plan or 0)
+    rows = []
+    cum_biaya = 0.0
+    cum_omzet = 0.0
+    seen = False
+    day = start
+    while day <= end:
+        hit = by_day.get(day.isoformat())
+        if hit is not None:
+            realisasi, omzet_hari = hit
+            cum_biaya += realisasi
+            cum_omzet += omzet_hari
+            seen = True
+        else:
+            realisasi = float("nan")
+        biaya_show = cum_biaya if seen else float("nan")
+        omzet_show = cum_omzet if seen else float("nan")
+        roas = (
+            omzet_show / biaya_show
+            if biaya_show == biaya_show and biaya_show > 0 and omzet_show == omzet_show
+            else float("nan")
+        )
+        if plan_hari <= 0 and realisasi == realisasi and realisasi > _ACTIVE_SPEND:
+            note = "Tidak sesuai rencana. Jeda / hentikan."
+        elif hit is None and not seen:
+            note = "Belum ada di laporan."
+        else:
+            note = day_decision_note(
+                plan_hari=plan_hari,
+                realisasi_hari=realisasi,
+                biaya_sejak=cum_biaya,
+                sales_iklan=cum_omzet,
+                sales_all=float("nan"),
+                target_roas=target_roas,
+            )
+        rows.append({
+            "Tanggal": day.isoformat(),
+            "Budget di rencana/hari": float(budget_plan or 0),
+            "Budget di Shopee/hari": float(budget_setup or 0),
+            "Biaya iklan": biaya_show,
+            "Omzet iklan": omzet_show,
+            "ROAS iklan": roas,
+            "Saran": note,
+        })
+        day += timedelta(days=1)
+    return pd.DataFrame(rows, columns=cols)
+
+
 def build_toko_snapshot(
     *,
     budget_plan_hari: float = 0.0,
@@ -2108,8 +2310,16 @@ def attach_month_daily(frame: pd.DataFrame, current: dict[str, dict] | None) -> 
                 return v
         return None
 
+    existing = (
+        pd.to_numeric(out["Biaya bulan ini/hari"], errors="coerce")
+        if "Biaya bulan ini/hari" in out.columns else None
+    )
     vals = []
-    for key in out["_key"].astype(str) if "_key" in out.columns else []:
+    keys = list(out["_key"].astype(str)) if "_key" in out.columns else []
+    for i, key in enumerate(keys):
+        if existing is not None and pd.notna(existing.iloc[i]):
+            vals.append(float(existing.iloc[i]))
+            continue
         cur = lookup(str(key))
         days = int((cur or {}).get("hari") or 0)
         vals.append(float(cur["biaya"]) / days if cur and days > 0 else float("nan"))

@@ -318,6 +318,49 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         )
         self.assertTrue(prog.empty)  # hari ini belum penuh
 
+    def test_ad_daily_progress_matches_campaign_window(self):
+        daily = pd.DataFrame([
+            {"Tanggal": "2026-11-16", "key": "produk:1", "Biaya": 1_000_000, "Omzet": 10_000_000},
+            {"Tanggal": "2026-11-17", "key": "produk:1", "Biaya": 1_200_000, "Omzet": 12_000_000},
+            {"Tanggal": "2026-11-18", "key": "produk:1", "Biaya": 900_000, "Omzet": 11_000_000},
+        ])
+        hist = Mon.ad_daily_progress(
+            daily, "produk:1",
+            start=date(2026, 11, 14), end=date(2026, 11, 18),
+            budget_plan=1_400_000, budget_setup=1_400_000, target_roas=8,
+        )
+        self.assertEqual(list(hist["Tanggal"]), [
+            "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18",
+        ])
+        self.assertTrue(pd.isna(hist.iloc[0]["Biaya iklan"]))
+        self.assertTrue(pd.isna(hist.iloc[1]["Biaya iklan"]))
+        self.assertAlmostEqual(hist.iloc[-1]["Biaya iklan"], 3_100_000)
+        self.assertAlmostEqual(hist.iloc[-1]["Omzet iklan"], 33_000_000)
+        self.assertAlmostEqual(hist.iloc[-1]["ROAS iklan"], 33_000_000 / 3_100_000)
+        frame = pd.DataFrame([{
+            "_key": "produk:1",
+            "Budget usulan/hari": 1_400_000,
+            "Budget efektif Shopee/hari": 1_400_000,
+            "Biaya sejak disimpan": 2_292_147,
+            "Omzet iklan sejak disimpan": 31_000_000,
+            "Hari dievaluasi": 5,
+            "Biaya aktual/hari": 458_429,
+            "Omzet iklan aktual/hari": 6_000_000,
+            "ROAS aktual": 13.0,
+            "Rekomendasi dijalankan": "Belum",
+            "Catatan batas": "baseline iklan tidak terekam — porsi proporsional bulan berjalan",
+            "Rasio vs efektif": 0.3,
+        }])
+        over = Mon.apply_daily_ad_window(
+            frame, daily, start=date(2026, 11, 14), end=date(2026, 11, 18),
+        )
+        self.assertAlmostEqual(over.iloc[0]["Biaya sejak disimpan"], 3_100_000)
+        self.assertAlmostEqual(over.iloc[0]["Omzet iklan sejak disimpan"], 33_000_000)
+        self.assertEqual(int(over.iloc[0]["Hari dievaluasi"]), 3)
+        self.assertAlmostEqual(over.iloc[0]["Biaya aktual/hari"], 3_100_000 / 3)
+        self.assertEqual(over.iloc[0]["Rekomendasi dijalankan"], "Ya")  # 1,03 jt ada di 60–140% dari 1,4 jt
+        self.assertNotIn("proporsional", str(over.iloc[0]["Catatan batas"]))
+
     def test_day_decision_note_roas(self):
         note = Mon.day_decision_note(
             plan_hari=100_000, realisasi_hari=90_000,

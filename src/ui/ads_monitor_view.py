@@ -194,6 +194,8 @@ def _ad_row_card(
     products: pd.DataFrame | None = None,
     planned_singles: set[str] | frozenset | None = None,
     window_start: date | None = None,
+    window_end: date | None = None,
+    unit_daily: pd.DataFrame | None = None,
 ) -> None:
     """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis.
 
@@ -217,7 +219,7 @@ def _ad_row_card(
         days = max(int(round(biaya / since)), 1)
     # Periode eksplisit agar bisa disamakan filter Seller Center (hindari ambigu "5 hari")
     win_lo = window_start
-    win_hi = report_end
+    win_hi = window_end or report_end
     if win_lo is None and win_hi is not None and days > 0:
         win_lo = win_hi - timedelta(days=max(days - 1, 0))
     period_txt = ""
@@ -239,10 +241,12 @@ def _ad_row_card(
     else:
         hasil = (
             (f"Sejak rencana disimpan di fitur · laporan {period_txt}" if period_txt else "Sejak rencana disimpan di fitur")
-            + (f" ({fmt_num(days)} hari di file laporan)" if days > 0 else "")
+            + (
+                f" ({fmt_num(days)} tanggal ada angka harian; hari ini belum dihitung)"
+                if days > 0 else " (belum ada angka harian; hari ini belum dihitung)"
+            )
             + f": omzet {fmt_idr(omzet)} · biaya {fmt_idr(biaya)}"
             + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
-            + (" · samakan rentang ini di Seller Center" if period_txt else "")
         )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
     group_active = not (
@@ -324,7 +328,7 @@ def _ad_row_card(
         + (f" <span style='color:#94a3b8'>(rata-rata tgl 1–{fmt_date(win_hi) if win_hi else 'laporan'})</span>" if month_v == month_v else "")
         + f"</span>"
         f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}"
-        + (f" · {fmt_num(days)} hari laporan" if days > 0 else "")
+        + (f" · {fmt_num(days)} tanggal" if days > 0 else "")
         + (f" · {period_txt}" if period_txt else "")
         + f"</span></div>"
         f"{spend_note}</div>",
@@ -393,33 +397,70 @@ def _ad_row_card(
                 )
     with st.expander("Lihat riwayat evaluasi campaign", expanded=False):
         st.caption(
-            "Tiap baris = **satu catatan Pantau** (buka halaman / unggah laporan) — "
-            f"**bukan** jumlah hari Seller Center"
-            + (f". Periode laporan acuan kartu: **{period_txt}** ({fmt_num(days)} hari di file)." if period_txt and days > 0 else ".")
-            + " Kolom **Hari laporan sejak campaign** = umur jendela evaluasi di file laporan "
-            "(bisa 5 sementara catatan Pantau baru 2). "
-            "**Naik sejak catatan lalu** = selisih total kumulatif antar catatan, "
-            "bukan biaya 1 hari kalender. Samakan rentang tanggal di SC bila membandingkan angka."
+            "Tiap baris = **satu tanggal** sejak campaign"
+            + (f" (**{period_txt}**" if period_txt else "")
+            + (", hari ini belum dihitung). " if period_txt else ". ")
+            + "**Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** terkumpul sejak tanggal campaign; "
+            "baris terakhir sama dengan angka di kartu ini. "
+            "Sumbernya laporan all iklan per tanggal, sama dengan progress harian di atas. "
+            "**Saran** memakai aturan yang sama: Sesuai rencana, Tidak sesuai rencana, ROAS lemah, "
+            "Naikkan budget, Turunkan budget, Naikkan Target ROAS."
         )
-        base_dt = None
-        if cur.get("setelan", {}).get("data_sampai"):
-            try:
-                base_dt = str(cur["setelan"]["data_sampai"])[:10]
-            except Exception:
-                base_dt = None
-        today_row = {
-            "tanggal": report_end.isoformat() if report_end else "",
-            "biaya": biaya, "omzet": omzet, "roas": (omzet / biaya) if biaya > 0 else float("nan"),
-            "biaya_hari": since, "biaya_bulan_hari": month_v, "budget_plan": plan, "budget_setup": setup,
-            "hari": days, "tindakan": act,
-        }
-        hist = Mon.daily_history_for(
-            cur, key,
-            baseline_row={"tanggal": base_dt or "baseline", "budget_plan": plan, "budget_setup": setup},
-            today_row=today_row,
-        )
+        if window_start is not None and win_hi is not None and unit_daily is not None:
+            hist = Mon.ad_daily_progress(
+                unit_daily, key,
+                start=window_start, end=win_hi,
+                budget_plan=plan, budget_setup=setup, target_roas=target_roas,
+            )
+        else:
+            base_dt = None
+            if cur.get("setelan", {}).get("data_sampai"):
+                try:
+                    base_dt = str(cur["setelan"]["data_sampai"])[:10]
+                except Exception:
+                    base_dt = None
+            today_row = {
+                "tanggal": report_end.isoformat() if report_end else "",
+                "biaya": biaya, "omzet": omzet, "roas": (omzet / biaya) if biaya > 0 else float("nan"),
+                "biaya_hari": since, "biaya_bulan_hari": month_v, "budget_plan": plan, "budget_setup": setup,
+                "hari": days, "tindakan": act,
+            }
+            hist = Mon.daily_history_for(
+                cur, key,
+                baseline_row={"tanggal": base_dt or "baseline", "budget_plan": plan, "budget_setup": setup},
+                today_row=today_row,
+            )
         if hist.empty:
-            st.info("Belum ada catatan evaluasi untuk iklan ini.")
+            st.info("Belum ada angka harian untuk iklan ini pada periode campaign.")
+        elif "Biaya iklan" in hist.columns:
+            from src.ui import grouped_table
+
+            grouped_table.show(
+                hist,
+                key=f"hist-{prefix}-{cid}-{key}",
+                noun="tanggal",
+                first=max(len(hist), 1),
+                height=360,
+                groups={"Sejak campaign": ("Biaya iklan", "Omzet iklan", "ROAS iklan")},
+                kinds={
+                    "Budget di rencana/hari": "money",
+                    "Budget di Shopee/hari": "money",
+                    "Biaya iklan": "money",
+                    "Omzet iklan": "money",
+                    "ROAS iklan": "dec",
+                },
+                wrap=("Saran",),
+                pin=("Tanggal",),
+                widths={
+                    "Tanggal": 118,
+                    "Budget di rencana/hari": 170,
+                    "Budget di Shopee/hari": 170,
+                    "Biaya iklan": 140,
+                    "Omzet iklan": 150,
+                    "ROAS iklan": 110,
+                    "Saran": 420,
+                },
+            )
         else:
             show_table(
                 hist,
@@ -458,6 +499,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     eval_end = Mon.campaign_eval_end(cur, today=today)
     last_data = eval_end
     store_since = {"biaya": 0.0, "omzet": 0.0, "hari": 0}
+    unit_daily = None
     if since_start and eval_end and since_start <= eval_end and ads_overall is not None:
         daily_win = M.daily_ad_totals(ads_overall, start=since_start, end=eval_end)
         if not daily_win.empty:
@@ -466,6 +508,9 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 "omzet": float(daily_win["Omzet"].sum()),
                 "hari": int(len(daily_win)),
             }
+        unit_daily = M.daily_unit_totals(
+            ads_overall, start=date(eval_end.year, eval_end.month, 1), end=eval_end,
+        )
     calendar_days = (
         (eval_end - since_start).days + 1
         if since_start and eval_end and eval_end >= since_start
@@ -507,6 +552,9 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     if base and report_end is not None and report_end >= start:
         planned = _planned_budgets(cur, start=start, report_end=report_end)
         frame, summary = A.evaluate(base, current, planned, target_roas=roas, jenis=kinds)
+        if not frame.empty and unit_daily is not None and not unit_daily.empty and since_start and eval_end:
+            frame = Mon.apply_daily_ad_window(frame, unit_daily, start=since_start, end=eval_end)
+            summary = Mon.execution_summary(frame, summary)
         if not frame.empty:
             frame.insert(1, "Iklan", frame["_key"].map(lambda k: names.get(k, (k, ""))[0]))
             if "Jenis" not in frame.columns or frame["Jenis"].isna().all():
@@ -518,6 +566,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             classified, planned, current, base, names=names, kinds=kinds, target_roas=roas,
             running_keys=running_keys, units=units, members=members,
         )
+        if unit_daily is not None and not unit_daily.empty and since_start and eval_end:
+            in_plan = Mon.apply_daily_ad_window(in_plan, unit_daily, start=since_start, end=eval_end)
+            out_plan = Mon.apply_daily_ad_window(out_plan, unit_daily, start=since_start, end=eval_end)
+            summary = Mon.execution_summary(in_plan, summary)
         in_plan = Mon.attach_month_daily(in_plan, current)
         out_plan = Mon.attach_month_daily(out_plan, current)
         in_plan = Mon.refresh_tips_after_month(
@@ -734,7 +786,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     r, cur=cur, report_end=report_end, prefix=prefix, cid=cid,
                     members=members, target_roas=roas, contribution=contribution, scope=scope,
                     units=units, products=products, planned_singles=singles,
-                    window_start=window_start,
+                    window_start=window_start, window_end=progress_end, unit_daily=unit_daily,
                 )
 
         # Progress: tiap hari kalender dalam periode campaign; biaya+omzet dari all iklan per tanggal
