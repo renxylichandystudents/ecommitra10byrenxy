@@ -1,28 +1,32 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (sore, Koreksi.docx).
+Diperbarui: 19 November 2026 (sore, koreksi2.docx).
 
 ## Lanjut nanti · Pantau iklan
 
 Localhost:8501 / Cloud ikut push `main`.
 
-**Sudah selesai dari Koreksi.docx**
-- Progress: Budget plan · Realisasi biaya hari itu · Sales iklan + ROAS · Sales all + ROAS · MTD produk/bersih (sama ringkasan) · Analisa keputusan.
-- Kartu: periode laporan eksplisit (samakan filter SC); bedakan hari laporan vs catatan Pantau.
-- Wording “di tempat lain” tidak dobel; tabel progress/anggota collapse sampai diklik.
+**Sudah selesai dari koreksi2.docx**
+- Realisasi biaya (hari itu) dihitung dari laporan overall per tanggal — tidak minus, tanggal pertama terisi.
+- Sales dari iklan = akumulasi omzet iklan **bruto** sejak campaign s.d. tanggal catatan.
+- Sales produk all = omzet iklan **bersih** (bruto × faktor toko).
 
 **Cek saat lanjut**
-- FSA0040 dll: bandingkan biaya/omzet di kartu dengan SC memakai **rentang tanggal yang sama** seperti di kartu.
-- Bila masih beda setelah filter sama → unggah ulang laporan + simpan campaign baru agar baseline akurat.
+- Buka Pantau: pastikan realisasi 18 & 19 Nov terisi positif; sales kumulatif tidak turun antar tanggal.
+- FSA0040: samakan filter tanggal kartu dengan SC.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 
+## 2026-11-19 · koreksi2: realisasi harian + sales bruto/bersih konsisten
+
+- Bug: realisasi −131 jt karena selisih kumulatif beda sumber (items vs store); tgl 18 kosong.
+- Perbaikan: `campaign_daily_progress` hitung ulang via `ad_spend` per tanggal; realisasi = biaya pada hari itu; larang nilai minus.
+- Sales all = omzet iklan bersih (bukan sales toko organik+iklan).
+
 ## 2026-11-19 · Koreksi.docx: progress + periode jelas + collapse
 
-- Kolom progress diganti sesuai koreksi (realisasi = pengeluaran antar catatan, bukan budget setup SC).
-- MTD memakai angka ringkasan yang sama; analisa = keputusan overall hari itu.
-- Label kartu: “Periode laporan A–B (N hari di file)” + “Hari laporan sejak campaign” di riwayat ≠ jumlah baris catatan Pantau.
+- Kolom progress diganti sesuai koreksi; periode laporan eksplisit; tabel collapse.
 
 ## 2026-11-19 · Progress harian: kotor, bersih, MTD, dampak organik
 

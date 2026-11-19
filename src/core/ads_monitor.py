@@ -6,7 +6,7 @@ tanpa mengubah rumus prediksi atau safety stock.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -761,6 +761,20 @@ def _finite(value, default: float = float("nan")) -> float:
     return v if v == v else default
 
 
+def _as_day(value) -> date | None:
+    if value is None or value is pd.NaT:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value)[:10]
+    try:
+        return date.fromisoformat(text)
+    except Exception:
+        return None
+
+
 def day_decision_note(
     *,
     plan_hari: float,
@@ -772,7 +786,7 @@ def day_decision_note(
 ) -> str:
     """Analisa keputusan overall performance iklan pada hari/catatan tersebut."""
     parts: list[str] = []
-    if plan_hari == plan_hari and plan_hari > 0 and realisasi_hari == realisasi_hari:
+    if plan_hari == plan_hari and plan_hari > 0 and realisasi_hari == realisasi_hari and realisasi_hari >= 0:
         if realisasi_hari < plan_hari * 0.6:
             parts.append("Realisasi biaya hari itu jauh di bawah plan — budget/Target ROAS di SC kurang terserap")
         elif realisasi_hari > plan_hari * 1.4:
@@ -782,23 +796,12 @@ def day_decision_note(
     roas_iklan = sales_iklan / biaya_sejak if biaya_sejak == biaya_sejak and biaya_sejak > 0 else float("nan")
     if roas_iklan == roas_iklan and target_roas > 0:
         if roas_iklan >= target_roas * 0.9:
-            parts.append(f"ROAS iklan {roas_iklan:.1f}× mendekati/di atas target {target_roas:.1f}× — pantahankan yang kuat")
+            parts.append(f"ROAS iklan bruto {roas_iklan:.1f}× mendekati/di atas target {target_roas:.1f}× — pertahankan yang kuat")
         else:
-            parts.append(f"ROAS iklan {roas_iklan:.1f}× di bawah target {target_roas:.1f}× — tinjau listing/Target ROAS/budget")
-    if (
-        sales_iklan == sales_iklan and sales_iklan > 0
-        and sales_all == sales_all and sales_all > 0
-    ):
-        share = sales_iklan / sales_all * 100
-        if share > 100:
-            parts.append(
-                f"Klaim iklan {share:.0f}% sales produk all (bisa >100% karena belum bayar) — "
-                "bandingkan filter tanggal yang sama di Seller Center"
-            )
-        else:
-            parts.append(
-                f"Klaim iklan ~{share:.0f}% sales produk all · ~{max(0.0, 100 - share):.0f}% organik/kanal lain"
-            )
+            parts.append(f"ROAS iklan bruto {roas_iklan:.1f}× di bawah target {target_roas:.1f}× — tinjau listing/Target ROAS/budget")
+    roas_all = sales_all / biaya_sejak if biaya_sejak == biaya_sejak and biaya_sejak > 0 and sales_all == sales_all else float("nan")
+    if roas_all == roas_all:
+        parts.append(f"ROAS omzet iklan bersih {roas_all:.1f}× vs biaya yang sudah keluar")
     if not parts:
         return "Belum cukup data untuk keputusan hari itu — unggah laporan & buka Pantau lagi"
     return " · ".join(parts[:3])
@@ -811,99 +814,133 @@ def campaign_daily_progress(
     live_toko: dict | None = None,
     live_tanggal: str | date | None = None,
     target_roas: float = 0.0,
+    ads_overall=None,
+    window_start: date | None = None,
+    factor: float = 0.0,
 ) -> pd.DataFrame:
-    """Progress harian sesuai koreksi: plan, realisasi hari itu, sales iklan/all + ROAS, MTD ringkasan, analisa.
+    """Progress harian: realisasi = biaya iklan pada tanggal itu; sales iklan = akumulasi harian bruto;
 
-    Angka MTD/sales all memakai sumber yang sama dengan kartu ringkasan Pantau (bukan rumus baru).
-    `live_toko` mengisi/memperbarui baris tanggal laporan terbaru.
+    sales all = omzet iklan bersih sejak campaign (bruto × faktor toko, sama acuan ringkasan).
+    Bila `ads_overall` ada, angka dihitung ulang dari laporan (konsisten, tidak minus).
     """
+    from src.core import ads_month as _AM
+
     cols = list(PROGRESS_COLS)
     log = list((campaign or {}).get("pantau_harian") or [])
-    if not log and not live_toko:
-        return pd.DataFrame(columns=cols)
-    keys = {str(k) for k in (plan_keys or set())} or None
     live_day = str(live_tanggal or "")[:10] if live_tanggal is not None else ""
-    raw = []
+    # Kumpulkan tanggal catatan (+ live)
+    days: list[str] = []
+    meta: dict[str, dict] = {}
     for entry in log:
         day = str(entry.get("tanggal") or "")[:10]
-        items = list(entry.get("items") or [])
-        if keys is not None:
-            items = [it for it in items if str(it.get("key") or "") in keys]
-        if not items and not entry.get("toko"):
+        if not day:
             continue
+        items = list(entry.get("items") or [])
+        if plan_keys is not None:
+            keys = {str(k) for k in plan_keys}
+            items = [it for it in items if str(it.get("key") or "") in keys]
         toko = dict(entry.get("toko") or {})
-        if live_toko and live_day and day == live_day:
-            toko = {**toko, **{k: v for k, v in live_toko.items() if v is not None}}
-        biaya = _finite(toko.get("biaya_sejak"), float(sum(float(it.get("biaya") or 0) for it in items)))
-        sales_iklan = _finite(
-            toko.get("omzet_kotor_sejak"),
-            float(sum(float(it.get("omzet") or 0) for it in items)),
-        )
-        plan = _finite(toko.get("budget_plan_hari"), float(sum(float(it.get("budget_plan") or 0) for it in items)))
-        raw.append({
-            "tanggal": day,
-            "plan": plan,
-            "biaya": biaya,
-            "sales_iklan": sales_iklan,
-            "sales_all": _finite(toko.get("produk_sejak")),
-            "produk_mtd": _finite(toko.get("produk_mtd")),
-            "bersih_mtd": _finite(toko.get("bersih_mtd")),
-            "realisasi_hari": _finite(toko.get("realisasi_biaya_hari")),
-            "note": str(toko.get("analisa") or toko.get("dampak") or ""),
-        })
-    if live_toko and live_day and live_day not in {r["tanggal"] for r in raw}:
-        raw.append({
-            "tanggal": live_day,
-            "plan": _finite(live_toko.get("budget_plan_hari")),
-            "biaya": _finite(live_toko.get("biaya_sejak")),
-            "sales_iklan": _finite(live_toko.get("omzet_kotor_sejak")),
-            "sales_all": _finite(live_toko.get("produk_sejak")),
-            "produk_mtd": _finite(live_toko.get("produk_mtd")),
-            "bersih_mtd": _finite(live_toko.get("bersih_mtd")),
-            "realisasi_hari": _finite(live_toko.get("realisasi_biaya_hari")),
-            "note": str(live_toko.get("analisa") or live_toko.get("dampak") or ""),
-        })
-    raw = sorted(raw, key=lambda r: r["tanggal"])
-    rows, prev_biaya = [], None
-    for item in raw:
-        if item["realisasi_hari"] == item["realisasi_hari"]:
-            realisasi = item["realisasi_hari"]
-        elif prev_biaya is not None and item["biaya"] == item["biaya"]:
-            realisasi = item["biaya"] - prev_biaya
+        if not items and not toko:
+            continue
+        days.append(day)
+        meta[day] = {"items": items, "toko": toko}
+    if live_toko and live_day:
+        if live_day not in meta:
+            days.append(live_day)
+            meta[live_day] = {"items": [], "toko": dict(live_toko)}
         else:
-            realisasi = float("nan")
-        roas_iklan = (
-            item["sales_iklan"] / item["biaya"]
-            if item["biaya"] == item["biaya"] and item["biaya"] > 0 and item["sales_iklan"] == item["sales_iklan"]
-            else float("nan")
-        )
+            # Live hanya melengkapi MTD/plan/analisa — jangan menimpa biaya/omzet laporan
+            keep = {k: v for k, v in live_toko.items() if k in {
+                "budget_plan_hari", "produk_mtd", "bersih_mtd", "bersih_sejak", "analisa", "iklan_tercatat",
+            } and v is not None}
+            meta[live_day]["toko"] = {**meta[live_day]["toko"], **keep}
+    if not days:
+        return pd.DataFrame(columns=cols)
+    days = sorted(set(days))
+    start = _as_day(window_start)
+    if start is None and campaign:
+        raw_start = (campaign.get("setelan") or {}).get("data_sampai")
+        d0 = _as_day(raw_start)
+        if d0 is not None:
+            start = d0 + timedelta(days=1)
+    use_report = ads_overall is not None and start is not None
+    rows = []
+    for day in days:
+        day_d = _as_day(day)
+        toko = meta[day]["toko"]
+        items = meta[day]["items"]
+        plan = _finite(toko.get("budget_plan_hari"), float(sum(float(it.get("budget_plan") or 0) for it in items)))
+        produk_mtd = _finite(toko.get("produk_mtd"))
+        bersih_mtd = _finite(toko.get("bersih_mtd"))
+        if use_report and day_d is not None and day_d >= start:
+            cum = _AM.ad_spend(ads_overall, start, day_d)
+            day_spend = _AM.ad_spend(ads_overall, day_d, day_d)
+            biaya = float(cum.get("biaya") or 0)
+            sales_bruto = float(cum.get("omzet") or 0)
+            realisasi = float(day_spend.get("biaya") or 0)
+            # Satu hari tanpa baris laporan → 0, bukan kosong/minus
+            if realisasi < 0:
+                realisasi = 0.0
+        else:
+            biaya = _finite(toko.get("biaya_sejak"), float(sum(float(it.get("biaya") or 0) for it in items)))
+            sales_bruto = _finite(toko.get("omzet_kotor_sejak"), float(sum(float(it.get("omzet") or 0) for it in items)))
+            realisasi = _finite(toko.get("realisasi_biaya_hari"))
+            if realisasi != realisasi or realisasi < 0:
+                realisasi = float("nan")
+        # Omzet iklan bersih = bruto × faktor toko (sama acuan sales bersih ringkasan); fallback bersih_sejak
+        if factor and float(factor) > 0 and sales_bruto == sales_bruto:
+            sales_bersih_iklan = sales_bruto * float(factor)
+        else:
+            sales_bersih_iklan = _finite(toko.get("bersih_sejak"))
+        roas_iklan = sales_bruto / biaya if biaya == biaya and biaya > 0 and sales_bruto == sales_bruto else float("nan")
         roas_all = (
-            item["sales_all"] / item["biaya"]
-            if item["biaya"] == item["biaya"] and item["biaya"] > 0 and item["sales_all"] == item["sales_all"]
+            sales_bersih_iklan / biaya
+            if biaya == biaya and biaya > 0 and sales_bersih_iklan == sales_bersih_iklan
             else float("nan")
         )
-        note = item["note"] or day_decision_note(
-            plan_hari=item["plan"],
+        note = str(toko.get("analisa") or "") or day_decision_note(
+            plan_hari=plan,
             realisasi_hari=realisasi,
-            biaya_sejak=item["biaya"],
-            sales_iklan=item["sales_iklan"],
-            sales_all=item["sales_all"],
+            biaya_sejak=biaya,
+            sales_iklan=sales_bruto,
+            sales_all=sales_bersih_iklan,
             target_roas=target_roas,
         )
         rows.append({
-            "Tanggal": item["tanggal"],
-            "Budget plan/hari": item["plan"],
+            "Tanggal": day,
+            "Budget plan/hari": plan,
             "Realisasi biaya iklan (hari itu)": realisasi,
-            "Sales produk dari iklan sejak campaign": item["sales_iklan"],
+            "Sales produk dari iklan sejak campaign": sales_bruto,
             "ROAS iklan": roas_iklan,
-            "Sales produk all sejak campaign": item["sales_all"],
+            "Sales produk all sejak campaign": sales_bersih_iklan,
             "ROAS sales all": roas_all,
-            "Sales MTD produk": item["produk_mtd"],
-            "Sales MTD bersih": item["bersih_mtd"],
+            "Sales MTD produk": produk_mtd,
+            "Sales MTD bersih": bersih_mtd,
             "Analisa keputusan hari itu": note,
         })
-        if item["biaya"] == item["biaya"]:
-            prev_biaya = item["biaya"]
+    # Fallback: tanpa laporan overall, realisasi dari selisih kumulatif sejenis — jangan pernah minus/kosong di baris pertama
+    if not use_report:
+        prev_biaya = None
+        for i, day in enumerate(days):
+            toko = meta[day]["toko"]
+            items = meta[day]["items"]
+            biaya = _finite(toko.get("biaya_sejak"), float(sum(float(it.get("biaya") or 0) for it in items)))
+            cur_r = rows[i]["Realisasi biaya iklan (hari itu)"]
+            if cur_r != cur_r or cur_r < 0:
+                if prev_biaya is not None and biaya == biaya:
+                    delta = biaya - prev_biaya
+                    rows[i]["Realisasi biaya iklan (hari itu)"] = delta if delta >= 0 else float("nan")
+                elif biaya == biaya and prev_biaya is None:
+                    rows[i]["Realisasi biaya iklan (hari itu)"] = biaya if biaya >= 0 else float("nan")
+            if biaya == biaya:
+                prev_biaya = biaya
+            sales_bruto = rows[i]["Sales produk dari iklan sejak campaign"]
+            sales_all = rows[i]["Sales produk all sejak campaign"]
+            if biaya == biaya and biaya > 0:
+                if sales_bruto == sales_bruto:
+                    rows[i]["ROAS iklan"] = sales_bruto / biaya
+                if sales_all == sales_all:
+                    rows[i]["ROAS sales all"] = sales_all / biaya
     return pd.DataFrame(rows, columns=cols)
 
 

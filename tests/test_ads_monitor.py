@@ -262,9 +262,9 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
                     "toko": {
                         "budget_plan_hari": 75_000,
                         "biaya_sejak": 150_000, "omzet_kotor_sejak": 1_200_000,
-                        "produk_sejak": 1_100_000,
+                        "bersih_sejak": 900_000,
                         "produk_mtd": 5_000_000, "bersih_mtd": 4_000_000,
-                        "realisasi_biaya_hari": 150_000,
+                        "realisasi_biaya_hari": 40_000,
                     },
                 },
                 {
@@ -276,31 +276,55 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
                     "toko": {
                         "budget_plan_hari": 75_000,
                         "biaya_sejak": 270_000, "omzet_kotor_sejak": 2_100_000,
-                        "produk_sejak": 1_900_000,
+                        "bersih_sejak": 1_500_000,
                         "produk_mtd": 5_500_000, "bersih_mtd": 4_400_000,
                     },
                 },
             ],
         }
-        prog = Mon.campaign_daily_progress(campaign, {"produk:1", "produk:2"}, target_roas=20.0)
+        prog = Mon.campaign_daily_progress(campaign, {"produk:1", "produk:2"}, target_roas=20.0, factor=0.75)
         self.assertEqual(len(prog), 2)
         self.assertAlmostEqual(prog.iloc[0]["Budget plan/hari"], 75_000)
-        self.assertAlmostEqual(prog.iloc[0]["Realisasi biaya iklan (hari itu)"], 150_000)
+        # Catatan pertama: pakai realisasi tersimpan (bukan kosong)
+        self.assertAlmostEqual(prog.iloc[0]["Realisasi biaya iklan (hari itu)"], 40_000)
         self.assertAlmostEqual(prog.iloc[0]["Sales produk dari iklan sejak campaign"], 1_200_000)
         self.assertAlmostEqual(prog.iloc[0]["ROAS iklan"], 8.0)
-        self.assertAlmostEqual(prog.iloc[0]["Sales produk all sejak campaign"], 1_100_000)
+        # Sales all = bruto × faktor (bersih iklan)
+        self.assertAlmostEqual(prog.iloc[0]["Sales produk all sejak campaign"], 900_000)
+        # Catatan kedua tanpa realisasi tersimpan → selisih kumulatif ≥ 0
         self.assertAlmostEqual(prog.iloc[1]["Realisasi biaya iklan (hari itu)"], 120_000)
+        self.assertGreaterEqual(prog.iloc[1]["Realisasi biaya iklan (hari itu)"], 0)
         self.assertAlmostEqual(prog.iloc[1]["Sales MTD produk"], 5_500_000)
         self.assertAlmostEqual(prog.iloc[1]["Sales MTD bersih"], 4_400_000)
-        self.assertIn("roas", str(prog.iloc[1]["Analisa keputusan hari itu"]).lower())
 
-    def test_day_decision_note_organic_share(self):
+    def test_campaign_daily_progress_never_negative_realisasi(self):
+        # Sumber campur: kumulatif turun → jangan tampilkan minus
+        campaign = {
+            "pantau_harian": [
+                {"tanggal": "2026-11-18", "toko": {
+                    "budget_plan_hari": 9_500_000, "biaya_sejak": 149_701_605,
+                    "omzet_kotor_sejak": 2_266_126_499, "bersih_sejak": 1_000_000,
+                }, "items": [{"key": "a", "biaya": 149_701_605, "omzet": 2_266_126_499, "budget_plan": 9_500_000}]},
+                {"tanggal": "2026-11-19", "toko": {
+                    "budget_plan_hari": 9_500_000, "biaya_sejak": 48_421_951,
+                    "omzet_kotor_sejak": 788_411_724, "bersih_sejak": 590_000,
+                    "realisasi_biaya_hari": -131_000_000,
+                }, "items": [{"key": "a", "biaya": 48_421_951, "omzet": 788_411_724, "budget_plan": 9_500_000}]},
+            ],
+        }
+        prog = Mon.campaign_daily_progress(campaign, target_roas=22.0, factor=0.8)
+        self.assertEqual(len(prog), 2)
+        r0 = prog.iloc[0]["Realisasi biaya iklan (hari itu)"]
+        r1 = prog.iloc[1]["Realisasi biaya iklan (hari itu)"]
+        self.assertTrue(r0 == r0 and r0 >= 0)  # tanggal 18 terisi, tidak kosong
+        self.assertFalse(r1 == r1 and r1 < 0)  # tidak boleh minus
+
+    def test_day_decision_note_roas(self):
         note = Mon.day_decision_note(
             plan_hari=100_000, realisasi_hari=90_000,
-            biaya_sejak=100_000, sales_iklan=800_000, sales_all=1_000_000, target_roas=10.0,
+            biaya_sejak=100_000, sales_iklan=800_000, sales_all=600_000, target_roas=10.0,
         )
-        self.assertIn("80%", note)
-        self.assertIn("organik", note.lower())
+        self.assertIn("roas", note.lower())
 
     def test_checkpoint_and_history(self):
         campaign = {"id": 1, "setelan": {"data_sampai": "2026-11-13"}}
