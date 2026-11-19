@@ -73,8 +73,43 @@ def test_daily_unit_totals_diff_only_when_ad_is_in_both_snapshots():
     assert list(hit["Tanggal"]) == ["2026-11-16"]
     assert hit.iloc[0]["Biaya"] == 150
     assert hit.iloc[0]["Omzet"] == 2_000
-    # Iklan baru di snapshot 16 tidak boleh menumpuk total MTD ke tanggal itu.
+    # Tanpa Tanggal Mulai, iklan yang baru muncul tidak boleh menumpuk total MTD ke satu hari.
     assert out.loc[out["key"] == "produk:2"].empty
+
+
+def test_daily_unit_totals_keeps_spend_on_the_day_an_ad_starts():
+    # Iklan mulai 15 Nov: kumulatif di file 15 Nov adalah biaya hari itu, bukan sisa bulan.
+    rows = []
+    for hi, code, cost, sales, mulai in (
+        ("14/11/2026", "1", 38_830_724, 783_738_849, "07/09/2026 00:00:00"),
+        ("15/11/2026", "1", 41_494_905, 815_670_806, "07/09/2026 00:00:00"),
+        ("15/11/2026", "2", 775_409, 8_548_361, "15/11/2026 00:00:00"),
+        ("16/11/2026", "1", 44_699_730, 866_336_737, "07/09/2026 00:00:00"),
+        ("16/11/2026", "2", 2_280_589, 26_042_063, "15/11/2026 00:00:00"),
+    ):
+        rows.append({
+            "Nama Iklan": f"Ad {code}",
+            "product_code": code,
+            "Kode Produk": code,
+            "cost": cost,
+            "ad_sales": sales,
+            "Tanggal Mulai": mulai,
+            "period": "2026-11-01",
+            "Periode laporan (teks)": f"01/11/2026 - {hi}",
+            "_submitted_at": "2026-11-16T08:00:00+07:00",
+            "_source_key": "ads_overall",
+        })
+    out = M.daily_unit_totals(pd.DataFrame(rows), start=date(2026, 11, 14), end=date(2026, 11, 16))
+    old = out.loc[out["key"] == "produk:1"].sort_values("Tanggal")
+    assert "2026-11-14" not in set(old["Tanggal"])
+    nov15 = old.loc[old["Tanggal"] == "2026-11-15"].iloc[0]
+    assert int(nov15["Biaya"]) == 41_494_905 - 38_830_724
+    baru = out.loc[out["key"] == "produk:2"].sort_values("Tanggal")
+    assert list(baru["Tanggal"]) == ["2026-11-15", "2026-11-16"]
+    assert int(baru.iloc[0]["Biaya"]) == 775_409
+    assert int(baru.iloc[0]["Omzet"]) == 8_548_361
+    assert int(baru.iloc[1]["Biaya"]) == 2_280_589 - 775_409
+    assert int(baru["Biaya"].sum()) == 2_280_589
 
 
 def test_ad_spend_prorates_month_to_date():

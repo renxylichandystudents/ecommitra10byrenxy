@@ -103,17 +103,34 @@ def _planned_budgets(cur: dict, *, start: date, report_end: date | None) -> dict
 
 
 def _attach_running_budget(frame: pd.DataFrame, acts_saved: pd.DataFrame) -> pd.DataFrame:
-    """Budget di Shopee = Budget harian sekarang (yang sudah berjalan), bukan salinan usulan."""
+    """Budget di Shopee = Budget harian sekarang saat rencana disimpan.
+
+    Bukan salinan usulan. Kunci `pisah:`/`baru:` dicocokkan ke `produk:`.
+    Iklan yang tidak punya catatan dibiarkan kosong, bukan diisi angka rencana.
+    """
     if frame is None or frame.empty or "_key" not in frame.columns:
         return frame if frame is not None else pd.DataFrame()
-    if acts_saved is None or acts_saved.empty or "key" not in acts_saved.columns or "Budget harian sekarang" not in acts_saved.columns:
-        return frame
-    mapping = {
-        str(k): float(v or 0)
-        for k, v in zip(acts_saved["key"], pd.to_numeric(acts_saved["Budget harian sekarang"], errors="coerce").fillna(0))
-    }
     out = frame.copy()
-    out["Budget harian sekarang"] = out["_key"].map(lambda k: mapping.get(str(k), 0.0))
+    if acts_saved is None or acts_saved.empty or "key" not in acts_saved.columns or "Budget harian sekarang" not in acts_saved.columns:
+        out["Budget harian sekarang"] = float("nan")
+        return out
+    mapping: dict[str, float] = {}
+    for k, v in zip(acts_saved["key"], pd.to_numeric(acts_saved["Budget harian sekarang"], errors="coerce").fillna(0)):
+        key = str(k)
+        val = float(v or 0)
+        mapping[key] = val
+        mapping[Mon.report_alias(key)] = val
+
+    def _lookup(k: object) -> float:
+        key = str(k)
+        if key in mapping:
+            return mapping[key]
+        alias = Mon.report_alias(key)
+        if alias in mapping:
+            return mapping[alias]
+        return float("nan")
+
+    out["Budget harian sekarang"] = out["_key"].map(_lookup)
     return out
 
 
@@ -163,6 +180,10 @@ def _plan_setup_labels(
     laporan masih mencatat biaya, label 'masih berbiaya' tanpa menempelkan Rp/hari (itu ada di Terpakai).
     """
     spending = (actual_since or 0) > 5_000 or (actual_month == actual_month and actual_month > 5_000)
+    if setup != setup:
+        if plan <= 0:
+            return "dihentikan (Rp 0)", "tidak tercatat di laporan"
+        return _fmt_hari(plan), "tidak tercatat di laporan"
     if plan <= 0 and setup <= 0:
         if spending:
             return "dihentikan (Rp 0)", "masih berbiaya — pause belum efektif"
@@ -222,10 +243,11 @@ def _ad_row_card(
     jenis = str(r.get("Jenis") or "")
     act = str(r.get("Tindakan") or "–")
     plan = float(r.get("Budget usulan/hari") or r.get("Budget di rencana/hari") or 0)
-    efektif = float(r.get("Budget efektif Shopee/hari") or 0)
-    sekarang = float(r.get("Budget harian sekarang") or 0)
-    # Di Shopee = yang sudah berjalan saat rencana disimpan, bukan usulan yang disalin.
-    setup = sekarang if sekarang > 0 else efektif
+    sekarang_raw = r.get("Budget harian sekarang")
+    sekarang = float(sekarang_raw) if sekarang_raw == sekarang_raw and sekarang_raw is not None else float("nan")
+    # Di Shopee = budget yang tercatat saat rencana disimpan. Jangan salin usulan
+    # bila catatan itu tidak ada — laporan all iklan tidak memuat budget yang diubah di SC.
+    setup = sekarang
     since = float(r.get("Biaya aktual/hari") or r.get("Terpakai sejak campaign/hari") or 0)
     month = r.get("Biaya bulan ini/hari")
     month_v = float(month) if month == month and month is not None else float("nan")
@@ -421,8 +443,9 @@ def _ad_row_card(
             + "**Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** = angka hari itu di laporan all iklan, "
             "bukan jumlah yang ditumpuk dan bukan budget harian. "
             "Jumlah semua tanggal ada di kartu di atas. "
-            "**Budget di rencana** = usulan campaign. **Budget di Shopee** = budget yang sudah berjalan "
-            "(bukan salinan usulan). "
+            "**Budget di rencana** = usulan campaign. **Budget di Shopee** = budget yang tercatat "
+            "saat rencana disimpan. Laporan all iklan tidak memuat perubahan budget di Seller Center "
+            "setelah itu, jadi kolom ini tidak menyalin usulan. "
             "**Saran** membandingkan biaya hari itu dengan rencana: Sesuai rencana, Tidak sesuai rencana, "
             "ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
         )

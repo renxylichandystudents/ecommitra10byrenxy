@@ -1,5 +1,10 @@
 # Status terbaru aplikasi
 
+Diperbarui: 19 November 2026 (malam, hari pertama iklan baru ikut dihitung).
+
+- Iklan yang Tanggal Mulainya sama dengan hari snapshot (contoh mulai 15 Nov) memakai kumulatif file itu sebagai biaya/omzet hari pertama. Jumlah sejak campaign jadi sama dengan laporan all iklan. Iklan lama tetap selisih antar hari, tidak menumpuk MTD.
+- Budget di Shopee tidak lagi menyalin usulan bila catatan "Budget harian sekarang" tidak ada. Laporan all iklan tidak memuat budget yang diubah belakangan di Seller Center.
+
 Diperbarui: 19 November 2026 (malam, budget Shopee bukan salinan rencana).
 
 - Budget di Shopee pada kartu dan riwayat iklan = Budget harian sekarang (yang sudah berjalan), bukan usulan. Biaya/omzet/ROAS di tabel riwayat = angka hari itu, bukan tumpukan budget. Kartu tetap jumlah sejak campaign.

@@ -289,7 +289,8 @@ def daily_unit_totals(
     Aturan sama dengan `daily_ad_totals`: laporan 1 hari dipakai langsung;
     unggahan MTD berurutan 1 hari → selisih kumulatif iklan itu.
     Iklan yang tidak ada di snapshot sebelumnya tidak diisi (bukan total MTD
-    yang ditumpuk ke satu hari, dan bukan prorata).
+    yang ditumpuk ke satu hari, dan bukan prorata), kecuali Tanggal Mulai
+    iklan itu sama dengan hari snapshot: kumulatifnya memang biaya hari pertama.
     """
     from src.core import ads as A
 
@@ -331,16 +332,35 @@ def daily_unit_totals(
     snap = snap.sort_values(["biaya", "omzet", "_sub"], ascending=True)
     winners = snap.drop_duplicates(["_lo", "_hi"], keep="last")
     part = work.merge(winners[["_src", "_lo", "_hi", "_sub"]], on=["_src", "_lo", "_hi", "_sub"], how="inner")
+    if "Tanggal Mulai" in part.columns:
+        part = part.copy()
+        part["_mulai"] = pd.to_datetime(part["Tanggal Mulai"], dayfirst=True, errors="coerce").dt.date
+    else:
+        part = part.copy()
+        part["_mulai"] = pd.NaT
     by_key = (
         part.groupby(["_lo", "_hi", "_key"], sort=False)[["_b", "_o"]]
         .sum()
         .reset_index()
     )
+    # Tanggal mulai hanya dari baris yang membawa biaya/omzet (iklan lama Rp 0 diabaikan).
+    mulai_by: dict[tuple, date] = {}
+    active = part.loc[(part["_b"] > 0) | (part["_o"] > 0)]
+    for rec in active.loc[active["_mulai"].notna()].to_dict("records"):
+        slot_key = (rec["_lo"], rec["_hi"], str(rec["_key"]))
+        cur_m = mulai_by.get(slot_key)
+        if cur_m is None or rec["_mulai"] > cur_m:
+            mulai_by[slot_key] = rec["_mulai"]
     snapshots = []
     for (lo_d, hi_d), group in by_key.groupby(["_lo", "_hi"], sort=False):
         keys = {
             str(rec["_key"]): (float(rec["_b"]), float(rec["_o"]))
             for rec in group.to_dict("records")
+        }
+        mulai = {
+            str(rec["_key"]): mulai_by[(lo_d, hi_d, str(rec["_key"]))]
+            for rec in group.to_dict("records")
+            if (lo_d, hi_d, str(rec["_key"])) in mulai_by
         }
         snapshots.append({
             "lo": lo_d,
@@ -349,6 +369,7 @@ def daily_unit_totals(
             "biaya": float(group["_b"].sum()),
             "omzet": float(group["_o"].sum()),
             "keys": keys,
+            "mulai": mulai,
         })
     snapshots = _with_lengkap_units(snapshots)
     if not snapshots:
@@ -381,14 +402,33 @@ def daily_unit_totals(
             if kept and snap_row["hi"] <= kept[-1]["hi"]:
                 continue
             kept.append(snap_row)
+        def _first_day(snap_row: dict, d: date, slot: dict, only_key: str | None = None) -> None:
+            """Kumulatif = biaya hari itu bila iklan mulai tepat pada tanggal snapshot.
+
+            Hanya untuk kunci yang belum terisi. Jangan menimpa selisih iklan yang sudah ada kemarin.
+            """
+            mulai = snap_row.get("mulai") or {}
+            items = snap_row["keys"].items()
+            if only_key is not None:
+                pair = snap_row["keys"].get(only_key)
+                items = [(only_key, pair)] if pair is not None else []
+            for key, (cur_b, cur_o) in items:
+                if key in slot or mulai.get(key) != d or cur_b < 0 or cur_o < 0 or (cur_b <= 0 and cur_o <= 0):
+                    continue
+                slot[key] = {"Biaya": cur_b, "Omzet": cur_o, "Sumber": "mulai"}
+
         prev = None
         for snap_row in kept:
-            if prev is not None and snap_row["hi"] == prev["hi"] + timedelta(days=1):
+            if prev is None:
+                d0 = snap_row["hi"]
+                _first_day(snap_row, d0, by_day.setdefault(d0, {}))
+            elif snap_row["hi"] == prev["hi"] + timedelta(days=1):
                 d = snap_row["hi"]
                 slot = by_day.setdefault(d, {})
                 for key, (cur_b, cur_o) in snap_row["keys"].items():
                     prev_pair = prev["keys"].get(key)
                     if prev_pair is None:
+                        _first_day(snap_row, d, slot, only_key=key)
                         continue
                     biaya = cur_b - prev_pair[0]
                     omzet = cur_o - prev_pair[1]
