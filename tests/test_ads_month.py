@@ -32,6 +32,25 @@ def test_curve_needs_three_months_and_positive_slope():
     assert M.fit_store_curve([("a", 1e8, 3e9), ("b", 2e8, 2e9), ("c", 3e8, 1e9)]) is None
 
 
+def test_lengkap_units_fill_daily_when_only_nov19_anchor_remains():
+    # File 14–18 Nov terpotong/hilang, yang utuh hanya MTD 19 Nov. Iklan yang sudah jalan
+    # tetap punya selisih harian, bukan tabel nol.
+    ads = pd.DataFrame([{
+        "Nama Iklan": "x", "product_code": "1",
+        "cost": 184_003_414, "ad_sales": 2_995_964_550,
+        "period": "2026-11-01",
+        "Periode laporan (teks)": "01/11/2026 - 19/11/2026",
+        "_submitted_at": "2026-11-19T18:00:00+07:00",
+        "_source_key": "ads_overall",
+    }])
+    out = M.daily_unit_totals(ads, start=date(2026, 11, 14), end=date(2026, 11, 18))
+    fsa = out.loc[out["key"] == "produk:27045994210"].sort_values("Tanggal")
+    assert list(fsa["Tanggal"]) == ["2026-11-16", "2026-11-17", "2026-11-18"]
+    assert int(fsa.iloc[0]["Biaya"]) == 1_505_180
+    assert int(fsa.iloc[-1]["Biaya"]) == 1_286_091
+    assert int(fsa["Omzet"].sum()) == 62_755_186
+
+
 def test_daily_unit_totals_diff_only_when_ad_is_in_both_snapshots():
     rows = []
     for hi, code, cost, sales in (

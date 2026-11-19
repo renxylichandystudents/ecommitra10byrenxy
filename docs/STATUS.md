@@ -1,6 +1,8 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (malam, analisa iklan = progress harian).
+Diperbarui: 19 November 2026 (malam, kartu iklan = tabel harian).
+
+- Bila snapshot 14–18 Nov terpotong tetapi MTD 19 Nov utuh ada, biaya/omzet per iklan diisi dari file lengkap yang sama. Kartu dan tabel riwayat memakai jumlah itu. Tanggal tanpa selisih harian tetap kosong.
 
 - Kartu iklan dan tabel riwayat memakai jumlah harian all iklan pada periode campaign (hari penuh, hari ini tidak dihitung). Bukan catatan Pantau dan bukan selisih baseline sampai hari ini.
 - Tabel riwayat: satu baris per tanggal sejak campaign. Biaya iklan, Omzet iklan, ROAS iklan terkumpul; baris terakhir sama dengan kartu iklan itu.

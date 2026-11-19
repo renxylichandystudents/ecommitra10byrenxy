@@ -1155,8 +1155,24 @@ def apply_daily_ad_window(
     for _, row in out.iterrows():
         part = _rows_for_key(daily, str(row.get("_key") or ""))
         win = part.loc[(part["Tanggal"] >= lo) & (part["Tanggal"] <= hi)] if not part.empty else part
-        biaya = float(win["Biaya"].sum()) if not win.empty else 0.0
-        omzet = float(win["Omzet"].sum()) if not win.empty else 0.0
+        if win.empty:
+            # Jangan menuliskan nol bila iklan ini tidak ada di deret harian.
+            biaya_s.append(float(row.get("Biaya sejak disimpan") or 0))
+            omzet_s.append(float(row.get("Omzet iklan sejak disimpan") or 0))
+            hari_s.append(int(row.get("Hari dievaluasi") or 0))
+            rate_s.append(float(row.get("Biaya aktual/hari") or 0))
+            sales_s.append(float(row.get("Omzet iklan aktual/hari") or 0))
+            roas_raw = row.get("ROAS aktual")
+            roas_s.append(float(roas_raw) if roas_raw == roas_raw and roas_raw is not None else float("nan"))
+            month_raw = row.get("Biaya bulan ini/hari")
+            month_s.append(float(month_raw) if month_raw == month_raw and month_raw is not None else float("nan"))
+            done_s.append(str(row.get("Rekomendasi dijalankan") or "Belum"))
+            notes.append(str(row.get("Catatan batas") or ""))
+            ratio_raw = row.get("Rasio vs efektif")
+            ratios.append(float(ratio_raw) if ratio_raw == ratio_raw and ratio_raw is not None else float("nan"))
+            continue
+        biaya = float(win["Biaya"].sum())
+        omzet = float(win["Omzet"].sum())
         hari = int(len(win))
         rate = biaya / hari if hari else 0.0
         sales_d = omzet / hari if hari else 0.0
