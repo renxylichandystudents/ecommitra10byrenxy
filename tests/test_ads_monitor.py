@@ -218,6 +218,24 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertAlmostEqual(out.iloc[0]["Biaya bulan ini/hari"], 100_000)
         self.assertAlmostEqual(out.iloc[0]["Biaya aktual/hari"], 50_000)
 
+    def test_turunkan_tip_mentions_shopee_budget_not_duplicate_acuan(self):
+        frame = pd.DataFrame([{
+            "_key": "produk:1", "Jenis": "Produk tunggal",
+            "Budget usulan/hari": 4_750_000, "Budget efektif Shopee/hari": 4_750_000,
+            "Biaya aktual/hari": 17_537_306, "Biaya bulan ini/hari": 16_000_000,
+            "Omzet iklan aktual/hari": 200_000_000, "ROAS aktual": 11.0,
+            "Rekomendasi dijalankan": "Belum",
+        }])
+        out = Mon.classify_rows(frame, target_roas=22)
+        tip = str(out.iloc[0]["Saran"])
+        self.assertEqual(out.iloc[0]["Tindakan"], "Turunkan budget")
+        self.assertIn("sejak campaign", tip)
+        self.assertIn("Terpakai bulan ini", tip)
+        self.assertIn("budget di Shopee", tip)
+        self.assertNotIn("acuan", tip)
+        self.assertNotIn("±", tip)
+        self.assertIn("Seller Center", tip)
+
 
 if __name__ == "__main__":
     unittest.main()

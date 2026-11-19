@@ -23,8 +23,12 @@ _STATUS_RANK = {
 }
 
 
+def _rp_hari(value: float) -> str:
+    return f"Rp {value:,.0f}/hari".replace(",", ".")
+
+
 def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[str] | None = None) -> pd.DataFrame:
-    """Lengkapi baris evaluasi dengan Status goals, Status SC, Tindakan, Saran."""
+    """Lengkapi baris evaluasi dengan Status goals, Status SC, Tindakan, Saran (bahasa manajer)."""
     if frame is None or frame.empty:
         return pd.DataFrame()
     out = frame.copy()
@@ -34,51 +38,65 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
         key = str(r.get("_key") or "")
         plan = float(r.get("Budget usulan/hari") or 0)
         expected = float(r.get("Budget efektif Shopee/hari") or A.implementable_budget(plan, r.get("Jenis") or key))
-        cost = float(r.get("Biaya aktual/hari") or 0)
+        cost = float(r.get("Biaya aktual/hari") or 0)  # terpakai sejak campaign
+        month = r.get("Biaya bulan ini/hari")
+        month_v = float(month) if month == month and month is not None else float("nan")
         roas = float(r.get("ROAS aktual")) if r.get("ROAS aktual") == r.get("ROAS aktual") else float("nan")
         done = str(r.get("Rekomendasi dijalankan")) == "Ya"
         is_run = key in running or any(k for k in running if k == key or key.endswith(":" + k.split(":")[-1]))
-        # cocokkan juga kunci produk: laporan
         if not is_run and running:
             report = "produk:" + key.split(":", 1)[1] if key.startswith(("pisah:", "baru:")) else key
             is_run = report in running or key in running
         sc_label = "Berjalan" if is_run or cost > max(expected * 0.3, 10_000) else "Tidak aktif / rendah"
         weak = cost > 0 and roas == roas and target_roas > 0 and roas < target_roas * 0.9
+        spend_bits = f"Terpakai sejak campaign {_rp_hari(cost)}"
+        if month_v == month_v:
+            spend_bits = f"Terpakai bulan ini {_rp_hari(month_v)}; sejak campaign {_rp_hari(cost)}"
 
         if expected <= 0:
             if done or cost <= 5_000:
-                goal, act, tip = "Sesuai goals", "Pertahankan", "Iklan dijeda sesuai rencana."
+                goal, act, tip = "Sesuai rencana", "Pertahankan", "Iklan ini memang dijeda di rencana — tidak perlu diubah."
             else:
-                goal, act, tip = "Di luar goals", "Jeda / hentikan", (
-                    f"Masih memakan ±{cost:,.0f}/hari padahal rencana jeda. Pause di Seller Center.".replace(",", ".")
+                goal, act, tip = "Tidak sesuai rencana", "Jeda / hentikan", (
+                    f"{spend_bits}, padahal di rencana iklan ini dihentikan. "
+                    "Pause / hentikan di Seller Center."
                 )
         elif sc_label.startswith("Tidak") and expected > 0:
-            goal, act, tip = "Belum aktif di SC", "Buat / aktifkan", (
-                f"Rencana meminta ±{expected:,.0f}/hari tetapi iklan belum terlihat aktif di laporan. "
-                "Aktifkan / buat di Seller Center, lalu unggah laporan.".replace(",", ".")
+            goal, act, tip = "Belum aktif", "Buat / aktifkan", (
+                f"Di rencana budget {_rp_hari(expected)}, tetapi iklan belum terlihat aktif di laporan. "
+                "Aktifkan atau buat di Seller Center, lalu unggah laporan."
             )
         elif not done and cost > expected * 1.4:
-            goal, act, tip = "Di luar goals", "Turunkan budget", (
-                f"Biaya ±{cost:,.0f}/hari di atas acuan ±{expected:,.0f}/hari. Turunkan ke {expected:,.0f}.".replace(",", ".")
+            goal, act, tip = "Tidak sesuai rencana", "Turunkan budget", (
+                f"{spend_bits} — lebih tinggi dari budget di Shopee ({_rp_hari(expected)}). "
+                f"Di Seller Center, turunkan budget harian menjadi {_rp_hari(expected)}."
             )
         elif not done and cost < expected * 0.6:
-            goal, act, tip = "Di luar goals", "Naikkan budget", (
-                f"Biaya ±{cost:,.0f}/hari di bawah acuan ±{expected:,.0f}/hari"
-                + (f" (usulan {plan:,.0f} → min Shopee)" if expected > plan + 1 else "")
-                + ". Isi budget di Seller Center atau longgarkan Target ROAS."
-            ).replace(",", ".")
+            floor_note = (
+                f" (rencana {_rp_hari(plan)}, dinaikkan ke minimum Shopee)"
+                if expected > plan + 1 else ""
+            )
+            goal, act, tip = "Tidak sesuai rencana", "Naikkan budget", (
+                f"{spend_bits} — masih di bawah budget di Shopee ({_rp_hari(expected)}){floor_note}. "
+                "Naikkan budget harian di Seller Center, atau longgarkan Target ROAS agar budget terserap."
+            )
         elif weak:
-            goal, act, tip = "ROAS di bawah target", "Naikkan Target ROAS", (
-                f"ROAS {roas:.1f} < 90% target {target_roas:.1f}. Naikkan Target ROAS atau pindah budget ke iklan lebih kuat."
+            goal, act, tip = "ROAS lemah", "Naikkan Target ROAS", (
+                f"ROAS {roas:.1f}× masih di bawah target campaign {target_roas:.1f}×. "
+                "Naikkan Target ROAS di Shopee atau pindahkan budget ke iklan yang lebih kuat."
             )
         elif done and expected > plan + 1:
-            goal, act, tip = "Sesuai goals", "Pertahankan", (
-                f"Di batas minimum Shopee ({expected:,.0f}/hari) — wajar, bukan gagal rencana.".replace(",", ".")
+            goal, act, tip = "Sesuai rencana", "Pertahankan", (
+                f"Berjalan di batas minimum Shopee ({_rp_hari(expected)}) — wajar, bukan gagal rencana."
             )
         elif done:
-            goal, act, tip = "Sesuai goals", "Pertahankan", "Budget & ROAS sejalan dengan rencana."
+            goal, act, tip = "Sesuai rencana", "Pertahankan", (
+                f"{spend_bits}. Budget dan ROAS sejalan dengan rencana campaign."
+            )
         else:
-            goal, act, tip = "Perlu dicek", "Naikkan budget", "Sesuaikan budget ke acuan efektif, unggah laporan esok hari."
+            goal, act, tip = "Perlu dicek", "Naikkan budget", (
+                f"{spend_bits}. Samakan budget di Seller Center ke {_rp_hari(expected)}, lalu unggah laporan esok hari."
+            )
 
         goals.append(goal)
         actions.append(act)
@@ -90,6 +108,33 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
     out["Saran"] = tips
     out["_rank"] = out["Tindakan"].map(lambda t: _STATUS_RANK.get(t, 9))
     return out.sort_values(["_rank", "Biaya aktual/hari"], ascending=[True, False]).drop(columns=["_rank"])
+
+
+def refresh_tips_after_month(frame: pd.DataFrame, *, target_roas: float, running_keys: set[str] | None = None) -> pd.DataFrame:
+    """Tulis ulang Status/Tindakan/Saran setelah `Biaya bulan ini/hari` terisi; urutan baris tetap."""
+    if frame is None or frame.empty or "Biaya bulan ini/hari" not in getattr(frame, "columns", []):
+        return frame if frame is not None else pd.DataFrame()
+    core = frame.drop(columns=["Status SC", "Status goals", "Tindakan", "Saran"], errors="ignore")
+    fresh = classify_rows(core, target_roas=target_roas, running_keys=running_keys)
+    if fresh.empty or "_key" not in fresh.columns:
+        return frame
+    by_key = {str(k): r for k, r in fresh.set_index("_key", drop=False).iterrows()}
+    tips, acts, goals, scs = [], [], [], []
+    for key in frame["_key"].astype(str):
+        row = by_key.get(str(key))
+        if row is None:
+            tips.append(str(frame.loc[frame["_key"].astype(str) == key, "Saran"].iloc[0]) if "Saran" in frame.columns else "")
+            acts.append(str(frame.loc[frame["_key"].astype(str) == key, "Tindakan"].iloc[0]) if "Tindakan" in frame.columns else "")
+            goals.append(str(frame.loc[frame["_key"].astype(str) == key, "Status goals"].iloc[0]) if "Status goals" in frame.columns else "")
+            scs.append(str(frame.loc[frame["_key"].astype(str) == key, "Status SC"].iloc[0]) if "Status SC" in frame.columns else "")
+            continue
+        tips.append(str(row["Saran"]))
+        acts.append(str(row["Tindakan"]))
+        goals.append(str(row["Status goals"]))
+        scs.append(str(row["Status SC"]))
+    out = frame.copy()
+    out["Saran"], out["Tindakan"], out["Status goals"], out["Status SC"] = tips, acts, goals, scs
+    return out
 
 
 def priority_actions(classified: pd.DataFrame, *, limit: int = 8) -> list[dict]:

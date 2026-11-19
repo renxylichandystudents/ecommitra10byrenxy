@@ -158,7 +158,7 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         f"<span style='color:{color}'>{html.escape(act)}</span></div>"
         f"<div style='color:#475569;font-size:var(--fs-sm)'>{hasil}</div></div>"
         f"<div style='color:#475569;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.5'>"
-        f"{html.escape(str(r.get('Saran') or r.get('Status goals') or ''))}</div>"
+        f"{html.escape(str(r.get('Saran') or ''))}</div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-top:.45rem;font-size:var(--fs-sm)'>"
         f"<span><b>Di rencana</b> {_fmt_hari(plan)}</span>"
         f"<span><b>Di Shopee</b> {_fmt_hari(setup)}</span>"
@@ -266,6 +266,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             classified, planned, current, base, names=names, kinds=kinds, target_roas=roas, running_keys=running_keys)
         in_plan = Mon.attach_month_daily(in_plan, current)
         out_plan = Mon.attach_month_daily(out_plan, current)
+        in_plan = Mon.refresh_tips_after_month(in_plan, target_roas=roas, running_keys=running_keys)
+        out_plan = Mon.refresh_tips_after_month(out_plan, target_roas=roas, running_keys=running_keys)
         classified = in_plan
         # Checkpoint harian ke depan (satu entri per tanggal laporan)
         if features is not None and not in_plan.empty and report_end is not None:

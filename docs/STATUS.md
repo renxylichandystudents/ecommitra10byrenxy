@@ -2,6 +2,11 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Saran iklan: hilangkan “acuan / ± / turunkan ke” yang rancu
+
+- Teks lama “Biaya ±17 jt di atas acuan ±4,75 jt. Turunkan ke 4,75 jt” diganti: terpakai bulan ini & sejak campaign vs **budget di Shopee**, lalu perintah jelas di Seller Center.
+- `refresh_tips_after_month` menulis ulang saran setelah angka bulan ini tersedia.
+
 ## 2026-11-19 · Poin 1: terpakai bulan ini + sejak campaign (dua angka)
 
 - “Actual pemakaian” satu angka ambigu diganti dua: **Terpakai bulan ini/hari** (laporan kumulatif bulan ÷ hari) dan **Terpakai sejak campaign/hari** (selisih baseline).
