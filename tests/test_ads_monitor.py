@@ -177,6 +177,56 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertTrue((out_plan["_key"] == "produk:9").any())
         self.assertFalse((in_plan["_key"] == "produk:9").any())
 
+    def test_split_filters_stray_classified_and_alias(self):
+        # classified keliru memuat produk luar → harus dibuang dari in_plan
+        classified = pd.DataFrame([
+            {"_key": "produk:1", "Iklan": "A", "Jenis": "Produk tunggal",
+             "Budget usulan/hari": 100_000, "Budget efektif Shopee/hari": 100_000,
+             "Biaya aktual/hari": 100_000, "Omzet iklan aktual/hari": 1_000_000,
+             "Biaya sejak disimpan": 200_000, "Omzet iklan sejak disimpan": 2_000_000,
+             "ROAS aktual": 10.0, "Rekomendasi dijalankan": "Ya"},
+            {"_key": "produk:9", "Iklan": "Luar", "Jenis": "Produk tunggal",
+             "Budget usulan/hari": 0, "Budget efektif Shopee/hari": 0,
+             "Biaya aktual/hari": 80_000, "Omzet iklan aktual/hari": 100_000,
+             "Biaya sejak disimpan": 160_000, "Omzet iklan sejak disimpan": 200_000,
+             "ROAS aktual": 1.25, "Rekomendasi dijalankan": "Belum"},
+        ])
+        classified = Mon.classify_rows(classified, target_roas=10)
+        base = {
+            "produk:1": {"periode": "2026-11-01", "hari": 5, "biaya": 100_000, "omzet": 1_000_000},
+            "produk:9": {"periode": "2026-11-01", "hari": 5, "biaya": 50_000, "omzet": 200_000},
+            "produk:55": {"periode": "2026-11-01", "hari": 5, "biaya": 10_000, "omzet": 50_000},
+        }
+        now = {
+            "produk:1": {"periode": "2026-11-01", "hari": 7, "biaya": 300_000, "omzet": 3_000_000},
+            "produk:9": {"periode": "2026-11-01", "hari": 7, "biaya": 250_000, "omzet": 800_000},
+            "produk:55": {"periode": "2026-11-01", "hari": 7, "biaya": 100_000, "omzet": 500_000},
+        }
+        # pisah:55 di rencana → produk:55 tidak boleh jadi luar rencana
+        planned = {"produk:1": 100_000, "pisah:55": 50_000}
+        in_plan, out_plan = Mon.split_in_out_plan(
+            classified, planned, now, base,
+            names={"produk:1": ("A", "Produk tunggal"), "pisah:55": ("Pisah", "Produk tunggal"),
+                   "produk:9": ("Luar", "Produk tunggal")},
+            kinds={"produk:1": "Produk tunggal", "pisah:55": "Produk tunggal", "produk:9": "Produk tunggal"},
+            target_roas=10,
+        )
+        self.assertEqual(set(in_plan["_key"].astype(str)), {"produk:1", "pisah:55"})
+        self.assertTrue((out_plan["_key"] == "produk:9").any())
+        self.assertFalse((out_plan["_key"] == "produk:55").any())
+
+    def test_partition_plan_rows(self):
+        frame = pd.DataFrame([
+            {"_key": "a", "Tindakan": "Buat / aktifkan", "Omzet iklan sejak disimpan": 0},
+            {"_key": "b", "Tindakan": "Jeda / hentikan", "Omzet iklan sejak disimpan": 100},
+            {"_key": "c", "Tindakan": "Turunkan budget", "Omzet iklan sejak disimpan": 500},
+            {"_key": "d", "Tindakan": "Pertahankan", "Omzet iklan sejak disimpan": 300},
+        ])
+        parts = Mon.partition_plan_rows(frame)
+        self.assertEqual(list(parts["belum_setup"]["_key"]), ["a"])
+        self.assertEqual(list(parts["jeda_tertinggal"]["_key"]), ["b"])
+        self.assertEqual(list(parts["pantau"]["_key"]), ["c", "d"])
+
     def test_checkpoint_and_history(self):
         campaign = {"id": 1, "setelan": {"data_sampai": "2026-11-13"}}
         rows = pd.DataFrame([{

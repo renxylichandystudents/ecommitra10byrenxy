@@ -85,19 +85,28 @@ def _kinds_from(units, weekly, acts_saved) -> dict[str, str]:
 
 
 def _planned_budgets(cur: dict, *, start: date, report_end: date | None) -> dict[str, float]:
+    """Anggota rencana = semua kunci di `iklan` tersimpan. Nilai minggu berjalan hanya menimpa budget, tidak menambah/menghapus anggota."""
+    saved_planned: dict[str, float] = {}
+    saved = cmp.frame_of(cur.get("iklan"))
+    if not saved.empty and "key" in saved.columns and "Budget harian usulan" in saved.columns:
+        saved_planned = {str(k): float(v or 0) for k, v in zip(saved["key"], saved["Budget harian usulan"])}
+
+    week_vals: dict[str, float] = {}
     weekly = cmp.frame_of(cur.get("iklan_minggu"))
     week_no = ((report_end - start).days // 7 + 1) if report_end else 1
-    planned: dict[str, float] = {}
     if not weekly.empty and "_key" in weekly.columns:
         cols = [c for c in weekly.columns if c.startswith("Minggu ")]
-        col = f"Minggu {min(week_no, len(cols))}" if cols else None
-        if col:
-            planned = {str(k): float(v or 0) for k, v in zip(weekly["_key"], weekly[col])}
-    if not planned:
-        saved = cmp.frame_of(cur.get("iklan"))
-        if "key" in saved.columns:
-            planned = {str(k): float(v or 0) for k, v in zip(saved["key"], saved["Budget harian usulan"])}
-    return planned
+        col = f"Minggu {min(max(week_no, 1), len(cols))}" if cols else None
+        if col and col in weekly.columns:
+            week_vals = {str(k): float(v or 0) for k, v in zip(weekly["_key"], weekly[col])}
+
+    if saved_planned:
+        planned = dict(saved_planned)
+        for key, value in week_vals.items():
+            if key in planned:
+                planned[key] = value
+        return planned
+    return week_vals
 
 
 def _period_sales(track: dict | None, factor: float) -> dict:
@@ -154,6 +163,7 @@ def _ad_row_card(
     members: pd.DataFrame | None = None,
     target_roas: float = 8.0,
     contribution: dict | None = None,
+    scope: str = "Dalam rencana",
 ) -> None:
     """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis.
 
@@ -186,10 +196,14 @@ def _ad_row_card(
     saran_txt = str(r.get("Saran") or "")
     if member_note:
         saran_txt = f"{saran_txt} {member_note}".strip() if saran_txt else member_note
+    scope_color = MUTED if scope.startswith("Dalam") else DOWN
     st.markdown(
         f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.75rem .9rem;margin:.4rem 0;background:#fff'>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.5rem 1rem;justify-content:space-between;align-items:baseline'>"
-        f"<div style='font-weight:800'>{html.escape(name)} · "
+        f"<div style='font-weight:800'>"
+        f"<span style='font-size:var(--fs-xs);font-weight:700;color:{scope_color};margin-right:.45rem'>"
+        f"{html.escape(scope)}</span>"
+        f"{html.escape(name)} · "
         f"<span style='color:{color}'>{html.escape(act)}</span></div>"
         f"<div style='color:#475569;font-size:var(--fs-sm)'>{hasil}</div></div>"
         f"<div style='color:#475569;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.5'>"
@@ -488,7 +502,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         st.button("Buka Rekomendasi sistem", key="adt-renew", type="primary",
                   on_click=st.session_state.__setitem__, args=("adt-view-next", VIEW_REC))
 
-    # -------- 1. Semua iklan campaign: urut omzet, insight, Detailed, di luar plan
+    # -------- 1. Iklan dalam rencana (sub-grup) + di luar rencana
     st.markdown("### 1 · Pelaksanaan per iklan (sejak disimpan)")
     if not base:
         st.info("Campaign tanpa baseline evaluasi. Simpan ulang sebagai campaign baru agar bisa dibanding harian.")
@@ -499,28 +513,48 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     else:
         aktif = fmt_num(summary.get("dijalankan", 0)) if summary else "0"
         rencana = fmt_num(len(in_plan)) if not in_plan.empty else fmt_num(len(planned))
+        luar_n = fmt_num(len(out_plan)) if not out_plan.empty else "0"
         st.caption(
-            f"Daftar semua iklan di campaign, diurut dari omzet terbesar. "
-            f"{aktif}/{rencana} sudah sesuai rencana · data s.d. {fmt_date(report_end)} "
-            f"({fmt_num(summary.get('hari', 0) if summary else 0)} hari). "
-            f"Di rencana = budget campaign (Rp 0 = sengaja dihentikan di rencana, bukan data hilang). "
-            f"Di Shopee = yang harus diisi "
-            f"(minimal {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup). "
-            "Terpakai bulan ini = rata-rata sejak tanggal 1. "
-            "Terpakai sejak campaign = rata-rata setelah campaign disimpan."
+            f"Hanya iklan yang tersimpan di campaign masuk blok **Dalam rencana** "
+            f"({aktif}/{rencana} sudah sesuai setup). "
+            f"Iklan berbiaya di Seller Center tetapi tidak ada di campaign → blok **Di luar rencana** ({luar_n}). "
+            f"Data s.d. {fmt_date(report_end)} ({fmt_num(summary.get('hari', 0) if summary else 0)} hari). "
+            f"Di rencana Rp 0 = sengaja dihentikan. "
+            f"Di Shopee minimal {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup."
         )
         cid = int(cur.get("id") or 0)
+        parts = Mon.partition_plan_rows(in_plan)
+
+        def _render_cards(frame: pd.DataFrame, *, prefix: str, scope: str) -> None:
+            for _, r in frame.iterrows():
+                _ad_row_card(
+                    r, cur=cur, report_end=report_end, prefix=prefix, cid=cid,
+                    members=members, target_roas=roas, contribution=contribution, scope=scope,
+                )
+
         if in_plan.empty:
             st.info("Tidak ada baris iklan di rencana tersimpan.")
         else:
-            need = in_plan.loc[in_plan["Tindakan"] != "Pertahankan"] if "Tindakan" in in_plan.columns else in_plan.iloc[0:0]
-            if not need.empty:
-                st.markdown(f"**Perlu tindakan** · {fmt_num(len(need))} iklan (dari analisa terakhir)")
-            for _, r in in_plan.iterrows():
-                _ad_row_card(
-                    r, cur=cur, report_end=report_end, prefix="in", cid=cid,
-                    members=members, target_roas=roas, contribution=contribution,
+            st.markdown("#### Dalam rencana campaign")
+            if not parts["belum_setup"].empty:
+                st.markdown(
+                    f"**Belum di-setup di Seller Center** · {fmt_num(len(parts['belum_setup']))} iklan "
+                    "(ada di rencana, belum terlihat aktif di laporan)"
                 )
+                _render_cards(parts["belum_setup"], prefix="in-setup", scope="Dalam rencana · belum setup")
+            if not parts["jeda_tertinggal"].empty:
+                st.markdown(
+                    f"**Dijeda di rencana, masih berbiaya** · {fmt_num(len(parts['jeda_tertinggal']))} iklan "
+                    "(budget rencana Rp 0, masih jalan di Shopee)"
+                )
+                _render_cards(parts["jeda_tertinggal"], prefix="in-jeda", scope="Dalam rencana · jeda tertinggal")
+            if not parts["pantau"].empty:
+                need = parts["pantau"].loc[parts["pantau"]["Tindakan"] != "Pertahankan"] if "Tindakan" in parts["pantau"].columns else parts["pantau"].iloc[0:0]
+                st.markdown(
+                    f"**Pantau & sesuaikan** · {fmt_num(len(parts['pantau']))} iklan"
+                    + (f" · {fmt_num(len(need))} perlu tindakan" if not need.empty else "")
+                )
+                _render_cards(parts["pantau"], prefix="in", scope="Dalam rencana")
 
             view = Mon.rename_budget_triad(in_plan)
             view_cols = [c for c in [
@@ -540,16 +574,12 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 download_excel(view[view_cols], f"pantau_iklan_{cid}.xlsx", key="xl-adt-mon", label="Unduh pantauan")
 
         if not out_plan.empty:
-            st.markdown("### Di luar rencana campaign")
+            st.markdown("#### Di luar rencana campaign")
             st.caption(
-                f"{fmt_num(len(out_plan))} iklan sedang berbiaya di Seller Center tetapi tidak masuk campaign tersimpan. "
-                "Ditampilkan terpisah supaya tidak tercampur dengan rencana."
+                f"{fmt_num(len(out_plan))} iklan berbiaya di Seller Center tetapi **tidak** masuk campaign tersimpan. "
+                "Bukan bagian rencana — pause atau masukkan ke rencana baru bila memang mau dilanjutkan."
             )
-            for _, r in out_plan.iterrows():
-                _ad_row_card(
-                    r, cur=cur, report_end=report_end, prefix="out", cid=cid,
-                    members=members, target_roas=roas, contribution=contribution,
-                )
+            _render_cards(out_plan, prefix="out", scope="Di luar rencana")
             out_view = Mon.rename_budget_triad(out_plan)
             out_cols = [c for c in [
                 "Iklan", "Jenis", "Status SC", "Status goals", "Tindakan",

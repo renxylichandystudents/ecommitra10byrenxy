@@ -2,6 +2,12 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Pantau: perketat dalam rencana vs di luar rencana
+
+- Anggota rencana = kunci di `iklan` tersimpan; budget minggu hanya menimpa nilai, tidak menambah/menghapus anggota.
+- `split_in_out_plan` membuang baris asing dari dalam rencana; alias `pisah:`/`baru:` ↔ `produk:` tidak digolongkan luar rencana.
+- UI dipisah: **Belum setup** · **Jeda tertinggal** · **Pantau** (dalam rencana) vs **Di luar rencana**; tiap kartu berlabel scope.
+
 ## 2026-11-19 · Iklan grup: analisa per produk anggota
 
 - Kartu grup di Pantau punya expander **Anggota grup · performa & saran**: biaya/omzet/ROAS/porsi + tindakan per produk.

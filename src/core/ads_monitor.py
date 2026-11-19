@@ -424,18 +424,41 @@ def sort_by_omzet(frame: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("_omz", ascending=False).drop(columns=["_omz"]).reset_index(drop=True)
 
 
+def report_alias(key: str) -> str:
+    """Kunci laporan Seller Center untuk usulan pisah/baru → produk:kode."""
+    k = str(key or "")
+    if k.startswith(("pisah:", "baru:")):
+        return "produk:" + k.split(":", 1)[1]
+    return k
+
+
+def plan_coverage(planned: dict[str, float] | None) -> set[str]:
+    """Semua kunci yang dianggap 'dalam rencana' (termasuk alias laporan)."""
+    covered: set[str] = set()
+    for key in planned or {}:
+        k = str(key)
+        covered.add(k)
+        covered.add(report_alias(k))
+    return covered
+
+
 def split_in_out_plan(classified: pd.DataFrame, planned: dict[str, float], current: dict[str, dict],
                      baseline: dict[str, dict], *, names: dict[str, tuple[str, str]], kinds: dict[str, str],
                      target_roas: float, running_keys: set[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Pisah iklan di dalam rencana campaign vs yang berbiaya di laporan tetapi tidak ada di plan."""
-    plan_keys = {str(k) for k in (planned or {})}
-    in_plan = complete_plan_rows(classified, planned or {}, names=names, target_roas=target_roas, running_keys=running_keys)
+    """Pisah ketat: hanya kunci campaign → dalam rencana; berbiaya di SC tanpa kunci campaign → luar rencana."""
+    planned = planned or {}
+    plan_keys = {str(k) for k in planned}
+    covered = plan_coverage(planned)
+    in_plan = complete_plan_rows(classified, planned, names=names, target_roas=target_roas, running_keys=running_keys)
+    if not in_plan.empty and "_key" in in_plan.columns:
+        # Pertahankan hanya kunci yang benar-benar tersimpan di campaign (bukan alias laporan).
+        in_plan = sort_by_omzet(in_plan.loc[in_plan["_key"].astype(str).isin(plan_keys)].copy())
 
-    # Di luar plan: ada di laporan sekarang, tidak ada di kunci campaign, dan ada biaya sejak baseline
+    # Di luar plan: ada di laporan sekarang, tidak tertutup kunci/alias campaign, dan ada biaya sejak baseline
     outsider_planned = {}
     for key, cur in (current or {}).items():
         k = str(key)
-        if k in plan_keys:
+        if k in covered or report_alias(k) in covered:
             continue
         base = (baseline or {}).get(k) or {}
         if base and base.get("periode") == cur.get("periode"):
@@ -455,7 +478,29 @@ def split_in_out_plan(classified: pd.DataFrame, planned: dict[str, float], curre
                 frame["Jenis"] = frame["_key"].map(
                     lambda k: kinds.get(str(k)) or ((names.get(str(k)) or ("", "Produk tunggal"))[1]))
             out_frame = sort_by_omzet(classify_rows(frame, target_roas=target_roas, running_keys=running_keys))
+            # Jaga-jaga: buang bila ternyata alias dari kunci rencana
+            if not out_frame.empty:
+                out_frame = out_frame.loc[
+                    ~out_frame["_key"].astype(str).isin(covered)
+                    & ~out_frame["_key"].astype(str).map(report_alias).isin(covered)
+                ].copy()
+                out_frame = sort_by_omzet(out_frame)
     return in_plan, out_frame
+
+
+def partition_plan_rows(in_plan: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Sub-grup dalam rencana: belum setup SC / jeda tertinggal / pantau (sisanya)."""
+    empty = pd.DataFrame()
+    if in_plan is None or in_plan.empty or "Tindakan" not in in_plan.columns:
+        return {"belum_setup": empty, "jeda_tertinggal": empty, "pantau": empty}
+    act = in_plan["Tindakan"].astype(str)
+    mask_belum = act == "Buat / aktifkan"
+    mask_jeda = act.str.startswith("Jeda")
+    return {
+        "belum_setup": sort_by_omzet(in_plan.loc[mask_belum].copy()),
+        "jeda_tertinggal": sort_by_omzet(in_plan.loc[mask_jeda].copy()),
+        "pantau": sort_by_omzet(in_plan.loc[~mask_belum & ~mask_jeda].copy()),
+    }
 
 
 def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: pd.DataFrame) -> tuple[dict, bool]:
