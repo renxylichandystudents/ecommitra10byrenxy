@@ -274,84 +274,92 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     verdict = Mon.rollup(classified, summary, track=track, target_roas=roas, store_roas=store_roas)
     _hero(verdict)
 
-    # -------- A. Hasil sejak campaign + pembanding MTD vs periode campaign
+    # -------- A. Hasil sejak campaign + pembanding bulan vs sejak campaign
+    biaya_status = str((track or {}).get("biaya_status") or "")
+    biaya_status_label = {
+        "kurang terserap": "masih di bawah rencana",
+        "lebih boros": "di atas rencana",
+        "sesuai": "sesuai rencana",
+    }.get(biaya_status, biaya_status or "–")
     st.markdown("### A · Hasil sejak campaign ditetapkan")
     st.caption(
-        f"Sumber biaya & omzet iklan: laporan **Keseluruhan iklan** (sama keluarga angka Seller Center). "
-        f"Periode campaign: {fmt_date(since_start)} – {fmt_date(last_data) if store_since.get('hari') else '–'} "
+        f"Angka iklan mengikuti laporan **Keseluruhan iklan** di Seller Center. "
+        f"Periode: {fmt_date(since_start)} – {fmt_date(last_data) if store_since.get('hari') else '–'} "
         f"({fmt_num(store_since.get('hari') or days_since)} hari). "
-        "TACoS memakai pembagi sales **periode yang sama** dengan biayanya (MTD dengan MTD, sejak dengan sejak)."
+        "Omzet iklan = penjualan yang dikaitkan ke iklan. Sales produk = penjualan produk seluruh toko "
+        "(bukan angka yang sama)."
     )
     period = _period_sales(track, factor)
     a = st.columns(4)
     card(a[0], "Biaya iklan sejak disimpan", fmt_idr(spent_since),
-         hint=f"jalur rencana {fmt_idr(wallet['jalur_sejak'])} · <b>{(track or {}).get('biaya_status', '–')}</b>")
-    card(a[1], "Omzet iklan sejak disimpan", fmt_idr(omzet_since),
-         hint="klaim Shopee (termasuk pesanan belum bayar) · dari laporan keseluruhan")
-    card(a[2], "ROAS iklan (SC)", fmt_num(store_roas, 1) if store_roas == store_roas else "–",
+         hint=f"rencana {fmt_idr(wallet['jalur_sejak'])} · <b>{biaya_status_label}</b>")
+    card(a[1], "Omzet dari iklan sejak disimpan", fmt_idr(omzet_since),
+         hint="penjualan yang dikaitkan ke iklan di Seller Center (bukan sales toko keseluruhan)")
+    card(a[2], "ROAS iklan", fmt_num(store_roas, 1) if store_roas == store_roas else "–",
          hint=f"target {fmt_num(roas, 1)} · <b style='color:{_tone(store_roas >= roas * 0.9 if store_roas == store_roas else False)}'>"
-              f"{'sesuai' if store_roas == store_roas and store_roas >= roas * 0.9 else 'di bawah / menunggu'}</b>")
+              f"{'sudah mendekati target' if store_roas == store_roas and store_roas >= roas * 0.9 else 'masih di bawah target'}</b>")
     if track and track.get("status") not in (None, "Menunggu data"):
         on = track["status"] == "On track"
-        card(a[3], "Jalur sales bersih", "✅ On track" if on else "⚠️ Tertinggal",
-             hint=f"{track['hari']} hari · {fmt_pct(track['pct_sales'], 1)} jalur · target toko memakai sales bersih")
+        card(a[3], "Status sales bersih", "✅ On track" if on else "⚠️ Tertinggal",
+             hint=f"{track['hari']} hari · mencapai {fmt_pct(track['pct_sales'], 1)} dari jalur rencana")
     else:
-        card(a[3], "Jalur sales bersih", "–", hint="menunggu data baru setelah campaign disimpan")
+        card(a[3], "Status sales bersih", "–", hint="menunggu data baru setelah campaign disimpan")
 
     produk_mtd = float(mtd_produk) if mtd_produk is not None else float("nan")
     bersih_mtd = float(mtd) if mtd is not None else float("nan")
     tacos_mtd_p, tacos_mtd_b = _tacos_pair(float(spent_month or 0), produk_mtd, bersih_mtd)
-    st.markdown("#### Pembanding · MTD vs sejak campaign")
+    st.markdown("#### Pembanding · bulan berjalan vs sejak campaign")
     st.caption(
-        "Kolom kiri = bulan berjalan. Kolom kanan = hanya sejak campaign disimpan. "
-        + ("Sales produk sejak = taksiran (rencana lama tanpa mtd_produk) · simpan rencana baru agar tepat. "
+        "Kiri: dari tanggal 1 bulan ini. Kanan: hanya sejak campaign disimpan. "
+        "Persentase biaya iklan dihitung pada periode yang sama agar perbandingannya adil."
+        + (" Angka sales produk di kanan masih perkiraan — simpan ulang rencana agar lebih tepat."
            if period.get("est") else "")
     )
     left, right = st.columns(2)
-    left.markdown("**MTD (bulan berjalan)**")
-    card(left, "Sales produk MTD", fmt_idr(produk_mtd) if produk_mtd == produk_mtd else "–",
-         hint="semua pesanan produk 1 s.d. hari data terakhir")
-    card(left, "Sales bersih MTD", fmt_idr(bersih_mtd) if bersih_mtd == bersih_mtd else "–",
-         hint="tanpa batal / Belum Bayar / retur · acuan target toko"
+    left.markdown("**Bulan berjalan**")
+    card(left, "Sales produk bulan ini", fmt_idr(produk_mtd) if produk_mtd == produk_mtd else "–",
+         hint="nilai jual produk toko sejak tanggal 1 sampai data terakhir")
+    card(left, "Sales bersih bulan ini", fmt_idr(bersih_mtd) if bersih_mtd == bersih_mtd else "–",
+         hint="acuan target toko (setelah batal, belum bayar, dan retur)"
          + (f" · jalur {fmt_idr(track['jalur_sales'])} · {_signed(track['selisih_sales'])}"
             if track and track.get("status") not in (None, "Menunggu data") else ""))
-    card(left, "TACoS vs sales produk (MTD)",
+    card(left, "Persentase biaya vs sales produk",
          fmt_pct(tacos_mtd_p, 1) if tacos_mtd_p == tacos_mtd_p else "–",
-         hint="biaya iklan bulan ÷ sales produk MTD")
-    card(left, "TACoS vs sales bersih (MTD)",
+         hint="berapa persen biaya iklan dari sales produk bulan ini · makin kecil makin hemat")
+    card(left, "Persentase biaya vs sales bersih",
          fmt_pct(tacos_mtd_b, 1) if tacos_mtd_b == tacos_mtd_b else "–",
-         hint="biaya iklan bulan ÷ sales bersih MTD")
+         hint="berapa persen biaya iklan dari sales bersih bulan ini · makin kecil makin hemat")
     right.markdown("**Sejak campaign disimpan**")
     card(right, "Sales produk sejak campaign",
          fmt_idr(period["produk"]) if period["produk"] == period["produk"] else "–",
-         hint=("taksiran sales bersih ÷ faktor · simpan rencana baru" if period.get("est")
-               else "delta sales produk sejak titik campaign"))
+         hint=("perkiraan sementara · simpan ulang rencana agar angka pasti"
+               if period.get("est") else "nilai jual produk toko sejak campaign disimpan"))
     card(right, "Sales bersih sejak campaign",
          fmt_idr(period["bersih"]) if period["bersih"] == period["bersih"] else "–",
-         hint="delta sales bersih sejak titik campaign")
-    card(right, "TACoS vs sales produk (sejak)",
+         hint="sales bersih toko sejak campaign disimpan")
+    card(right, "Persentase biaya vs sales produk",
          fmt_pct(period["tacos_produk"], 1) if period["tacos_produk"] == period["tacos_produk"] else "–",
-         hint="biaya iklan sejak ÷ sales produk sejak · sejajar performa iklan")
-    card(right, "TACoS vs sales bersih (sejak)",
+         hint="biaya iklan sejak campaign dibanding sales produk periode yang sama")
+    card(right, "Persentase biaya vs sales bersih",
          fmt_pct(period["tacos_bersih"], 1) if period["tacos_bersih"] == period["tacos_bersih"] else "–",
-         hint="biaya iklan sejak ÷ sales bersih sejak · hemat vs target toko")
+         hint="biaya iklan sejak campaign dibanding sales bersih periode yang sama")
 
     tip = Mon.spend_gap_tip(wallet, store_since, summary)
     if tip:
         st.caption(tip)
 
-    # -------- B. Dompet budget (bukan 1 angka)
+    # -------- B. Dompet budget
     st.markdown("### B · Dompet budget campaign")
-    st.caption("Satu angka total saja membingungkan — baca berurutan: total → terpakai bulan → sisa → rencana harian → realisasi sejak disimpan.")
+    st.caption("Baca berurutan: total budget → yang sudah terpakai → sisa → rencana harian.")
     w = st.columns(4)
     card(w[0], "1. Budget total campaign", fmt_idr(wallet["budget_total"]),
-         hint=f"setelan saat disimpan · Target ROAS {fmt_num(wallet['roas_target'], 1)}")
+         hint=f"disimpan saat campaign dibuat · Target ROAS {fmt_num(wallet['roas_target'], 1)}")
     card(w[1], "2. Terpakai bulan ini", fmt_idr(wallet["terpakai_bulan"]),
-         hint="semua biaya iklan 1 s.d. hari data terakhir (laporan keseluruhan)")
+         hint="seluruh biaya iklan dari tanggal 1 sampai data terakhir")
     card(w[2], "3. Sisa budget bulan", fmt_idr(wallet["sisa_bulan"]),
-         hint=f"total − terpakai · sisa periode rencana {fmt_num(wallet['sisa_hari_rencana'])} hari")
+         hint=f"total dikurangi terpakai · sisa {fmt_num(wallet['sisa_hari_rencana'])} hari di periode rencana")
     card(w[3], "4. Rencana harian", fmt_idr(wallet["rencana_harian"]),
-         hint=f"pembagian sisa saat disimpan · realisasi sejak ≈ {fmt_idr(spent_since / days_since if days_since else 0)}/hari")
+         hint=f"alokasi harian saat disimpan · realisasi ≈ {fmt_idr(spent_since / days_since if days_since else 0)}/hari")
 
     if goal > 0:
         gap = max(goal - projection, 0)
@@ -382,11 +390,12 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         aktif = fmt_num(summary.get("dijalankan", 0)) if summary else "0"
         rencana = fmt_num(len(in_plan)) if not in_plan.empty else fmt_num(len(planned))
         st.caption(
-            f"Semua iklan di campaign tersimpan, urut omzet iklan terbesar. "
-            f"{aktif}/{rencana} sesuai acuan · laporan s.d. {fmt_date(report_end)} · {fmt_num(summary.get('hari', 0) if summary else 0)} hari. "
-            f"Budget plan = usulan saat disimpan · Budget setup SC = min Shopee "
-            f"({fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup) · "
-            "Actual pemakaian = biaya/hari sejak campaign."
+            f"Daftar semua iklan di campaign, diurut dari omzet terbesar. "
+            f"{aktif}/{rencana} sudah sesuai rencana · data s.d. {fmt_date(report_end)} "
+            f"({fmt_num(summary.get('hari', 0) if summary else 0)} hari). "
+            f"Budget plan = yang disimpan di campaign · Budget setup = yang harus diisi di Shopee "
+            f"(minimal {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup) · "
+            "Actual = pemakaian nyata per hari sejak campaign."
         )
         cid = int(cur.get("id") or 0)
         if in_plan.empty:
@@ -417,8 +426,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         if not out_plan.empty:
             st.markdown("### Di luar rencana campaign")
             st.caption(
-                f"{fmt_num(len(out_plan))} iklan berbiaya di laporan tetapi tidak ada di campaign tersimpan. "
-                "Format performance sama; dipisah agar tidak bercampur dengan rencana."
+                f"{fmt_num(len(out_plan))} iklan sedang berbiaya di Seller Center tetapi tidak masuk campaign tersimpan. "
+                "Ditampilkan terpisah supaya tidak tercampur dengan rencana."
             )
             for _, r in out_plan.iterrows():
                 _ad_row_card(r, cur=cur, report_end=report_end, prefix="out", cid=cid)

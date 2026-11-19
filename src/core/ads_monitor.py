@@ -314,18 +314,21 @@ def spend_gap_tip(wallet: dict, store_since: dict, summary: dict) -> str:
     bits = []
     if store_since:
         bits.append(
-            f"Laporan keseluruhan sejak campaign: biaya {store_since.get('biaya', 0):,.0f} · omzet iklan {store_since.get('omzet', 0):,.0f}"
+            f"Sejak campaign: biaya Rp {store_since.get('biaya', 0):,.0f} · omzet dari iklan Rp {store_since.get('omzet', 0):,.0f}"
             .replace(",", ".")
         )
         if store_since.get("biaya", 0) > 0:
-            bits.append(f"ROAS SC {store_since['omzet'] / store_since['biaya']:.1f}")
+            bits.append(f"ROAS {store_since['omzet'] / store_since['biaya']:.1f}")
     if wallet.get("rencana_harian"):
         bits.append(
-            f"Rencana harian {wallet['rencana_harian']:,.0f} · terpakai sejak {wallet['terpakai_sejak']:,.0f} vs jalur {wallet['jalur_sejak']:,.0f}"
-            .replace(",", ".")
+            f"Rencana harian Rp {wallet['rencana_harian']:,.0f} · terpakai Rp {wallet['terpakai_sejak']:,.0f} "
+            f"(rencana Rp {wallet['jalur_sejak']:,.0f})".replace(",", ".")
         )
     if summary.get("batas_shopee"):
-        bits.append(f"{summary['batas_shopee']} iklan di min. Shopee 25 rb/100 rb (bukan gagal rencana)")
+        bits.append(
+            f"{summary['batas_shopee']} iklan memakai batas minimum Shopee "
+            "(Rp 25.000 tunggal / Rp 100.000 grup) — itu wajar, bukan gagal rencana"
+        )
     return " · ".join(bits)
 
 

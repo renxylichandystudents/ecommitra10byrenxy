@@ -1,6 +1,11 @@
 # Status terbaru aplikasi
 
-Diperbarui: 18 November 2026 (malam) · **lanjut besok**.
+Diperbarui: 19 November 2026.
+
+## 2026-11-19 · Pantau A/B: wording manajer (tanpa jargon teknis)
+
+- Label & hint bagian A–B diganti bahasa operasional: omzet dari iklan vs sales produk toko dibedakan jelas; TACoS disebut “persentase biaya vs sales…”; hilangkan istilah delta/faktor/klaim/SC/÷.
+- Status biaya: “masih di bawah rencana / di atas rencana / sesuai rencana”. Tip bawah & caption poin 1 juga dirapikan.
 
 ## Lanjut besok (18→19 Nov) · Pantau iklan
 
