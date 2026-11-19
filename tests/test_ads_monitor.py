@@ -272,6 +272,22 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
             date(2026, 11, 15),
         )
 
+    def test_skip_baseline_day_drops_leading_day_without_ads(self):
+        daily = pd.DataFrame([
+            {"Tanggal": "2026-11-15", "Biaya": 8_749_407, "Omzet": 130_292_700},
+            {"Tanggal": "2026-11-16", "Biaya": 11_733_472, "Omzet": 208_113_425},
+        ])
+        self.assertEqual(
+            Mon.skip_baseline_day(date(2026, 11, 14), date(2026, 11, 18), daily),
+            date(2026, 11, 15),
+        )
+        # Hari pertama kosong dan hari berikutnya juga kosong: jangan melompat.
+        later = pd.DataFrame([{"Tanggal": "2026-11-17", "Biaya": 1, "Omzet": 2}])
+        self.assertEqual(
+            Mon.skip_baseline_day(date(2026, 11, 15), date(2026, 11, 18), later),
+            date(2026, 11, 15),
+        )
+
     def test_campaign_daily_progress_from_daily_overall_reports(self):
         # Campaign 15–22; hari ini 19 → baris 15..18; biaya+omzet dari all iklan per tanggal
         ads = pd.DataFrame([
@@ -302,12 +318,12 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         # 15–16 belum ada laporan → NaN; 17–18 terisi
         self.assertTrue(pd.isna(prog.iloc[0]["Biaya iklan"]))
         self.assertTrue(pd.isna(prog.iloc[1]["Biaya iklan"]))
-        # Biaya iklan & Omzet iklan = kumulatif sejak campaign (sama kartu dan ROAS aktual)
+        # Tiap baris = angka hari itu, bukan tumpukan. Jumlah ada di kartu.
         self.assertAlmostEqual(prog.iloc[2]["Biaya iklan"], 7_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Biaya iklan"], 15_154_135)
+        self.assertAlmostEqual(prog.iloc[3]["Biaya iklan"], 8_154_135)
         self.assertAlmostEqual(prog.iloc[2]["Omzet iklan"], 100_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Omzet iklan"], 228_168_508)
-        self.assertAlmostEqual(prog.iloc[3]["ROAS iklan"], 228_168_508 / 15_154_135)
+        self.assertAlmostEqual(prog.iloc[3]["Omzet iklan"], 128_168_508)
+        self.assertAlmostEqual(prog.iloc[3]["ROAS iklan"], 128_168_508 / 8_154_135)
         self.assertIn("Saran", prog.columns)
         # Sales produk/bersih dari orders (Ringkasan) — tanpa orders tetap NaN, bukan omzet×faktor
         self.assertTrue(pd.isna(prog.iloc[3]["Sales produk"]))

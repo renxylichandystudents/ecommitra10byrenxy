@@ -822,6 +822,23 @@ def campaign_eval_start(campaign: dict | None) -> date | None:
     return None
 
 
+def skip_baseline_day(start: date | None, end: date | None, daily: pd.DataFrame | None) -> date | None:
+    """Lewati hari pertama bila belum ada angka all iklan, sementara hari berikutnya ada.
+
+    Hari itu baseline (contoh 14 Nov: campaign tersimpan di tanggal data terakhir).
+    Evaluasi mulai pada hari pertama yang punya selisih laporan.
+    """
+    if start is None or end is None or start >= end or daily is None or getattr(daily, "empty", True):
+        return start
+    if "Tanggal" not in daily.columns:
+        return start
+    have = set(daily["Tanggal"].astype(str).str[:10])
+    nxt = start + timedelta(days=1)
+    if start.isoformat() not in have and nxt.isoformat() in have:
+        return nxt
+    return start
+
+
 def campaign_eval_end(campaign: dict | None, *, today: date | None = None) -> date | None:
     """Hari terakhir penuh dalam periode campaign: min(selesai, kemarin).
 
@@ -954,9 +971,8 @@ def campaign_daily_progress(
 ) -> pd.DataFrame:
     """Progress harian dalam periode campaign (hari penuh saja).
 
-    Biaya iklan, Omzet iklan, dan ROAS iklan = kumulatif sejak tanggal campaign
-    (hari terakhir = kartu Biaya iklan / Omzet iklan / ROAS iklan).
-    Sales bruto, Sales bersih, Sales produk = kumulatif dari pesanan, istilah Ringkasan.
+    Biaya iklan, Omzet iklan, ROAS iklan, dan sales = angka tanggal itu,
+    bukan tumpukan sejak awal campaign. Jumlah semua tanggal ada di kartu.
     Saran memakai aturan yang sama dengan analisa iklan di bawah.
     Hari ini tidak ditampilkan.
     """
@@ -1021,14 +1037,6 @@ def campaign_daily_progress(
     if plan_default != plan_default or plan_default <= 0:
         plan_default = _finite(setelan.get("budget_harian"), 0.0)
     rows = []
-    cum_biaya = 0.0
-    cum_omzet = 0.0
-    cum_produk = 0.0
-    cum_bersih = 0.0
-    cum_bruto = 0.0
-    seen_produk = False
-    seen_bersih = False
-    seen_bruto = False
     for day in day_list:
         day_d = _as_day(day)
         if day_d is None or day_d > last_full:
@@ -1042,58 +1050,39 @@ def campaign_daily_progress(
         if hit is not None and float(hit["biaya"]) >= 0 and float(hit["omzet"]) >= 0:
             realisasi = float(hit["biaya"])
             omzet_hari = float(hit["omzet"])
-            cum_biaya += realisasi
-            cum_omzet += omzet_hari
         else:
             realisasi = float("nan")
             omzet_hari = float("nan")
-        biaya_show = cum_biaya if cum_biaya > 0 else float("nan")
-        omzet_show = cum_omzet if cum_omzet > 0 else float("nan")
         store = store_daily.get(day)
         if store is not None:
-            if store.get("sumber") == "transaksi":
-                cum_produk += float(store.get("produk") or 0.0)
-                seen_produk = True
-            cum_bruto += float(store.get("bruto") or 0.0)
-            cum_bersih += float(store.get("bersih") or 0.0)
-            seen_bruto = True
-            seen_bersih = True
-            sales_bruto = cum_bruto
-            sales_bersih = cum_bersih
-            sales_produk = cum_produk if seen_produk else float("nan")
+            sales_bruto = float(store.get("bruto") or 0.0)
+            sales_bersih = float(store.get("bersih") or 0.0)
+            sales_produk = float(store.get("produk") or 0.0) if store.get("sumber") == "transaksi" else float("nan")
         else:
-            sales_bruto = cum_bruto if seen_bruto else float("nan")
-            sales_bersih = cum_bersih if seen_bersih else float("nan")
-            sales_produk = cum_produk if seen_produk else float("nan")
-        # ROAS iklan = Omzet iklan ÷ Biaya iklan sejak campaign. Sama dengan ROAS aktual di analisa iklan.
+            sales_bruto = float("nan")
+            sales_bersih = float("nan")
+            sales_produk = float("nan")
         roas_iklan = (
-            omzet_show / biaya_show
-            if biaya_show == biaya_show and biaya_show > 0 and omzet_show == omzet_show
+            omzet_hari / realisasi
+            if realisasi == realisasi and realisasi > 0 and omzet_hari == omzet_hari
             else float("nan")
         )
         if hit is None or realisasi != realisasi:
-            note = "Belum ada di laporan." if not (biaya_show == biaya_show and biaya_show > 0) else day_decision_note(
-                plan_hari=plan,
-                realisasi_hari=float("nan"),
-                biaya_sejak=cum_biaya,
-                sales_iklan=cum_omzet,
-                sales_all=float("nan"),
-                target_roas=target_roas,
-            )
+            note = "Belum ada di laporan."
         else:
             note = day_decision_note(
                 plan_hari=plan,
                 realisasi_hari=realisasi,
-                biaya_sejak=cum_biaya,
-                sales_iklan=cum_omzet,
+                biaya_sejak=realisasi,
+                sales_iklan=omzet_hari,
                 sales_all=float("nan"),
                 target_roas=target_roas,
             )
         rows.append({
             "Tanggal": day,
             "Budget di rencana/hari": plan,
-            "Biaya iklan": biaya_show,
-            "Omzet iklan": omzet_show,
+            "Biaya iklan": realisasi,
+            "Omzet iklan": omzet_hari,
             "ROAS iklan": roas_iklan,
             "Sales bruto": sales_bruto,
             "Sales produk": sales_produk,

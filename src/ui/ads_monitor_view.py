@@ -536,10 +536,12 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     # ---- Angka campaign: all iklan per tanggal + transaksi (Ringkasan) / performa bila transaksi belum ada
     # Contoh Campaign 15–22 Nov, hari ini 19 → ambil 15 s.d. 18 (hari penuh; 19 belum dihitung)
     since_start = Mon.campaign_eval_start(cur) or start
-    # Resume, progress, dan jendela angka memakai hari pertama evaluasi.
-    # Hari data terakhir saat simpan (mis. 14 Nov) tidak ikut tampil.
-    start = since_start
     eval_end = Mon.campaign_eval_end(cur, today=today)
+    # 14 Nov tampil bila tanggal mulai = hari data, sementara selisih all iklan baru ada tanggal 15.
+    if since_start and eval_end and since_start <= eval_end and ads_overall is not None:
+        probe = M.daily_ad_totals(ads_overall, start=since_start, end=eval_end)
+        since_start = Mon.skip_baseline_day(since_start, eval_end, probe) or since_start
+    start = since_start
     last_data = eval_end
     store_since = {"biaya": 0.0, "omzet": 0.0, "hari": 0}
     unit_daily = None
@@ -883,9 +885,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             st.caption(
                 "Tiap baris = satu tanggal."
                 + period_caption
-                + " **Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** terkumpul sejak tanggal campaign; baris terakhir sama dengan kartu di atas. "
-                "ROAS iklan = Omzet iklan ÷ Biaya iklan, sama dengan ROAS aktual di analisa iklan. "
-                "**Sales bruto**, **Sales produk**, dan **Sales bersih** sama Ringkasan, juga terkumpul sejak tanggal campaign. "
+                + " **Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** = angka hari itu di laporan all iklan, bukan tumpukan. "
+                "Jumlah semua tanggal ada di kartu di atas. "
+                "ROAS iklan = Omzet iklan ÷ Biaya iklan hari itu. "
+                "**Sales bruto**, **Sales produk**, dan **Sales bersih** = angka hari itu, istilah sama Ringkasan. "
                 "**Saran** memakai aturan yang sama dengan analisa di bawah: Sesuai rencana, Tidak sesuai rencana, ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=True):

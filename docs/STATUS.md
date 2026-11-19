@@ -1,5 +1,10 @@
 # Status terbaru aplikasi
 
+Diperbarui: 19 November 2026 (malam, tabel progress harian = angka per tanggal).
+
+- Progress harian tidak lagi menumpuk biaya, omzet, ROAS, dan sales. Tiap baris = hari itu. Jumlah ada di kartu di atas.
+- Baris 14 Nov hilang bila hari itu tidak punya selisih all iklan dan 15 Nov punya. Resume ikut mulai 15 Nov.
+
 Diperbarui: 19 November 2026 (malam, angka campaign dipisah dari bulan dan dari tanggal 14).
 
 - Evaluasi mulai sehari setelah `data_sampai` bila tanggal mulai campaign jatuh di hari data itu. Campaign yang disimpan 14 Nov (data s.d. 14) dihitung dari 15 Nov. Tanggal 14 tidak masuk tabel riwayat maupun resume. Hari ini tetap tidak dihitung.
