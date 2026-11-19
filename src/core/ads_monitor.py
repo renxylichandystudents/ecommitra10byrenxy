@@ -321,8 +321,9 @@ def spend_gap_tip(wallet: dict, store_since: dict, summary: dict) -> str:
             bits.append(f"ROAS {store_since['omzet'] / store_since['biaya']:.1f}")
     if wallet.get("rencana_harian"):
         bits.append(
-            f"Rencana harian Rp {wallet['rencana_harian']:,.0f} · terpakai Rp {wallet['terpakai_sejak']:,.0f} "
-            f"(rencana Rp {wallet['jalur_sejak']:,.0f})".replace(",", ".")
+            f"Patokan harian Rp {wallet['rencana_harian']:,.0f} · "
+            f"terpakai sejak campaign Rp {wallet['terpakai_sejak']:,.0f} "
+            f"(patokan kumulatif Rp {wallet['jalur_sejak']:,.0f})".replace(",", ".")
         )
     if summary.get("batas_shopee"):
         bits.append(

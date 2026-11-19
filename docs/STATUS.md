@@ -2,6 +2,16 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Poin 1 kartu iklan: wording hasil + triad budget
+
+- “Omzet sejak · ROAS” diganti **Hasil iklan sejak campaign: Rp … · ROAS …×**.
+- Triad: **Di rencana / Di Shopee / Terpakai**; expander **Lihat riwayat harian**.
+
+## 2026-11-19 · Dompet budget: kartu 4 = patokan harian (bukan sisa/rata-rata)
+
+- Kartu 4 diganti **Patokan budget harian**: angka yang disimpan di campaign. Hint memisahkan rata-rata terpakai sejak campaign (bukan “pembagian sisa”).
+- Caption B menekankan urutan baca dan bahwa kartu 4 ≠ sisa harian ≠ rata-rata pemakaian.
+
 ## 2026-11-19 · Pantau A/B: wording manajer (tanpa jargon teknis)
 
 - Label & hint bagian A–B diganti bahasa operasional: omzet dari iklan vs sales produk toko dibedakan jelas; TACoS disebut “persentase biaya vs sales…”; hilangkan istilah delta/faktor/klaim/SC/÷.

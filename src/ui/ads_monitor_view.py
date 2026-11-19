@@ -141,25 +141,28 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
     omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
     biaya = float(r.get("Biaya sejak disimpan") or 0)
     roas = float(r["ROAS aktual"]) if r.get("ROAS aktual") == r.get("ROAS aktual") else float("nan")
+    hasil = (
+        f"Hasil iklan sejak campaign: {fmt_idr(omzet)}"
+        + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
+    )
     st.markdown(
         f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.75rem .9rem;margin:.4rem 0;background:#fff'>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.5rem 1rem;justify-content:space-between;align-items:baseline'>"
         f"<div style='font-weight:800'>{html.escape(name)} · "
         f"<span style='color:{color}'>{html.escape(act)}</span></div>"
-        f"<div style='color:#475569;font-size:var(--fs-sm)'>"
-        f"Omzet sejak {fmt_idr(omzet)} · ROAS {fmt_num(roas, 1) if roas == roas else '–'}</div></div>"
+        f"<div style='color:#475569;font-size:var(--fs-sm)'>{hasil}</div></div>"
         f"<div style='color:#475569;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.5'>"
-        f"{html.escape(str(r.get('Status goals') or ''))} · {html.escape(str(r.get('Saran') or ''))}</div>"
+        f"{html.escape(str(r.get('Saran') or r.get('Status goals') or ''))}</div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-top:.45rem;font-size:var(--fs-sm)'>"
-        f"<span><b>Budget plan</b> {fmt_idr(plan)}/hari</span>"
-        f"<span><b>Budget setup SC</b> {fmt_idr(setup)}/hari</span>"
-        f"<span><b>Actual pemakaian</b> {fmt_idr(actual)}/hari</span></div></div>",
+        f"<span><b>Di rencana</b> {fmt_idr(plan)}/hari</span>"
+        f"<span><b>Di Shopee</b> {fmt_idr(setup)}/hari</span>"
+        f"<span><b>Terpakai</b> {fmt_idr(actual)}/hari</span></div></div>",
         unsafe_allow_html=True,
     )
-    with st.expander("Detailed · historis harian", expanded=False):
+    with st.expander("Lihat riwayat harian", expanded=False):
         st.caption(
-            "Checkpoint tersimpan tiap buka Pantau / unggah laporan. "
-            "Hari sebelum fitur ini: hanya titik saat campaign disimpan + hari ini."
+            "Catatan harian tersimpan setiap kali Pantau dibuka atau laporan diunggah. "
+            "Sebelum fitur ini aktif, yang tampil hanya titik saat campaign disimpan dan hari ini."
         )
         base_dt = None
         if cur.get("setelan", {}).get("data_sampai"):
@@ -350,16 +353,33 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
 
     # -------- B. Dompet budget
     st.markdown("### B · Dompet budget campaign")
-    st.caption("Baca berurutan: total budget → yang sudah terpakai → sisa → rencana harian.")
+    st.caption(
+        "Urutan baca: (1) total budget campaign → (2) sudah terpakai bulan ini → (3) sisa bulan → "
+        "(4) patokan budget harian di rencana. Kartu 4 bukan sisa harian dan bukan rata-rata terpakai."
+    )
+    avg_since = spent_since / days_since if days_since else 0.0
+    plan_daily = float(wallet["rencana_harian"] or 0)
+    if days_since and plan_daily > 0:
+        if avg_since > plan_daily * 1.05:
+            vs_plan = "di atas patokan"
+        elif avg_since < plan_daily * 0.95:
+            vs_plan = "di bawah patokan"
+        else:
+            vs_plan = "mendekati patokan"
+        daily_hint = (
+            f"Ini patokan budget/hari saat campaign disimpan — bukan sisa budget. "
+            f"Rata-rata terpakai sejak campaign: {fmt_idr(avg_since)}/hari ({vs_plan})."
+        )
+    else:
+        daily_hint = "Patokan budget per hari yang disimpan di campaign (bukan sisa bulan ÷ sisa hari)."
     w = st.columns(4)
     card(w[0], "1. Budget total campaign", fmt_idr(wallet["budget_total"]),
          hint=f"disimpan saat campaign dibuat · Target ROAS {fmt_num(wallet['roas_target'], 1)}")
     card(w[1], "2. Terpakai bulan ini", fmt_idr(wallet["terpakai_bulan"]),
          hint="seluruh biaya iklan dari tanggal 1 sampai data terakhir")
     card(w[2], "3. Sisa budget bulan", fmt_idr(wallet["sisa_bulan"]),
-         hint=f"total dikurangi terpakai · sisa {fmt_num(wallet['sisa_hari_rencana'])} hari di periode rencana")
-    card(w[3], "4. Rencana harian", fmt_idr(wallet["rencana_harian"]),
-         hint=f"alokasi harian saat disimpan · realisasi ≈ {fmt_idr(spent_since / days_since if days_since else 0)}/hari")
+         hint=f"total dikurangi yang sudah terpakai · masih ada {fmt_num(wallet['sisa_hari_rencana'])} hari di periode rencana")
+    card(w[3], "4. Patokan budget harian", fmt_idr(plan_daily), hint=daily_hint)
 
     if goal > 0:
         gap = max(goal - projection, 0)
