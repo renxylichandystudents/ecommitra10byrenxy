@@ -199,6 +199,7 @@ def _ad_row_card(
     scope: str = "Dalam rencana",
     units=None,
     products: pd.DataFrame | None = None,
+    planned_singles: set[str] | frozenset | None = None,
 ) -> None:
     """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis.
 
@@ -209,7 +210,6 @@ def _ad_row_card(
     key = str(r.get("_key") or "")
     jenis = str(r.get("Jenis") or "")
     act = str(r.get("Tindakan") or "–")
-    color = DOWN if act.startswith(("Jeda", "Turunkan")) else (UP if act == "Pertahankan" else WARN)
     plan = float(r.get("Budget usulan/hari") or r.get("Budget di rencana/hari") or 0)
     setup = float(r.get("Budget efektif Shopee/hari") or r.get("Budget di Shopee/hari") or 0)
     since = float(r.get("Biaya aktual/hari") or r.get("Terpakai sejak campaign/hari") or 0)
@@ -238,13 +238,20 @@ def _ad_row_card(
         Mon.group_members_review(
             members, key, target_roas=target_roas, contribution=contribution,
             group_active=group_active, units=units, products=products,
+            planned_singles=planned_singles,
         )
         if is_group else pd.DataFrame()
     )
-    member_note = Mon.group_members_summary(member_frame) if not member_frame.empty else ""
     saran_txt = str(r.get("Saran") or "")
-    if member_note:
-        saran_txt = f"{saran_txt} {member_note}".strip() if saran_txt else member_note
+    if is_group and not member_frame.empty:
+        act, saran_txt = Mon.group_card_from_members(
+            member_frame, act=act, tip=saran_txt,
+            expected=setup, cost_since=since, cost_month=month_v,
+        )
+        member_note = Mon.group_members_summary(member_frame)
+        if member_note and member_note not in saran_txt:
+            saran_txt = f"{saran_txt} {member_note}".strip()
+    color = DOWN if act.startswith(("Jeda", "Turunkan", "Keluarkan")) else (UP if act == "Pertahankan" else WARN)
     stock_sum = Mon.stock_summary_for_ad(products, key, units=units, members=members)
     if stock_sum.get("kosong"):
         saran_txt = (
@@ -326,10 +333,10 @@ def _ad_row_card(
         with st.expander(label, expanded=(need_mem > 0) or (not group_active and n_mem > 0)):
             if group_active:
                 st.caption(
-                    "Angka dari laporan iklan grup (bulan terakhir). "
-                    "Stok 10037/10062/10036 = faktor layak iklan harian (toko · DC Cikupa · DC Cipeucang). "
-                    "Item lemah/kosong stok sebaiknya dikeluarkan. "
-                    "Kolom Iklan lain = apakah produk yang sama sudah jalan di iklan lain."
+                    "Biaya/omzet di tabel = laporan iklan grup periode terakhir "
+                    "(bukan rata-rata kartu campaign di atas). "
+                    "Jika produk sudah jadi iklan tunggal → keluarkan dari grup (jangan hanya turunkan budget). "
+                    "Stok 10037/10062/10036 = faktor layak iklan. Kolom Iklan lain = iklan lain yang memuat produk sama."
                 )
             else:
                 st.caption(
@@ -350,7 +357,8 @@ def _ad_row_card(
                     kinds={
                         "Stok 10037": "count", "Stok 10062": "count", "Stok 10036": "count",
                         "Prediksi omzet/hari": "money",
-                        "Biaya/hari": "money", "Omzet/hari": "money", "ROAS": "dec",
+                        "Biaya di grup/hari": "money", "Omzet di grup/hari": "money",
+                        "ROAS di grup": "dec",
                         "Porsi omzet grup": "pct", "Porsi biaya grup": "pct",
                     },
                     column_config={
@@ -476,8 +484,17 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         out_plan = Mon.attach_month_daily(out_plan, current)
         in_plan = Mon.refresh_tips_after_month(in_plan, target_roas=roas, running_keys=running_keys)
         out_plan = Mon.refresh_tips_after_month(out_plan, target_roas=roas, running_keys=running_keys)
+        singles = Mon.planned_single_codes(acts_saved)
+        in_plan = Mon.enrich_group_actions(
+            in_plan, members, target_roas=roas, units=units, products=products,
+            contribution=contribution, planned_singles=singles,
+        )
+        out_plan = Mon.enrich_group_actions(
+            out_plan, members, target_roas=roas, units=units, products=products,
+            contribution=contribution, planned_singles=singles,
+        )
         classified = in_plan
-        # Checkpoint harian ke depan (satu entri per tanggal laporan)
+        # Checkpoint harian ke depan (satu entri per tanggal laporan) — setelah hygiene anggota
         if features is not None and not in_plan.empty and report_end is not None:
             merged = in_plan if out_plan.empty else pd.concat([in_plan, out_plan], ignore_index=True)
             updated, changed = Mon.record_daily_checkpoint(cur, report_date=report_end, rows=merged)
@@ -642,13 +659,14 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         )
         cid = int(cur.get("id") or 0)
         parts = Mon.partition_plan_rows(in_plan)
+        singles = Mon.planned_single_codes(acts_saved)
 
         def _render_cards(frame: pd.DataFrame, *, prefix: str, scope: str) -> None:
             for _, r in frame.iterrows():
                 _ad_row_card(
                     r, cur=cur, report_end=report_end, prefix=prefix, cid=cid,
                     members=members, target_roas=roas, contribution=contribution, scope=scope,
-                    units=units, products=products,
+                    units=units, products=products, planned_singles=singles,
                 )
 
         if in_plan.empty:
@@ -669,6 +687,17 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     tone="alert",
                 )
                 _render_cards(parts["jeda_tertinggal"], prefix="in-jeda", scope="Dalam rencana · jeda tertinggal")
+            if not parts.get("keluarkan_anggota", pd.DataFrame()).empty:
+                _block_header(
+                    f"Keluarkan anggota dari grup · {fmt_num(len(parts['keluarkan_anggota']))} iklan",
+                    "Mayoritas anggota sudah jadi iklan tunggal / menyedot budget tanpa hasil. "
+                    "Bersihkan isi grup di Seller Center dulu — jangan hanya turunkan budget.",
+                    tone="alert",
+                )
+                _render_cards(
+                    parts["keluarkan_anggota"], prefix="in-keluar",
+                    scope="Dalam rencana · keluarkan anggota",
+                )
             if not parts["pantau"].empty:
                 need = parts["pantau"].loc[parts["pantau"]["Tindakan"] != "Pertahankan"] if "Tindakan" in parts["pantau"].columns else parts["pantau"].iloc[0:0]
                 _block_header(

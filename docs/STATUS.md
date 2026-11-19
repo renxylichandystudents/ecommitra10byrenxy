@@ -7,18 +7,24 @@ Diperbarui: 19 November 2026 (siang).
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai siang ini**
-- Kelayakan setup grup: prediksi tidak mendorong target → Tidak perlu; Layak + alasan jelas; urut Layak dulu.
-- Jeda tertinggal: header omzet · biaya · ROAS · N hari; Di Shopee bukan rata-rata terpakai.
-- **Riwayat evaluasi:** ganti “Tambahan hari ini” → “Naik sejak catatan lalu”; bedakan dari rata-rata/hari; kolom Hari evaluasi + hari laporan di antara catatan.
+- Kelayakan setup grup + riwayat evaluasi wording.
+- **Grup Heater / take-out:** jika mayoritas anggota harus dikeluarkan (sudah iklan tunggal / tanpa hasil), tindakan kartu = **Keluarkan anggota dari grup** (bukan Turunkan budget). Blok khusus di Pantau. Label biaya anggota = “di grup/hari”.
 
 **Cek saat lanjut**
-- Hand Shower riwayat: 18 Nov total biaya 5,89 jt (≈3 hari) → 19 Nov 10,18 jt (≈5 hari); naik ≈4,29 jt untuk **2 hari laporan** — jangan dibaca sebagai biaya 1 hari kalender.
-- Kartu jeda: omzet · biaya · ROAS; Di Shopee tanpa Rp/hari palsu.
+- Sep38 PL - Heater: harus masuk blok “Keluarkan anggota”; Water Heater yang sudah tunggal → Keluarkan + sebut iklan lain; bukan “Turunkan budget”.
+- Riwayat: Naik sejak catatan lalu ≠ rata-rata/hari.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 - Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” (edge).
 - Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0.
+
+## 2026-11-19 · Grup aktif: take-out anggota mengalahkan “Turunkan budget”
+
+- Sep38 PL - Heater: 4/4 anggota “Keluarkan” tetapi kartu bilang Turunkan budget → membingungkan.
+- `group_card_from_members` / `enrich_group_actions`: ≥½ anggota take-out → tindakan **Keluarkan anggota dari grup**.
+- Deteksi iklan tunggal ganda juga saat masih berbiaya di grup; `planned_singles` dari campaign.
+- Kolom anggota: Biaya/Omzet/ROAS **di grup** (laporan grup, bukan rata-rata kartu).
 
 ## 2026-11-19 · Riwayat evaluasi: wording naik vs rata-rata (bukan “tambahan hari ini”)
 

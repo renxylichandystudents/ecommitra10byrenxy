@@ -300,9 +300,67 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertEqual(by["B"], "Keluarkan dari grup")
         self.assertEqual(by["A"], "Pisahkan jadi iklan tunggal")
         self.assertEqual(by["D"], "Pertahankan di grup")
+        self.assertIn("Biaya di grup/hari", out.columns)
         tip = Mon.group_members_summary(out)
         self.assertIn("dikeluarkan", tip)
         self.assertIn("andalan", tip.lower())
+
+    def test_active_group_takeout_overrides_turunkan_budget(self):
+        # Heater-style: semua anggota take-out → kartu bukan 'Turunkan budget'
+        members = pd.DataFrame([
+            {"unit": "grup:Heater", "periode": "2026-11", "product_code": "H1", "nama": "Heater A",
+             "biaya": 478_000, "omzet": 0, "terjual": 0},
+            {"unit": "grup:Heater", "periode": "2026-11", "product_code": "H2", "nama": "Heater B",
+             "biaya": 39_000, "omzet": 0, "terjual": 0},
+            {"unit": "grup:Heater", "periode": "2026-11", "product_code": "H3", "nama": "Heater C",
+             "biaya": 26_000, "omzet": 0, "terjual": 0},
+            {"unit": "grup:Heater", "periode": "2026-11", "product_code": "H4", "nama": "Heater D",
+             "biaya": 12_000, "omzet": 0, "terjual": 0},
+            # H1 sudah jadi iklan tunggal
+            {"unit": "produk:H1", "periode": "2026-11", "product_code": "H1", "nama": "Heater A tunggal",
+             "biaya": 200_000, "omzet": 2_000_000, "terjual": 5},
+        ])
+        units = [
+            A.Unit("produk:H1", "Heater A tunggal", "Produk tunggal", "Berjalan", "GMV Max ROAS",
+                   200_000, 2_000_000, 0.0, 0.0, 0.5, ["H1"], []),
+            A.Unit("grup:Heater", "Sep38 PL - Heater", "Grup", "Berjalan", "GMV Max ROAS",
+                   1_700_000, 20_000_000, 0.0, 0.0, 0.5, ["H1", "H2", "H3", "H4"], []),
+        ]
+        products = pd.DataFrame([
+            {"product_code": c, "nama": c, "omzet_harian": 50_000, "qty_harian": 1,
+             "stok": 10, "stok_10037": 10, "stok_10062": 5, "stok_10036": 5, "stok_room": 100_000}
+            for c in ("H1", "H2", "H3", "H4")
+        ])
+        products.loc[products["product_code"] == "H4", ["stok", "stok_10037", "stok_10062"]] = 0
+        out = Mon.group_members_review(
+            members, "grup:Heater", target_roas=22.0, group_active=True,
+            units=units, products=products, planned_singles={"H1"},
+        )
+        by = out.set_index("Kode produk")
+        self.assertEqual(by.loc["H1", "Tindakan"], "Keluarkan dari grup")
+        self.assertIn("iklan tunggal", str(by.loc["H1", "Saran"]).lower() + str(by.loc["H1", "Iklan lain"]).lower())
+        self.assertEqual(by.loc["H2", "Tindakan"], "Keluarkan dari grup")
+        act, tip = Mon.group_card_from_members(
+            out, act="Turunkan budget",
+            tip="Terpakai lebih tinggi dari budget di Shopee.",
+            expected=100_000, cost_since=1_737_189,
+        )
+        self.assertEqual(act, "Keluarkan anggota dari grup")
+        self.assertIn("Prioritas: keluarkan", tip)
+        self.assertIn("jangan hanya turunkan budget", tip.lower())
+
+        frame = pd.DataFrame([{
+            "_key": "grup:Heater", "Iklan": "Sep38 PL - Heater", "Jenis": "Grup",
+            "Budget usulan/hari": 75_000, "Budget efektif Shopee/hari": 100_000,
+            "Biaya aktual/hari": 1_737_189, "Biaya bulan ini/hari": 1_667_842,
+            "Biaya sejak disimpan": 8_685_945, "Omzet iklan sejak disimpan": 106_011_267,
+            "ROAS aktual": 12.2, "Tindakan": "Turunkan budget",
+            "Saran": "lebih tinggi dari budget di Shopee", "Status SC": "Berjalan", "Status goals": "Tidak sesuai",
+        }])
+        enriched = Mon.enrich_group_actions(
+            frame, members, target_roas=22.0, units=units, products=products, planned_singles={"H1"},
+        )
+        self.assertEqual(enriched.iloc[0]["Tindakan"], "Keluarkan anggota dari grup")
 
     def test_group_members_review_empty_for_single(self):
         members = pd.DataFrame([
