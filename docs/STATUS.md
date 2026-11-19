@@ -1,28 +1,31 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (sore, koreksi2.docx).
+Diperbarui: 19 November 2026 (malam).
 
 ## Lanjut nanti · Pantau iklan
 
 Localhost:8501 / Cloud ikut push `main`.
 
-**Sudah selesai dari koreksi2.docx**
-- Realisasi biaya (hari itu) dihitung dari laporan overall per tanggal — tidak minus, tanggal pertama terisi.
-- Sales dari iklan = akumulasi omzet iklan **bruto** sejak campaign s.d. tanggal catatan.
-- Sales produk all = omzet iklan **bersih** (bruto × faktor toko).
+**Sudah selesai malam ini**
+- Clarified: **campaign = rencana disimpan di fitur** (`data_sampai`+1), bukan tanggal buat iklan di SC.
+- Realisasi ≠ bagi rata laporan bulanan per hari; = selisih biaya kumulatif antar catatan Pantau.
+- Sales bruto/bersih = kumulatif sejak rencana app (naik antar tanggal).
 
 **Cek saat lanjut**
-- Buka Pantau: pastikan realisasi 18 & 19 Nov terisi positif; sales kumulatif tidak turun antar tanggal.
-- FSA0040: samakan filter tanggal kartu dengan SC.
+- Progress: realisasi 18 vs 19 harus beda; sales kumulatif naik; caption sebut “rencana disimpan di fitur”.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 
+## 2026-11-19 · Progress: campaign = simpan di fitur, realisasi = selisih kumulatif
+
+- Bug: `ad_spend(hari,hari)` pada laporan rentang panjang → realisasi sama tiap tanggal.
+- Bug definisi: “sejak campaign” disamakan dengan SC; yang benar = sejak Simpan rencana di app.
+- Perbaikan: `campaign_eval_start`; kumulatif `ad_spend(start_app, tanggal)`; realisasi = Δ kumulatif.
+
 ## 2026-11-19 · koreksi2: realisasi harian + sales bruto/bersih konsisten
 
-- Bug: realisasi −131 jt karena selisih kumulatif beda sumber (items vs store); tgl 18 kosong.
-- Perbaikan: `campaign_daily_progress` hitung ulang via `ad_spend` per tanggal; realisasi = biaya pada hari itu; larang nilai minus.
-- Sales all = omzet iklan bersih (bukan sales toko organik+iklan).
+- Iterasi awal koreksi2; diganti pendekatan di entri malam (hindari prorata harian).
 
 ## 2026-11-19 · Koreksi.docx: progress + periode jelas + collapse
 

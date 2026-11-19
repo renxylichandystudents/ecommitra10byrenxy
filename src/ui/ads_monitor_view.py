@@ -238,11 +238,11 @@ def _ad_row_card(
             hasil = "Slot rencana Rp 0 · produk aktif di iklan lain (lihat saran)"
     else:
         hasil = (
-            (f"Periode laporan {period_txt}" if period_txt else "Sejak campaign")
+            (f"Sejak rencana disimpan di fitur · laporan {period_txt}" if period_txt else "Sejak rencana disimpan di fitur")
             + (f" ({fmt_num(days)} hari di file laporan)" if days > 0 else "")
             + f": omzet {fmt_idr(omzet)} · biaya {fmt_idr(biaya)}"
             + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
-            + (" · samakan rentang tanggal ini di Seller Center" if period_txt else "")
+            + (" · samakan rentang ini di Seller Center" if period_txt else "")
         )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
     group_active = not (
@@ -724,18 +724,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             f"**{fmt_num(luar_n)} di luar plan**."
         )
 
-        # Jendela laporan = hari setelah data_sampai campaign s.d. tanggal laporan (samakan filter SC)
-        window_start = None
-        if s.get("data_sampai"):
-            try:
-                window_start = date.fromisoformat(str(s["data_sampai"])[:10]) + timedelta(days=1)
-            except Exception:
-                window_start = None
-        if window_start is None and track and track.get("mulai"):
-            try:
-                window_start = track["mulai"] + timedelta(days=1)
-            except Exception:
-                window_start = None
+        # "Sejak campaign" = sejak rencana disimpan di fitur ini (data_sampai+1), BUKAN tanggal buat iklan di SC
+        window_start = Mon.campaign_eval_start(cur) or since_start
 
         def _render_cards(frame: pd.DataFrame, *, prefix: str, scope: str) -> None:
             for _, r in frame.iterrows():
@@ -746,7 +736,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     window_start=window_start,
                 )
 
-        # Progress harian: realisasi & sales dihitung ulang dari laporan overall (hindari minus / sumber campur)
+        # Progress: kumulatif sejak rencana app; realisasi = selisih antar catatan (bukan prorata harian file bulanan)
         plan_keys = {str(k) for k in (planned or {})}
         period_live = _period_sales(track, factor)
         plan_hari_live = float(
@@ -771,12 +761,12 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             live_toko=live_toko, live_tanggal=report_end, target_roas=roas,
             ads_overall=ads_overall, window_start=window_start, factor=float(factor or 0),
         )
-        st.markdown("#### Progress harian · sejak campaign dibuat")
+        st.markdown("#### Progress harian · sejak rencana disimpan di fitur")
         period_caption = ""
         if window_start and report_end:
             period_caption = (
-                f" Periode acuan: **{fmt_date(window_start)} – {fmt_date(report_end)}** "
-                "(samakan filter tanggal di Seller Center)."
+                f" **Mulai hitung: {fmt_date(window_start)}** (sehari setelah data saat Simpan rencana di app) "
+                f"s.d. **{fmt_date(report_end)}**. Bukan tanggal buat iklan di Seller Center."
             )
         if progress.empty:
             st.info(
@@ -787,11 +777,11 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             st.caption(
                 "Tiap baris = satu **catatan Pantau**."
                 + period_caption
-                + " **Realisasi biaya iklan (hari itu)** = biaya iklan pada tanggal itu dari laporan "
-                "(bukan selisih checkpoint yang bisa minus). "
-                "**Sales dari iklan** = akumulasi omzet iklan **bruto** (inkl. belum bayar) sejak campaign s.d. tanggal itu. "
-                "**Sales produk all** = total omzet iklan **bersih** sejak campaign (bruto × faktor toko). "
-                "**ROAS** memakai biaya kumulatif yang sudah keluar. "
+                + " **Realisasi biaya iklan (hari itu)** = pengeluaran iklan dari catatan sebelumnya ke tanggal ini "
+                "(selisih biaya kumulatif sejak rencana disimpan; catatan pertama = total sejak simpan). "
+                "Bukan bagi rata laporan bulanan per hari. "
+                "**Sales dari iklan** = omzet iklan **bruto** kumulatif sejak rencana disimpan. "
+                "**Sales produk all** = omzet iklan **bersih** (bruto × faktor toko) sejak rencana disimpan. "
                 "**MTD** = sama dengan ringkasan di atas."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=False):

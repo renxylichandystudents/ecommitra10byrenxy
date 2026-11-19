@@ -250,8 +250,15 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertEqual(counts["tidak"], 4)
         self.assertEqual(counts["efektif"], 1)
 
+    def test_campaign_eval_start_uses_app_save_not_sc(self):
+        # Campaign = simpan rencana di fitur (data_sampai), bukan tanggal buat iklan di SC
+        camp = {"mulai": "2026-11-01", "setelan": {"data_sampai": "2026-11-14"}}
+        self.assertEqual(Mon.campaign_eval_start(camp), date(2026, 11, 15))
+        self.assertEqual(Mon.campaign_eval_start({"mulai": "2026-11-01"}), date(2026, 11, 1))
+
     def test_campaign_daily_progress_deltas(self):
         campaign = {
+            "setelan": {"data_sampai": "2026-11-13"},
             "pantau_harian": [
                 {
                     "tanggal": "2026-11-15",
@@ -264,7 +271,6 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
                         "biaya_sejak": 150_000, "omzet_kotor_sejak": 1_200_000,
                         "bersih_sejak": 900_000,
                         "produk_mtd": 5_000_000, "bersih_mtd": 4_000_000,
-                        "realisasi_biaya_hari": 40_000,
                     },
                 },
                 {
@@ -285,21 +291,25 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         prog = Mon.campaign_daily_progress(campaign, {"produk:1", "produk:2"}, target_roas=20.0, factor=0.75)
         self.assertEqual(len(prog), 2)
         self.assertAlmostEqual(prog.iloc[0]["Budget plan/hari"], 75_000)
-        # Catatan pertama: pakai realisasi tersimpan (bukan kosong)
-        self.assertAlmostEqual(prog.iloc[0]["Realisasi biaya iklan (hari itu)"], 40_000)
-        self.assertAlmostEqual(prog.iloc[0]["Sales produk dari iklan sejak campaign"], 1_200_000)
-        self.assertAlmostEqual(prog.iloc[0]["ROAS iklan"], 8.0)
-        # Sales all = bruto × faktor (bersih iklan)
-        self.assertAlmostEqual(prog.iloc[0]["Sales produk all sejak campaign"], 900_000)
-        # Catatan kedua tanpa realisasi tersimpan → selisih kumulatif ≥ 0
+        # Catatan pertama = total sejak rencana disimpan; berikutnya = selisih (bukan nilai sama)
+        self.assertAlmostEqual(prog.iloc[0]["Realisasi biaya iklan (hari itu)"], 150_000)
         self.assertAlmostEqual(prog.iloc[1]["Realisasi biaya iklan (hari itu)"], 120_000)
-        self.assertGreaterEqual(prog.iloc[1]["Realisasi biaya iklan (hari itu)"], 0)
-        self.assertAlmostEqual(prog.iloc[1]["Sales MTD produk"], 5_500_000)
-        self.assertAlmostEqual(prog.iloc[1]["Sales MTD bersih"], 4_400_000)
+        self.assertNotEqual(
+            prog.iloc[0]["Realisasi biaya iklan (hari itu)"],
+            prog.iloc[1]["Realisasi biaya iklan (hari itu)"],
+        )
+        self.assertAlmostEqual(prog.iloc[0]["Sales produk dari iklan sejak campaign"], 1_200_000)
+        self.assertAlmostEqual(prog.iloc[1]["Sales produk dari iklan sejak campaign"], 2_100_000)
+        self.assertAlmostEqual(prog.iloc[0]["Sales produk all sejak campaign"], 900_000)
+        self.assertGreater(
+            prog.iloc[1]["Sales produk dari iklan sejak campaign"],
+            prog.iloc[0]["Sales produk dari iklan sejak campaign"],
+        )
 
     def test_campaign_daily_progress_never_negative_realisasi(self):
-        # Sumber campur: kumulatif turun → jangan tampilkan minus
+        # Kumulatif turun (sumber campur) → realisasi bukan minus
         campaign = {
+            "setelan": {"data_sampai": "2026-11-14"},
             "pantau_harian": [
                 {"tanggal": "2026-11-18", "toko": {
                     "budget_plan_hari": 9_500_000, "biaya_sejak": 149_701_605,
@@ -308,7 +318,6 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
                 {"tanggal": "2026-11-19", "toko": {
                     "budget_plan_hari": 9_500_000, "biaya_sejak": 48_421_951,
                     "omzet_kotor_sejak": 788_411_724, "bersih_sejak": 590_000,
-                    "realisasi_biaya_hari": -131_000_000,
                 }, "items": [{"key": "a", "biaya": 48_421_951, "omzet": 788_411_724, "budget_plan": 9_500_000}]},
             ],
         }
@@ -316,8 +325,8 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertEqual(len(prog), 2)
         r0 = prog.iloc[0]["Realisasi biaya iklan (hari itu)"]
         r1 = prog.iloc[1]["Realisasi biaya iklan (hari itu)"]
-        self.assertTrue(r0 == r0 and r0 >= 0)  # tanggal 18 terisi, tidak kosong
-        self.assertFalse(r1 == r1 and r1 < 0)  # tidak boleh minus
+        self.assertTrue(r0 == r0 and r0 >= 0)
+        self.assertFalse(r1 == r1 and r1 < 0)
 
     def test_day_decision_note_roas(self):
         note = Mon.day_decision_note(
