@@ -7,17 +7,22 @@ Diperbarui: 19 November 2026 (siang).
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai siang ini**
-- Grup take-out vs turunkan budget; riwayat wording.
-- **Bug angka jeda tertinggal:** baseline biaya=0 di tengah bulan membuat terpakai sejak menggelembung (6,5 jt vs bulan 4 jt). Diganti porsi proporsional bulan berjalan.
+- Bug angka jeda + grup take-out.
+- **Belum setup:** jangan pakai ambang 30%×budget; ada biaya/omzet = sudah aktif. Deteksi “sudah di tempat lain”; Pintu (bulan>0, sejak=0) ≠ belum setup.
 
 **Cek saat lanjut**
-- Shower Column / Hand Shower: **Terpakai sejak ≈ Terpakai bulan ini** bila baseline biaya kosong (bukan 6,5 jt vs 4 jt). Saran menyebut proporsional; idealnya simpan ulang campaign.
-- Heater: blok Keluarkan anggota.
+- Kloset FSA0159: harus **Naikkan budget** (bukan Buat/aktifkan) — sudah omzet 12 jt.
+- Pintu Kamar Mandi: saran “SUDAH ada di laporan (bukan belum setup)”.
+- Blok baru bila produk aktif di iklan lain: **Sudah diiklankan di tempat lain**.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
-- Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” (edge).
-- Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0.
+
+## 2026-11-19 · Belum setup: bedakan aktif / di tempat lain / benar-benar belum
+
+- Bug: `cost > 30%×budget` membuat Kloset 171 rb/hari (plan 750 rb) = “Tidak aktif” → Buat/aktifkan padahal omzet 12 jt.
+- Perbaikan: aktif bila biaya/omzet sejak ATAU bulan ini > 5 rb; cek iklan lain untuk `baru:`/`pisah:`.
+- Pintu: bulan ada biaya + sejak 0 → Naikkan budget + teks “bukan belum setup”.
 
 ## 2026-11-19 · Bug evaluate: baseline biaya 0 tidak boleh menggelembungkan rata-rata sejak
 

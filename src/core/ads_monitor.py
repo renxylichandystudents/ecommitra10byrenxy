@@ -18,10 +18,40 @@ _STATUS_RANK = {
     "Keluarkan anggota dari grup": 1,
     "Turunkan budget": 2,
     "Naikkan budget": 3,
-    "Buat / aktifkan": 4,
-    "Naikkan Target ROAS": 5,
-    "Pertahankan": 6,
+    "Sudah diiklankan di tempat lain": 4,
+    "Buat / aktifkan": 5,
+    "Naikkan Target ROAS": 6,
+    "Pertahankan": 7,
 }
+
+# Ambang mutlak: ada biaya berarti sudah terlihat di laporan (jangan pakai % budget rencana).
+_ACTIVE_SPEND = 5_000.0
+
+
+def _code_from_ad_key(key: str) -> str:
+    k = str(key or "")
+    if k.startswith(("produk:", "pisah:", "baru:")):
+        return k.split(":", 1)[1].strip()
+    return ""
+
+
+def _alts_for_plan_key(key: str, units=None, members: pd.DataFrame | None = None) -> list[dict]:
+    """Iklan lain yang memuat produk yang sama (untuk kunci rencana tunggal).
+
+    - Rencana `produk:X`: abaikan alias pisah/baru/produk kode sama (itu slot yang sama).
+    - Rencana `baru:X` / `pisah:X`: `produk:X` yang sudah jalan = sudah diiklankan di tempat lain.
+    """
+    code = _code_from_ad_key(key)
+    if not code:
+        return []
+    found = _elsewhere_for_codes(members, units, group_key=str(key), codes={code})
+    k = str(key)
+    if k.startswith("produk:"):
+        self_keys = {k, f"produk:{code}", f"pisah:{code}", f"baru:{code}"}
+    else:
+        # baru:/pisah: — jangan filter produk: yang sudah aktif
+        self_keys = {k}
+    return [a for a in (found.get(code) or []) if str(a.get("unit") or "") not in self_keys]
 
 
 def _rp_hari(value: float) -> str:
@@ -32,7 +62,14 @@ def _rp(value: float) -> str:
     return f"Rp {value:,.0f}".replace(",", ".")
 
 
-def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[str] | None = None) -> pd.DataFrame:
+def classify_rows(
+    frame: pd.DataFrame,
+    *,
+    target_roas: float,
+    running_keys: set[str] | None = None,
+    units=None,
+    members: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Lengkapi baris evaluasi dengan Status goals, Status SC, Tindakan, Saran (bahasa manajer)."""
     if frame is None or frame.empty:
         return pd.DataFrame()
@@ -52,17 +89,28 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
         if not is_run and running:
             report = "produk:" + key.split(":", 1)[1] if key.startswith(("pisah:", "baru:")) else key
             is_run = report in running or key in running
-        sc_label = "Berjalan" if is_run or cost > max(expected * 0.3, 10_000) else "Tidak aktif / rendah"
-        weak = cost > 0 and roas == roas and target_roas > 0 and roas < target_roas * 0.9
-        spend_bits = f"Terpakai sejak campaign {_rp_hari(cost)}"
-        if month_v == month_v:
-            spend_bits = f"Terpakai bulan ini {_rp_hari(month_v)}; sejak campaign {_rp_hari(cost)}"
         nama = str(r.get("Iklan") or key)
         total_sejak = float(r.get("Biaya sejak disimpan") or 0)
         omzet_sejak = float(r.get("Omzet iklan sejak disimpan") or 0)
         days_eval = int(r.get("Hari dievaluasi") or 0)
         if days_eval <= 0 and cost > 0 and total_sejak > 0:
             days_eval = max(int(round(total_sejak / cost)), 1)
+        # Aktif di laporan = ada biaya/omzet (jangan pakai 30%×budget — itu menyesatkan "belum setup")
+        has_month = month_v == month_v and month_v > _ACTIVE_SPEND
+        has_since = cost > _ACTIVE_SPEND or total_sejak > _ACTIVE_SPEND or omzet_sejak > 0
+        has_spend = has_month or has_since
+        sc_label = "Berjalan" if is_run or has_spend else "Tidak aktif / rendah"
+        weak = cost > 0 and roas == roas and target_roas > 0 and roas < target_roas * 0.9
+        spend_bits = f"Terpakai sejak campaign {_rp_hari(cost)}"
+        if month_v == month_v:
+            spend_bits = f"Terpakai bulan ini {_rp_hari(month_v)}; sejak campaign {_rp_hari(cost)}"
+        alts = _alts_for_plan_key(key, units=units, members=members) if not has_spend else []
+        alt_label = "; ".join(
+            f"{a['nama']} ({a['jenis']}"
+            + (f", {_rp_hari(a['biaya'])}" if a.get("biaya") else "")
+            + ")"
+            for a in alts[:3]
+        ) if alts else ""
 
         if expected <= 0:
             if done or cost <= 5_000:
@@ -92,10 +140,25 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
                     f"Pause / hentikan iklan «{nama}» di SC (cari nama yang sama)."
                     + window_note
                 )
+        elif sc_label.startswith("Tidak") and expected > 0 and alts:
+            # Bukan belum setup: produk sudah jalan di iklan lain (grup/tunggal)
+            goal, act, tip = "Sudah di tempat lain", "Sudah diiklankan di tempat lain", (
+                f"Di rencana budget {_rp_hari(expected)}, tetapi produk sudah aktif di: {alt_label}. "
+                "Jangan buat iklan baru sesuai nama rencana — itu dobel. "
+                "Kelola iklan yang sudah jalan, atau pindahkan ke campaign yang benar."
+            )
         elif sc_label.startswith("Tidak") and expected > 0:
             goal, act, tip = "Belum aktif", "Buat / aktifkan", (
-                f"Di rencana budget {_rp_hari(expected)}, tetapi iklan belum terlihat aktif di laporan. "
-                "Aktifkan atau buat di Seller Center, lalu unggah laporan."
+                f"Di rencana budget {_rp_hari(expected)}, dan belum ada biaya/omzet di laporan "
+                "untuk kunci iklan ini. Buat/aktifkan di Seller Center (atau pastikan nama/kode cocok), "
+                "lalu unggah laporan."
+            )
+        elif has_month and not has_since and expected > 0:
+            # Pintu-style: ada di laporan bulan ini, belum bertambah sejak campaign
+            goal, act, tip = "Perlu dicek", "Naikkan budget", (
+                f"Iklan ini SUDAH ada di laporan (bukan belum setup): terpakai bulan ini {_rp_hari(month_v)}, "
+                f"tetapi sejak campaign ±Rp 0. Cek di SC apakah dijeda setelah campaign disimpan, "
+                f"lalu naikkan/aktifkan budget ke {_rp_hari(expected)} bila ingin jalan sesuai rencana."
             )
         elif not done and cost > expected * 1.4:
             goal, act, tip = "Tidak sesuai rencana", "Turunkan budget", (
@@ -148,12 +211,19 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
     return out.sort_values(["_rank", "Biaya aktual/hari"], ascending=[True, False]).drop(columns=["_rank"])
 
 
-def refresh_tips_after_month(frame: pd.DataFrame, *, target_roas: float, running_keys: set[str] | None = None) -> pd.DataFrame:
+def refresh_tips_after_month(
+    frame: pd.DataFrame,
+    *,
+    target_roas: float,
+    running_keys: set[str] | None = None,
+    units=None,
+    members: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Tulis ulang Status/Tindakan/Saran setelah `Biaya bulan ini/hari` terisi; urutan baris tetap."""
     if frame is None or frame.empty or "Biaya bulan ini/hari" not in getattr(frame, "columns", []):
         return frame if frame is not None else pd.DataFrame()
     core = frame.drop(columns=["Status SC", "Status goals", "Tindakan", "Saran"], errors="ignore")
-    fresh = classify_rows(core, target_roas=target_roas, running_keys=running_keys)
+    fresh = classify_rows(core, target_roas=target_roas, running_keys=running_keys, units=units, members=members)
     if fresh.empty or "_key" not in fresh.columns:
         return frame
     by_key = {str(k): r for k, r in fresh.set_index("_key", drop=False).iterrows()}
@@ -436,8 +506,16 @@ def spend_gap_tip(wallet: dict, store_since: dict, summary: dict) -> str:
     return " · ".join(bits)
 
 
-def complete_plan_rows(classified: pd.DataFrame, planned: dict[str, float], *, names: dict[str, tuple[str, str]],
-                       target_roas: float, running_keys: set[str] | None = None) -> pd.DataFrame:
+def complete_plan_rows(
+    classified: pd.DataFrame,
+    planned: dict[str, float],
+    *,
+    names: dict[str, tuple[str, str]],
+    target_roas: float,
+    running_keys: set[str] | None = None,
+    units=None,
+    members: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Pastikan semua kunci campaign tersimpan muncul, meski belum ada di laporan terbaru."""
     have = set(classified["_key"].astype(str)) if isinstance(classified, pd.DataFrame) and not classified.empty and "_key" in classified.columns else set()
     rows = []
@@ -459,10 +537,12 @@ def complete_plan_rows(classified: pd.DataFrame, planned: dict[str, float], *, n
     if extra.empty:
         frame = classified.copy() if isinstance(classified, pd.DataFrame) else pd.DataFrame()
     elif classified is None or classified.empty:
-        frame = classify_rows(extra, target_roas=target_roas, running_keys=running_keys)
+        frame = classify_rows(extra, target_roas=target_roas, running_keys=running_keys, units=units, members=members)
     else:
-        frame = pd.concat([classified, classify_rows(extra, target_roas=target_roas, running_keys=running_keys)],
-                          ignore_index=True)
+        frame = pd.concat(
+            [classified, classify_rows(extra, target_roas=target_roas, running_keys=running_keys, units=units, members=members)],
+            ignore_index=True,
+        )
     return sort_by_omzet(frame)
 
 
@@ -496,14 +576,27 @@ def plan_coverage(planned: dict[str, float] | None) -> set[str]:
     return covered
 
 
-def split_in_out_plan(classified: pd.DataFrame, planned: dict[str, float], current: dict[str, dict],
-                     baseline: dict[str, dict], *, names: dict[str, tuple[str, str]], kinds: dict[str, str],
-                     target_roas: float, running_keys: set[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def split_in_out_plan(
+    classified: pd.DataFrame,
+    planned: dict[str, float],
+    current: dict[str, dict],
+    baseline: dict[str, dict],
+    *,
+    names: dict[str, tuple[str, str]],
+    kinds: dict[str, str],
+    target_roas: float,
+    running_keys: set[str] | None = None,
+    units=None,
+    members: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Pisah ketat: hanya kunci campaign → dalam rencana; berbiaya di SC tanpa kunci campaign → luar rencana."""
     planned = planned or {}
     plan_keys = {str(k) for k in planned}
     covered = plan_coverage(planned)
-    in_plan = complete_plan_rows(classified, planned, names=names, target_roas=target_roas, running_keys=running_keys)
+    in_plan = complete_plan_rows(
+        classified, planned, names=names, target_roas=target_roas, running_keys=running_keys,
+        units=units, members=members,
+    )
     if not in_plan.empty and "_key" in in_plan.columns:
         # Pertahankan hanya kunci yang benar-benar tersimpan di campaign (bukan alias laporan).
         in_plan = sort_by_omzet(in_plan.loc[in_plan["_key"].astype(str).isin(plan_keys)].copy())
@@ -531,7 +624,9 @@ def split_in_out_plan(classified: pd.DataFrame, planned: dict[str, float], curre
             if "Jenis" not in frame.columns or frame["Jenis"].isna().all():
                 frame["Jenis"] = frame["_key"].map(
                     lambda k: kinds.get(str(k)) or ((names.get(str(k)) or ("", "Produk tunggal"))[1]))
-            out_frame = sort_by_omzet(classify_rows(frame, target_roas=target_roas, running_keys=running_keys))
+            out_frame = sort_by_omzet(classify_rows(
+                frame, target_roas=target_roas, running_keys=running_keys, units=units, members=members,
+            ))
             # Jaga-jaga: buang bila ternyata alias dari kunci rencana
             if not out_frame.empty:
                 out_frame = out_frame.loc[
@@ -543,22 +638,26 @@ def split_in_out_plan(classified: pd.DataFrame, planned: dict[str, float], curre
 
 
 def partition_plan_rows(in_plan: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Sub-grup dalam rencana: belum setup / jeda / keluarkan anggota / pantau."""
+    """Sub-grup dalam rencana: belum setup / sudah di tempat lain / jeda / keluarkan anggota / pantau."""
     empty = pd.DataFrame()
     if in_plan is None or in_plan.empty or "Tindakan" not in in_plan.columns:
         return {
-            "belum_setup": empty, "jeda_tertinggal": empty,
+            "belum_setup": empty, "sudah_di_tempat_lain": empty, "jeda_tertinggal": empty,
             "keluarkan_anggota": empty, "pantau": empty,
         }
     act = in_plan["Tindakan"].astype(str)
     mask_belum = act == "Buat / aktifkan"
+    mask_lain = act == "Sudah diiklankan di tempat lain"
     mask_jeda = act.str.startswith("Jeda")
     mask_keluar = act == "Keluarkan anggota dari grup"
     return {
         "belum_setup": sort_by_omzet(in_plan.loc[mask_belum].copy()),
+        "sudah_di_tempat_lain": sort_by_omzet(in_plan.loc[mask_lain].copy()),
         "jeda_tertinggal": sort_by_omzet(in_plan.loc[mask_jeda].copy()),
         "keluarkan_anggota": sort_by_omzet(in_plan.loc[mask_keluar].copy()),
-        "pantau": sort_by_omzet(in_plan.loc[~mask_belum & ~mask_jeda & ~mask_keluar].copy()),
+        "pantau": sort_by_omzet(
+            in_plan.loc[~mask_belum & ~mask_lain & ~mask_jeda & ~mask_keluar].copy()
+        ),
     }
 
 

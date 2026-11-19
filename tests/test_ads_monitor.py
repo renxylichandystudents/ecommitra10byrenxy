@@ -534,6 +534,56 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertNotIn("±", tip)
         self.assertIn("Seller Center", tip)
 
+    def test_under_plan_spend_is_not_belum_setup(self):
+        # Kloset-style: terpakai 171 rb < 30%×750 rb tetapi sudah jelas aktif → Naikkan budget, bukan Buat/aktifkan
+        frame = pd.DataFrame([{
+            "_key": "produk:kloset", "Iklan": "Kloset FSA0159", "Jenis": "Produk tunggal",
+            "Budget usulan/hari": 750_000, "Budget efektif Shopee/hari": 750_000,
+            "Hari dievaluasi": 5,
+            "Biaya aktual/hari": 171_442, "Biaya bulan ini/hari": 171_442,
+            "Biaya sejak disimpan": 857_212, "Omzet iklan sejak disimpan": 12_134_964,
+            "Omzet iklan aktual/hari": 2_426_993, "ROAS aktual": 14.2,
+            "Rekomendasi dijalankan": "Belum",
+        }])
+        out = Mon.classify_rows(frame, target_roas=22)
+        self.assertNotEqual(out.iloc[0]["Tindakan"], "Buat / aktifkan")
+        self.assertEqual(out.iloc[0]["Tindakan"], "Naikkan budget")
+        self.assertEqual(out.iloc[0]["Status SC"], "Berjalan")
+        tip = str(out.iloc[0]["Saran"]).lower()
+        self.assertNotIn("belum terlihat aktif", tip)
+
+    def test_month_spend_only_not_belum_setup(self):
+        # Pintu-style: bulan ini ada biaya, sejak campaign 0 → sudah ada di laporan
+        frame = pd.DataFrame([{
+            "_key": "produk:pintu", "Iklan": "Pintu Kamar Mandi", "Jenis": "Produk tunggal",
+            "Budget usulan/hari": 25_000, "Budget efektif Shopee/hari": 25_000,
+            "Biaya aktual/hari": 0, "Biaya bulan ini/hari": 15_927,
+            "Biaya sejak disimpan": 0, "Omzet iklan sejak disimpan": 0,
+            "ROAS aktual": float("nan"), "Rekomendasi dijalankan": "Belum",
+        }])
+        out = Mon.classify_rows(frame, target_roas=22)
+        self.assertNotEqual(out.iloc[0]["Tindakan"], "Buat / aktifkan")
+        self.assertIn("bukan belum setup", str(out.iloc[0]["Saran"]).lower())
+
+    def test_elsewhere_active_not_belum_setup(self):
+        frame = pd.DataFrame([{
+            "_key": "baru:99", "Iklan": "Usulan baru 99", "Jenis": "Produk tunggal",
+            "Budget usulan/hari": 50_000, "Budget efektif Shopee/hari": 50_000,
+            "Biaya aktual/hari": 0, "Biaya bulan ini/hari": float("nan"),
+            "Biaya sejak disimpan": 0, "Omzet iklan sejak disimpan": 0,
+            "ROAS aktual": float("nan"), "Rekomendasi dijalankan": "Belum",
+        }])
+        units = [
+            A.Unit("produk:99", "Sudah tunggal 99", "Produk tunggal", "Berjalan", "GMV Max ROAS",
+                   80_000, 900_000, 0.0, 0.0, 0.5, ["99"], []),
+        ]
+        out = Mon.classify_rows(frame, target_roas=22, units=units)
+        self.assertEqual(out.iloc[0]["Tindakan"], "Sudah diiklankan di tempat lain")
+        self.assertIn("sudah aktif", str(out.iloc[0]["Saran"]).lower())
+        parts = Mon.partition_plan_rows(out)
+        self.assertTrue(parts["belum_setup"].empty)
+        self.assertEqual(len(parts["sudah_di_tempat_lain"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

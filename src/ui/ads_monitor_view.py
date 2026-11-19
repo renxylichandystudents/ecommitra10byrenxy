@@ -477,13 +477,21 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             frame.insert(1, "Iklan", frame["_key"].map(lambda k: names.get(k, (k, ""))[0]))
             if "Jenis" not in frame.columns or frame["Jenis"].isna().all():
                 frame["Jenis"] = frame["_key"].map(lambda k: names.get(k, ("", "Produk tunggal"))[1])
-            classified = Mon.classify_rows(frame, target_roas=roas, running_keys=running_keys)
+            classified = Mon.classify_rows(
+                frame, target_roas=roas, running_keys=running_keys, units=units, members=members,
+            )
         in_plan, out_plan = Mon.split_in_out_plan(
-            classified, planned, current, base, names=names, kinds=kinds, target_roas=roas, running_keys=running_keys)
+            classified, planned, current, base, names=names, kinds=kinds, target_roas=roas,
+            running_keys=running_keys, units=units, members=members,
+        )
         in_plan = Mon.attach_month_daily(in_plan, current)
         out_plan = Mon.attach_month_daily(out_plan, current)
-        in_plan = Mon.refresh_tips_after_month(in_plan, target_roas=roas, running_keys=running_keys)
-        out_plan = Mon.refresh_tips_after_month(out_plan, target_roas=roas, running_keys=running_keys)
+        in_plan = Mon.refresh_tips_after_month(
+            in_plan, target_roas=roas, running_keys=running_keys, units=units, members=members,
+        )
+        out_plan = Mon.refresh_tips_after_month(
+            out_plan, target_roas=roas, running_keys=running_keys, units=units, members=members,
+        )
         singles = Mon.planned_single_codes(acts_saved)
         in_plan = Mon.enrich_group_actions(
             in_plan, members, target_roas=roas, units=units, products=products,
@@ -676,10 +684,22 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             if not parts["belum_setup"].empty:
                 _block_header(
                     f"Belum di-setup di Seller Center · {fmt_num(len(parts['belum_setup']))} iklan",
-                    "Ada di rencana campaign, belum terlihat aktif di laporan. Setup di SC lalu unggah laporan.",
+                    "Benar-benar belum ada biaya/omzet di laporan untuk kunci iklan ini. "
+                    "Bila produk sudah jalan di iklan lain, lihat blok «Sudah diiklankan di tempat lain».",
                     tone="warn",
                 )
                 _render_cards(parts["belum_setup"], prefix="in-setup", scope="Dalam rencana · belum setup")
+            if not parts.get("sudah_di_tempat_lain", pd.DataFrame()).empty:
+                _block_header(
+                    f"Sudah diiklankan di tempat lain · {fmt_num(len(parts['sudah_di_tempat_lain']))} iklan",
+                    "Ada di rencana campaign, tetapi produknya sudah aktif di iklan tunggal/grup lain. "
+                    "Jangan buat iklan baru (dobel) — kelola yang sudah jalan.",
+                    tone="alert",
+                )
+                _render_cards(
+                    parts["sudah_di_tempat_lain"], prefix="in-lain",
+                    scope="Dalam rencana · sudah di tempat lain",
+                )
             if not parts["jeda_tertinggal"].empty:
                 _block_header(
                     f"Dijeda di rencana, masih berbiaya · {fmt_num(len(parts['jeda_tertinggal']))} iklan",
