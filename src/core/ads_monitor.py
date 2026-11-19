@@ -743,10 +743,11 @@ PROGRESS_COLS = [
     "Tanggal",
     "Budget plan/hari",
     "Realisasi biaya iklan (hari itu)",
-    "Sales produk dari iklan sejak campaign",
+    "Omzet dari iklan sejak campaign",
     "ROAS iklan",
-    "Sales produk all sejak campaign",
-    "ROAS sales all",
+    "Sales produk sejak campaign",
+    "Sales bersih sejak campaign",
+    "ROAS sales bersih",
     "Sales MTD produk",
     "Sales MTD bersih",
     "Analisa keputusan hari itu",
@@ -840,6 +841,75 @@ def day_decision_note(
     return " · ".join(parts[:3])
 
 
+def _daily_store_sales(
+    orders,
+    start: date,
+    end: date,
+    *,
+    performance=None,
+) -> dict[str, dict[str, float]]:
+    """Sales produk & sales bersih per tanggal — istilah sama Ringkasan.
+
+    Urutan sumber:
+    1. Data pesanan (sama month_outlook / Ringkasan): Sales produk = net_sku_sales,
+       Sales bersih = order_metrics.sales_bersih.
+    2. Bila pesanan belum mencakup tanggal itu: Data performa toko harian
+       (Total Penjualan = Sales produk; kolom `_sales_bersih_hari` atau Pesanan Dibayar
+       bila ada = Sales bersih).
+    """
+    out: dict[str, dict[str, float]] = {}
+    if end < start:
+        return out
+    if orders is not None and isinstance(orders, pd.DataFrame) and not orders.empty:
+        from src.core.metrics import net_sku_sales, normalize_lines, order_metrics
+
+        lines = normalize_lines(orders)
+        day = start
+        while day <= end:
+            key = day.isoformat()
+            m = order_metrics(lines, day, day, normalized=True)
+            produk = float(net_sku_sales(lines, day, day, normalized=True)["sales"].sum())
+            bersih = float(m.get("sales_bersih") or 0.0)
+            if produk > 0 or bersih > 0:
+                out[key] = {"produk": produk, "bersih": bersih}
+            day += timedelta(days=1)
+
+    # Lengkapi hari kosong dari performa toko (unggahan harian / hasil selisih MTD)
+    if performance is not None and isinstance(performance, pd.DataFrame) and not performance.empty:
+        from src.core.performance import clean_performance, perf_number
+
+        work = performance.copy()
+        if "date" in work.columns:
+            work = clean_performance(work)
+        elif "Tanggal" in work.columns:
+            work = work.copy()
+            work["date"] = pd.to_datetime(work["Tanggal"], dayfirst=True, errors="coerce")
+            work = work.loc[work["date"].notna()]
+        if not work.empty:
+            for _, row in work.iterrows():
+                raw = row["date"]
+                if isinstance(raw, date) and not isinstance(raw, datetime):
+                    day_d = raw
+                else:
+                    ts = pd.Timestamp(raw)
+                    day_d = ts.date() if pd.notna(ts) else None
+                if day_d is None or day_d < start or day_d > end:
+                    continue
+                key = day_d.isoformat()
+                if key in out and (out[key]["produk"] > 0 or out[key]["bersih"] > 0):
+                    continue
+                produk = 0.0
+                if "Total Penjualan (IDR)" in work.columns:
+                    produk = float(perf_number(pd.Series([row["Total Penjualan (IDR)"]])).iloc[0] or 0)
+                elif "sales" in work.columns:
+                    produk = float(perf_number(pd.Series([row["sales"]])).iloc[0] or 0)
+                bersih = produk
+                if "_sales_bersih_hari" in work.columns and pd.notna(row.get("_sales_bersih_hari")):
+                    bersih = float(row["_sales_bersih_hari"])
+                out[key] = {"produk": produk, "bersih": bersih}
+    return out
+
+
 def campaign_daily_progress(
     campaign: dict | None,
     plan_keys: set[str] | frozenset | None = None,
@@ -848,20 +918,23 @@ def campaign_daily_progress(
     live_tanggal: str | date | None = None,
     target_roas: float = 0.0,
     ads_overall=None,
+    orders=None,
+    performance=None,
     window_start: date | None = None,
     window_end: date | None = None,
     factor: float = 0.0,
     today: date | None = None,
 ) -> pd.DataFrame:
-    """Progress harian dari laporan **all iklan per tanggal** dalam periode campaign.
+    """Progress harian dalam periode campaign (hari penuh saja).
 
-    - Jendela = `mulai` s.d. min(`selesai`, kemarin). Hari ini tidak ditampilkan.
-    - Realisasi (hari itu) = biaya all iklan pada tanggal itu (sejajar filter SC 1 hari / Kemarin).
-    - Sales bruto/bersih = **akumulasi** omzet all iklan sejak `mulai` campaign s.d. tanggal itu.
-    - Tiap hari kalender dalam jendela ditampilkan; tanpa laporan 1 hari / MTD beruntun → NaN + minta unggah.
+    - Realisasi & omzet iklan = laporan **all iklan** per tanggal (1 hari / selisih MTD).
+    - Sales produk & sales bersih = **akumulasi** dari data pesanan, istilah sama Ringkasan
+      (bukan omzet iklan × faktor).
+    - Hari ini tidak ditampilkan.
     """
     from src.core import ads_month as _AM
 
+    del factor  # faktor toko tidak dipakai untuk "bersih" di sini — angka ikut Ringkasan/orders
     cols = list(PROGRESS_COLS)
     start = _as_day(window_start) or campaign_eval_start(campaign)
     today_d = _as_day(today) or date.today()
@@ -880,6 +953,7 @@ def campaign_daily_progress(
         return pd.DataFrame(columns=cols)
 
     daily = _AM.daily_ad_totals(ads_overall, start=start, end=end_cap)
+    store_daily = _daily_store_sales(orders, start, end_cap, performance=performance)
     # Meta dari pantau_harian / live untuk plan & MTD saja
     meta: dict[str, dict] = {}
     for entry in list((campaign or {}).get("pantau_harian") or []):
@@ -917,6 +991,9 @@ def campaign_daily_progress(
     rows = []
     cum_biaya = 0.0
     cum_omzet = 0.0
+    cum_produk = 0.0
+    cum_bersih = 0.0
+    has_store = False
     for day in day_list:
         day_d = _as_day(day)
         if day_d is None or day_d > last_full:
@@ -929,19 +1006,29 @@ def campaign_daily_progress(
             realisasi = float(hit["biaya"])
             cum_biaya += realisasi
             cum_omzet += float(hit["omzet"])
-            sales_bruto = cum_omzet
+            omzet_iklan = cum_omzet
             sumber = hit.get("sumber") or ""
         else:
             realisasi = float("nan")
-            sales_bruto = float("nan")
+            omzet_iklan = float("nan")
             sumber = ""
-        if factor and float(factor) > 0 and sales_bruto == sales_bruto:
-            sales_bersih = sales_bruto * float(factor)
+        store = store_daily.get(day)
+        if store is not None:
+            cum_produk += float(store.get("produk") or 0.0)
+            cum_bersih += float(store.get("bersih") or 0.0)
+            has_store = True
+            sales_produk = cum_produk
+            sales_bersih = cum_bersih
         else:
-            sales_bersih = _finite(toko.get("bersih_sejak"))
+            sales_produk = float("nan")
+            sales_bersih = float("nan")
         biaya_cum = cum_biaya if hit is not None else float("nan")
-        roas_iklan = sales_bruto / biaya_cum if biaya_cum == biaya_cum and biaya_cum > 0 and sales_bruto == sales_bruto else float("nan")
-        roas_all = (
+        roas_iklan = (
+            omzet_iklan / biaya_cum
+            if biaya_cum == biaya_cum and biaya_cum > 0 and omzet_iklan == omzet_iklan
+            else float("nan")
+        )
+        roas_bersih = (
             sales_bersih / biaya_cum
             if biaya_cum == biaya_cum and biaya_cum > 0 and sales_bersih == sales_bersih
             else float("nan")
@@ -957,20 +1044,23 @@ def campaign_daily_progress(
                 plan_hari=plan,
                 realisasi_hari=realisasi,
                 biaya_sejak=biaya_cum,
-                sales_iklan=sales_bruto,
-                sales_all=sales_bersih,
+                sales_iklan=omzet_iklan,
+                sales_all=sales_bersih if sales_bersih == sales_bersih else omzet_iklan,
                 target_roas=target_roas,
             )
             if sumber:
                 note = f"{note} · sumber: {sumber}"
+            if not has_store:
+                note = f"{note} · Sales produk/bersih menunggu data pesanan (sama sumber Ringkasan)"
         rows.append({
             "Tanggal": day,
             "Budget plan/hari": plan,
             "Realisasi biaya iklan (hari itu)": realisasi,
-            "Sales produk dari iklan sejak campaign": sales_bruto,
+            "Omzet dari iklan sejak campaign": omzet_iklan,
             "ROAS iklan": roas_iklan,
-            "Sales produk all sejak campaign": sales_bersih,
-            "ROAS sales all": roas_all,
+            "Sales produk sejak campaign": sales_produk,
+            "Sales bersih sejak campaign": sales_bersih,
+            "ROAS sales bersih": roas_bersih,
             "Sales MTD produk": _finite(toko.get("produk_mtd")),
             "Sales MTD bersih": _finite(toko.get("bersih_mtd")),
             "Analisa keputusan hari itu": note,

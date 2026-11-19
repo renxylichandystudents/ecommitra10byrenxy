@@ -440,7 +440,8 @@ def _ad_row_card(
 def render_monitor(cur: dict, *, units, members, products, contribution, projection: float, mtd: float, target_now: float,
                    today: date, factor: float, first_open: date, month_end: date, periode: str, has_ads: bool,
                    track: dict | None = None, project_fn=None, ads_overall=None, spent_month: float = 0.0,
-                   mtd_produk: float = 0.0, features=None, username: str = "") -> None:
+                   mtd_produk: float = 0.0, features=None, username: str = "",
+                   orders=None, performance=None) -> None:
     from src.ui.ads_target import VIEW_REC  # late import
 
     s = cur.get("setelan") or {}
@@ -756,7 +757,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         progress = Mon.campaign_daily_progress(
             cur, plan_keys,
             live_toko=live_toko, live_tanggal=progress_end, target_roas=roas,
-            ads_overall=ads_overall, window_start=window_start, window_end=progress_end,
+            ads_overall=ads_overall, orders=orders, performance=performance,
+            window_start=window_start, window_end=progress_end,
             factor=float(factor or 0), today=today,
         )
         st.markdown("#### Progress harian · periode campaign")
@@ -777,10 +779,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             st.caption(
                 "Tiap baris = **satu tanggal kalender** dalam periode campaign."
                 + period_caption
-                + " **Realisasi biaya (hari itu)** & **omzet iklan** = dari laporan all iklan tanggal itu "
-                "(sama cara baca filter 1 hari / Kemarin di SC — bukan bagi rata bulanan). "
-                "**Sales dari iklan** = akumulasi omzet all iklan **bruto** sejak awal campaign s.d. tanggal itu. "
-                "**Sales produk all** = akumulasi omzet **bersih** (bruto × faktor toko)."
+                + " **Realisasi biaya** & **Omzet dari iklan** = laporan all iklan tanggal itu "
+                "(filter 1 hari / selisih MTD — bukan bagi rata). "
+                "**Sales produk** & **Sales bersih** = akumulasi dari data pesanan, "
+                "istilah dan definisi sama halaman Ringkasan (bukan omzet iklan × faktor)."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=False):
                 show_table(
@@ -788,10 +790,11 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     kinds={
                         "Budget plan/hari": "money",
                         "Realisasi biaya iklan (hari itu)": "money",
-                        "Sales produk dari iklan sejak campaign": "money",
+                        "Omzet dari iklan sejak campaign": "money",
                         "ROAS iklan": "dec",
-                        "Sales produk all sejak campaign": "money",
-                        "ROAS sales all": "dec",
+                        "Sales produk sejak campaign": "money",
+                        "Sales bersih sejak campaign": "money",
+                        "ROAS sales bersih": "dec",
                         "Sales MTD produk": "money",
                         "Sales MTD bersih": "money",
                     },

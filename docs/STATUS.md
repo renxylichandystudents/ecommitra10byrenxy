@@ -7,14 +7,15 @@ Diperbarui: 19 November 2026 (malam, lanjut).
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai malam ini**
-- Judul + caption ringkas «Pelaksanaan · campaign vs realisasi…» dihapus.
-- Evaluasi = **periode campaign** (`mulai`–`selesai`), contoh 15–22 Nov.
-- Angka biaya & omzet dari **all iklan per tanggal**; hari penuh saja (hari ini 19 → hitung 15–18).
-- Progress menampilkan tiap hari kalender dalam jendela itu; 19 tidak muncul.
+- File all iklan 15–19 Nov (MTD) diunggah ke vault lokal; dedup MTD beruntun diperbaiki.
+- Progress: **Omzet dari iklan** (all iklan) + **Sales produk** / **Sales bersih** (istilah Ringkasan; dari pesanan, atau performa bila pesanan belum ada).
+- Performa 15–18 dari selisih MTD Pesanan Dibuat / Dibayar.
+- Judul ringkas Pelaksanaan dihapus; hari ini (19) tidak dihitung.
 
 **Cek saat lanjut**
-- Unggah all iklan filter **1 tanggal** untuk 15, 16, 17, **18** (18 ≈ Rp 8,15 jt seperti SC Kemarin), atau MTD berurutan.
-- Kartu A + tabel progress harus sejajar rentang campaign, bukan prorata bulanan.
+- Realisasi **15 Nov** masih kosong sampai ada all iklan MTD s.d. **14 Nov** (atau filter 1 hari 15/11).
+- Unggah ulang transaksi pesanan s.d. kemarin agar Sales produk/bersih ikut sumber Ringkasan (bukan hanya performa).
+- Refresh 8501; buka tabel progress campaign.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.

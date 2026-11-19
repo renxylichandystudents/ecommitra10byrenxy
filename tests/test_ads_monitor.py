@@ -296,9 +296,11 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertTrue(pd.isna(prog.iloc[1]["Realisasi biaya iklan (hari itu)"]))
         self.assertAlmostEqual(prog.iloc[2]["Realisasi biaya iklan (hari itu)"], 7_000_000)
         self.assertAlmostEqual(prog.iloc[3]["Realisasi biaya iklan (hari itu)"], 8_154_135)
-        self.assertAlmostEqual(prog.iloc[2]["Sales produk dari iklan sejak campaign"], 100_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Sales produk dari iklan sejak campaign"], 228_168_508)
-        self.assertAlmostEqual(prog.iloc[3]["Sales produk all sejak campaign"], 228_168_508 * 0.8)
+        self.assertAlmostEqual(prog.iloc[2]["Omzet dari iklan sejak campaign"], 100_000_000)
+        self.assertAlmostEqual(prog.iloc[3]["Omzet dari iklan sejak campaign"], 228_168_508)
+        # Sales produk/bersih dari orders (Ringkasan) — tanpa orders tetap NaN, bukan omzet×faktor
+        self.assertTrue(pd.isna(prog.iloc[3]["Sales produk sejak campaign"]))
+        self.assertTrue(pd.isna(prog.iloc[3]["Sales bersih sejak campaign"]))
 
     def test_campaign_daily_progress_skips_today(self):
         ads = pd.DataFrame([{

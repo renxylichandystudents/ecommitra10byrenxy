@@ -92,6 +92,7 @@ PERFORMANCE_ALIASES = {
 }
 
 AD_PRODUCT_ALIASES = {
+    "period_range": _alias("Periode laporan (teks)"),
     "product_name": _alias("Nama Produk", "Product Name", "Nama Iklan/Produk", "Nama Iklan"),
     "product_code": _alias("Kode Produk", "Product Code", "Kode produk"),
     "cart_adds": _alias("Tambah ke Keranjang"),
@@ -217,7 +218,8 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         label="Data keseluruhan iklan",
         required=("product_code",),
         aliases=AD_PRODUCT_ALIASES,
-        dedup_keys=("period", "row_no", "product_code", "product_name"),
+        # period_range = teks "01/11–18/11" agar unggahan MTD beruntun tidak saling menimpa
+        dedup_keys=("period_range", "row_no", "product_code", "product_name"),
         date_fields=("period",),
         utility="Acuan total biaya, omzet, dan ROAS iklan toko (Semua Laporan Iklan).",
     ),

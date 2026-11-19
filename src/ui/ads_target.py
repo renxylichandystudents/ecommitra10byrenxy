@@ -863,11 +863,13 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         if saved_s.get("budget_bulan") and saved_s.get("periode_target") == periode:
             project_fn = lambda goal_, roas_: project(goal_, float(saved_s["budget_bulan"]), roas_,  # noqa: E731
                                                       float(saved_s.get("efisiensi_min") or A.MIN_MARGINAL))[:2]
+        perf_frame = getattr(frames, "performance", None) if frames is not None else None
         render_monitor(
             cur, units=units, members=members, products=products, contribution=contribution, projection=projection, mtd=mtd,
             target_now=float(goals.target_sales), today=today, factor=factor, first_open=first_open, month_end=month_end,
             periode=periode, has_ads=has_ads, track=track, project_fn=project_fn, ads_overall=ads_overall,
             spent_month=spent, mtd_produk=mtd_produk, features=features, username=username or "",
+            orders=orders, performance=perf_frame,
         )
         return
 

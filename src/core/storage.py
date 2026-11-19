@@ -358,6 +358,11 @@ class LocalDataStore:
         else:
             merged = pd.concat([previous, incoming], ignore_index=True) if not previous.empty else incoming
             subset = _usable_dedup_keys(merged, spec)
+            # All iklan MTD beruntun (01–15, 01–16, …) harus tetap tersimpan terpisah.
+            # Cadangan: teks periode laporan bila period_range belum ada di unggahan lama.
+            period_text = "Periode laporan (teks)"
+            if source_key == "ads_overall" and period_text in merged.columns and period_text not in subset:
+                subset = [period_text] + [k for k in subset if k != "period"]
             if subset:
                 merged = merged.drop_duplicates(subset=subset, keep="last")
             else:
