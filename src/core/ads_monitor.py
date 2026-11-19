@@ -607,6 +607,9 @@ def split_in_out_plan(
         k = str(key)
         if k in covered or report_alias(k) in covered:
             continue
+        # Iklan Produk Otomatis di all iklan tidak punya Kode Produk. Jangan tampilkan kartu kosong.
+        if k == "auto":
+            continue
         base = (baseline or {}).get(k) or {}
         if base and base.get("periode") == cur.get("periode"):
             days = int(cur.get("hari", 0)) - int(base.get("hari", 0))

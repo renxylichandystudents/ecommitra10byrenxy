@@ -1,5 +1,9 @@
 # Status terbaru aplikasi
 
+Diperbarui: 20 November 2026 (dini, kartu iklan otomatis tanpa produk disembunyikan).
+
+- Bagian Di luar plan tidak lagi menampilkan Iklan Produk Otomatis. Baris all iklan itu tidak punya Kode Produk, jadi kartunya kosong.
+
 Diperbarui: 19 November 2026 (malam, baris Total di progress harian).
 
 - Tabel progress punya baris Total di atas tanggal. Biaya, ROAS, Sales produk, dan Sales bersih di baris itu sama dengan kartu di atas. Omzet iklan dan Sales bruto tidak ditampilkan di tabel.

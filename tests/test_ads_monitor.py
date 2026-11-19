@@ -176,6 +176,18 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertTrue((in_plan["_key"] == "produk:1").any())
         self.assertTrue((out_plan["_key"] == "produk:9").any())
         self.assertFalse((in_plan["_key"] == "produk:9").any())
+        # Iklan otomatis tanpa kode produk tidak masuk kartu di luar plan.
+        now_auto = {**now, "auto": {"periode": "2026-11-01", "hari": 7, "biaya": 400_000, "omzet": 2_000_000}}
+        base_auto = {**base, "auto": {"periode": "2026-11-01", "hari": 5, "biaya": 100_000, "omzet": 500_000}}
+        _, out_auto = Mon.split_in_out_plan(
+            classified, planned, now_auto, base_auto,
+            names={"produk:1": ("A", "Produk tunggal"), "produk:9": ("Luar", "Produk tunggal"),
+                   "auto": ("Iklan Produk Otomatis", "Otomatis")},
+            kinds={"produk:1": "Produk tunggal", "produk:9": "Produk tunggal", "auto": "Otomatis"},
+            target_roas=10,
+        )
+        self.assertFalse(out_auto.empty)
+        self.assertFalse((out_auto["_key"] == "auto").any())
 
     def test_split_filters_stray_classified_and_alias(self):
         # classified keliru memuat produk luar → harus dibuang dari in_plan
