@@ -1,22 +1,30 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (siang).
+Diperbarui: 19 November 2026 (sore).
 
 ## Lanjut nanti · Pantau iklan
 
 Localhost:8501 / Cloud ikut push `main`.
 
-**Sudah selesai siang ini**
-- Bug angka jeda + grup take-out.
-- **Belum setup:** jangan pakai ambang 30%×budget; ada biaya/omzet = sudah aktif. Deteksi “sudah di tempat lain”; Pintu (bulan>0, sejak=0) ≠ belum setup.
+**Sudah selesai sore ini**
+- **Pelaksanaan** dirombak: sesuai plan (efektif / tidak efektif / boros) vs tidak sesuai plan vs di luar plan.
+- Progress harian komitmen vs realisasi dari `pantau_harian`.
+- Poin **2 · Yang harus diiklankan** dan **3 · Cuplikan rencana tersimpan** dihapus dari Pantau.
+- Kartu “sudah di tempat lain”: tampilkan realisasi di iklan lain (bukan Rp 0 seolah gagal).
 
 **Cek saat lanjut**
 - Kloset FSA0159: harus **Naikkan budget** (bukan Buat/aktifkan) — sudah omzet 12 jt.
-- Pintu Kamar Mandi: saran “SUDAH ada di laporan (bukan belum setup)”.
-- Blok baru bila produk aktif di iklan lain: **Sudah diiklankan di tempat lain**.
+- Pintu Kamar Mandi: saran “bukan belum setup”.
+- Progress harian terisi setelah unggah laporan lagi (checkpoint).
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
+
+## 2026-11-19 · Pantau: rombak Pelaksanaan + hapus poin 2 & 3
+
+- UI hanya fokus **campaign vs realisasi SC**: progress harian, A sesuai plan, B tidak sesuai, C di luar plan.
+- Helper baru: `partition_execution`, `execution_counts`, `campaign_daily_progress`.
+- Hapus blok “Yang harus diiklankan” dan “Cuplikan rencana tersimpan” agar tidak mengalihkan dari kecocokan plan.
 
 ## 2026-11-19 · Belum setup: bedakan aktif / di tempat lain / benar-benar belum
 

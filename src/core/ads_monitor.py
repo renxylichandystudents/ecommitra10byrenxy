@@ -661,6 +661,133 @@ def partition_plan_rows(in_plan: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
+_TIDAK_SESUAI_ACT = frozenset({
+    "Buat / aktifkan",
+    "Sudah diiklankan di tempat lain",
+    "Jeda / hentikan",
+    "Keluarkan anggota dari grup",
+})
+
+
+def partition_execution(in_plan: pd.DataFrame, *, target_roas: float = 0.0) -> dict[str, pd.DataFrame]:
+    """Grouping pelaksanaan: sesuai plan (efektif / tidak efektif / boros) vs tidak sesuai plan.
+
+    Sesuai plan = slot campaign sudah jalan di kunci yang sama (bukan dobel/belum setup/jeda/isi grup salah).
+    Efektivitas diukur dari ROAS vs target + tindakan budget.
+    """
+    empty = pd.DataFrame()
+    base = {
+        "sesuai_efektif": empty, "sesuai_tidak_efektif": empty, "sesuai_boros": empty,
+        "tidak_belum_setup": empty, "tidak_di_tempat_lain": empty,
+        "tidak_jeda": empty, "tidak_isi_grup": empty,
+    }
+    if in_plan is None or in_plan.empty or "Tindakan" not in in_plan.columns:
+        return base
+    parts = partition_plan_rows(in_plan)
+    pantau = parts.get("pantau", empty)
+    if pantau is None or pantau.empty:
+        sesuai_ok = sesuai_lemah = sesuai_boros = empty
+    else:
+        act = pantau["Tindakan"].astype(str)
+        roas = pd.to_numeric(pantau.get("ROAS aktual"), errors="coerce")
+        mask_boros = act.str.startswith("Turunkan")
+        mask_lemah = (
+            act.str.startswith("Naikkan Target ROAS")
+            | act.str.startswith("Naikkan budget")
+            | (
+                (target_roas > 0)
+                & roas.notna()
+                & (roas < target_roas * 0.9)
+                & ~mask_boros
+            )
+        )
+        # Efektif: Pertahankan, atau pantau lain yang tidak lemah/boros
+        mask_ok = act.eq("Pertahankan") | (~mask_boros & ~mask_lemah)
+        # Hindari overlap: boros dulu, lalu lemah, sisanya efektif
+        sesuai_boros = sort_by_omzet(pantau.loc[mask_boros].copy())
+        sesuai_lemah = sort_by_omzet(pantau.loc[mask_lemah & ~mask_boros].copy())
+        sesuai_ok = sort_by_omzet(pantau.loc[mask_ok & ~mask_boros & ~mask_lemah].copy())
+    return {
+        "sesuai_efektif": sesuai_ok,
+        "sesuai_tidak_efektif": sesuai_lemah,
+        "sesuai_boros": sesuai_boros,
+        "tidak_belum_setup": parts.get("belum_setup", empty),
+        "tidak_di_tempat_lain": parts.get("sudah_di_tempat_lain", empty),
+        "tidak_jeda": parts.get("jeda_tertinggal", empty),
+        "tidak_isi_grup": parts.get("keluarkan_anggota", empty),
+    }
+
+
+def execution_counts(parts: dict[str, pd.DataFrame]) -> dict[str, int]:
+    """Ringkas jumlah iklan per bucket pelaksanaan."""
+    def n(key: str) -> int:
+        f = parts.get(key)
+        return 0 if f is None or getattr(f, "empty", True) else len(f)
+
+    sesuai = n("sesuai_efektif") + n("sesuai_tidak_efektif") + n("sesuai_boros")
+    tidak = n("tidak_belum_setup") + n("tidak_di_tempat_lain") + n("tidak_jeda") + n("tidak_isi_grup")
+    return {
+        "sesuai": sesuai,
+        "tidak": tidak,
+        "efektif": n("sesuai_efektif"),
+        "tidak_efektif": n("sesuai_tidak_efektif"),
+        "boros": n("sesuai_boros"),
+        "belum_setup": n("tidak_belum_setup"),
+        "di_tempat_lain": n("tidak_di_tempat_lain"),
+        "jeda": n("tidak_jeda"),
+        "isi_grup": n("tidak_isi_grup"),
+    }
+
+
+def campaign_daily_progress(
+    campaign: dict | None,
+    plan_keys: set[str] | frozenset | None = None,
+) -> pd.DataFrame:
+    """Progress harian komitmen vs realisasi dari checkpoint Pantau (agregat semua iklan dalam rencana)."""
+    cols = [
+        "Tanggal", "Komitmen budget/hari", "Biaya kumulatif sejak campaign",
+        "Omzet kumulatif sejak campaign", "ROAS kumulatif",
+        "Naik biaya vs catatan lalu", "Naik omzet vs catatan lalu", "Iklan tercatat",
+    ]
+    log = list((campaign or {}).get("pantau_harian") or [])
+    if not log:
+        return pd.DataFrame(columns=cols)
+    keys = {str(k) for k in (plan_keys or set())} or None
+    raw = []
+    for entry in log:
+        day = str(entry.get("tanggal") or "")[:10]
+        items = list(entry.get("items") or [])
+        if keys is not None:
+            items = [it for it in items if str(it.get("key") or "") in keys]
+        if not items:
+            continue
+        biaya = float(sum(float(it.get("biaya") or 0) for it in items))
+        omzet = float(sum(float(it.get("omzet") or 0) for it in items))
+        komitmen = float(sum(float(it.get("budget_plan") or 0) for it in items))
+        raw.append({
+            "tanggal": day, "biaya": biaya, "omzet": omzet, "komitmen": komitmen, "n": len(items),
+        })
+    raw = sorted(raw, key=lambda r: r["tanggal"])
+    rows, prev = [], None
+    for item in raw:
+        add_b = float("nan") if prev is None else item["biaya"] - prev["biaya"]
+        add_o = float("nan") if prev is None else item["omzet"] - prev["omzet"]
+        roas = item["omzet"] / item["biaya"] if item["biaya"] > 0 else float("nan")
+        rows.append({
+            "Tanggal": item["tanggal"],
+            "Komitmen budget/hari": item["komitmen"],
+            "Biaya kumulatif sejak campaign": item["biaya"],
+            "Omzet kumulatif sejak campaign": item["omzet"],
+            "ROAS kumulatif": roas,
+            "Naik biaya vs catatan lalu": add_b,
+            "Naik omzet vs catatan lalu": add_o,
+            "Iklan tercatat": item["n"],
+        })
+        prev = item
+    return pd.DataFrame(rows, columns=cols)
+
+
+
 def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: pd.DataFrame) -> tuple[dict, bool]:
     """Simpan/timpa checkpoint harian per iklan di campaign['pantau_harian']. True bila ada perubahan."""
     if report_date is None or rows is None or (isinstance(rows, pd.DataFrame) and rows.empty):

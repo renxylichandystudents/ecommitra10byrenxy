@@ -1,9 +1,10 @@
-"""UI Pantau rencana tersimpan: review harian hasil campaign vs Seller Center + item yang harus diiklankan."""
+"""UI Pantau rencana tersimpan: pelaksanaan campaign vs realisasi Seller Center."""
 
 from __future__ import annotations
 
 import html
 from datetime import date, timedelta
+from functools import partial
 
 import pandas as pd
 import streamlit as st
@@ -14,21 +15,13 @@ from src.core import ads_strategy as A
 from src.core import campaigns as C
 from src.core.fmt import fmt_date
 from src.ui import campaign_ui as cmp
-from src.ui.common import batched_view, card, download_excel, fmt_idr, fmt_num, fmt_pct
+from src.ui.common import card, download_excel, fmt_idr, fmt_num, fmt_pct
 from src.utils.format import show_table as _show_table
-from functools import partial
 
 show_table = partial(_show_table, dash_missing=True)
 
 UP, WARN, DOWN, MUTED = "#059669", "#d97706", "#dc2626", "#64748b"
 LEVEL_COLOR = {"ok": UP, "warn": WARN, "alert": DOWN, "info": MUTED}
-
-ACT_COLS = ["Tindakan", "Iklan", "Jenis", "Anggota", "Budget harian sekarang", "Budget harian usulan", "Perubahan/hari",
-            "Target ROAS Shopee", "ROAS bulan terakhir", "Omzet iklan usulan/hari", "Catatan"]
-ACT_KINDS = {"Budget harian sekarang": "money", "Budget harian usulan": "money", "Perubahan/hari": "money",
-             "Omzet iklan usulan/hari": "money", "Anggota": "count", "ROAS bulan terakhir": "dec", "Target ROAS Shopee": "dec"}
-SEL_KINDS = {"Biaya iklan/hari": "money", "Omzet iklan/hari": "money", "ROAS 2 bulan": "dec", "Porsi omzet grup": "pct",
-             "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money"}
 
 
 def _tone(ok: bool) -> str:
@@ -222,13 +215,25 @@ def _ad_row_card(
     if days <= 0 and since > 0 and biaya > 0:
         days = max(int(round(biaya / since)), 1)
     plan_txt, setup_txt = _plan_setup_labels(plan, setup, actual_since=since, actual_month=month_v)
-    # Omzet ≠ biaya: tampilkan keduanya agar 200 jt vs 33 jt tidak terlihat kontradiksi.
-    hasil = (
-        "Sejak campaign"
-        + (f" ({fmt_num(days)} hari)" if days > 0 else "")
-        + f": omzet {fmt_idr(omzet)} · biaya {fmt_idr(biaya)}"
-        + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
-    )
+    # Omzet ≠ biaya. Untuk "sudah di tempat lain": jangan tampilkan Rp 0 seolah gagal — sebut realisasi di iklan lain.
+    if act == "Sudah diiklankan di tempat lain":
+        alts = Mon._alts_for_plan_key(key, units=units, members=members)
+        if alts:
+            a0 = alts[0]
+            hasil = (
+                f"Slot rencana ini belum berbiaya · realisasi di «{a0.get('nama') or a0.get('unit')}»: "
+                f"biaya {_fmt_hari(float(a0.get('biaya') or 0))}"
+                + (f" · omzet {_fmt_hari(float(a0.get('omzet') or 0))}" if float(a0.get("omzet") or 0) > 0 else "")
+            )
+        else:
+            hasil = "Slot rencana ini belum berbiaya · produk aktif di iklan lain (lihat saran)"
+    else:
+        hasil = (
+            "Sejak campaign"
+            + (f" ({fmt_num(days)} hari)" if days > 0 else "")
+            + f": omzet {fmt_idr(omzet)} · biaya {fmt_idr(biaya)}"
+            + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
+        )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
     group_active = not (
         act == "Buat / aktifkan"
@@ -251,7 +256,12 @@ def _ad_row_card(
         member_note = Mon.group_members_summary(member_frame)
         if member_note and member_note not in saran_txt:
             saran_txt = f"{saran_txt} {member_note}".strip()
-    color = DOWN if act.startswith(("Jeda", "Turunkan", "Keluarkan")) else (UP if act == "Pertahankan" else WARN)
+    color = (
+        DOWN if act.startswith(("Jeda", "Turunkan", "Keluarkan"))
+        else (UP if act == "Pertahankan" else WARN)
+    )
+    if act == "Sudah diiklankan di tempat lain":
+        color = WARN
     stock_sum = Mon.stock_summary_for_ad(products, key, units=units, members=members)
     if stock_sum.get("kosong"):
         saran_txt = (
@@ -423,12 +433,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     s = cur.get("setelan") or {}
     start, end = C.as_date(cur["mulai"]), C.as_date(cur["selesai"])
     acts_saved = cmp.frame_of(cur.get("iklan"))
-    sel_saved = cmp.frame_of(cur.get("produk"))
     target = float(s.get("target") or 0)
     goal = target_now if target_now > 0 else target
     roas = float(s.get("roas") or 8.0)
     budget_daily = float(s.get("biaya_harian_rencana") or s.get("budget_harian") or 0)
-    horizon_start, horizon_end = Mon.week_window(today)
 
     # ---- Performa toko dari laporan keseluruhan (sejajar Seller Center › Keseluruhan iklan)
     last_data = first_open - timedelta(days=1)
@@ -645,29 +653,32 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         st.button("Buka Rekomendasi sistem", key="adt-renew", type="primary",
                   on_click=st.session_state.__setitem__, args=("adt-view-next", VIEW_REC))
 
-    # -------- 1. Iklan dalam rencana (sub-grup) + di luar rencana
-    st.markdown("### 1 · Pelaksanaan per iklan (sejak disimpan)")
+    # -------- Pelaksanaan: campaign vs realisasi SC (poin 2 & 3 dihapus — fokus kecocokan plan)
+    st.markdown("### Pelaksanaan · campaign vs realisasi Seller Center")
     if not base:
         st.info("Campaign tanpa baseline evaluasi. Simpan ulang sebagai campaign baru agar bisa dibanding harian.")
     elif report_end is None or report_end < start:
-        st.info(f"Laporan iklan s.d. {fmt_date(report_end) if report_end else '–'} belum melewati mulai campaign {fmt_date(start)}. Unggah laporan hari kemarin.")
+        st.info(
+            f"Laporan iklan s.d. {fmt_date(report_end) if report_end else '–'} belum melewati mulai campaign "
+            f"{fmt_date(start)}. Unggah laporan hari kemarin."
+        )
     elif not planned and classified.empty:
         st.info("Belum ada hari baru sejak campaign disimpan. Unggah laporan iklan esok hari.")
     else:
-        aktif = fmt_num(summary.get("dijalankan", 0)) if summary else "0"
-        rencana = fmt_num(len(in_plan)) if not in_plan.empty else fmt_num(len(planned))
-        luar_n = fmt_num(len(out_plan)) if not out_plan.empty else "0"
-        st.caption(
-            f"Hanya iklan yang tersimpan di campaign masuk blok **Dalam rencana** "
-            f"({aktif}/{rencana} sudah sesuai setup). "
-            f"Iklan berbiaya di Seller Center tetapi tidak ada di campaign → blok **Di luar rencana** ({luar_n}). "
-            f"Data s.d. {fmt_date(report_end)} ({fmt_num(summary.get('hari', 0) if summary else 0)} hari). "
-            f"Di rencana Rp 0 = sengaja dihentikan. "
-            f"Di Shopee minimal {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup."
-        )
         cid = int(cur.get("id") or 0)
-        parts = Mon.partition_plan_rows(in_plan)
         singles = Mon.planned_single_codes(acts_saved)
+        exe = Mon.partition_execution(in_plan, target_roas=roas)
+        counts = Mon.execution_counts(exe)
+        luar_n = len(out_plan) if not out_plan.empty else 0
+        st.caption(
+            "Bandingkan **komitmen campaign** (budget/slot yang disimpan) dengan **realisasi laporan iklan** di Seller Center. "
+            f"Data s.d. {fmt_date(report_end)} · Target ROAS {fmt_num(roas, 1)}×. "
+            f"Ringkas: **{fmt_num(counts['sesuai'])} sesuai plan** "
+            f"({fmt_num(counts['efektif'])} efektif · {fmt_num(counts['tidak_efektif'])} tidak efektif · "
+            f"{fmt_num(counts['boros'])} boros) · "
+            f"**{fmt_num(counts['tidak'])} tidak sesuai plan** · "
+            f"**{fmt_num(luar_n)} di luar plan**."
+        )
 
         def _render_cards(frame: pd.DataFrame, *, prefix: str, scope: str) -> None:
             for _, r in frame.iterrows():
@@ -677,56 +688,116 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     units=units, products=products, planned_singles=singles,
                 )
 
+        # Progress harian komitmen → realisasi
+        plan_keys = {str(k) for k in (planned or {})}
+        progress = Mon.campaign_daily_progress(cur, plan_keys)
+        st.markdown("#### Progress harian · komitmen vs realisasi")
+        if progress.empty:
+            st.info(
+                "Belum ada catatan harian. Buka Pantau lagi setelah unggah laporan — "
+                "setiap tanggal laporan tersimpan sebagai titik progress."
+            )
+        else:
+            st.caption(
+                "Tiap baris = satu tanggal Pantau/unggah. "
+                "**Komitmen** = jumlah budget rencana iklan hari itu. "
+                "**Biaya/omzet kumulatif** = realisasi sejak campaign. "
+                "**Naik vs catatan lalu** = pergerakan antar hari (bukan rata-rata)."
+            )
+            show_table(
+                progress,
+                kinds={
+                    "Komitmen budget/hari": "money",
+                    "Biaya kumulatif sejak campaign": "money",
+                    "Omzet kumulatif sejak campaign": "money",
+                    "ROAS kumulatif": "dec",
+                    "Naik biaya vs catatan lalu": "money",
+                    "Naik omzet vs catatan lalu": "money",
+                    "Iklan tercatat": "count",
+                },
+                key=f"camp-progress-{cid}",
+            )
+
         if in_plan.empty:
             st.info("Tidak ada baris iklan di rencana tersimpan.")
         else:
-            st.markdown("#### Dalam rencana campaign")
-            if not parts["belum_setup"].empty:
+            # A. Sesuai plan
+            st.markdown("#### A · Sesuai plan (slot campaign sudah jalan di kunci yang sama)")
+            st.caption(
+                "Iklan rencana yang sudah terlihat di laporan dengan kunci yang cocok. "
+                "Di sini dinilai: efektif vs target, tidak efektif, atau boros budget."
+            )
+            if not exe["sesuai_efektif"].empty:
                 _block_header(
-                    f"Belum di-setup di Seller Center · {fmt_num(len(parts['belum_setup']))} iklan",
-                    "Benar-benar belum ada biaya/omzet di laporan untuk kunci iklan ini. "
-                    "Bila produk sudah jalan di iklan lain, lihat blok «Sudah diiklankan di tempat lain».",
+                    f"Efektif / on target · {fmt_num(len(exe['sesuai_efektif']))} iklan",
+                    f"Budget & ROAS sejalan rencana (target ROAS {fmt_num(roas, 1)}×). Pertahankan.",
+                    tone="ok",
+                )
+                _render_cards(exe["sesuai_efektif"], prefix="ok", scope="Sesuai plan · efektif")
+            if not exe["sesuai_tidak_efektif"].empty:
+                _block_header(
+                    f"Tidak efektif vs target · {fmt_num(len(exe['sesuai_tidak_efektif']))} iklan",
+                    "Sudah setup sesuai plan, tetapi ROAS lemah atau budget belum terserap. "
+                    "Naikkan Target ROAS / budget, atau tinjau isi iklan.",
                     tone="warn",
                 )
-                _render_cards(parts["belum_setup"], prefix="in-setup", scope="Dalam rencana · belum setup")
-            if not parts.get("sudah_di_tempat_lain", pd.DataFrame()).empty:
+                _render_cards(
+                    exe["sesuai_tidak_efektif"], prefix="lemah", scope="Sesuai plan · tidak efektif",
+                )
+            if not exe["sesuai_boros"].empty:
                 _block_header(
-                    f"Sudah diiklankan di tempat lain · {fmt_num(len(parts['sudah_di_tempat_lain']))} iklan",
-                    "Ada di rencana campaign, tetapi produknya sudah aktif di iklan tunggal/grup lain. "
-                    "Jangan buat iklan baru (dobel) — kelola yang sudah jalan.",
+                    f"Boros vs budget plan · {fmt_num(len(exe['sesuai_boros']))} iklan",
+                    "Terpakai jauh di atas budget di Shopee/rencana. Turunkan budget di Seller Center.",
+                    tone="alert",
+                )
+                _render_cards(exe["sesuai_boros"], prefix="boros", scope="Sesuai plan · boros")
+            if (
+                exe["sesuai_efektif"].empty
+                and exe["sesuai_tidak_efektif"].empty
+                and exe["sesuai_boros"].empty
+            ):
+                st.info("Belum ada iklan yang masuk kategori sesuai plan. Lihat blok B di bawah.")
+
+            # B. Tidak sesuai plan
+            st.markdown("#### B · Tidak sesuai plan (struktur / setup belum cocok)")
+            st.caption(
+                "Komitmen campaign belum terwujud di slot yang benar: belum dibuat, dobel di iklan lain, "
+                "jeda tertinggal, atau isi grup salah."
+            )
+            if not exe["tidak_belum_setup"].empty:
+                _block_header(
+                    f"Belum di-setup di Seller Center · {fmt_num(len(exe['tidak_belum_setup']))} iklan",
+                    "Belum ada biaya/omzet di laporan untuk kunci iklan ini. Buat/aktifkan di SC.",
+                    tone="warn",
+                )
+                _render_cards(
+                    exe["tidak_belum_setup"], prefix="setup", scope="Tidak sesuai · belum setup",
+                )
+            if not exe["tidak_di_tempat_lain"].empty:
+                _block_header(
+                    f"Sudah diiklankan di tempat lain · {fmt_num(len(exe['tidak_di_tempat_lain']))} iklan",
+                    "Produk aktif di iklan tunggal/grup lain — jangan buat dobel. "
+                    "Angka realisasi ada di iklan lain (bukan Rp 0 di slot rencana).",
                     tone="alert",
                 )
                 _render_cards(
-                    parts["sudah_di_tempat_lain"], prefix="in-lain",
-                    scope="Dalam rencana · sudah di tempat lain",
+                    exe["tidak_di_tempat_lain"], prefix="lain", scope="Tidak sesuai · di tempat lain",
                 )
-            if not parts["jeda_tertinggal"].empty:
+            if not exe["tidak_jeda"].empty:
                 _block_header(
-                    f"Dijeda di rencana, masih berbiaya · {fmt_num(len(parts['jeda_tertinggal']))} iklan",
-                    "Budget rencana Rp 0, tetapi laporan masih mencatat biaya pada iklan bernama sama di Seller Center — pause di SC.",
+                    f"Jeda di rencana, masih berbiaya · {fmt_num(len(exe['tidak_jeda']))} iklan",
+                    "Budget rencana Rp 0, tetapi laporan masih mencatat biaya — pause di SC.",
                     tone="alert",
                 )
-                _render_cards(parts["jeda_tertinggal"], prefix="in-jeda", scope="Dalam rencana · jeda tertinggal")
-            if not parts.get("keluarkan_anggota", pd.DataFrame()).empty:
+                _render_cards(exe["tidak_jeda"], prefix="jeda", scope="Tidak sesuai · jeda tertinggal")
+            if not exe["tidak_isi_grup"].empty:
                 _block_header(
-                    f"Keluarkan anggota dari grup · {fmt_num(len(parts['keluarkan_anggota']))} iklan",
-                    "Mayoritas anggota sudah jadi iklan tunggal / menyedot budget tanpa hasil. "
-                    "Bersihkan isi grup di Seller Center dulu — jangan hanya turunkan budget.",
+                    f"Isi grup salah · {fmt_num(len(exe['tidak_isi_grup']))} iklan",
+                    "Mayoritas anggota harus dikeluarkan (sudah tunggal / tanpa hasil). "
+                    "Bersihkan anggota dulu — jangan hanya turunkan budget.",
                     tone="alert",
                 )
-                _render_cards(
-                    parts["keluarkan_anggota"], prefix="in-keluar",
-                    scope="Dalam rencana · keluarkan anggota",
-                )
-            if not parts["pantau"].empty:
-                need = parts["pantau"].loc[parts["pantau"]["Tindakan"] != "Pertahankan"] if "Tindakan" in parts["pantau"].columns else parts["pantau"].iloc[0:0]
-                _block_header(
-                    f"Pantau & sesuaikan · {fmt_num(len(parts['pantau']))} iklan"
-                    + (f" · {fmt_num(len(need))} perlu tindakan" if not need.empty else ""),
-                    "Iklan dalam rencana yang sudah terlihat di laporan — sesuaikan budget / Target ROAS bila perlu.",
-                    tone="info",
-                )
-                _render_cards(parts["pantau"], prefix="in", scope="Dalam rencana")
+                _render_cards(exe["tidak_isi_grup"], prefix="grup", scope="Tidak sesuai · isi grup")
 
             view = Mon.rename_budget_triad(in_plan)
             view_cols = [c for c in [
@@ -737,7 +808,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             ] if c in view.columns]
             money_kinds = {c: "money" for c in view_cols if c.endswith("/hari") or c.startswith(("Biaya", "Omzet"))}
             money_kinds["ROAS aktual"] = "dec"
-            with st.expander(f"Tabel ringkas rencana · {fmt_num(len(view))} iklan", expanded=False):
+            with st.expander(f"Tabel ringkas semua iklan dalam plan · {fmt_num(len(view))} iklan", expanded=False):
                 show_table(
                     view[view_cols], kinds=money_kinds,
                     column_config={"Iklan": st.column_config.TextColumn(width="large"),
@@ -745,13 +816,18 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 )
                 download_excel(view[view_cols], f"pantau_iklan_{cid}.xlsx", key="xl-adt-mon", label="Unduh pantauan")
 
-        if not out_plan.empty:
+        # C. Di luar plan
+        st.markdown("#### C · Di luar plan (berbiaya di SC, tidak ada di campaign)")
+        if out_plan.empty:
+            st.caption("Tidak ada iklan berbiaya di luar campaign — bagus.")
+        else:
             _block_header(
                 f"Di luar rencana campaign · {fmt_num(len(out_plan))} iklan",
-                "Berbiaya di Seller Center tetapi tidak masuk campaign tersimpan. Pause atau masukkan ke rencana baru bila mau dilanjutkan.",
+                "Berbiaya di Seller Center tetapi tidak masuk campaign tersimpan. "
+                "Pause atau masukkan ke rencana baru bila mau dilanjutkan.",
                 tone="alert",
             )
-            _render_cards(out_plan, prefix="out", scope="Di luar rencana")
+            _render_cards(out_plan, prefix="out", scope="Di luar plan")
             out_view = Mon.rename_budget_triad(out_plan)
             out_cols = [c for c in [
                 "Iklan", "Jenis", "Status SC", "Status goals", "Tindakan",
@@ -768,55 +844,3 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                                    "Saran": st.column_config.TextColumn(width="large")},
                 )
                 download_excel(out_view[out_cols], f"pantau_luar_plan_{cid}.xlsx", key="xl-adt-out", label="Unduh di luar plan")
-
-    # -------- 2. Apa yang harus diiklankan
-    st.markdown(f"### 2 · Yang harus diiklankan · {fmt_date(horizon_start)} – {fmt_date(horizon_end)}")
-    st.caption("Fokus aksi: pertahankan yang kuat, buat iklan baru yang layak, jeda yang lemah. Bukan daftar panjang 'jangan iklan'.")
-    room = max(wallet["rencana_harian"] * 0.5, A.SHOPEE_MIN_GROUP * 2)
-    week = Mon.must_advertise(products, classified if not classified.empty else None, sel_saved, units,
-                              target_roas=roas, daily_budget_room=room, limit=12)
-    if week.empty:
-        st.info("Belum ada usulan — pastikan laporan iklan & analisa sudah diunggah.")
-    else:
-        go = week.loc[~week["Keputusan"].astype(str).str.contains("Jeda", case=False)]
-        stop = week.loc[week["Keputusan"].astype(str).str.contains("Jeda", case=False)]
-        k = st.columns(3)
-        card(k[0], "Wajib jalan / naikkan", fmt_num(int(go["Keputusan"].str.contains("Pertahankan", case=False).sum())),
-             hint="ROAS kuat — jangan dipotong")
-        card(k[1], "Buat iklan baru", fmt_num(int(go["Keputusan"].str.contains("Buat", case=False).sum())),
-             hint="prediksi tinggi + stok · mulai 25 rb")
-        card(k[2], "Jeda / alihkan", fmt_num(len(stop)), hint="ROAS lemah — pindahkan budget")
-        show_table(week, kinds={"Budget/hari": "money", "Prediksi omzet/hari": "money",
-                                "Stok 10037": "count", "Stok 10062": "count", "Stok 10036": "count",
-                                "ROAS terkini": "dec", "Biaya kini/hari": "money", "Prioritas": "count"},
-                   column_config={"Produk": st.column_config.TextColumn(width="medium"), "Alasan": st.column_config.TextColumn(width="large")})
-        download_excel(week, f"wajib_iklan_{horizon_start}.xlsx", key="xl-adt-week", label="Unduh daftar wajib iklan")
-        _box("Urutan kerja",
-             "1) Kerjakan <b>Tindakan hari ini</b> di poin 1.<br>"
-             "2) Aktifkan baris <b>Buat iklan tunggal</b> (25 rb, Target ROAS sama rencana).<br>"
-             "3) Jeda baris ROAS lemah agar budget pindah ke yang kuat.<br>"
-             "4) Unggah laporan iklan esok hari — review ulang tanpa menunggu seminggu.", UP)
-
-    # -------- 3. Rencana tersimpan (ringkas)
-    st.markdown("### 3 · Cuplikan rencana tersimpan")
-    st.caption("Hanya iklan berbudget / berubah (bukan seluruh katalog). Budget usulan = angka yang disimpan saat campaign dibuat; "
-               "budget sekarang = kondisi laporan saat itu.")
-    focus_acts = Mon.active_plan_ads(acts_saved, limit=40)
-    if focus_acts.empty:
-        st.info("Campaign tidak menyimpan baris budget per iklan.")
-    else:
-        cols = [c for c in ACT_COLS if c in focus_acts.columns]
-        batched_view(
-            len(focus_acts), key="adt-lock-units", noun="iklan berbudget",
-            render=lambda lo, hi: show_table(focus_acts.iloc[lo:hi][cols], kinds=ACT_KINDS, max_height=10_000,
-                                             column_config={"Iklan": st.column_config.TextColumn(width="medium"),
-                                                            "Catatan": st.column_config.TextColumn(width="large")}),
-            download=lambda: download_excel(focus_acts[cols], f"rencana_iklan_fokus_{cur['id']}.xlsx", key="xl-adt-lock"),
-        )
-    focus_sel = Mon.selection_focus(sel_saved, limit=25)
-    if not focus_sel.empty:
-        with st.expander(f"Pemilihan produk prioritas · {fmt_num(len(focus_sel))} dari {fmt_num(len(sel_saved))} (disaring)", expanded=False):
-            st.caption("Ditampilkan tindakan aktif + prediksi tertinggi saja, supaya prioritas jelas.")
-            show_table(focus_sel.drop(columns=["_unit"], errors="ignore"), kinds=SEL_KINDS,
-                       column_config={"Produk": st.column_config.TextColumn(width="medium"),
-                                      "Alasan": st.column_config.TextColumn(width="large")})

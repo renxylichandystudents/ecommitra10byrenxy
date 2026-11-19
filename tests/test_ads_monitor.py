@@ -227,6 +227,56 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertEqual(list(parts["jeda_tertinggal"]["_key"]), ["b"])
         self.assertEqual(list(parts["pantau"]["_key"]), ["c", "d"])
 
+    def test_partition_execution_sesuai_vs_tidak(self):
+        frame = pd.DataFrame([
+            {"_key": "a", "Tindakan": "Buat / aktifkan", "Omzet iklan sejak disimpan": 0, "ROAS aktual": float("nan")},
+            {"_key": "b", "Tindakan": "Sudah diiklankan di tempat lain", "Omzet iklan sejak disimpan": 0, "ROAS aktual": float("nan")},
+            {"_key": "c", "Tindakan": "Jeda / hentikan", "Omzet iklan sejak disimpan": 100, "ROAS aktual": 5.0},
+            {"_key": "d", "Tindakan": "Keluarkan anggota dari grup", "Omzet iklan sejak disimpan": 50, "ROAS aktual": 3.0},
+            {"_key": "e", "Tindakan": "Turunkan budget", "Omzet iklan sejak disimpan": 500, "ROAS aktual": 4.0},
+            {"_key": "f", "Tindakan": "Naikkan Target ROAS", "Omzet iklan sejak disimpan": 200, "ROAS aktual": 6.0},
+            {"_key": "g", "Tindakan": "Pertahankan", "Omzet iklan sejak disimpan": 800, "ROAS aktual": 22.0},
+        ])
+        exe = Mon.partition_execution(frame, target_roas=20.0)
+        self.assertEqual(list(exe["tidak_belum_setup"]["_key"]), ["a"])
+        self.assertEqual(list(exe["tidak_di_tempat_lain"]["_key"]), ["b"])
+        self.assertEqual(list(exe["tidak_jeda"]["_key"]), ["c"])
+        self.assertEqual(list(exe["tidak_isi_grup"]["_key"]), ["d"])
+        self.assertEqual(list(exe["sesuai_boros"]["_key"]), ["e"])
+        self.assertEqual(list(exe["sesuai_tidak_efektif"]["_key"]), ["f"])
+        self.assertEqual(list(exe["sesuai_efektif"]["_key"]), ["g"])
+        counts = Mon.execution_counts(exe)
+        self.assertEqual(counts["sesuai"], 3)
+        self.assertEqual(counts["tidak"], 4)
+        self.assertEqual(counts["efektif"], 1)
+
+    def test_campaign_daily_progress_deltas(self):
+        campaign = {
+            "pantau_harian": [
+                {
+                    "tanggal": "2026-11-15",
+                    "items": [
+                        {"key": "produk:1", "biaya": 100_000, "omzet": 1_000_000, "budget_plan": 50_000},
+                        {"key": "produk:2", "biaya": 50_000, "omzet": 200_000, "budget_plan": 25_000},
+                    ],
+                },
+                {
+                    "tanggal": "2026-11-17",
+                    "items": [
+                        {"key": "produk:1", "biaya": 180_000, "omzet": 1_800_000, "budget_plan": 50_000},
+                        {"key": "produk:2", "biaya": 90_000, "omzet": 300_000, "budget_plan": 25_000},
+                    ],
+                },
+            ],
+        }
+        prog = Mon.campaign_daily_progress(campaign, {"produk:1", "produk:2"})
+        self.assertEqual(len(prog), 2)
+        self.assertAlmostEqual(prog.iloc[0]["Komitmen budget/hari"], 75_000)
+        self.assertAlmostEqual(prog.iloc[0]["Biaya kumulatif sejak campaign"], 150_000)
+        self.assertTrue(pd.isna(prog.iloc[0]["Naik biaya vs catatan lalu"]))
+        self.assertAlmostEqual(prog.iloc[1]["Naik biaya vs catatan lalu"], 120_000)
+        self.assertAlmostEqual(prog.iloc[1]["Naik omzet vs catatan lalu"], 900_000)
+
     def test_checkpoint_and_history(self):
         campaign = {"id": 1, "setelan": {"data_sampai": "2026-11-13"}}
         rows = pd.DataFrame([{
