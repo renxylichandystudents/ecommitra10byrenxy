@@ -1,5 +1,10 @@
 # Status terbaru aplikasi
 
+Diperbarui: 20 November 2026 (dini, unggah laporan iklan satu hari untuk campaign).
+
+- Di bawah riwayat campaign iklan ada unggahan Semua Laporan Iklan yang periodenya satu hari. Biaya dan omzet tanggal itu menggantikan selisih MTD pada kartu, progress, dan riwayat iklan campaign. File MTD ditolak di slot ini dan tetap untuk data latih.
+- Modal Harian tidak dibaca. Budget di Shopee tetap kosong. Sales produk dan sales bersih tetap dari transaksi atau performa.
+
 Diperbarui: 20 November 2026 (dini, kartu iklan otomatis tanpa produk disembunyikan).
 
 - Bagian Di luar plan tidak lagi menampilkan Iklan Produk Otomatis. Baris all iklan itu tidak punya Kode Produk, jadi kartunya kosong.

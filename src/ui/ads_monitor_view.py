@@ -440,6 +440,8 @@ def _ad_row_card(
             + (", hari ini belum dihitung). " if period_txt else ". ")
             + "**Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** = angka hari itu di laporan all iklan, "
             "bukan jumlah yang ditumpuk dan bukan budget harian. "
+            "Tanggal yang sudah diunggah sebagai laporan satu hari memakai angka file itu. "
+            "Tanggal yang belum diunggah masih selisih laporan MTD. "
             "Jumlah semua tanggal ada di kartu di atas. "
             "**Budget di rencana** = usulan campaign. **Budget di Shopee** kosong: file all iklan "
             "tidak memuat Modal Harian yang diisi di Seller Center (bukan rata-rata biaya, bukan usulan). "
@@ -538,24 +540,36 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     since_start = Mon.campaign_eval_start(cur) or start
     eval_end = Mon.campaign_eval_end(cur, today=today)
     # 14 Nov tampil bila tanggal mulai = hari data, sementara selisih all iklan baru ada tanggal 15.
-    if since_start and eval_end and since_start <= eval_end and ads_overall is not None:
-        probe = M.daily_ad_totals(ads_overall, start=since_start, end=eval_end)
+    from src.core.ads_campaign_daily import apply_campaign_daily
+
+    empty_daily = pd.DataFrame(columns=["Tanggal", "Biaya", "Omzet", "Sumber"])
+    if since_start and eval_end and since_start <= eval_end:
+        probe = M.daily_ad_totals(ads_overall, start=since_start, end=eval_end) if ads_overall is not None else empty_daily
+        probe, _ = apply_campaign_daily(cur, probe, None, start=since_start, end=eval_end)
         since_start = Mon.skip_baseline_day(since_start, eval_end, probe) or since_start
     start = since_start
     last_data = eval_end
     store_since = {"biaya": 0.0, "omzet": 0.0, "hari": 0}
     unit_daily = None
-    if since_start and eval_end and since_start <= eval_end and ads_overall is not None:
-        daily_win = M.daily_ad_totals(ads_overall, start=since_start, end=eval_end)
-        if not daily_win.empty:
+    daily_win = empty_daily
+    daily_built = False
+    if since_start and eval_end and since_start <= eval_end:
+        daily_built = True
+        if ads_overall is not None:
+            daily_win = M.daily_ad_totals(ads_overall, start=since_start, end=eval_end)
+            unit_daily = M.daily_unit_totals(
+                ads_overall, start=date(eval_end.year, eval_end.month, 1), end=eval_end,
+            )
+        daily_win, unit_over = apply_campaign_daily(
+            cur, daily_win, unit_daily, start=since_start, end=eval_end,
+        )
+        unit_daily = unit_over if unit_over is not None and not unit_over.empty else None
+        if daily_win is not None and not daily_win.empty:
             store_since = {
                 "biaya": float(daily_win["Biaya"].sum()),
                 "omzet": float(daily_win["Omzet"].sum()),
                 "hari": int(len(daily_win)),
             }
-        unit_daily = M.daily_unit_totals(
-            ads_overall, start=date(eval_end.year, eval_end.month, 1), end=eval_end,
-        )
     calendar_days = (
         (eval_end - since_start).days + 1
         if since_start and eval_end and eval_end >= since_start
@@ -648,9 +662,18 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             period_now = _period_sales(track, factor)
             plan_hari = float(pd.to_numeric(merged.get("Budget usulan/hari"), errors="coerce").fillna(0).sum()) if "Budget usulan/hari" in merged.columns else 0.0
             actual_hari = float(pd.to_numeric(merged.get("Budget efektif Shopee/hari"), errors="coerce").fillna(0).sum()) if "Budget efektif Shopee/hari" in merged.columns else 0.0
-            # Realisasi hari checkpoint dari laporan all iklan 1 tanggal (bukan prorata)
-            day_tot = M.daily_ad_totals(ads_overall, start=checkpoint_day, end=checkpoint_day)
-            realisasi_hari = float(day_tot.iloc[0]["Biaya"]) if not day_tot.empty else float("nan")
+            # Realisasi hari checkpoint: laporan satu hari bila sudah diunggah, kalau tidak selisih MTD
+            day_key = checkpoint_day.isoformat()
+            hit = (
+                daily_win.loc[daily_win["Tanggal"].astype(str).str[:10] == day_key]
+                if daily_win is not None and not daily_win.empty and "Tanggal" in daily_win.columns
+                else pd.DataFrame()
+            )
+            if not hit.empty:
+                realisasi_hari = float(hit.iloc[0]["Biaya"])
+            else:
+                day_tot = M.daily_ad_totals(ads_overall, start=checkpoint_day, end=checkpoint_day)
+                realisasi_hari = float(day_tot.iloc[0]["Biaya"]) if not day_tot.empty else float("nan")
             toko_snap = Mon.build_toko_snapshot(
                 budget_plan_hari=plan_hari,
                 budget_actual_hari=actual_hari,
@@ -696,6 +719,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         f"Yang dihitung sekarang: **{fmt_date(since_start)} – {fmt_date(last_data) if last_data else '–'}** "
         f"({fmt_num(days_since)} hari penuh; hari ini belum dihitung). "
         f"Ada angka harian untuk {fmt_num(store_since.get('hari') or 0)} tanggal. "
+        "Tanggal yang sudah diunggah di bawah riwayat campaign memakai file satu hari itu. "
+        "Tanggal lain masih selisih laporan MTD. "
         "Omzet iklan = penjualan yang dikaitkan ke iklan di laporan itu."
     )
     period = _period_sales(track, factor)
@@ -870,6 +895,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             ads_overall=ads_overall, orders=orders, performance=performance,
             window_start=window_start, window_end=progress_end,
             factor=float(factor or 0), today=today, ringkas=ringkas,
+            daily_store=daily_win if daily_built else None,
         )
         st.markdown("#### Progress harian · periode campaign")
         period_caption = ""
@@ -886,7 +912,9 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 "Tiap baris = satu tanggal."
                 + period_caption
                 + " **Baris Total** di atas = jumlah tanggal di bawah, sama dengan kartu Biaya iklan, ROAS iklan, Sales produk, dan Sales bersih. "
-                "**Biaya iklan** dan **ROAS iklan** = angka hari itu. ROAS Total = jumlah omzet ÷ jumlah biaya. "
+                "**Biaya iklan** dan **ROAS iklan** = angka hari itu. "
+                "Tanggal yang sudah diunggah sebagai laporan satu hari memakai file itu; yang belum, selisih MTD. "
+                "ROAS Total = jumlah omzet ÷ jumlah biaya. "
                 "**Sales produk** dan **Sales bersih** = angka hari itu, istilah sama Ringkasan. "
                 "**Saran** memakai aturan yang sama dengan analisa di bawah: Sesuai rencana, Tidak sesuai rencana, ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
             )

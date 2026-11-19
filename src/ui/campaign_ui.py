@@ -107,9 +107,62 @@ def panel(kind: str, *, features, today: date, can_edit: bool, username: str, de
                     _require()
                     store.save(C.remove(items, pick), username=username)
                     st.rerun()
+        _daily_report_box(kind, cur, store, can_edit, username)
     if not toggle:
         return (SAVED if cur is not None else NEW), cur
     return ((st.session_state.get(mode_key) or SAVED) if cur is not None else NEW), cur
+
+
+def _daily_report_box(kind, cur, store, can_edit, username) -> None:
+    """Unggah all iklan satu tanggal. Hanya untuk campaign iklan yang sedang dipakai."""
+    if kind != "iklan" or not cur:
+        return
+    days = [
+        str(item.get("tanggal") or "")[:10]
+        for item in (cur.get("laporan_harian") or [])
+        if isinstance(item, dict) and item.get("tanggal")
+    ]
+    st.markdown("**Laporan all iklan per tanggal**")
+    st.caption(
+        "Untuk evaluasi campaign, unggah Semua Laporan Iklan yang periodenya satu hari "
+        "(tanggal awal sama dengan tanggal akhir). Biaya dan omzet hari itu menggantikan selisih MTD. "
+        "Modal Harian tidak dibaca. Sales produk dan sales bersih tetap dari transaksi atau performa. "
+        "File MTD (misalnya 1–18 November) ditolak; file itu untuk data latih, bukan untuk campaign."
+    )
+    if days:
+        st.caption("Sudah masuk: " + ", ".join(fmt_date(day) for day in days) + ". Unggah tanggal yang sama untuk mengganti.")
+    else:
+        st.caption("Belum ada laporan satu hari. Angka campaign masih selisih laporan MTD.")
+    if not can_edit:
+        return
+    round_no = int(st.session_state.get(f"cmp-daily-round-{kind}", 0))
+    files = st.file_uploader(
+        "Semua Laporan Iklan, satu tanggal",
+        type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True,
+        key=f"cmp-daily-file-{kind}-{round_no}",
+        label_visibility="collapsed",
+    )
+    if not files or not st.button("Masukkan ke campaign", key=f"cmp-daily-save-{kind}-{round_no}", type="primary"):
+        return
+    _require()
+    from src.core.ads_campaign_daily import merge_daily_reports, parse_daily_ad_file
+
+    accepted, rejected = [], []
+    for uploaded in files:
+        try:
+            accepted.append(parse_daily_ad_file(uploaded.getvalue(), getattr(uploaded, "name", "laporan")))
+        except ValueError as exc:
+            rejected.append(str(exc))
+    if rejected:
+        st.error("\n\n".join(rejected))
+    if not accepted:
+        return
+    cid = cur.get("id")
+    saved = [merge_daily_reports(item, accepted) if item.get("id") == cid else item for item in store.all()]
+    store.save(saved, username=username or "lokal")
+    st.session_state[f"cmp-daily-round-{kind}"] = round_no + 1
+    st.rerun()
 
 
 def switch_to_new(kind: str) -> None:

@@ -984,6 +984,7 @@ def campaign_daily_progress(
     ads_overall=None,
     orders=None,
     performance=None,
+    daily_store: pd.DataFrame | None = None,
     window_start: date | None = None,
     window_end: date | None = None,
     factor: float = 0.0,
@@ -1017,7 +1018,13 @@ def campaign_daily_progress(
     if start is None or end_cap < start:
         return pd.DataFrame(columns=cols)
 
-    daily = _AM.daily_ad_totals(ads_overall, start=start, end=end_cap)
+    if daily_store is not None:
+        daily = daily_store.copy() if isinstance(daily_store, pd.DataFrame) else pd.DataFrame()
+        if not daily.empty and "Tanggal" in daily.columns:
+            tanggal = pd.to_datetime(daily["Tanggal"], errors="coerce").dt.date
+            daily = daily.loc[tanggal.notna() & (tanggal >= start) & (tanggal <= end_cap)].copy()
+    else:
+        daily = _AM.daily_ad_totals(ads_overall, start=start, end=end_cap)
     store_daily = _daily_store_sales(orders, start, end_cap, performance=performance)
     # Meta dari pantau_harian / live untuk plan & MTD saja
     meta: dict[str, dict] = {}
