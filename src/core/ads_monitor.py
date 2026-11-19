@@ -663,6 +663,13 @@ _MEMBER_RANK = {
     "Pertahankan di grup": 6,
 }
 
+# Grup belum setup: tampilkan dulu yang masih perlu keputusan setup (layak), baru yang tidak perlu / sudah di tempat lain.
+_MEMBER_RANK_SETUP = {
+    "Layak di-setup di grup ini": 0,
+    "Tidak perlu di-setup": 1,
+    "Sudah diiklankan di tempat lain": 2,
+}
+
 
 def _member_unit_slice(members: pd.DataFrame, group_key: str) -> pd.DataFrame:
     key = str(group_key)
@@ -761,7 +768,8 @@ def _num_cell(row, *names: str) -> float:
 def _product_signal(products: pd.DataFrame | None, code: str) -> dict:
     """Sinyal produk + triad stok Site 10037 (toko) / 10062 (DC Cikupa) / 10036 (DC Cipeucang)."""
     empty = {
-        "omzet_harian": float("nan"), "stok": float("nan"), "stok_room": float("nan"), "nama": "",
+        "omzet_harian": float("nan"), "qty_harian": float("nan"),
+        "stok": float("nan"), "stok_room": float("nan"), "nama": "",
         "stok_10037": float("nan"), "stok_10062": float("nan"), "stok_10036": float("nan"),
     }
     if products is None or getattr(products, "empty", True) or "product_code" not in products.columns:
@@ -775,6 +783,7 @@ def _product_signal(products: pd.DataFrame | None, code: str) -> dict:
     s36 = _num_cell(row, "stok_10036")
     return {
         "omzet_harian": _num_cell(row, "omzet_harian"),
+        "qty_harian": _num_cell(row, "qty_harian"),
         "stok": s37,
         "stok_room": _num_cell(row, "stok_room"),
         "nama": str(row["nama"]) if "nama" in hit.columns else "",
@@ -918,13 +927,14 @@ def group_members_review(
     """Performa + saran tiap produk di dalam satu iklan grup.
 
     - Grup aktif: evaluasi biaya/omzet periode terakhir (keluarkan yang lemah).
-    - Grup belum di-setup: bandingkan vs iklan yang sudah jalan di tempat lain, lalu nilai kelayakan
-      setup dari histori grup / prediksi / stok (campaign sebelumnya tidak otomatis layak).
+    - Grup belum di-setup: urut Layak → Tidak perlu → Sudah di tempat lain. Layak hanya bila
+      prediksi mendorong target (batas 95% sales toko / qty laku) atau histori ROAS kuat + stok toko;
+      saran menjelaskan kenapa harus diiklankan.
     """
     cols = [
         "Produk", "Kode produk",
         "Stok 10037", "Stok 10062", "Stok 10036",
-        "Biaya/hari", "Omzet/hari", "ROAS",
+        "Prediksi omzet/hari", "Biaya/hari", "Omzet/hari", "ROAS",
         "Porsi omzet grup", "Porsi biaya grup", "Iklan lain", "Tindakan", "Saran",
     ]
     if members is None or getattr(members, "empty", True) or not group_key:
@@ -962,6 +972,7 @@ def group_members_review(
     contrib = contribution or {}
     codes = set(part["product_code"].astype(str))
     elsewhere = _elsewhere_for_codes(members, units, group_key=key, codes=codes)
+    sales_floor, qty_floor = A.potential_floors(products) if products is not None else (0.0, float("inf"))
     rows = []
     for r in part.itertuples(index=False):
         code = str(r.product_code)
@@ -981,6 +992,14 @@ def group_members_review(
 
         sig = _product_signal(products, code)
         stock_status, stock_tip = stock_worthiness(sig)
+        demand = sig["omzet_harian"]
+        qty_day = sig["qty_harian"]
+        demand_v = demand if demand == demand else 0.0
+        qty_v = qty_day if qty_day == qty_day else 0.0
+        pushes_target = (
+            (sales_floor > 0 and demand_v >= sales_floor)
+            or (qty_floor < float("inf") and qty_v >= qty_floor)
+        )
 
         if not group_active:
             # Mode belum di-setup: jangan bilang "pertahankan" — bandingkan setup & kelayakan
@@ -993,10 +1012,26 @@ def group_members_review(
                 )
             else:
                 hist_b, hist_o, hist_roas = _hist_perf_for_code(work, code)
-                demand = sig["omzet_harian"]
+                strong_hist = (
+                    hist_b > 0
+                    and hist_o > 0
+                    and hist_roas == hist_roas
+                    and target_roas > 0
+                    and hist_roas >= target_roas * 0.8
+                )
+                ok_hist = (
+                    hist_o > 0
+                    and (
+                        hist_roas != hist_roas
+                        or hist_roas >= max(target_roas * 0.5, 1.0)
+                    )
+                )
                 if margin is not None and margin <= 0:
                     act = "Tidak perlu di-setup"
-                    tip = "Margin kotor di bawah potongan Shopee — rugi bila diiklankan. Jangan masukkan ke grup baru. " + stock_tip
+                    tip = (
+                        "Margin kotor di bawah potongan Shopee — rugi bila diiklankan. "
+                        "Jangan masukkan ke grup baru. " + stock_tip
+                    )
                 elif stock_status == "kosong":
                     act = "Tidak perlu di-setup"
                     tip = stock_tip
@@ -1012,38 +1047,59 @@ def group_members_review(
                         f"Histori di grup ini ROAS {hist_roas:.1f}× jauh di bawah target {target_roas:.1f}×. "
                         "Tidak layak di-setup ulang di grup ini. " + stock_tip
                     )
-                elif demand == demand and demand <= 0 and hist_o <= 0:
-                    act = "Tidak perlu di-setup"
-                    tip = "Prediksi omzet rendah dan belum ada bukti omzet iklan — prioritaskan produk lain. " + stock_tip
                 elif stock_status == "isi_dari_dc":
                     act = "Tidak perlu di-setup"
                     tip = (
                         stock_tip
                         + " Setelah stok masuk Site 10037, baru masukkan ke grup."
                     )
-                elif (
-                    (hist_roas == hist_roas and target_roas > 0 and hist_roas >= target_roas * 0.8)
-                    or (demand == demand and demand > 0 and stock_status == "ada_toko")
-                    or (hist_o > 0 and (hist_roas != hist_roas or hist_roas >= max(target_roas * 0.5, 1.0))
-                        and stock_status == "ada_toko")
-                ):
-                    act = "Layak di-setup di grup ini"
-                    bits = []
-                    if hist_roas == hist_roas and hist_b > 0:
-                        bits.append(f"histori ROAS {hist_roas:.1f}×")
-                    if demand == demand and demand > 0:
-                        bits.append(f"prediksi omzet {_rp_hari(demand)}")
-                    bits.append(stock_sites_text(sig, short=True))
+                elif not pushes_target and not strong_hist:
+                    # Prediksi tidak mendorong target → tidak perlu setup
+                    floor_txt = (
+                        f"≥ {_rp_hari(sales_floor)} (produk pembentuk 95% sales toko)"
+                        if sales_floor > 0 else "batas sales toko"
+                    )
+                    qty_txt = (
+                        f" atau ≥ {qty_floor:.1f} unit/hari".replace(".", ",")
+                        if qty_floor < float("inf") else ""
+                    )
                     tip = (
-                        "Belum ada iklan aktif di tempat lain. "
-                        + (("Bukti: " + "; ".join(bits) + ". ") if bits else "")
-                        + "Layak dimasukkan saat grup ini diaktifkan di Seller Center."
+                        f"Prediksi sales {_rp_hari(demand_v)}"
+                        + (f" ({qty_v:.1f} unit/hari)".replace(".", ",") if qty_v > 0 else "")
+                        + f" di bawah batas kejar target ({floor_txt}{qty_txt}). "
+                        "Tidak mendorong target — tidak perlu di-setup di grup ini. "
+                        + stock_tip
+                    )
+                    act = "Tidak perlu di-setup"
+                elif stock_status == "ada_toko" and (pushes_target or strong_hist or ok_hist):
+                    act = "Layak di-setup di grup ini"
+                    why = ["belum diiklankan di tempat lain"]
+                    if pushes_target:
+                        why.append(
+                            f"prediksi sales {_rp_hari(demand_v)}"
+                            + (f" / {qty_v:.1f} unit".replace(".", ",") if qty_v > 0 else "")
+                            + " mendorong target"
+                            + (f" (≥ {_rp_hari(sales_floor)} = 95% sales toko)" if sales_floor > 0 else "")
+                        )
+                    if strong_hist or (ok_hist and hist_roas == hist_roas and hist_b > 0):
+                        why.append(
+                            f"histori di grup ini ROAS {hist_roas:.1f}×"
+                            + (f" vs target {target_roas:.1f}×" if target_roas > 0 else "")
+                            + f" (biaya {_rp_hari(hist_b)} → omzet {_rp_hari(hist_o)})"
+                        )
+                    elif ok_hist and hist_o > 0:
+                        why.append(f"pernah menghasilkan omzet iklan {_rp_hari(hist_o)} di grup ini")
+                    why.append(stock_sites_text(sig, short=True) + " — stok toko ada")
+                    tip = (
+                        "Kenapa harus diiklankan: " + "; ".join(why) + ". "
+                        "Masukkan produk ini saat grup diaktifkan di Seller Center."
                     )
                 else:
                     act = "Tidak perlu di-setup"
                     tip = (
-                        "Belum ada bukti kuat (histori/prediksi/stok 10037·10062·10036) bahwa produk ini layak ikut grup baru. "
-                        "Tunda dulu; fokus ke item yang sudah jelas. " + stock_tip
+                        "Belum ada bukti kuat (prediksi mendorong target / histori ROAS / stok toko) "
+                        "bahwa produk ini layak ikut grup baru. Tunda dulu; fokus ke item yang sudah jelas. "
+                        + stock_tip
                     )
         elif stock_status == "kosong" and biaya > 0:
             act = "Keluarkan dari grup"
@@ -1131,6 +1187,7 @@ def group_members_review(
             "Stok 10037": sig.get("stok_10037", float("nan")),
             "Stok 10062": sig.get("stok_10062", float("nan")),
             "Stok 10036": sig.get("stok_10036", float("nan")),
+            "Prediksi omzet/hari": demand if demand == demand else float("nan"),
             "Biaya/hari": biaya,
             "Omzet/hari": omzet,
             "ROAS": roas,
@@ -1143,9 +1200,12 @@ def group_members_review(
     frame = pd.DataFrame(rows, columns=cols)
     if frame.empty:
         return frame
-    frame["_rank"] = frame["Tindakan"].map(lambda t: _MEMBER_RANK.get(t, 9))
+    rank_map = _MEMBER_RANK_SETUP if not group_active else _MEMBER_RANK
+    frame["_rank"] = frame["Tindakan"].map(lambda t: rank_map.get(t, 9))
+    # Belum setup: dalam blok Layak urut prediksi tertinggi dulu (yang paling mendorong target).
+    sort_cols = ["_rank", "Prediksi omzet/hari"] if not group_active else ["_rank", "Biaya/hari"]
     return (
-        frame.sort_values(["_rank", "Biaya/hari"], ascending=[True, False])
+        frame.sort_values(sort_cols, ascending=[True, False], na_position="last")
         .drop(columns=["_rank"])
         .reset_index(drop=True)
     )
@@ -1164,12 +1224,13 @@ def group_members_summary(member_frame: pd.DataFrame) -> str:
     andalan = int((acts == "Pisahkan jadi iklan tunggal").sum())
     ok = int((acts == "Pertahankan di grup").sum())
     bits = []
-    if already:
-        bits.append(f"{already} produk sudah diiklankan di tempat lain (jangan dobel)")
+    # Urutan sama dengan tabel belum-setup: layak (belum di-setting) dulu.
+    if layak:
+        bits.append(f"{layak} produk belum di-setup & layak ikut saat grup diaktifkan")
     if skip:
         bits.append(f"{skip} produk tidak perlu di-setup di grup ini")
-    if layak:
-        bits.append(f"{layak} produk layak ikut saat grup diaktifkan")
+    if already:
+        bits.append(f"{already} produk sudah diiklankan di tempat lain (jangan dobel)")
     if out:
         bits.append(f"{out} produk sebaiknya dikeluarkan (menyedot budget tanpa hasil)")
     if tinjau:

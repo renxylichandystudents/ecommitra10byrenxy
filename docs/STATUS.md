@@ -1,29 +1,32 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026.
+Diperbarui: 19 November 2026 (siang).
 
-## Lanjut nanti (disimpan 19 Nov pagi) · Pantau iklan
+## Lanjut nanti · Pantau iklan (grup belum setup)
 
-Semua perubahan Pantau hari ini sudah di `main` (commit terakhir: triad stok 10037/10062/10036). Localhost:8501 / Cloud ikut push.
+Localhost:8501 / Cloud ikut push `main`.
 
-**Sudah selesai hari ini**
-- Rombak tabel riwayat evaluasi (patokan / tambahan harian / total sejak campaign / rata-rata MTD).
-- Split ketat dalam rencana vs di luar rencana + banner blok (Belum setup / Jeda tertinggal / Pantau / Di luar).
-- Grup belum setup: bandingkan anggota vs iklan aktif lain + kelayakan setup.
-- Jeda masih berbiaya: sebut nama iklan di SC; label Shopee tidak bilang “tidak diisi”.
-- Dompet: “di atas patokan” bila rata-rata terpakai melebihi (bukan “mendekati”).
-- Stok harian 10037 · 10062 · 10036 di kartu, anggota grup, dan daftar wajib iklan.
+**Sudah selesai siang ini**
+- Kelayakan setup grup diperketat: prediksi sales yang **tidak mendorong target** (di bawah batas 95% sales toko / qty laku) → **Tidak perlu di-setup**.
+- Saran **Layak** wajib menjelaskan kenapa harus diiklankan (prediksi vs batas target, histori ROAS, stok toko, belum di tempat lain).
+- Urutan tabel/ringkasan: **Layak (belum di-setting)** → Tidak perlu → Sudah diiklankan di tempat lain; kolom Prediksi omzet/hari ditambah.
 
 **Cek saat lanjut**
-- Refresh keras Pantau bila label lama masih muncul.
-- Buka Grup Iklan 01 (belum setup): kolom stok + saran Sudah diiklankan / Layak / Tidak perlu.
-- Buka blok Jeda tertinggal: pastikan nama iklan SC + triad stok terbaca.
-- Bila stok DC tampil “–”, pastikan unggahan Data stok Site 10062/10036 terbaru ada.
+- Refresh keras Pantau → buka Grup Iklan 01: baris Layak di atas; saran diawali “Kenapa harus diiklankan…”.
+- Produk prediksi kecil (stok ada tapi tidak mendorong target) harus **Tidak perlu**, bukan Layak.
+- Water Heater / item layak: pastikan alasan menyebut prediksi atau histori ROAS + stok 10037.
 
 **Belum dikerjakan / bisa lanjut**
-- Tesis docx (sempat dibuka, diprioritaskan Pantau).
-- Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” untuk kasus edge (penjelasan UI sudah ada).
-- Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0 — pantau apakah alias kunci/laporan perlu diperhalus.
+- Tesis docx.
+- Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” (edge).
+- Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0.
+
+## 2026-11-19 · Grup belum setup: urut Layak + alasan jelas + prediksi kejar target
+
+- `_MEMBER_RANK_SETUP`: Layak dulu (belum di-setting), lalu Tidak perlu, lalu Sudah di tempat lain.
+- Layak memakai `potential_floors` (sama seperti strategi iklan): prediksi ≥ batas 95% sales toko atau qty laku, **atau** histori ROAS ≥ 80% target + stok toko.
+- Prediksi di bawah batas tanpa histori kuat → Tidak perlu (“tidak mendorong target”).
+- Teks Layak: “Kenapa harus diiklankan: …”. Expander label hitung layak / tidak perlu / sudah di tempat lain.
 
 ## 2026-11-19 · Pantau: triad stok 10037/10062/10036 di semua laporan iklan
 

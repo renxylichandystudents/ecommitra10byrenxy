@@ -288,16 +288,27 @@ def _ad_row_card(
     )
     if is_group:
         n_mem = len(member_frame)
-        keep_labels = {"Pertahankan di grup", "Layak di-setup di grup ini"}
-        need_mem = (
-            int((~member_frame["Tindakan"].isin(keep_labels)).sum())
-            if n_mem and "Tindakan" in member_frame.columns else 0
-        )
-        label = (
-            f"Anggota grup · performa & saran ({fmt_num(n_mem)} produk"
-            + (f", {fmt_num(need_mem)} perlu tindakan" if need_mem else "")
-            + ")"
-        )
+        acts = member_frame["Tindakan"] if n_mem and "Tindakan" in member_frame.columns else pd.Series(dtype=str)
+        if not group_active and n_mem:
+            n_layak = int((acts == "Layak di-setup di grup ini").sum())
+            n_skip = int((acts == "Tidak perlu di-setup").sum())
+            n_else = int((acts == "Sudah diiklankan di tempat lain").sum())
+            label = (
+                f"Anggota grup · belum setup ({fmt_num(n_mem)} produk"
+                + (f": {fmt_num(n_layak)} layak" if n_layak else ": 0 layak")
+                + (f", {fmt_num(n_skip)} tidak perlu" if n_skip else "")
+                + (f", {fmt_num(n_else)} sudah di tempat lain" if n_else else "")
+                + ")"
+            )
+            need_mem = n_layak
+        else:
+            keep_labels = {"Pertahankan di grup", "Layak di-setup di grup ini"}
+            need_mem = int((~acts.isin(keep_labels)).sum()) if n_mem else 0
+            label = (
+                f"Anggota grup · performa & saran ({fmt_num(n_mem)} produk"
+                + (f", {fmt_num(need_mem)} perlu tindakan" if need_mem else "")
+                + ")"
+            )
         with st.expander(label, expanded=(need_mem > 0) or (not group_active and n_mem > 0)):
             if group_active:
                 st.caption(
@@ -308,9 +319,10 @@ def _ad_row_card(
                 )
             else:
                 st.caption(
-                    "Grup ini belum aktif di Seller Center. Tiap produk dicek: "
-                    "sudahkah diiklankan di tempat lain, dan apakah masih layak di-setup "
-                    "(histori, prediksi, stok 10037/10062/10036). "
+                    "Urutan: Layak di-setup (belum di-setting) → Tidak perlu → Sudah diiklankan di tempat lain. "
+                    "Layak hanya bila prediksi sales mendorong target (batas 95% sales toko / qty laku) "
+                    "atau histori ROAS kuat, plus stok toko 10037. "
+                    "Kolom Saran menjelaskan kenapa harus / tidak perlu diiklankan. "
                     "Toko kosong tapi DC ada → restock dulu, jangan langsung setup."
                 )
             if member_frame.empty:
@@ -323,6 +335,7 @@ def _ad_row_card(
                     member_frame,
                     kinds={
                         "Stok 10037": "count", "Stok 10062": "count", "Stok 10036": "count",
+                        "Prediksi omzet/hari": "money",
                         "Biaya/hari": "money", "Omzet/hari": "money", "ROAS": "dec",
                         "Porsi omzet grup": "pct", "Porsi biaya grup": "pct",
                     },
