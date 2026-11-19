@@ -2,6 +2,12 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Highlight blok + jeda sebut nama iklan + beda jendela biaya
+
+- Pembatas **Belum setup / Jeda tertinggal / Pantau / Di luar rencana** diganti banner menonjol (bukan teks kecil).
+- Jeda masih berbiaya: saran & kartu menyebut **nama iklan di SC** yang masih mencatat biaya; label Di Shopee = “masih berbiaya… pause belum efektif” (bukan “tidak diisi”).
+- Catatan: rata-rata bulan ini boleh lebih kecil dari sejak campaign karena jendela hitung berbeda (tgl 1 vs sejak campaign).
+
 ## 2026-11-19 · Grup belum setup: bandingkan anggota vs iklan aktif + kelayakan
 
 - Mode `group_active=False`: tiap produk dicek apakah **sudah diiklankan di tempat lain**, lalu kelayakan setup dari histori grup / prediksi / stok / margin.

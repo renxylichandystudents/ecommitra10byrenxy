@@ -142,15 +142,45 @@ def _fmt_hari(value: float) -> str:
     return f"{fmt_idr(value)}/hari" if value == value else "–"
 
 
-def _plan_setup_labels(plan: float, setup: float) -> tuple[str, str]:
-    """Budget 0 di campaign = sengaja dihentikan, bukan data kosong."""
+def _plan_setup_labels(
+    plan: float,
+    setup: float,
+    *,
+    actual_since: float = 0.0,
+    actual_month: float = float("nan"),
+) -> tuple[str, str]:
+    """Budget 0 di campaign = sengaja dihentikan. Jika masih ada biaya di laporan, jangan bilang 'tidak diisi'."""
+    spending = (actual_since or 0) > 5_000 or (actual_month == actual_month and actual_month > 5_000)
     if plan <= 0 and setup <= 0:
+        if spending:
+            rate = actual_since if (actual_since or 0) > 5_000 else actual_month
+            return "dihentikan (Rp 0)", f"masih berbiaya {_fmt_hari(rate)} — pause belum efektif"
         return "dihentikan (Rp 0)", "tidak diisi (sesuai jeda)"
     if plan <= 0:
         return "dihentikan (Rp 0)", _fmt_hari(setup)
     if setup <= 0:
         return _fmt_hari(plan), "belum diisi"
     return _fmt_hari(plan), _fmt_hari(setup)
+
+
+def _block_header(title: str, detail: str, *, tone: str = "info") -> None:
+    """Pembatas antar blok campaign — lebih menonjol dari caption biasa."""
+    palette = {
+        "warn": ("#fff7ed", "#9a3412", "#fdba74"),
+        "alert": ("#fef2f2", "#991b1b", "#fca5a5"),
+        "ok": ("#ecfdf5", "#065f46", "#6ee7b7"),
+        "info": ("#f1f5f9", "#0f172a", "#94a3b8"),
+    }
+    bg, fg, border = palette.get(tone, palette["info"])
+    st.markdown(
+        f"<div style='margin:1.1rem 0 .55rem;padding:.7rem .95rem;border-radius:10px;"
+        f"background:{bg};border:1px solid {border};border-left:6px solid {fg}'>"
+        f"<div style='font-size:1.05rem;font-weight:800;color:{fg};letter-spacing:.01em'>"
+        f"{html.escape(title)}</div>"
+        f"<div style='margin-top:.2rem;font-size:var(--fs-sm);color:#475569;line-height:1.45'>"
+        f"{html.escape(detail)}</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _ad_row_card(
@@ -185,11 +215,26 @@ def _ad_row_card(
     omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
     biaya = float(r.get("Biaya sejak disimpan") or 0)
     roas = float(r["ROAS aktual"]) if r.get("ROAS aktual") == r.get("ROAS aktual") else float("nan")
-    plan_txt, setup_txt = _plan_setup_labels(plan, setup)
+    plan_txt, setup_txt = _plan_setup_labels(plan, setup, actual_since=since, actual_month=month_v)
     hasil = (
         f"Hasil iklan sejak campaign: {fmt_idr(omzet)}"
         + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
     )
+    spend_note = ""
+    if month_v == month_v and since > 0 and month_v + 1 < since:
+        spend_note = (
+            "<div style='color:#64748b;font-size:var(--fs-xs);margin-top:.35rem;line-height:1.4'>"
+            "Terpakai bulan ini boleh lebih kecil dari sejak campaign: bulan = rata-rata dari tanggal 1 "
+            "(termasuk hari sebelum campaign), sejak campaign = hanya setelah campaign disimpan."
+            "</div>"
+        )
+    if plan <= 0 and since > 5_000:
+        spend_note += (
+            f"<div style='color:#991b1b;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.45'>"
+            f"<b>Biaya masih dari iklan ini:</b> «{html.escape(name)}» di Seller Center"
+            f" · total sejak campaign {fmt_idr(biaya)}. Pause iklan dengan nama yang sama di SC."
+            f"</div>"
+        )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
     group_active = not (
         act == "Buat / aktifkan"
@@ -222,7 +267,8 @@ def _ad_row_card(
         f"<span><b>Di rencana</b> {html.escape(plan_txt)}</span>"
         f"<span><b>Di Shopee</b> {html.escape(setup_txt)}</span>"
         f"<span><b>Terpakai bulan ini</b> {_fmt_hari(month_v)}</span>"
-        f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}</span></div></div>",
+        f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}</span></div>"
+        f"{spend_note}</div>",
         unsafe_allow_html=True,
     )
     if is_group:
@@ -562,22 +608,26 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         else:
             st.markdown("#### Dalam rencana campaign")
             if not parts["belum_setup"].empty:
-                st.markdown(
-                    f"**Belum di-setup di Seller Center** · {fmt_num(len(parts['belum_setup']))} iklan "
-                    "(ada di rencana, belum terlihat aktif di laporan)"
+                _block_header(
+                    f"Belum di-setup di Seller Center · {fmt_num(len(parts['belum_setup']))} iklan",
+                    "Ada di rencana campaign, belum terlihat aktif di laporan. Setup di SC lalu unggah laporan.",
+                    tone="warn",
                 )
                 _render_cards(parts["belum_setup"], prefix="in-setup", scope="Dalam rencana · belum setup")
             if not parts["jeda_tertinggal"].empty:
-                st.markdown(
-                    f"**Dijeda di rencana, masih berbiaya** · {fmt_num(len(parts['jeda_tertinggal']))} iklan "
-                    "(budget rencana Rp 0, masih jalan di Shopee)"
+                _block_header(
+                    f"Dijeda di rencana, masih berbiaya · {fmt_num(len(parts['jeda_tertinggal']))} iklan",
+                    "Budget rencana Rp 0, tetapi laporan masih mencatat biaya pada iklan bernama sama di Seller Center — pause di SC.",
+                    tone="alert",
                 )
                 _render_cards(parts["jeda_tertinggal"], prefix="in-jeda", scope="Dalam rencana · jeda tertinggal")
             if not parts["pantau"].empty:
                 need = parts["pantau"].loc[parts["pantau"]["Tindakan"] != "Pertahankan"] if "Tindakan" in parts["pantau"].columns else parts["pantau"].iloc[0:0]
-                st.markdown(
-                    f"**Pantau & sesuaikan** · {fmt_num(len(parts['pantau']))} iklan"
-                    + (f" · {fmt_num(len(need))} perlu tindakan" if not need.empty else "")
+                _block_header(
+                    f"Pantau & sesuaikan · {fmt_num(len(parts['pantau']))} iklan"
+                    + (f" · {fmt_num(len(need))} perlu tindakan" if not need.empty else ""),
+                    "Iklan dalam rencana yang sudah terlihat di laporan — sesuaikan budget / Target ROAS bila perlu.",
+                    tone="info",
                 )
                 _render_cards(parts["pantau"], prefix="in", scope="Dalam rencana")
 
@@ -599,10 +649,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 download_excel(view[view_cols], f"pantau_iklan_{cid}.xlsx", key="xl-adt-mon", label="Unduh pantauan")
 
         if not out_plan.empty:
-            st.markdown("#### Di luar rencana campaign")
-            st.caption(
-                f"{fmt_num(len(out_plan))} iklan berbiaya di Seller Center tetapi **tidak** masuk campaign tersimpan. "
-                "Bukan bagian rencana — pause atau masukkan ke rencana baru bila memang mau dilanjutkan."
+            _block_header(
+                f"Di luar rencana campaign · {fmt_num(len(out_plan))} iklan",
+                "Berbiaya di Seller Center tetapi tidak masuk campaign tersimpan. Pause atau masukkan ke rencana baru bila mau dilanjutkan.",
+                tone="alert",
             )
             _render_cards(out_plan, prefix="out", scope="Di luar rencana")
             out_view = Mon.rename_budget_triad(out_plan)

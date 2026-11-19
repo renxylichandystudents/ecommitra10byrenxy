@@ -52,6 +52,8 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
         spend_bits = f"Terpakai sejak campaign {_rp_hari(cost)}"
         if month_v == month_v:
             spend_bits = f"Terpakai bulan ini {_rp_hari(month_v)}; sejak campaign {_rp_hari(cost)}"
+        nama = str(r.get("Iklan") or key)
+        total_sejak = float(r.get("Biaya sejak disimpan") or 0)
 
         if expected <= 0:
             if done or cost <= 5_000:
@@ -60,10 +62,19 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
                     "(sengaja dihentikan). Tidak perlu diubah."
                 )
             else:
+                window_note = ""
+                if month_v == month_v and cost > 0 and month_v + 1 < cost:
+                    window_note = (
+                        " Angka bulan ini bisa lebih kecil dari sejak campaign: "
+                        "bulan dihitung dari tanggal 1 (termasuk hari sebelum campaign), "
+                        "sedangkan sejak campaign hanya setelah campaign disimpan."
+                    )
                 goal, act, tip = "Tidak sesuai rencana", "Jeda / hentikan", (
-                    f"Iklan ini masuk campaign dengan budget rencana Rp 0 (sengaja dihentikan), "
-                    f"tetapi masih berbiaya — {spend_bits}. "
-                    "Pause / hentikan di Seller Center agar tidak terus berbiaya."
+                    f"Budget rencana Rp 0 (sengaja dihentikan), tetapi biaya masih tercatat "
+                    f"pada iklan «{nama}» di Seller Center — {spend_bits}"
+                    + (f" · total sejak campaign Rp {total_sejak:,.0f}".replace(",", ".") if total_sejak > 0 else "")
+                    + f". Pause / hentikan iklan «{nama}» di SC (cari nama yang sama)."
+                    + window_note
                 )
         elif sc_label.startswith("Tidak") and expected > 0:
             goal, act, tip = "Belum aktif", "Buat / aktifkan", (
