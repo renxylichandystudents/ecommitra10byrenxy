@@ -246,34 +246,40 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
             today_row=None,
         )
         self.assertGreaterEqual(len(hist), 1)
-        self.assertEqual(hist.iloc[-1]["Tanggal"], "2026-11-17")
+        self.assertEqual(hist.iloc[-1]["Tanggal catatan"], "2026-11-17")
         self.assertIn("Total biaya sejak campaign", hist.columns)
-        self.assertIn("Rata-rata terpakai bulan ini", hist.columns)
-        self.assertAlmostEqual(hist.iloc[-1]["Rata-rata terpakai bulan ini"], 80_000)
+        self.assertIn("Rata-rata biaya/hari bulan ini", hist.columns)
+        self.assertAlmostEqual(hist.iloc[-1]["Rata-rata biaya/hari bulan ini"], 80_000)
 
     def test_history_shows_day_delta_and_mtd_separate(self):
+        # Hand Shower-style: naik 4,29 jt ≠ rata-rata 2,04 jt/hari — naik = selisih catatan, bukan biaya 1 hari kalender
         campaign = {
             "pantau_harian": [
                 {"tanggal": "2026-11-18", "items": [{
-                    "key": "produk:1", "biaya": 78_521_003, "omzet": 1_538_347_407, "roas": 19.59,
-                    "biaya_hari": 19_630_251, "biaya_bulan_hari": 18_000_000,
-                    "budget_plan": 4_750_000, "budget_setup": 4_750_000, "tindakan": "Turunkan budget",
+                    "key": "produk:1", "biaya": 5_887_464, "omzet": 8_245_860, "roas": 1.40,
+                    "biaya_hari": 1_962_488, "biaya_bulan_hari": 900_000, "hari": 3,
+                    "budget_plan": 0, "budget_setup": 0, "tindakan": "Jeda / hentikan",
                 }]},
                 {"tanggal": "2026-11-19", "items": [{
-                    "key": "produk:1", "biaya": 87_686_532, "omzet": 1_716_947_237, "roas": 19.58,
-                    "biaya_hari": 17_537_306, "biaya_bulan_hari": 17_000_000,
-                    "budget_plan": 4_750_000, "budget_setup": 4_750_000, "tindakan": "Turunkan budget",
+                    "key": "produk:1", "biaya": 10_178_746, "omzet": 14_905_603, "roas": 1.46,
+                    "biaya_hari": 2_035_749, "biaya_bulan_hari": 1_005_700, "hari": 5,
+                    "budget_plan": 0, "budget_setup": 0, "tindakan": "Jeda / hentikan",
                 }]},
             ]
         }
         hist = Mon.daily_history_for(campaign, "produk:1")
         self.assertEqual(len(hist), 2)
-        self.assertTrue(pd.isna(hist.iloc[0]["Tambahan biaya hari ini"]))  # baris pertama: belum ada selisih
-        self.assertAlmostEqual(hist.iloc[1]["Tambahan biaya hari ini"], 87_686_532 - 78_521_003)
-        self.assertAlmostEqual(hist.iloc[1]["Total biaya sejak campaign"], 87_686_532)
-        self.assertAlmostEqual(hist.iloc[1]["Rata-rata terpakai sejak campaign"], 17_537_306)
-        self.assertAlmostEqual(hist.iloc[1]["Rata-rata terpakai bulan ini"], 17_000_000)
-        self.assertNotIn("Actual pemakaian/hari", hist.columns)
+        self.assertTrue(pd.isna(hist.iloc[0]["Naik biaya sejak catatan lalu"]))
+        self.assertAlmostEqual(hist.iloc[1]["Naik biaya sejak catatan lalu"], 10_178_746 - 5_887_464)
+        self.assertAlmostEqual(hist.iloc[1]["Hari laporan di antara catatan"], 2)  # hari evaluasi 3 → 5
+        self.assertAlmostEqual(hist.iloc[1]["Total biaya sejak campaign"], 10_178_746)
+        self.assertAlmostEqual(hist.iloc[1]["Rata-rata biaya/hari sejak campaign"], 2_035_749)
+        self.assertAlmostEqual(hist.iloc[1]["Rata-rata biaya/hari bulan ini"], 1_005_700)
+        self.assertNotIn("Tambahan biaya hari ini", hist.columns)
+        self.assertNotIn("Patokan di rencana", hist.columns)
+        # Naik ≈ 4,29 jt untuk 2 hari laporan ≈ 2,15 jt/hari — sejalan dengan rata-rata ~2,04 jt
+        naik = float(hist.iloc[1]["Naik biaya sejak catatan lalu"])
+        self.assertGreater(naik, hist.iloc[1]["Rata-rata biaya/hari sejak campaign"])
 
     def test_group_members_review_flags_weak_and_strong(self):
         members = pd.DataFrame([

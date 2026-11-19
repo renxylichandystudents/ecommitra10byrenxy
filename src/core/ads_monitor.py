@@ -563,6 +563,11 @@ def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: p
         omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
         month = r.get("Biaya bulan ini/hari")
         month_v = float(month) if month == month and month is not None else None
+        hari = int(r.get("Hari dievaluasi") or 0)
+        if hari <= 0:
+            rate = float(r.get("Biaya aktual/hari") or 0)
+            if rate > 0 and biaya > 0:
+                hari = max(int(round(biaya / rate)), 1)
         items.append({
             "key": key,
             "iklan": str(r.get("Iklan") or key),
@@ -573,6 +578,7 @@ def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: p
             "biaya_bulan_hari": round(month_v, 2) if month_v is not None else None,
             "budget_plan": round(float(r.get("Budget usulan/hari") or 0), 2),
             "budget_setup": round(float(r.get("Budget efektif Shopee/hari") or 0), 2),
+            "hari": hari,
             "tindakan": str(r.get("Tindakan") or ""),
         })
     entry = {"tanggal": day, "items": items}
@@ -588,13 +594,13 @@ def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: p
 
 def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = None,
                       today_row: dict | None = None) -> pd.DataFrame:
-    """Riwayat evaluasi campaign per tanggal — patokan, pergerakan, kumulatif, dan rata-rata bulan ini.
+    """Riwayat evaluasi campaign per tanggal catatan Pantau (bukan buku harian Shopee).
 
-    Kolom disusun agar atribusi jelas:
-    - Patokan di rencana / di Shopee = acuan campaign (bukan realisasi)
-    - Tambahan hari ini = selisih vs catatan sebelumnya (pergerakan)
+    Kolom:
+    - Budget di rencana/Shopee = yang diset di campaign (bukan uang terpakai)
+    - Naik sejak catatan lalu = selisih total kumulatif vs baris sebelumnya (bisa > 1 hari laporan)
     - Total sejak campaign = akumulasi sejak campaign disimpan
-    - Rata-rata terpakai sejak campaign vs rata-rata bulan ini (MTD)
+    - Rata-rata biaya/hari = total ÷ hari evaluasi (bukan sama dengan kolom naik)
     """
     raw: list[dict] = []
     for entry in campaign.get("pantau_harian") or []:
@@ -603,15 +609,21 @@ def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = N
             if str(it.get("key")) != str(key):
                 continue
             month = it.get("biaya_bulan_hari")
+            hari = int(it.get("hari") or 0)
+            biaya_v = float(it.get("biaya") or 0)
+            rate = float(it.get("biaya_hari") or 0)
+            if hari <= 0 and rate > 0 and biaya_v > 0:
+                hari = max(int(round(biaya_v / rate)), 1)
             raw.append({
                 "tanggal": day,
-                "biaya": float(it.get("biaya") or 0),
+                "biaya": biaya_v,
                 "omzet": float(it.get("omzet") or 0),
                 "roas": it.get("roas"),
-                "biaya_hari": float(it.get("biaya_hari") or 0),
+                "biaya_hari": rate,
                 "biaya_bulan_hari": float(month) if month is not None and month == month else float("nan"),
                 "budget_plan": float(it.get("budget_plan") or 0),
                 "budget_setup": float(it.get("budget_setup") or 0),
+                "hari": hari,
                 "tindakan": str(it.get("tindakan") or ""),
             })
     if not raw and baseline_row is not None:
@@ -621,21 +633,28 @@ def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = N
             "biaya_bulan_hari": float("nan"),
             "budget_plan": float(baseline_row.get("budget_plan") or 0),
             "budget_setup": float(baseline_row.get("budget_setup") or 0),
+            "hari": 0,
             "tindakan": "titik awal campaign",
         })
     if today_row is not None:
         day = str(today_row.get("tanggal") or "")[:10]
         if day and not any(r["tanggal"] == day for r in raw):
             month = today_row.get("biaya_bulan_hari")
+            biaya_v = float(today_row.get("biaya") or 0)
+            rate = float(today_row.get("biaya_hari") or 0)
+            hari = int(today_row.get("hari") or 0)
+            if hari <= 0 and rate > 0 and biaya_v > 0:
+                hari = max(int(round(biaya_v / rate)), 1)
             raw.append({
                 "tanggal": day or "hari ini",
-                "biaya": float(today_row.get("biaya") or 0),
+                "biaya": biaya_v,
                 "omzet": float(today_row.get("omzet") or 0),
                 "roas": today_row.get("roas"),
-                "biaya_hari": float(today_row.get("biaya_hari") or 0),
+                "biaya_hari": rate,
                 "biaya_bulan_hari": float(month) if month is not None and month == month else float("nan"),
                 "budget_plan": float(today_row.get("budget_plan") or 0),
                 "budget_setup": float(today_row.get("budget_setup") or 0),
+                "hari": hari,
                 "tindakan": str(today_row.get("tindakan") or ""),
             })
     raw = sorted(raw, key=lambda r: str(r.get("tanggal") or ""))
@@ -644,24 +663,30 @@ def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = N
     for item in raw:
         biaya = float(item["biaya"])
         omzet = float(item["omzet"])
+        hari = int(item.get("hari") or 0)
         if prev is None:
             add_biaya = float("nan")
             add_omzet = float("nan")
+            add_hari = float("nan")
         else:
             add_biaya = biaya - float(prev["biaya"])
             add_omzet = omzet - float(prev["omzet"])
+            prev_hari = int(prev.get("hari") or 0)
+            add_hari = float(hari - prev_hari) if hari > 0 and prev_hari > 0 else float("nan")
         roas = item.get("roas")
         rows.append({
-            "Tanggal": item["tanggal"],
-            "Patokan di rencana": float(item["budget_plan"]),
-            "Patokan di Shopee": float(item["budget_setup"]),
-            "Tambahan biaya hari ini": add_biaya,
-            "Tambahan omzet hari ini": add_omzet,
+            "Tanggal catatan": item["tanggal"],
+            "Hari evaluasi": hari if hari > 0 else float("nan"),
+            "Budget di rencana/hari": float(item["budget_plan"]),
+            "Budget di Shopee/hari": float(item["budget_setup"]),
+            "Naik biaya sejak catatan lalu": add_biaya,
+            "Naik omzet sejak catatan lalu": add_omzet,
+            "Hari laporan di antara catatan": add_hari,
             "Total biaya sejak campaign": biaya,
             "Total omzet sejak campaign": omzet,
             "ROAS sejak campaign": float(roas) if roas is not None and roas == roas else float("nan"),
-            "Rata-rata terpakai sejak campaign": float(item["biaya_hari"]),
-            "Rata-rata terpakai bulan ini": float(item["biaya_bulan_hari"]),
+            "Rata-rata biaya/hari sejak campaign": float(item["biaya_hari"]),
+            "Rata-rata biaya/hari bulan ini": float(item["biaya_bulan_hari"]),
             "Saran saat itu": item["tindakan"],
         })
         prev = item

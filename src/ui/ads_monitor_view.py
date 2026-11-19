@@ -362,11 +362,13 @@ def _ad_row_card(
                 )
     with st.expander("Lihat riwayat evaluasi campaign", expanded=False):
         st.caption(
-            "Catatan tersimpan tiap kali Pantau dibuka / laporan diunggah. Cara baca: "
-            "**Patokan** = budget campaign (bukan pemakaian). "
-            "**Tambahan hari ini** = selisih vs catatan sebelumnya (pergerakan). "
-            "**Total sejak campaign** = akumulasi sejak campaign disimpan. "
-            "**Rata-rata bulan ini** = pemakaian di bulan berjalan (MTD), terpisah dari sejak campaign."
+            "Tiap baris = satu kali Pantau dibuka / laporan diunggah — **bukan** buku harian Shopee. "
+            "**Budget di rencana/Shopee** = yang diset di campaign (bukan uang terpakai). "
+            "**Naik sejak catatan lalu** = selisih total kumulatif vs baris sebelumnya "
+            "(bisa mencakup lebih dari 1 hari laporan bila sempat tidak dibuka atau hari evaluasi naik > 1). "
+            "**Jangan samakan** kolom naik dengan **rata-rata biaya/hari** "
+            "(rata-rata = total sejak campaign ÷ hari evaluasi). "
+            "Budget Rp 0 + total biaya naik → jeda di rencana belum efektif di Seller Center."
         )
         base_dt = None
         if cur.get("setelan", {}).get("data_sampai"):
@@ -378,7 +380,7 @@ def _ad_row_card(
             "tanggal": report_end.isoformat() if report_end else "",
             "biaya": biaya, "omzet": omzet, "roas": (omzet / biaya) if biaya > 0 else float("nan"),
             "biaya_hari": since, "biaya_bulan_hari": month_v, "budget_plan": plan, "budget_setup": setup,
-            "tindakan": act,
+            "hari": days, "tindakan": act,
         }
         hist = Mon.daily_history_for(
             cur, key,
@@ -391,11 +393,14 @@ def _ad_row_card(
             show_table(
                 hist,
                 kinds={
-                    "Patokan di rencana": "money", "Patokan di Shopee": "money",
-                    "Tambahan biaya hari ini": "money", "Tambahan omzet hari ini": "money",
+                    "Hari evaluasi": "count",
+                    "Budget di rencana/hari": "money", "Budget di Shopee/hari": "money",
+                    "Naik biaya sejak catatan lalu": "money", "Naik omzet sejak catatan lalu": "money",
+                    "Hari laporan di antara catatan": "count",
                     "Total biaya sejak campaign": "money", "Total omzet sejak campaign": "money",
                     "ROAS sejak campaign": "dec",
-                    "Rata-rata terpakai sejak campaign": "money", "Rata-rata terpakai bulan ini": "money",
+                    "Rata-rata biaya/hari sejak campaign": "money",
+                    "Rata-rata biaya/hari bulan ini": "money",
                 },
                 key=f"hist-{prefix}-{cid}-{key}",
             )

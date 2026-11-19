@@ -8,16 +8,23 @@ Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai siang ini**
 - Kelayakan setup grup: prediksi tidak mendorong target → Tidak perlu; Layak + alasan jelas; urut Layak dulu.
-- **Jeda tertinggal angka dibenahi tampilan:** header omzet · biaya · ROAS · N hari; Di Shopee tidak lagi menempel rata-rata terpakai seolah budget SC; saran memisahkan biaya vs omzet.
+- Jeda tertinggal: header omzet · biaya · ROAS · N hari; Di Shopee bukan rata-rata terpakai.
+- **Riwayat evaluasi:** ganti “Tambahan hari ini” → “Naik sejak catatan lalu”; bedakan dari rata-rata/hari; kolom Hari evaluasi + hari laporan di antara catatan.
 
 **Cek saat lanjut**
-- Blok Jeda tertinggal (Shower Column / Hand Shower): header “omzet … · biaya …” (bukan satu angka “Hasil”); Di Shopee = “masih berbiaya — pause belum efektif” tanpa Rp/hari; terpakai × hari ≈ biaya total.
-- Grup Iklan 01: Layak di atas + “Kenapa harus diiklankan…”.
+- Hand Shower riwayat: 18 Nov total biaya 5,89 jt (≈3 hari) → 19 Nov 10,18 jt (≈5 hari); naik ≈4,29 jt untuk **2 hari laporan** — jangan dibaca sebagai biaya 1 hari kalender.
+- Kartu jeda: omzet · biaya · ROAS; Di Shopee tanpa Rp/hari palsu.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 - Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” (edge).
 - Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0.
+
+## 2026-11-19 · Riwayat evaluasi: wording naik vs rata-rata (bukan “tambahan hari ini”)
+
+- Hand Shower: naik biaya 4,29 jt vs rata-rata 2,04 jt/hari — konsisten karena hari evaluasi 3→5 (naik mencakup 2 hari laporan).
+- Kolom baru/ganti: Tanggal catatan, Hari evaluasi, Budget di rencana/Shopee, Naik biaya/omzet sejak catatan lalu, Hari laporan di antara catatan, Rata-rata biaya/hari sejak campaign / bulan ini.
+- Caption: tiap baris = catatan Pantau, bukan buku harian SC; jangan samakan naik dengan rata-rata/hari.
 
 ## 2026-11-19 · Jeda tertinggal: omzet vs biaya + Di Shopee bukan rata-rata terpakai
 
