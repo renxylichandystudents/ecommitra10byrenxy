@@ -218,6 +218,24 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertAlmostEqual(out.iloc[0]["Biaya bulan ini/hari"], 100_000)
         self.assertAlmostEqual(out.iloc[0]["Biaya aktual/hari"], 50_000)
 
+    def test_paused_plan_zero_budget_tip_explains_intentional(self):
+        frame = pd.DataFrame([{
+            "_key": "produk:9", "Jenis": "Produk tunggal",
+            "Budget usulan/hari": 0, "Budget efektif Shopee/hari": 0,
+            "Biaya aktual/hari": 6_592_242, "Biaya bulan ini/hari": 6_000_000,
+            "Omzet iklan aktual/hari": 40_000_000, "ROAS aktual": 6.1,
+            "Rekomendasi dijalankan": "Belum",
+        }])
+        out = Mon.classify_rows(frame, target_roas=22)
+        tip = str(out.iloc[0]["Saran"])
+        self.assertEqual(out.iloc[0]["Tindakan"], "Jeda / hentikan")
+        self.assertIn("budget rencana Rp 0", tip)
+        self.assertIn("sengaja dihentikan", tip)
+        from src.ui.ads_monitor_view import _plan_setup_labels
+        plan_txt, setup_txt = _plan_setup_labels(0.0, 0.0)
+        self.assertIn("dihentikan", plan_txt)
+        self.assertIn("tidak diisi", setup_txt)
+
     def test_turunkan_tip_mentions_shopee_budget_not_duplicate_acuan(self):
         frame = pd.DataFrame([{
             "_key": "produk:1", "Jenis": "Produk tunggal",

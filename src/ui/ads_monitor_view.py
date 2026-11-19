@@ -133,6 +133,17 @@ def _fmt_hari(value: float) -> str:
     return f"{fmt_idr(value)}/hari" if value == value else "–"
 
 
+def _plan_setup_labels(plan: float, setup: float) -> tuple[str, str]:
+    """Budget 0 di campaign = sengaja dihentikan, bukan data kosong."""
+    if plan <= 0 and setup <= 0:
+        return "dihentikan (Rp 0)", "tidak diisi (sesuai jeda)"
+    if plan <= 0:
+        return "dihentikan (Rp 0)", _fmt_hari(setup)
+    if setup <= 0:
+        return _fmt_hari(plan), "belum diisi"
+    return _fmt_hari(plan), _fmt_hari(setup)
+
+
 def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: str, cid: int) -> None:
     """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis."""
     name = str(r.get("Iklan") or r.get("_key") or "")
@@ -147,6 +158,7 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
     omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
     biaya = float(r.get("Biaya sejak disimpan") or 0)
     roas = float(r["ROAS aktual"]) if r.get("ROAS aktual") == r.get("ROAS aktual") else float("nan")
+    plan_txt, setup_txt = _plan_setup_labels(plan, setup)
     hasil = (
         f"Hasil iklan sejak campaign: {fmt_idr(omzet)}"
         + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
@@ -160,8 +172,8 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         f"<div style='color:#475569;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.5'>"
         f"{html.escape(str(r.get('Saran') or ''))}</div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-top:.45rem;font-size:var(--fs-sm)'>"
-        f"<span><b>Di rencana</b> {_fmt_hari(plan)}</span>"
-        f"<span><b>Di Shopee</b> {_fmt_hari(setup)}</span>"
+        f"<span><b>Di rencana</b> {html.escape(plan_txt)}</span>"
+        f"<span><b>Di Shopee</b> {html.escape(setup_txt)}</span>"
         f"<span><b>Terpakai bulan ini</b> {_fmt_hari(month_v)}</span>"
         f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}</span></div></div>",
         unsafe_allow_html=True,
@@ -424,7 +436,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             f"Daftar semua iklan di campaign, diurut dari omzet terbesar. "
             f"{aktif}/{rencana} sudah sesuai rencana · data s.d. {fmt_date(report_end)} "
             f"({fmt_num(summary.get('hari', 0) if summary else 0)} hari). "
-            f"Di rencana = budget campaign · Di Shopee = yang harus diisi "
+            f"Di rencana = budget campaign (Rp 0 = sengaja dihentikan di rencana, bukan data hilang). "
+            f"Di Shopee = yang harus diisi "
             f"(minimal {fmt_idr(A.SHOPEE_MIN_SINGLE)} tunggal / {fmt_idr(A.SHOPEE_MIN_GROUP)} grup). "
             "Terpakai bulan ini = rata-rata sejak tanggal 1. "
             "Terpakai sejak campaign = rata-rata setelah campaign disimpan."

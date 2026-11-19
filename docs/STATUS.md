@@ -2,6 +2,10 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Budget Rp 0 di campaign = sengaja dihentikan
+
+- Iklan tetap di daftar campaign walau budget rencana 0 (status jeda). Label kartu: **Di rencana dihentikan (Rp 0)** / **Di Shopee tidak diisi**; saran menjelaskan bukan data hilang.
+
 ## 2026-11-19 · Saran iklan: hilangkan “acuan / ± / turunkan ke” yang rancu
 
 - Teks lama “Biaya ±17 jt di atas acuan ±4,75 jt. Turunkan ke 4,75 jt” diganti: terpakai bulan ini & sejak campaign vs **budget di Shopee**, lalu perintah jelas di Seller Center.

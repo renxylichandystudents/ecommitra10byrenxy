@@ -55,11 +55,15 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
 
         if expected <= 0:
             if done or cost <= 5_000:
-                goal, act, tip = "Sesuai rencana", "Pertahankan", "Iklan ini memang dijeda di rencana — tidak perlu diubah."
+                goal, act, tip = "Sesuai rencana", "Pertahankan", (
+                    "Iklan ini tetap tercatat di campaign, tetapi budget rencananya Rp 0 "
+                    "(sengaja dihentikan). Tidak perlu diubah."
+                )
             else:
                 goal, act, tip = "Tidak sesuai rencana", "Jeda / hentikan", (
-                    f"{spend_bits}, padahal di rencana iklan ini dihentikan. "
-                    "Pause / hentikan di Seller Center."
+                    f"Iklan ini masuk campaign dengan budget rencana Rp 0 (sengaja dihentikan), "
+                    f"tetapi masih berbiaya — {spend_bits}. "
+                    "Pause / hentikan di Seller Center agar tidak terus berbiaya."
                 )
         elif sc_label.startswith("Tidak") and expected > 0:
             goal, act, tip = "Belum aktif", "Buat / aktifkan", (
