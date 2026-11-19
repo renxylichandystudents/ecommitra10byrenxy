@@ -7,6 +7,7 @@ Diperbarui: 19 November 2026 (malam, lanjut).
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai malam ini**
+- Judul + caption ringkas «Pelaksanaan · campaign vs realisasi…» dihapus.
 - Evaluasi = **periode campaign** (`mulai`–`selesai`), contoh 15–22 Nov.
 - Angka biaya & omzet dari **all iklan per tanggal**; hari penuh saja (hari ini 19 → hitung 15–18).
 - Progress menampilkan tiap hari kalender dalam jendela itu; 19 tidak muncul.

@@ -705,8 +705,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         st.button("Buka Rekomendasi sistem", key="adt-renew", type="primary",
                   on_click=st.session_state.__setitem__, args=("adt-view-next", VIEW_REC))
 
-    # -------- Pelaksanaan: campaign vs realisasi SC (poin 2 & 3 dihapus — fokus kecocokan plan)
-    st.markdown("### Pelaksanaan · campaign vs realisasi Seller Center")
+    # -------- Pelaksanaan: A/B/C + progress (judul ringkas dihapus atas permintaan)
     if not base:
         st.info("Campaign tanpa baseline evaluasi. Simpan ulang sebagai campaign baru agar bisa dibanding harian.")
     elif report_end is None or report_end < start:
@@ -720,17 +719,6 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         cid = int(cur.get("id") or 0)
         singles = Mon.planned_single_codes(acts_saved)
         exe = Mon.partition_execution(in_plan, target_roas=roas)
-        counts = Mon.execution_counts(exe)
-        luar_n = len(out_plan) if not out_plan.empty else 0
-        st.caption(
-            "Bandingkan **komitmen campaign** (budget/slot yang disimpan) dengan **realisasi laporan iklan** di Seller Center. "
-            f"Data s.d. {fmt_date(report_end)} · Target ROAS {fmt_num(roas, 1)}×. "
-            f"Ringkas: **{fmt_num(counts['sesuai'])} sesuai plan** "
-            f"({fmt_num(counts['efektif'])} efektif · {fmt_num(counts['tidak_efektif'])} tidak efektif · "
-            f"{fmt_num(counts['boros'])} boros) · "
-            f"**{fmt_num(counts['tidak'])} tidak sesuai plan** · "
-            f"**{fmt_num(luar_n)} di luar plan**."
-        )
 
         # Jendela evaluasi = periode campaign (mulai–selesai), dibatasi hari penuh (kemarin)
         window_start = since_start
