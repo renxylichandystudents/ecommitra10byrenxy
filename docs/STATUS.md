@@ -1,27 +1,33 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (sore).
+Diperbarui: 19 November 2026 (sore, Koreksi.docx).
 
 ## Lanjut nanti · Pantau iklan
 
 Localhost:8501 / Cloud ikut push `main`.
 
-**Sudah selesai sore ini**
-- **Pelaksanaan** dirombak + hapus poin 2 & 3.
-- **Progress harian** diperluas: budget plan/actual, omzet kotor + ROAS kotor, sales bersih + ROAS bersih (÷ biaya keluar), MTD produk/bersih, dampak iklan vs sales all (organik).
+**Sudah selesai dari Koreksi.docx**
+- Progress: Budget plan · Realisasi biaya hari itu · Sales iklan + ROAS · Sales all + ROAS · MTD produk/bersih (sama ringkasan) · Analisa keputusan.
+- Kartu: periode laporan eksplisit (samakan filter SC); bedakan hari laporan vs catatan Pantau.
+- Wording “di tempat lain” tidak dobel; tabel progress/anggota collapse sampai diklik.
 
 **Cek saat lanjut**
-- Baris progress lama tanpa `toko`: biaya/omzet/plan dari items; sales bersih/MTD terisi setelah buka Pantau lagi (live + checkpoint baru).
-- Kloset FSA0159 / Pintu: label Belum setup sudah diperbaiki sebelumnya.
+- FSA0040 dll: bandingkan biaya/omzet di kartu dengan SC memakai **rentang tanggal yang sama** seperti di kartu.
+- Bila masih beda setelah filter sama → unggah ulang laporan + simpan campaign baru agar baseline akurat.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 
+## 2026-11-19 · Koreksi.docx: progress + periode jelas + collapse
+
+- Kolom progress diganti sesuai koreksi (realisasi = pengeluaran antar catatan, bukan budget setup SC).
+- MTD memakai angka ringkasan yang sama; analisa = keputusan overall hari itu.
+- Label kartu: “Periode laporan A–B (N hari di file)” + “Hari laporan sejak campaign” di riwayat ≠ jumlah baris catatan Pantau.
+
 ## 2026-11-19 · Progress harian: kotor, bersih, MTD, dampak organik
 
 - Checkpoint menyimpan ringkasan `toko` (biaya, omzet kotor klaim iklan, bersih sejak, MTD).
-- Tabel: Budget plan/actual · Biaya · Omzet kotor + ROAS kotor · Sales bersih + ROAS bersih · Omzet produk MTD · Sales bersih MTD · Dampak iklan ke sales all.
-- ROAS memakai **biaya yang sudah keluar** sebagai penyebut; omzet kotor = klaim SC (inkl. belum bayar).
+- Iterasi berikutnya mengganti nama kolom sesuai Koreksi.docx (lihat entri di atas).
 
 ## 2026-11-19 · Pantau: rombak Pelaksanaan + hapus poin 2 & 3
 
