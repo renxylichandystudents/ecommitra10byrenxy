@@ -1,12 +1,11 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (malam, biaya/omzet kosong).
+Diperbarui: 19 November 2026 (malam, header progress).
 
 ## Lanjut nanti · Pantau iklan
 
-- Biaya & omzet kosong karena unggahan all iklan 15–18 Nov di data latih terpotong (dedup lama). File 19 Nov utuh tetap jadi jangkar; total lengkap 14–18 dipakai lagi tanpa unggah ulang.
-- Snapshot rentang yang sama: yang totalnya lebih besar yang dipakai, bukan unggahan terpotong yang lebih baru.
-- Hari ini (19) tidak dihitung. Sales bruto / bersih / produk tetap istilah Ringkasan.
+- Tabel progress dikelompokkan: **Iklan hari itu** (Biaya iklan, Omzet iklan, ROAS iklan) dan **Toko sejak campaign** (Sales bruto, Sales bersih, Sales produk, ROAS sales bersih). Nama kolom sama istilah Ringkasan.
+- Tanggal 14 (campaign dibuat) tetap menampilkan Sales toko. Biaya/Omzet iklan hari itu kosong karena laporan all iklan sampai 14 Nov masih gabungan 1–14 Nov; laporan utuh sebelumnya berakhir 8 Nov, jadi selisihnya bukan 1 hari.
 
 ## Lanjut nanti · Pantau iklan
 

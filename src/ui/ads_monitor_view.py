@@ -780,31 +780,47 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             )
         else:
             st.caption(
-                "Tiap baris = satu tanggal dalam periode campaign."
+                "Tiap baris = satu tanggal. Kolom dikelompokkan supaya cara bacanya tidak tercampur."
                 + period_caption
-                + " **Biaya iklan** dan **Omzet iklan** = laporan all iklan tanggal itu (selisih MTD berurutan, unggahan yang totalnya mengecil diabaikan). "
-                "**Sales bruto** = semua pesanan (transaksi, atau performa Pesanan Dibuat). "
-                "**Sales bersih** = Total Pembayaran − batal − Belum Bayar − retur (transaksi, atau performa Pesanan Dibayar). "
-                "**Sales produk** = Harga Setelah Diskon × QTY, hanya dari transaksi — sama halaman Ringkasan. "
-                "Hari ini tidak dihitung."
+                + " **Iklan hari itu** = Biaya iklan, Omzet iklan, dan ROAS iklan pada tanggal itu (laporan all iklan; ROAS iklan = Omzet iklan ÷ Biaya iklan hari yang sama). "
+                "**Toko sejak campaign** = Sales bruto, Sales bersih, dan Sales produk terkumpul sejak tanggal campaign dibuat — istilah sama Ringkasan. "
+                "ROAS sales bersih = Sales bersih sejak campaign ÷ Biaya iklan yang sudah terkumpul. "
+                "Tanggal campaign dibuat tetap masuk: Sales toko hari itu sudah dihitung. Biaya iklan hari itu hanya diisi bila laporannya terpisah per tanggal."
             )
-            with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=False):
-                show_table(
+            with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=True):
+                from src.ui import grouped_table
+
+                grouped_table.show(
                     progress,
+                    key=f"camp-progress-{cid}",
+                    noun="tanggal",
+                    first=max(len(progress), 1),
+                    height=520,
+                    groups=Mon.PROGRESS_GROUPS,
                     kinds={
                         "Budget plan/hari": "money",
-                        "Biaya iklan (hari itu)": "money",
-                        "Omzet iklan sejak campaign": "money",
+                        "Biaya iklan": "money",
+                        "Omzet iklan": "money",
                         "ROAS iklan": "dec",
-                        "Sales bruto sejak campaign": "money",
-                        "Sales bersih sejak campaign": "money",
-                        "Sales produk sejak campaign": "money",
+                        "Sales bruto": "money",
+                        "Sales bersih": "money",
+                        "Sales produk": "money",
                         "ROAS sales bersih": "dec",
                     },
-                    column_config={
-                        "Analisa keputusan hari itu": st.column_config.TextColumn(width="large"),
+                    wrap=("Analisa",),
+                    pin=("Tanggal",),
+                    widths={
+                        "Tanggal": 118,
+                        "Budget plan/hari": 150,
+                        "Biaya iklan": 140,
+                        "Omzet iklan": 150,
+                        "ROAS iklan": 110,
+                        "Sales bruto": 140,
+                        "Sales bersih": 140,
+                        "Sales produk": 140,
+                        "ROAS sales bersih": 140,
+                        "Analisa": 420,
                     },
-                    key=f"camp-progress-{cid}",
                 )
 
         if in_plan.empty:
