@@ -164,10 +164,13 @@ def _ad_row_card(
     target_roas: float = 8.0,
     contribution: dict | None = None,
     scope: str = "Dalam rencana",
+    units=None,
+    products: pd.DataFrame | None = None,
 ) -> None:
     """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis.
 
     Untuk iklan grup: lampiran performa & saran tiap produk anggota agar item lemah tidak dipaksa lanjut.
+    Grup belum setup: bandingkan anggota vs iklan aktif lain + kelayakan setup.
     """
     name = str(r.get("Iklan") or r.get("_key") or "")
     key = str(r.get("_key") or "")
@@ -188,8 +191,15 @@ def _ad_row_card(
         + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
     )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
+    group_active = not (
+        act == "Buat / aktifkan"
+        or (since <= 5_000 and (month_v != month_v or month_v <= 5_000) and omzet <= 0)
+    )
     member_frame = (
-        Mon.group_members_review(members, key, target_roas=target_roas, contribution=contribution)
+        Mon.group_members_review(
+            members, key, target_roas=target_roas, contribution=contribution,
+            group_active=group_active, units=units, products=products,
+        )
         if is_group else pd.DataFrame()
     )
     member_note = Mon.group_members_summary(member_frame) if not member_frame.empty else ""
@@ -217,8 +227,9 @@ def _ad_row_card(
     )
     if is_group:
         n_mem = len(member_frame)
+        keep_labels = {"Pertahankan di grup", "Layak di-setup di grup ini"}
         need_mem = (
-            int((member_frame["Tindakan"] != "Pertahankan di grup").sum())
+            int((~member_frame["Tindakan"].isin(keep_labels)).sum())
             if n_mem and "Tindakan" in member_frame.columns else 0
         )
         label = (
@@ -226,12 +237,21 @@ def _ad_row_card(
             + (f", {fmt_num(need_mem)} perlu tindakan" if need_mem else "")
             + ")"
         )
-        with st.expander(label, expanded=need_mem > 0):
-            st.caption(
-                "Angka dari laporan iklan grup (bulan terakhir). "
-                "Item lemah sebaiknya dikeluarkan agar budget grup tidak terpakai untuk produk yang tidak menghasilkan. "
-                "Andalan bisa dipertimbangkan jadi iklan tunggal."
-            )
+        with st.expander(label, expanded=(need_mem > 0) or (not group_active and n_mem > 0)):
+            if group_active:
+                st.caption(
+                    "Angka dari laporan iklan grup (bulan terakhir). "
+                    "Item lemah sebaiknya dikeluarkan agar budget grup tidak terpakai untuk produk yang tidak menghasilkan. "
+                    "Andalan bisa dipertimbangkan jadi iklan tunggal. "
+                    "Kolom Iklan lain = apakah produk yang sama sudah jalan di iklan lain."
+                )
+            else:
+                st.caption(
+                    "Grup ini belum aktif di Seller Center. Tiap produk dicek: "
+                    "sudahkah diiklankan di tempat lain, dan apakah masih layak di-setup "
+                    "(histori campaign sebelumnya, prediksi omzet, stok). "
+                    "Jangan aktifkan semua anggota lama secara buta."
+                )
             if member_frame.empty:
                 st.info(
                     "Belum ada baris produk di laporan iklan grup untuk campaign ini. "
@@ -246,6 +266,7 @@ def _ad_row_card(
                     },
                     column_config={
                         "Produk": st.column_config.TextColumn(width="large"),
+                        "Iklan lain": st.column_config.TextColumn(width="medium"),
                         "Saran": st.column_config.TextColumn(width="large"),
                     },
                     key=f"grp-mem-{prefix}-{cid}-{key}",
@@ -533,6 +554,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 _ad_row_card(
                     r, cur=cur, report_end=report_end, prefix=prefix, cid=cid,
                     members=members, target_roas=roas, contribution=contribution, scope=scope,
+                    units=units, products=products,
                 )
 
         if in_plan.empty:

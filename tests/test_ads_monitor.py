@@ -306,6 +306,48 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         out = Mon.group_members_review(members, "produk:1", target_roas=8.0)
         self.assertTrue(out.empty)
 
+    def test_group_members_review_pending_setup_compares_elsewhere(self):
+        members = pd.DataFrame([
+            # Grup belum setup: periode terakhir semua 0
+            {"unit": "grup:G0", "periode": "2026-11", "product_code": "A", "nama": "Sudah tunggal",
+             "biaya": 0, "omzet": 0, "terjual": 0},
+            {"unit": "grup:G0", "periode": "2026-11", "product_code": "B", "nama": "Lemah dulu",
+             "biaya": 0, "omzet": 0, "terjual": 0},
+            {"unit": "grup:G0", "periode": "2026-11", "product_code": "C", "nama": "Layak baru",
+             "biaya": 0, "omzet": 0, "terjual": 0},
+            # Histori campaign sebelumnya
+            {"unit": "grup:G0", "periode": "2026-10", "product_code": "B", "nama": "Lemah dulu",
+             "biaya": 50_000, "omzet": 0, "terjual": 0},
+            {"unit": "grup:G0", "periode": "2026-10", "product_code": "C", "nama": "Layak baru",
+             "biaya": 40_000, "omzet": 900_000, "terjual": 5},
+            # A sudah jalan sebagai iklan tunggal
+            {"unit": "produk:A", "periode": "2026-11", "product_code": "A", "nama": "Sudah tunggal",
+             "biaya": 80_000, "omzet": 1_600_000, "terjual": 8},
+        ])
+        units = [
+            A.Unit("produk:A", "Sudah tunggal", "Produk tunggal", "Berjalan", "GMV Max ROAS",
+                   80_000, 1_600_000, 0.0, 0.0, 0.5, ["A"], []),
+            A.Unit("grup:G0", "Grup 01", "Grup", "Dijeda", "GMV Max ROAS",
+                   0.0, 0.0, 0.0, 0.0, 0.5, ["A", "B", "C"], []),
+        ]
+        products = pd.DataFrame([
+            {"product_code": "A", "nama": "Sudah tunggal", "omzet_harian": 100_000, "stok": 10, "stok_room": 1_000_000},
+            {"product_code": "B", "nama": "Lemah dulu", "omzet_harian": 5_000, "stok": 5, "stok_room": 50_000},
+            {"product_code": "C", "nama": "Layak baru", "omzet_harian": 200_000, "stok": 20, "stok_room": 2_000_000},
+        ])
+        out = Mon.group_members_review(
+            members, "grup:G0", target_roas=22.0, group_active=False,
+            units=units, products=products, contribution={"A": 0.3, "B": 0.2, "C": 0.25},
+        )
+        by = out.set_index("Kode produk")["Tindakan"].to_dict()
+        self.assertEqual(by["A"], "Sudah diiklankan di tempat lain")
+        self.assertEqual(by["B"], "Tidak perlu di-setup")
+        self.assertEqual(by["C"], "Layak di-setup di grup ini")
+        tip = Mon.group_members_summary(out)
+        self.assertIn("sudah diiklankan", tip.lower())
+        self.assertIn("layak", tip.lower())
+        self.assertNotIn("sehat", tip.lower())
+
     def test_rename_budget_triad(self):
         frame = pd.DataFrame([{
             "Budget usulan/hari": 1, "Budget efektif Shopee/hari": 2,

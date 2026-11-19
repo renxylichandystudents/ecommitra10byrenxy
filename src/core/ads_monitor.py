@@ -623,11 +623,122 @@ def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = N
 
 
 _MEMBER_RANK = {
-    "Keluarkan dari grup": 0,
-    "Kurangi porsi / tinjau": 1,
-    "Pisahkan jadi iklan tunggal": 2,
-    "Pertahankan di grup": 3,
+    "Sudah diiklankan di tempat lain": 0,
+    "Tidak perlu di-setup": 1,
+    "Keluarkan dari grup": 2,
+    "Kurangi porsi / tinjau": 3,
+    "Pisahkan jadi iklan tunggal": 4,
+    "Layak di-setup di grup ini": 5,
+    "Pertahankan di grup": 6,
 }
+
+
+def _member_unit_slice(members: pd.DataFrame, group_key: str) -> pd.DataFrame:
+    key = str(group_key)
+    work = members.loc[members["unit"].astype(str) == key]
+    if not work.empty:
+        return work
+    tail = key.split(":", 1)[-1].strip().lower()
+    return members.loc[
+        members["unit"].astype(str).str.startswith("grup:")
+        & members["unit"].astype(str).str.lower().str.endswith(tail)
+    ]
+
+
+def _elsewhere_for_codes(
+    members: pd.DataFrame | None,
+    units,
+    *,
+    group_key: str,
+    codes: set[str],
+) -> dict[str, list[dict]]:
+    """Iklan lain (tunggal/grup) yang memuat kode produk yang sama dan sedang berbiaya / berjalan."""
+    out: dict[str, list[dict]] = {c: [] for c in codes}
+    if not codes:
+        return out
+    by_unit = {getattr(u, "key", ""): u for u in (units or [])}
+    # Unit produk tunggal langsung dari daftar unit
+    for code in codes:
+        for prefix in ("produk:", "pisah:", "baru:"):
+            ukey = f"{prefix}{code}"
+            unit = by_unit.get(ukey)
+            if unit is None:
+                continue
+            running = bool(A._running(unit) and float(getattr(unit, "daily_cost", 0) or 0) > 0)
+            if not running and float(getattr(unit, "daily_cost", 0) or 0) <= 0:
+                continue
+            out[code].append({
+                "unit": ukey,
+                "nama": str(getattr(unit, "nama", "") or ukey),
+                "jenis": "Produk tunggal",
+                "biaya": float(getattr(unit, "daily_cost", 0) or 0),
+                "omzet": float(getattr(unit, "daily_sales", 0) or 0),
+            })
+    if members is None or getattr(members, "empty", True):
+        return out
+    need = {"unit", "periode", "product_code", "biaya", "omzet"}
+    if not need <= set(members.columns):
+        return out
+    other = members.loc[
+        members["product_code"].astype(str).isin(codes)
+        & (members["unit"].astype(str) != str(group_key))
+        & (members["unit"].astype(str) != "auto")
+    ]
+    if other.empty:
+        return out
+    latest = other.loc[other["periode"] == other.groupby("unit")["periode"].transform("max")]
+    for r in latest.itertuples(index=False):
+        code = str(r.product_code)
+        ukey = str(r.unit)
+        if ukey.startswith(("produk:", "pisah:", "baru:")):
+            continue  # sudah dari units
+        biaya = float(r.biaya or 0)
+        omzet = float(r.omzet or 0)
+        unit = by_unit.get(ukey)
+        running = bool(unit is not None and A._running(unit) and float(getattr(unit, "daily_cost", 0) or 0) > 0)
+        if not running and biaya <= 0 and omzet <= 0:
+            continue
+        nama = str(getattr(unit, "nama", "") or ukey.split(":", 1)[-1])
+        # hindari duplikat unit
+        if any(x["unit"] == ukey for x in out.get(code, [])):
+            continue
+        out.setdefault(code, []).append({
+            "unit": ukey,
+            "nama": nama,
+            "jenis": "Grup" if ukey.startswith("grup:") else "Iklan lain",
+            "biaya": biaya if biaya > 0 else float(getattr(unit, "daily_cost", 0) or 0),
+            "omzet": omzet if omzet > 0 else float(getattr(unit, "daily_sales", 0) or 0),
+        })
+    return out
+
+
+def _product_signal(products: pd.DataFrame | None, code: str) -> dict:
+    empty = {"omzet_harian": float("nan"), "stok": float("nan"), "stok_room": float("nan"), "nama": ""}
+    if products is None or getattr(products, "empty", True) or "product_code" not in products.columns:
+        return empty
+    hit = products.loc[products["product_code"].astype(str) == str(code)]
+    if hit.empty:
+        return empty
+    row = hit.iloc[0]
+    return {
+        "omzet_harian": float(row["omzet_harian"]) if "omzet_harian" in hit.columns and row["omzet_harian"] == row["omzet_harian"] else float("nan"),
+        "stok": float(row["stok"]) if "stok" in hit.columns and row["stok"] == row["stok"] else float("nan"),
+        "stok_room": float(row["stok_room"]) if "stok_room" in hit.columns and row["stok_room"] == row["stok_room"] else float("nan"),
+        "nama": str(row["nama"]) if "nama" in hit.columns else "",
+    }
+
+
+def _hist_perf_for_code(work: pd.DataFrame, code: str) -> tuple[float, float, float]:
+    """Rata-rata biaya/omzet/ROAS historis saat produk pernah berbiaya di grup ini (campaign sebelumnya)."""
+    part = work.loc[work["product_code"].astype(str) == str(code)]
+    if part.empty:
+        return 0.0, 0.0, float("nan")
+    active = part.loc[(part["biaya"].fillna(0) > 0) | (part["omzet"].fillna(0) > 0)]
+    use = active if not active.empty else part
+    biaya = float(use["biaya"].mean() or 0)
+    omzet = float(use["omzet"].mean() or 0)
+    roas = omzet / biaya if biaya > 0 else float("nan")
+    return biaya, omzet, roas
 
 
 def group_members_review(
@@ -636,15 +747,19 @@ def group_members_review(
     *,
     target_roas: float,
     contribution: dict[str, float] | None = None,
+    group_active: bool = True,
+    units=None,
+    products: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Performa + saran tiap produk di dalam satu iklan grup (periode laporan terakhir).
+    """Performa + saran tiap produk di dalam satu iklan grup.
 
-    Tujuan Pantau: grup tidak memaksa item lemah ikut dilanjutkan. Angka biaya/omzet = rata-rata
-    harian di bulan laporan terakhir (dari laporan iklan grup).
+    - Grup aktif: evaluasi biaya/omzet periode terakhir (keluarkan yang lemah).
+    - Grup belum di-setup: bandingkan vs iklan yang sudah jalan di tempat lain, lalu nilai kelayakan
+      setup dari histori grup / prediksi / stok (campaign sebelumnya tidak otomatis layak).
     """
     cols = [
         "Produk", "Kode produk", "Biaya/hari", "Omzet/hari", "ROAS",
-        "Porsi omzet grup", "Porsi biaya grup", "Tindakan", "Saran",
+        "Porsi omzet grup", "Porsi biaya grup", "Iklan lain", "Tindakan", "Saran",
     ]
     if members is None or getattr(members, "empty", True) or not group_key:
         return pd.DataFrame(columns=cols)
@@ -654,14 +769,7 @@ def group_members_review(
     need = {"unit", "periode", "product_code", "nama", "biaya", "omzet"}
     if not need <= set(members.columns):
         return pd.DataFrame(columns=cols)
-    work = members.loc[members["unit"].astype(str) == key]
-    if work.empty:
-        # cocokkan nama grup tanpa prefix bila key berbeda sedikit
-        tail = key.split(":", 1)[-1].strip().lower()
-        work = members.loc[
-            members["unit"].astype(str).str.startswith("grup:")
-            & members["unit"].astype(str).str.lower().str.endswith(tail)
-        ]
+    work = _member_unit_slice(members, key)
     if work.empty:
         return pd.DataFrame(columns=cols)
     latest = str(sorted(work["periode"].astype(str).unique())[-1])
@@ -672,19 +780,101 @@ def group_members_review(
     )
     if part.empty:
         return pd.DataFrame(columns=cols)
+    # Bila periode terakhir semua nol (grup belum setup), pakai histori berbiaya bila ada
+    if float(part["biaya"].sum()) <= 0 and float(part["omzet"].sum()) <= 0:
+        hist_rows = []
+        for code in part["product_code"].astype(str):
+            b, o, _ = _hist_perf_for_code(work, code)
+            nama = str(part.loc[part["product_code"].astype(str) == code, "nama"].iloc[0])
+            hist_rows.append({"product_code": code, "nama": nama, "biaya": b, "omzet": o})
+        if any(r["biaya"] > 0 or r["omzet"] > 0 for r in hist_rows):
+            part = pd.DataFrame(hist_rows)
+
     total_omzet = float(part["omzet"].sum())
     total_biaya = float(part["biaya"].sum())
     group_roas = total_omzet / total_biaya if total_biaya > 0 else float("nan")
     contrib = contribution or {}
+    codes = set(part["product_code"].astype(str))
+    elsewhere = _elsewhere_for_codes(members, units, group_key=key, codes=codes)
     rows = []
     for r in part.itertuples(index=False):
+        code = str(r.product_code)
         biaya = float(r.biaya or 0)
         omzet = float(r.omzet or 0)
         roas = omzet / biaya if biaya > 0 else float("nan")
         share_o = omzet / total_omzet if total_omzet > 0 else 0.0
         share_c = biaya / total_biaya if total_biaya > 0 else 0.0
-        margin = contrib.get(str(r.product_code))
-        if biaya > 0 and omzet <= 0:
+        margin = contrib.get(code)
+        alts = elsewhere.get(code) or []
+        alt_label = "; ".join(
+            f"{a['nama']} ({a['jenis']}"
+            + (f", {_rp_hari(a['biaya'])}" if a.get("biaya") else "")
+            + ")"
+            for a in alts[:3]
+        ) if alts else "–"
+
+        if not group_active:
+            # Mode belum di-setup: jangan bilang "pertahankan" — bandingkan setup & kelayakan
+            if alts:
+                act = "Sudah diiklankan di tempat lain"
+                tip = (
+                    f"Sudah aktif di: {alt_label}. "
+                    "Jangan masukkan lagi ke grup ini agar budget tidak dobel."
+                )
+            else:
+                sig = _product_signal(products, code)
+                hist_b, hist_o, hist_roas = _hist_perf_for_code(work, code)
+                stok = sig["stok"]
+                demand = sig["omzet_harian"]
+                if margin is not None and margin <= 0:
+                    act = "Tidak perlu di-setup"
+                    tip = "Margin kotor di bawah potongan Shopee — rugi bila diiklankan. Jangan masukkan ke grup baru."
+                elif stok == stok and stok <= 0:
+                    act = "Tidak perlu di-setup"
+                    tip = "Stok 0 — tidak layak di-setup sekarang. Aktifkan lagi setelah restock."
+                elif hist_b > 0 and hist_o <= 0:
+                    act = "Tidak perlu di-setup"
+                    tip = (
+                        f"Di campaign/grup sebelumnya berbiaya {_rp_hari(hist_b)} tanpa omzet. "
+                        "Jangan ikut di-setup di grup ini."
+                    )
+                elif hist_b > 0 and hist_roas == hist_roas and target_roas > 0 and hist_roas < target_roas * 0.5:
+                    act = "Tidak perlu di-setup"
+                    tip = (
+                        f"Histori di grup ini ROAS {hist_roas:.1f}× jauh di bawah target {target_roas:.1f}×. "
+                        "Tidak layak di-setup ulang di grup ini."
+                    )
+                elif demand == demand and demand <= 0 and hist_o <= 0:
+                    act = "Tidak perlu di-setup"
+                    tip = "Prediksi omzet rendah dan belum ada bukti omzet iklan — prioritaskan produk lain."
+                elif (
+                    (hist_roas == hist_roas and target_roas > 0 and hist_roas >= target_roas * 0.8)
+                    or (demand == demand and demand > 0 and (stok != stok or stok > 0))
+                    or (hist_o > 0 and (hist_roas != hist_roas or hist_roas >= max(target_roas * 0.5, 1.0)))
+                ):
+                    act = "Layak di-setup di grup ini"
+                    bits = []
+                    if hist_roas == hist_roas and hist_b > 0:
+                        bits.append(f"histori ROAS {hist_roas:.1f}×")
+                    if demand == demand and demand > 0:
+                        bits.append(f"prediksi omzet {_rp_hari(demand)}")
+                    if stok == stok and stok > 0:
+                        bits.append(f"stok {stok:,.0f}".replace(",", "."))
+                    tip = (
+                        "Belum ada iklan aktif di tempat lain. "
+                        + (("Bukti: " + "; ".join(bits) + ". ") if bits else "")
+                        + "Layak dimasukkan saat grup ini diaktifkan di Seller Center."
+                    )
+                else:
+                    act = "Tidak perlu di-setup"
+                    tip = (
+                        "Belum ada bukti kuat (histori/prediksi/stok) bahwa produk ini layak ikut grup baru. "
+                        "Tunda dulu; fokus ke item yang sudah jelas."
+                    )
+        elif alts and biaya <= 0 and omzet <= 0:
+            act = "Sudah diiklankan di tempat lain"
+            tip = f"Di grup ini belum berbiaya, tetapi sudah aktif di: {alt_label}. Hindari dobel budget."
+        elif biaya > 0 and omzet <= 0:
             act = "Keluarkan dari grup"
             tip = (
                 f"Ada biaya {_rp_hari(biaya)} tanpa omzet di laporan terakhir. "
@@ -752,13 +942,14 @@ def group_members_review(
             else:
                 tip = "Belum cukup data ROAS; pantau lagi setelah laporan berikutnya."
         rows.append({
-            "Produk": str(r.nama or r.product_code),
-            "Kode produk": str(r.product_code),
+            "Produk": str(r.nama or code),
+            "Kode produk": code,
             "Biaya/hari": biaya,
             "Omzet/hari": omzet,
             "ROAS": roas,
             "Porsi omzet grup": share_o * 100,
             "Porsi biaya grup": share_c * 100,
+            "Iklan lain": alt_label,
             "Tindakan": act,
             "Saran": tip,
         })
@@ -777,11 +968,21 @@ def group_members_summary(member_frame: pd.DataFrame) -> str:
     """Satu kalimat ringkas untuk kartu grup dari hasil `group_members_review`."""
     if member_frame is None or member_frame.empty or "Tindakan" not in member_frame.columns:
         return ""
-    out = int((member_frame["Tindakan"] == "Keluarkan dari grup").sum())
-    tinjau = int((member_frame["Tindakan"] == "Kurangi porsi / tinjau").sum())
-    andalan = int((member_frame["Tindakan"] == "Pisahkan jadi iklan tunggal").sum())
-    ok = int((member_frame["Tindakan"] == "Pertahankan di grup").sum())
+    acts = member_frame["Tindakan"].astype(str)
+    already = int((acts == "Sudah diiklankan di tempat lain").sum())
+    skip = int((acts == "Tidak perlu di-setup").sum())
+    layak = int((acts == "Layak di-setup di grup ini").sum())
+    out = int((acts == "Keluarkan dari grup").sum())
+    tinjau = int((acts == "Kurangi porsi / tinjau").sum())
+    andalan = int((acts == "Pisahkan jadi iklan tunggal").sum())
+    ok = int((acts == "Pertahankan di grup").sum())
     bits = []
+    if already:
+        bits.append(f"{already} produk sudah diiklankan di tempat lain (jangan dobel)")
+    if skip:
+        bits.append(f"{skip} produk tidak perlu di-setup di grup ini")
+    if layak:
+        bits.append(f"{layak} produk layak ikut saat grup diaktifkan")
     if out:
         bits.append(f"{out} produk sebaiknya dikeluarkan (menyedot budget tanpa hasil)")
     if tinjau:

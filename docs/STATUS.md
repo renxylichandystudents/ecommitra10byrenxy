@@ -2,6 +2,12 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Grup belum setup: bandingkan anggota vs iklan aktif + kelayakan
+
+- Mode `group_active=False`: tiap produk dicek apakah **sudah diiklankan di tempat lain**, lalu kelayakan setup dari histori grup / prediksi / stok / margin.
+- Tindakan baru: **Sudah diiklankan di tempat lain**, **Layak di-setup di grup ini**, **Tidak perlu di-setup** — tidak lagi “pertahankan / grup sehat” saat grup belum aktif.
+- Kolom **Iklan lain** di tabel anggota; expander terbuka otomatis untuk grup belum setup.
+
 ## 2026-11-19 · Dompet: label patokan harian tidak menyesatkan
 
 - Rata-rata terpakai > patokan → **di atas patokan** (+ selisih Rp/hari), bukan “mendekati” (toleransi lama ±5% terlalu longgar).
