@@ -2,6 +2,11 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Dompet: label patokan harian tidak menyesatkan
+
+- Rata-rata terpakai > patokan → **di atas patokan** (+ selisih Rp/hari), bukan “mendekati” (toleransi lama ±5% terlalu longgar).
+- Hanya ±0,5% yang disebut **sesuai patokan**.
+
 ## 2026-11-19 · Pantau: perketat dalam rencana vs di luar rencana
 
 - Anggota rencana = kunci di `iklan` tersimpan; budget minggu hanya menimpa nilai, tidak menambah/menghapus anggota.

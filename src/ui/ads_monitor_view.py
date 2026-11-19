@@ -464,12 +464,15 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     avg_since = spent_since / days_since if days_since else 0.0
     plan_daily = float(wallet["rencana_harian"] or 0)
     if days_since and plan_daily > 0:
-        if avg_since > plan_daily * 1.05:
-            vs_plan = "di atas patokan"
-        elif avg_since < plan_daily * 0.95:
-            vs_plan = "di bawah patokan"
+        # Band sempit (±0,5%) = "sesuai"; di luar itu langsung di atas / di bawah (bukan "mendekati").
+        if avg_since > plan_daily * 1.005:
+            selisih = avg_since - plan_daily
+            vs_plan = f"di atas patokan · lebih {fmt_idr(selisih)}/hari"
+        elif avg_since < plan_daily * 0.995:
+            selisih = plan_daily - avg_since
+            vs_plan = f"di bawah patokan · kurang {fmt_idr(selisih)}/hari"
         else:
-            vs_plan = "mendekati patokan"
+            vs_plan = "sesuai patokan"
         daily_hint = (
             f"Ini patokan budget/hari saat campaign disimpan — bukan sisa budget. "
             f"Rata-rata terpakai sejak campaign: {fmt_idr(avg_since)}/hari ({vs_plan})."
