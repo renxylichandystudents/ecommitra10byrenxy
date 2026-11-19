@@ -250,14 +250,22 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertEqual(counts["tidak"], 4)
         self.assertEqual(counts["efektif"], 1)
 
-    def test_campaign_eval_start_uses_app_save_not_sc(self):
-        # Campaign = simpan rencana di fitur (data_sampai), bukan tanggal buat iklan di SC
-        camp = {"mulai": "2026-11-01", "setelan": {"data_sampai": "2026-11-14"}}
+    def test_campaign_eval_start_uses_campaign_period_not_sc(self):
+        # Awal evaluasi = mulai periode campaign di fitur, bukan tanggal buat iklan di SC
+        camp = {
+            "mulai": "2026-11-15", "selesai": "2026-11-22",
+            "setelan": {"data_sampai": "2026-11-14"},
+        }
         self.assertEqual(Mon.campaign_eval_start(camp), date(2026, 11, 15))
-        self.assertEqual(Mon.campaign_eval_start({"mulai": "2026-11-01"}), date(2026, 11, 1))
+        self.assertEqual(Mon.campaign_eval_end(camp, today=date(2026, 11, 19)), date(2026, 11, 18))
+        # Tanpa mulai → fallback data_sampai+1
+        self.assertEqual(
+            Mon.campaign_eval_start({"setelan": {"data_sampai": "2026-11-14"}}),
+            date(2026, 11, 15),
+        )
 
     def test_campaign_daily_progress_from_daily_overall_reports(self):
-        # Dua unggahan all iklan 1 hari — realisasi beda; sales kumulatif sejak simpan rencana
+        # Campaign 15–22; hari ini 19 → baris 15..18; biaya+omzet dari all iklan per tanggal
         ads = pd.DataFrame([
             {
                 "Nama Iklan": "A", "product_code": "", "cost": 8_154_135, "ad_sales": 128_168_508,
@@ -271,7 +279,8 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
             },
         ])
         campaign = {
-            "setelan": {"data_sampai": "2026-11-16"},
+            "mulai": "2026-11-15", "selesai": "2026-11-22",
+            "setelan": {"data_sampai": "2026-11-14"},
             "pantau_harian": [
                 {"tanggal": "2026-11-17", "toko": {"budget_plan_hari": 9_500_000, "produk_mtd": 1.0, "bersih_mtd": 1.0}, "items": []},
                 {"tanggal": "2026-11-18", "toko": {"budget_plan_hari": 9_500_000, "produk_mtd": 2.0, "bersih_mtd": 2.0}, "items": []},
@@ -281,13 +290,15 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         prog = Mon.campaign_daily_progress(
             campaign, ads_overall=ads, target_roas=22.0, factor=0.8, today=date(2026, 11, 19),
         )
-        self.assertEqual(list(prog["Tanggal"]), ["2026-11-17", "2026-11-18"])
-        self.assertAlmostEqual(prog.iloc[0]["Realisasi biaya iklan (hari itu)"], 7_000_000)
-        self.assertAlmostEqual(prog.iloc[1]["Realisasi biaya iklan (hari itu)"], 8_154_135)
-        self.assertNotEqual(prog.iloc[0]["Realisasi biaya iklan (hari itu)"], prog.iloc[1]["Realisasi biaya iklan (hari itu)"])
-        self.assertAlmostEqual(prog.iloc[0]["Sales produk dari iklan sejak campaign"], 100_000_000)
-        self.assertAlmostEqual(prog.iloc[1]["Sales produk dari iklan sejak campaign"], 228_168_508)
-        self.assertAlmostEqual(prog.iloc[1]["Sales produk all sejak campaign"], 228_168_508 * 0.8)
+        self.assertEqual(list(prog["Tanggal"]), ["2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18"])
+        # 15–16 belum ada laporan → NaN; 17–18 terisi
+        self.assertTrue(pd.isna(prog.iloc[0]["Realisasi biaya iklan (hari itu)"]))
+        self.assertTrue(pd.isna(prog.iloc[1]["Realisasi biaya iklan (hari itu)"]))
+        self.assertAlmostEqual(prog.iloc[2]["Realisasi biaya iklan (hari itu)"], 7_000_000)
+        self.assertAlmostEqual(prog.iloc[3]["Realisasi biaya iklan (hari itu)"], 8_154_135)
+        self.assertAlmostEqual(prog.iloc[2]["Sales produk dari iklan sejak campaign"], 100_000_000)
+        self.assertAlmostEqual(prog.iloc[3]["Sales produk dari iklan sejak campaign"], 228_168_508)
+        self.assertAlmostEqual(prog.iloc[3]["Sales produk all sejak campaign"], 228_168_508 * 0.8)
 
     def test_campaign_daily_progress_skips_today(self):
         ads = pd.DataFrame([{
@@ -295,7 +306,8 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
             "period": "2026-11-19", "Periode laporan (teks)": "19/11/2026 - 19/11/2026",
             "_submitted_at": "2026-11-19T18:00:00+07:00", "_source_key": "ads_overall",
         }])
-        campaign = {"setelan": {"data_sampai": "2026-11-10"}, "pantau_harian": []}
+        # Campaign mulai hari ini → belum ada hari penuh
+        campaign = {"mulai": "2026-11-19", "selesai": "2026-11-22", "pantau_harian": []}
         prog = Mon.campaign_daily_progress(
             campaign, ads_overall=ads, today=date(2026, 11, 19),
         )

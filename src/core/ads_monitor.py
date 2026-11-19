@@ -776,18 +776,36 @@ def _as_day(value) -> date | None:
 
 
 def campaign_eval_start(campaign: dict | None) -> date | None:
-    """Hari pertama evaluasi setelah **rencana iklan disimpan di fitur ini** (bukan tanggal buat iklan di Seller Center).
+    """Hari pertama evaluasi = **awal periode campaign** yang di-set di fitur (`mulai`).
 
-    Acuan: `setelan.data_sampai` (tanggal data terakhir saat Simpan) + 1 hari.
-    Fallback: `campaign.mulai` (awal periode rencana di app).
+    Fallback: `setelan.data_sampai` + 1 hari (hari pertama setelah Simpan rencana).
+    Bukan tanggal buat iklan di Seller Center.
     """
     if not campaign:
         return None
+    mulai = _as_day(campaign.get("mulai"))
+    if mulai is not None:
+        return mulai
     s = campaign.get("setelan") or {}
     d0 = _as_day(s.get("data_sampai"))
     if d0 is not None:
         return d0 + timedelta(days=1)
-    return _as_day(campaign.get("mulai"))
+    return None
+
+
+def campaign_eval_end(campaign: dict | None, *, today: date | None = None) -> date | None:
+    """Hari terakhir penuh dalam periode campaign: min(selesai, kemarin).
+
+    Hari ini tidak ikut — hasil all iklan belum penuh.
+    """
+    if not campaign:
+        return None
+    today_d = _as_day(today) or date.today()
+    last_full = today_d - timedelta(days=1)
+    selesai = _as_day(campaign.get("selesai"))
+    if selesai is None:
+        return last_full
+    return min(selesai, last_full)
 
 
 def day_decision_note(
@@ -831,15 +849,16 @@ def campaign_daily_progress(
     target_roas: float = 0.0,
     ads_overall=None,
     window_start: date | None = None,
+    window_end: date | None = None,
     factor: float = 0.0,
     today: date | None = None,
 ) -> pd.DataFrame:
-    """Progress harian dari laporan **all iklan per tanggal** (bukan prorata bulanan).
+    """Progress harian dari laporan **all iklan per tanggal** dalam periode campaign.
 
+    - Jendela = `mulai` s.d. min(`selesai`, kemarin). Hari ini tidak ditampilkan.
     - Realisasi (hari itu) = biaya all iklan pada tanggal itu (sejajar filter SC 1 hari / Kemarin).
-    - Sales bruto/bersih = **akumulasi** omzet all iklan sejak rencana disimpan di fitur s.d. tanggal itu.
-    - Tanggal **hari ini** tidak ditampilkan (hari belum penuh).
-    - Tanpa laporan 1 hari / MTD beruntun → baris kosong + analisa minta unggah harian.
+    - Sales bruto/bersih = **akumulasi** omzet all iklan sejak `mulai` campaign s.d. tanggal itu.
+    - Tiap hari kalender dalam jendela ditampilkan; tanpa laporan 1 hari / MTD beruntun → NaN + minta unggah.
     """
     from src.core import ads_month as _AM
 
@@ -849,8 +868,12 @@ def campaign_daily_progress(
     last_full = today_d - timedelta(days=1)
     live_day = str(live_tanggal or "")[:10] if live_tanggal is not None else ""
     live_d = _as_day(live_day)
-    # Batas data penuh: min(akhir laporan, kemarin) — jangan pakai hari ini
-    end_cap = last_full
+    # Batas data penuh: min(akhir campaign, kemarin, live) — jangan pakai hari ini
+    end_cap = campaign_eval_end(campaign, today=today_d) or last_full
+    end_cap = min(end_cap, last_full)
+    we = _as_day(window_end)
+    if we is not None:
+        end_cap = min(end_cap, we)
     if live_d is not None:
         end_cap = min(end_cap, live_d)
     if start is None or end_cap < start:
@@ -877,15 +900,8 @@ def campaign_daily_progress(
             "items": prev_meta.get("items") or [],
         }
 
-    # Tanggal yang ditampilkan: hari yang ada di daily series; jika daily kosong, tetap
-    # tampilkan tanggal catatan ≤ kemarin dengan analisa "unggah laporan harian"
-    if not daily.empty:
-        day_list = [str(t)[:10] for t in daily["Tanggal"].tolist()]
-    else:
-        day_list = sorted(
-            d for d in meta
-            if (_as_day(d) is not None and start <= _as_day(d) <= end_cap)  # type: ignore[operator]
-        )
+    # Semua hari kalender dalam periode campaign (penuh) — mis. 15–18 saat hari ini 19
+    day_list = [(start + timedelta(days=i)).isoformat() for i in range((end_cap - start).days + 1)]
     if not day_list:
         return pd.DataFrame(columns=cols)
 

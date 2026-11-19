@@ -1,28 +1,34 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (malam).
+Diperbarui: 19 November 2026 (malam, lanjut).
 
 ## Lanjut nanti · Pantau iklan
 
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai malam ini**
-- Progress baca **all iklan per tanggal** (laporan 1 hari atau selisih MTD beruntun) — bukan prorata.
-- **Hari ini tidak ditampilkan** (hasil belum penuh). Contoh 18 Nov ≈ SC «Kemarin» bila laporan 1 hari diunggah.
-- Campaign = simpan rencana di fitur.
+- Evaluasi = **periode campaign** (`mulai`–`selesai`), contoh 15–22 Nov.
+- Angka biaya & omzet dari **all iklan per tanggal**; hari penuh saja (hari ini 19 → hitung 15–18).
+- Progress menampilkan tiap hari kalender dalam jendela itu; 19 tidak muncul.
 
 **Cek saat lanjut**
-- Unggah laporan Keseluruhan iklan filter **18/11–18/11** (atau MTD 1–17 lalu 1–18) agar realisasi 18 ≈ Rp 8,15 jt.
-- Pastikan baris 19 Nov tidak muncul.
+- Unggah all iklan filter **1 tanggal** untuk 15, 16, 17, **18** (18 ≈ Rp 8,15 jt seperti SC Kemarin), atau MTD berurutan.
+- Kartu A + tabel progress harus sejajar rentang campaign, bukan prorata bulanan.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
+
+## 2026-11-19 · Evaluasi = periode campaign + all iklan 15–kemarin
+
+- `campaign_eval_start` = `mulai`; `campaign_eval_end` = min(`selesai`, kemarin).
+- Progress: baris tiap hari kalender; biaya/omzet dari `daily_ad_totals`.
+- Kartu A memakai jumlah harian all iklan (bukan `ad_spend` prorata).
 
 ## 2026-11-19 · Progress: all iklan per tanggal + skip hari ini
 
 - `daily_ad_totals` / `overall_upload_snapshots`: angka harian dari unggahan 1 hari atau Δ MTD hi berurutan.
 - Tidak mengarang bagi rata dari blob bulanan; hari ini excluded.
-- Sales bruto/bersih = akumulasi harian sejak `campaign_eval_start`.
+- Sales bruto/bersih = akumulasi harian sejak awal campaign.
 
 ## 2026-11-19 · Progress: campaign = simpan di fitur, realisasi = selisih kumulatif
 
