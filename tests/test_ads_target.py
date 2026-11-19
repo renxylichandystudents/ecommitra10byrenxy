@@ -271,7 +271,26 @@ class EvaluateTest(unittest.TestCase):
         frame, _summary = A.evaluate(base, now, {"grup:A": 100_000, "pisah:42": 50_000}, target_roas=8)
         row = frame.set_index("_key").loc["pisah:42"]
         self.assertEqual(row["Hari dievaluasi"], 1)
-        self.assertEqual(row["Rekomendasi dijalankan"], "Ya")
+        # Tanpa baseline biaya: porsi 1/8 dari MTD — bukan 50 rb seolah semua dibakar dalam 1 hari
+        self.assertAlmostEqual(row["Biaya aktual/hari"], 50_000 / 8)
+        self.assertAlmostEqual(row["Biaya sejak disimpan"], 50_000 / 8)
+        self.assertIn("proporsional", str(row["Catatan batas"]))
+
+    def test_missing_baseline_cost_does_not_inflate_daily_rate(self):
+        """Bug jeda tertinggal: baseline hari=14 biaya=0 + MTD 33 jt / 19 hari → jangan jadi 6,5 jt/hari."""
+        # Gejala layar: terpakai sejak 6,59 jt vs bulan 4,07 jt untuk total ~33 jt
+        base = {"produk:shower": {"periode": "2026-11-01", "hari": 14, "biaya": 0.0, "omzet": 0.0}}
+        now = {"produk:shower": {
+            "periode": "2026-11-01", "hari": 19,
+            "biaya": 4_073_599 * 19, "omzet": (4_073_599 * 19) * 6.1,
+        }}
+        frame, _ = A.evaluate(base, now, {"produk:shower": 0}, target_roas=8)
+        row = frame.set_index("_key").loc["produk:shower"]
+        self.assertEqual(row["Hari dievaluasi"], 5)
+        # Rata-rata sejak ≈ rata-rata bulan (bukan total_bulan ÷ 5)
+        self.assertAlmostEqual(row["Biaya aktual/hari"], 4_073_599, delta=1)
+        self.assertLess(row["Biaya aktual/hari"], 5_000_000)  # bukan ~6,5 jt menggelembung
+        self.assertIn("proporsional", str(row["Catatan batas"]))
 
 
 class RoundBudgetTest(unittest.TestCase):

@@ -1254,15 +1254,50 @@ def evaluate(baseline: dict[str, dict], current: dict[str, dict], planned: dict[
         cur, base = current.get(key) or current.get(report_key), baseline.get(key) or baseline.get(report_key)
         if cur is None:
             continue
+        # JANGAN mengarang baseline biaya=0 di tengah bulan: itu membagi total MTD dengan sisa hari
+        # dan menggelembungkan "terpakai sejak campaign" (gejala: sejak ≫ bulan ini untuk total yang sama).
+        baseline_note = ""
+        cur_hari = int(cur.get("hari") or 0)
+        cur_biaya = float(cur.get("biaya") or 0)
+        cur_omzet = float(cur.get("omzet") or 0)
+
+        def _proportional(days_window: int) -> tuple[float, float]:
+            """Porsi biaya/omzet untuk jendela hari, asumsi laju merata di bulan laporan."""
+            if cur_hari <= 0 or days_window <= 0:
+                return 0.0, 0.0
+            return cur_biaya * days_window / cur_hari, cur_omzet * days_window / cur_hari
+
         if base is None and cur["periode"] in base_days:
-            base = {"periode": cur["periode"], "hari": base_days[cur["periode"]], "biaya": 0.0, "omzet": 0.0}
-        if base and base.get("periode") == cur["periode"]:
-            days = cur["hari"] - int(base.get("hari", 0))
-            cost, sales = cur["biaya"] - float(base.get("biaya", 0)), cur["omzet"] - float(base.get("omzet", 0))
+            # Iklan tidak ada di snapshot baseline: tetap hitung umur campaign, tapi biaya proporsional.
+            base_hari = int(base_days[cur["periode"]] or 0)
+            days = cur_hari - base_hari
+            if days <= 0:
+                continue
+            cost, sales = _proportional(days)
+            baseline_note = "baseline iklan tidak terekam — porsi proporsional bulan berjalan"
+            base = {"periode": cur["periode"], "hari": base_hari, "biaya": 0.0, "omzet": 0.0}
+        elif base and base.get("periode") == cur["periode"]:
+            base_hari = int(base.get("hari", 0) or 0)
+            base_biaya = float(base.get("biaya", 0) or 0)
+            base_omzet = float(base.get("omzet", 0) or 0)
+            days = cur_hari - base_hari
+            if days <= 0:
+                continue
+            if base_hari > 0 and base_biaya <= 0 and base_omzet <= 0 and cur_biaya > 0:
+                cost, sales = _proportional(days)
+                baseline_note = "baseline tanpa biaya terekam — porsi proporsional bulan berjalan"
+            else:
+                cost = cur_biaya - base_biaya
+                sales = cur_omzet - base_omzet
         else:
-            days, cost, sales = cur["hari"], cur["biaya"], cur["omzet"]
+            days, cost, sales = cur_hari, cur_biaya, cur_omzet
         if days <= 0:
             continue
+        # Lindungi dari total negatif (laporan turun / ganti file)
+        if cost < 0:
+            cost = 0.0
+        if sales < 0:
+            sales = 0.0
         cost_d, sales_d = cost / days, sales / days
         if expected <= 0:
             done = cost_d <= max(5_000.0, 0.1 * float((base or {}).get("biaya", 0)) / max(int((base or {}).get("hari", 1)), 1))
@@ -1271,6 +1306,8 @@ def evaluate(baseline: dict[str, dict], current: dict[str, dict], planned: dict[
             done = 0.6 <= cost_d / expected <= 1.4
             note = (f"usulan {plan_cost:,.0f} → min Shopee {expected:,.0f}".replace(",", ".")
                     if expected > plan_cost + 1 else "")
+        if baseline_note:
+            note = f"{note}; {baseline_note}" if note else baseline_note
         ratio = cost_d / expected if expected > 0 else float("nan")
         if expected <= 0:
             status = "Sesuai (dijeda)" if done else "Masih berbiaya (harusnya dijeda)"

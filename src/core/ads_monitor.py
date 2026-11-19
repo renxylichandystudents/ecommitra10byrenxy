@@ -129,6 +129,13 @@ def classify_rows(frame: pd.DataFrame, *, target_roas: float, running_keys: set[
                 f"{spend_bits}. Samakan budget di Seller Center ke {_rp_hari(expected)}, lalu unggah laporan esok hari."
             )
 
+        catatan = str(r.get("Catatan batas") or "")
+        if "proporsional" in catatan.lower() and "proporsional" not in tip.lower():
+            tip = (
+                f"{tip} Angka terpakai memakai porsi proporsional bulan berjalan "
+                "(baseline biaya iklan tidak terekam saat campaign disimpan — "
+                "simpan ulang campaign agar selisih hari nyata)."
+            ).strip()
         goals.append(goal)
         actions.append(act)
         tips.append(tip)

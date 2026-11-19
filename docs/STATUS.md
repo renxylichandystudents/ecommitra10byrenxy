@@ -7,17 +7,23 @@ Diperbarui: 19 November 2026 (siang).
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai siang ini**
-- Kelayakan setup grup + riwayat evaluasi wording.
-- **Grup Heater / take-out:** jika mayoritas anggota harus dikeluarkan (sudah iklan tunggal / tanpa hasil), tindakan kartu = **Keluarkan anggota dari grup** (bukan Turunkan budget). Blok khusus di Pantau. Label biaya anggota = “di grup/hari”.
+- Grup take-out vs turunkan budget; riwayat wording.
+- **Bug angka jeda tertinggal:** baseline biaya=0 di tengah bulan membuat terpakai sejak menggelembung (6,5 jt vs bulan 4 jt). Diganti porsi proporsional bulan berjalan.
 
 **Cek saat lanjut**
-- Sep38 PL - Heater: harus masuk blok “Keluarkan anggota”; Water Heater yang sudah tunggal → Keluarkan + sebut iklan lain; bukan “Turunkan budget”.
-- Riwayat: Naik sejak catatan lalu ≠ rata-rata/hari.
+- Shower Column / Hand Shower: **Terpakai sejak ≈ Terpakai bulan ini** bila baseline biaya kosong (bukan 6,5 jt vs 4 jt). Saran menyebut proporsional; idealnya simpan ulang campaign.
+- Heater: blok Keluarkan anggota.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
 - Penyelarasan angka “Terpakai bulan ini” vs “sejak campaign” (edge).
 - Pintu Kamar Mandi di Belum setup tapi Terpakai bulan ini > 0.
+
+## 2026-11-19 · Bug evaluate: baseline biaya 0 tidak boleh menggelembungkan rata-rata sejak
+
+- Gejala: Shower Column terpakai sejak Rp 6,59 jt/hari vs bulan Rp 4,07 jt/hari (total ~33 jt).
+- Akar: `evaluate` mengarang baseline `biaya=0` + `hari` tengah bulan → total MTD ÷ sisa hari.
+- Perbaikan: porsi proporsional (`biaya × days/cur.hari`) bila baseline hilang / tanpa biaya; catatan di tip.
 
 ## 2026-11-19 · Grup aktif: take-out anggota mengalahkan “Turunkan budget”
 
