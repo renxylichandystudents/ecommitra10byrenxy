@@ -1,11 +1,11 @@
 # Status terbaru aplikasi
 
-Diperbarui: 19 November 2026 (malam, header progress).
+Diperbarui: 19 November 2026 (malam, progress = analisa).
 
 ## Lanjut nanti · Pantau iklan
 
-- Tabel progress dikelompokkan: **Iklan hari itu** (Biaya iklan, Omzet iklan, ROAS iklan) dan **Toko sejak campaign** (Sales bruto, Sales bersih, Sales produk, ROAS sales bersih). Nama kolom sama istilah Ringkasan.
-- Tanggal 14 (campaign dibuat) tetap menampilkan Sales toko. Biaya/Omzet iklan hari itu kosong karena laporan all iklan sampai 14 Nov masih gabungan 1–14 Nov; laporan utuh sebelumnya berakhir 8 Nov, jadi selisihnya bukan 1 hari.
+- Progress memakai istilah yang sudah ada: Budget di rencana/hari, Biaya iklan, Omzet iklan, ROAS iklan, Sales bruto, Sales bersih, Sales produk, Saran.
+- Angka iklan di baris terakhir = kartu Biaya iklan / Omzet iklan / ROAS iklan. Saran memakai aturan analisa di bawah (Sesuai rencana, Tidak sesuai rencana, ROAS lemah, Naikkan/Turunkan budget, Naikkan Target ROAS) plus jumlah Efektif, Tidak efektif, Boros, Belum di-setup, Di luar plan.
 
 ## Lanjut nanti · Pantau iklan
 

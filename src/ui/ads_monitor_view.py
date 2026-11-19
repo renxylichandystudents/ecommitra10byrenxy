@@ -757,12 +757,14 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             iklan_tercatat=len(in_plan) if not in_plan.empty else 0,
             target_roas=roas,
         )
+        luar_n = 0 if out_plan is None or out_plan.empty else len(out_plan)
+        ringkas = Mon.execution_ringkas(Mon.execution_counts(exe), luar=luar_n)
         progress = Mon.campaign_daily_progress(
             cur, plan_keys,
             live_toko=live_toko, live_tanggal=progress_end, target_roas=roas,
             ads_overall=ads_overall, orders=orders, performance=performance,
             window_start=window_start, window_end=progress_end,
-            factor=float(factor or 0), today=today,
+            factor=float(factor or 0), today=today, ringkas=ringkas,
         )
         st.markdown("#### Progress harian · periode campaign")
         period_caption = ""
@@ -773,19 +775,15 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 "(hari ini belum dihitung)."
             )
         if progress.empty:
-            st.info(
-                "Belum ada hari penuh dalam periode campaign, atau belum ada laporan **Keseluruhan iklan**. "
-                "Di Seller Center unduh all iklan filter **1 tanggal** untuk tiap hari campaign yang sudah lewat "
-                "(atau unggah MTD berurutan), lalu unggah ke app."
-            )
+            st.info("Belum ada hari penuh dalam periode campaign, atau belum ada laporan Keseluruhan iklan.")
         else:
             st.caption(
-                "Tiap baris = satu tanggal. Kolom dikelompokkan supaya cara bacanya tidak tercampur."
+                "Tiap baris = satu tanggal."
                 + period_caption
-                + " **Iklan hari itu** = Biaya iklan, Omzet iklan, dan ROAS iklan pada tanggal itu (laporan all iklan; ROAS iklan = Omzet iklan ÷ Biaya iklan hari yang sama). "
-                "**Toko sejak campaign** = Sales bruto, Sales bersih, dan Sales produk terkumpul sejak tanggal campaign dibuat — istilah sama Ringkasan. "
-                "ROAS sales bersih = Sales bersih sejak campaign ÷ Biaya iklan yang sudah terkumpul. "
-                "Tanggal campaign dibuat tetap masuk: Sales toko hari itu sudah dihitung. Biaya iklan hari itu hanya diisi bila laporannya terpisah per tanggal."
+                + " **Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** terkumpul sejak tanggal campaign; baris terakhir sama dengan kartu di atas. "
+                "ROAS iklan = Omzet iklan ÷ Biaya iklan, sama dengan ROAS aktual di analisa iklan. "
+                "**Sales bruto**, **Sales bersih**, dan **Sales produk** sama Ringkasan, juga terkumpul sejak tanggal campaign. "
+                "**Saran** memakai aturan yang sama dengan analisa di bawah: Sesuai rencana, Tidak sesuai rencana, ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=True):
                 from src.ui import grouped_table
@@ -798,28 +796,26 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     height=520,
                     groups=Mon.PROGRESS_GROUPS,
                     kinds={
-                        "Budget plan/hari": "money",
+                        "Budget di rencana/hari": "money",
                         "Biaya iklan": "money",
                         "Omzet iklan": "money",
                         "ROAS iklan": "dec",
                         "Sales bruto": "money",
                         "Sales bersih": "money",
                         "Sales produk": "money",
-                        "ROAS sales bersih": "dec",
                     },
-                    wrap=("Analisa",),
+                    wrap=("Saran",),
                     pin=("Tanggal",),
                     widths={
                         "Tanggal": 118,
-                        "Budget plan/hari": 150,
+                        "Budget di rencana/hari": 170,
                         "Biaya iklan": 140,
                         "Omzet iklan": 150,
                         "ROAS iklan": 110,
                         "Sales bruto": 140,
                         "Sales bersih": 140,
                         "Sales produk": 140,
-                        "ROAS sales bersih": 140,
-                        "Analisa": 420,
+                        "Saran": 420,
                     },
                 )
 

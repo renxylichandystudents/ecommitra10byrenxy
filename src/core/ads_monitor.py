@@ -718,6 +718,27 @@ def partition_execution(in_plan: pd.DataFrame, *, target_roas: float = 0.0) -> d
     }
 
 
+def execution_ringkas(counts: dict | None, *, luar: int = 0) -> str:
+    """Satu kalimat dengan istilah yang sama seperti judul analisa di bawah tabel."""
+    c = counts or {}
+    bits = []
+    for label, key in (
+        ("Efektif", "efektif"),
+        ("Tidak efektif", "tidak_efektif"),
+        ("Boros", "boros"),
+        ("Belum di-setup", "belum_setup"),
+        ("Sudah diiklankan di tempat lain", "di_tempat_lain"),
+        ("Jeda", "jeda"),
+        ("Isi grup salah", "isi_grup"),
+    ):
+        n = int(c.get(key) or 0)
+        if n:
+            bits.append(f"{label} {n}")
+    if luar:
+        bits.append(f"Di luar plan {int(luar)}")
+    return " · ".join(bits)
+
+
 def execution_counts(parts: dict[str, pd.DataFrame]) -> dict[str, int]:
     """Ringkas jumlah iklan per bucket pelaksanaan."""
     def n(key: str) -> int:
@@ -741,23 +762,19 @@ def execution_counts(parts: dict[str, pd.DataFrame]) -> dict[str, int]:
 
 PROGRESS_COLS = [
     "Tanggal",
-    "Budget plan/hari",
+    "Budget di rencana/hari",
     "Biaya iklan",
     "Omzet iklan",
     "ROAS iklan",
     "Sales bruto",
     "Sales bersih",
     "Sales produk",
-    "ROAS sales bersih",
-    "Analisa",
+    "Saran",
 ]
-# Satu kelompok = satu cara baca. Jangan campur "hari itu" dan "sejak campaign" di kolom sebelahan.
+# Nama kelompok dan kolom memakai istilah yang sudah ada di kartu dan analisa iklan.
 PROGRESS_GROUPS = {
-    "Periode": ("Tanggal",),
-    "Rencana": ("Budget plan/hari",),
-    "Iklan hari itu": ("Biaya iklan", "Omzet iklan", "ROAS iklan"),
-    "Toko sejak campaign": ("Sales bruto", "Sales bersih", "Sales produk", "ROAS sales bersih"),
-    "Keputusan": ("Analisa",),
+    "Di rencana": ("Budget di rencana/hari",),
+    "Sejak campaign": ("Biaya iklan", "Omzet iklan", "ROAS iklan", "Sales bruto", "Sales bersih", "Sales produk"),
 }
 
 
@@ -825,27 +842,20 @@ def day_decision_note(
     sales_all: float,
     target_roas: float = 0.0,
 ) -> str:
-    """Analisa keputusan overall performance iklan pada hari/catatan tersebut."""
-    parts: list[str] = []
+    """Saran toko dengan aturan yang sama seperti analisa iklan: 60% / 140% budget, ROAS 90% target."""
+    del sales_all  # Sales bersih tidak dipakai di Saran iklan; tetap di kartu Persentase biaya vs sales bersih
+    roas = sales_iklan / biaya_sejak if biaya_sejak == biaya_sejak and biaya_sejak > 0 else float("nan")
+    roas_bit = f" ROAS aktual {roas:.1f}×." if roas == roas else ""
     if plan_hari == plan_hari and plan_hari > 0 and realisasi_hari == realisasi_hari and realisasi_hari >= 0:
+        if realisasi_hari > plan_hari * 1.4:
+            return f"Tidak sesuai rencana. Turunkan budget.{roas_bit}"
         if realisasi_hari < plan_hari * 0.6:
-            parts.append("Biaya iklan jauh di bawah Budget plan/hari — budget di Seller Center kurang terserap")
-        elif realisasi_hari > plan_hari * 1.4:
-            parts.append("Biaya iklan di atas Budget plan/hari — cek boros atau budget Seller Center lebih tinggi dari rencana")
-        else:
-            parts.append("Biaya iklan mendekati Budget plan/hari")
-    roas_iklan = sales_iklan / biaya_sejak if biaya_sejak == biaya_sejak and biaya_sejak > 0 else float("nan")
-    if roas_iklan == roas_iklan and target_roas > 0:
-        if roas_iklan >= target_roas * 0.9:
-            parts.append(f"ROAS iklan {roas_iklan:.1f}× mendekati/di atas target {target_roas:.1f}× — pertahankan yang kuat")
-        else:
-            parts.append(f"ROAS iklan {roas_iklan:.1f}× di bawah target {target_roas:.1f}× — tinjau listing, Target ROAS, atau budget")
-    roas_all = sales_all / biaya_sejak if biaya_sejak == biaya_sejak and biaya_sejak > 0 and sales_all == sales_all else float("nan")
-    if roas_all == roas_all:
-        parts.append(f"ROAS sales bersih {roas_all:.1f}× (Sales bersih sejak campaign ÷ Biaya iklan terkumpul)")
-    if not parts:
-        return "Belum cukup data untuk keputusan hari itu."
-    return " · ".join(parts[:3])
+            return f"Tidak sesuai rencana. Naikkan budget.{roas_bit}"
+    if roas == roas and target_roas > 0 and roas < target_roas * 0.9:
+        return f"ROAS lemah. Naikkan Target ROAS. ROAS aktual {roas:.1f}×, target {target_roas:.1f}×."
+    if (biaya_sejak == biaya_sejak and biaya_sejak > 0) or (realisasi_hari == realisasi_hari and realisasi_hari > 0):
+        return f"Sesuai rencana. Pertahankan.{roas_bit}"
+    return "Belum ada di laporan."
 
 
 def _daily_store_sales(
@@ -936,13 +946,15 @@ def campaign_daily_progress(
     window_end: date | None = None,
     factor: float = 0.0,
     today: date | None = None,
+    ringkas: str = "",
 ) -> pd.DataFrame:
     """Progress harian dalam periode campaign (hari penuh saja).
 
-    - Realisasi & omzet iklan = laporan **all iklan** per tanggal (1 hari / selisih MTD).
-    - Sales produk & sales bersih = **akumulasi** dari data pesanan, istilah sama Ringkasan
-      (bukan omzet iklan × faktor).
-    - Hari ini tidak ditampilkan.
+    Biaya iklan, Omzet iklan, dan ROAS iklan = kumulatif sejak tanggal campaign
+    (hari terakhir = kartu Biaya iklan / Omzet iklan / ROAS iklan).
+    Sales bruto, Sales bersih, Sales produk = kumulatif dari pesanan, istilah Ringkasan.
+    Saran memakai aturan yang sama dengan analisa iklan di bawah.
+    Hari ini tidak ditampilkan.
     """
     from src.core import ads_month as _AM
 
@@ -1028,11 +1040,11 @@ def campaign_daily_progress(
             omzet_hari = float(hit["omzet"])
             cum_biaya += realisasi
             cum_omzet += omzet_hari
-            sumber = hit.get("sumber") or ""
         else:
             realisasi = float("nan")
             omzet_hari = float("nan")
-            sumber = ""
+        biaya_show = cum_biaya if cum_biaya > 0 else float("nan")
+        omzet_show = cum_omzet if cum_omzet > 0 else float("nan")
         store = store_daily.get(day)
         if store is not None:
             if store.get("sumber") == "transaksi":
@@ -1045,61 +1057,47 @@ def campaign_daily_progress(
             sales_bruto = cum_bruto
             sales_bersih = cum_bersih
             sales_produk = cum_produk if seen_produk else float("nan")
-            asal_sales = store.get("sumber") or ""
         else:
             sales_bruto = cum_bruto if seen_bruto else float("nan")
             sales_bersih = cum_bersih if seen_bersih else float("nan")
             sales_produk = cum_produk if seen_produk else float("nan")
-            asal_sales = ""
-        # ROAS iklan = Omzet iklan ÷ Biaya iklan hari yang sama (satu kelompok).
+        # ROAS iklan = Omzet iklan ÷ Biaya iklan sejak campaign. Sama dengan ROAS aktual di analisa iklan.
         roas_iklan = (
-            omzet_hari / realisasi
-            if realisasi == realisasi and realisasi > 0 and omzet_hari == omzet_hari
-            else float("nan")
-        )
-        # ROAS sales bersih = Sales bersih sejak campaign ÷ Biaya iklan yang sudah terkumpul sejak campaign.
-        roas_bersih = (
-            sales_bersih / cum_biaya
-            if cum_biaya > 0 and sales_bersih == sales_bersih and hit is not None
+            omzet_show / biaya_show
+            if biaya_show == biaya_show and biaya_show > 0 and omzet_show == omzet_show
             else float("nan")
         )
         if hit is None or realisasi != realisasi:
-            if day_d == start:
-                note = (
-                    "Tanggal campaign dibuat, iklan sudah jalan sesuai rencana. "
-                    "Sales bruto, Sales bersih, dan Sales produk terisi dari transaksi. "
-                    "Biaya iklan dan Omzet iklan hari itu belum bisa dipisah: laporan all iklan yang tersimpan "
-                    "sampai tanggal ini masih gabungan sejak awal bulan, bukan filter 1 tanggal."
-                )
-            else:
-                note = "Biaya iklan dan Omzet iklan hari itu belum terpisah dari laporan all iklan yang tersimpan."
+            note = "Belum ada di laporan." if not (biaya_show == biaya_show and biaya_show > 0) else day_decision_note(
+                plan_hari=plan,
+                realisasi_hari=float("nan"),
+                biaya_sejak=cum_biaya,
+                sales_iklan=cum_omzet,
+                sales_all=float("nan"),
+                target_roas=target_roas,
+            )
         else:
             note = day_decision_note(
                 plan_hari=plan,
                 realisasi_hari=realisasi,
                 biaya_sejak=cum_biaya,
                 sales_iklan=cum_omzet,
-                sales_all=sales_bersih if sales_bersih == sales_bersih else cum_omzet,
+                sales_all=float("nan"),
                 target_roas=target_roas,
             )
-            if sumber:
-                note = f"{note} · iklan: {sumber}"
-            if asal_sales == "performa":
-                note = f"{note} · Sales bruto/bersih dari performa toko (transaksi hari itu belum ada)"
-            elif asal_sales == "transaksi":
-                note = f"{note} · Sales produk & Sales bersih dari transaksi (sama Ringkasan)"
         rows.append({
             "Tanggal": day,
-            "Budget plan/hari": plan,
-            "Biaya iklan": realisasi,
-            "Omzet iklan": omzet_hari,
+            "Budget di rencana/hari": plan,
+            "Biaya iklan": biaya_show,
+            "Omzet iklan": omzet_show,
             "ROAS iklan": roas_iklan,
             "Sales bruto": sales_bruto,
             "Sales bersih": sales_bersih,
             "Sales produk": sales_produk,
-            "ROAS sales bersih": roas_bersih,
-            "Analisa": note,
+            "Saran": note,
         })
+    if rows and ringkas:
+        rows[-1]["Saran"] = f"{rows[-1]['Saran']} {ringkas}".strip()
     return pd.DataFrame(rows, columns=cols)
 
 

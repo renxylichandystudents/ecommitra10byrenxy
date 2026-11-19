@@ -294,12 +294,13 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         # 15–16 belum ada laporan → NaN; 17–18 terisi
         self.assertTrue(pd.isna(prog.iloc[0]["Biaya iklan"]))
         self.assertTrue(pd.isna(prog.iloc[1]["Biaya iklan"]))
+        # Biaya iklan & Omzet iklan = kumulatif sejak campaign (sama kartu dan ROAS aktual)
         self.assertAlmostEqual(prog.iloc[2]["Biaya iklan"], 7_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Biaya iklan"], 8_154_135)
-        # Omzet iklan = hari itu (satu kelompok dengan Biaya iklan), bukan kumulatif
+        self.assertAlmostEqual(prog.iloc[3]["Biaya iklan"], 15_154_135)
         self.assertAlmostEqual(prog.iloc[2]["Omzet iklan"], 100_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Omzet iklan"], 128_168_508)
-        self.assertAlmostEqual(prog.iloc[2]["ROAS iklan"], 100_000_000 / 7_000_000)
+        self.assertAlmostEqual(prog.iloc[3]["Omzet iklan"], 228_168_508)
+        self.assertAlmostEqual(prog.iloc[3]["ROAS iklan"], 228_168_508 / 15_154_135)
+        self.assertIn("Saran", prog.columns)
         # Sales produk/bersih dari orders (Ringkasan) — tanpa orders tetap NaN, bukan omzet×faktor
         self.assertTrue(pd.isna(prog.iloc[3]["Sales produk"]))
         self.assertTrue(pd.isna(prog.iloc[3]["Sales bersih"]))
