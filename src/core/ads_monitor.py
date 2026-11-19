@@ -1259,9 +1259,9 @@ def ad_daily_progress(
 ) -> pd.DataFrame:
     """Satu baris per tanggal penuh sejak campaign, untuk satu iklan.
 
-    Biaya iklan, Omzet iklan, dan ROAS iklan terkumpul sejak tanggal campaign
-    (baris terakhir = angka di kartu iklan). Saran memakai aturan yang sama
-    dengan progress toko dan analisa iklan.
+    Biaya iklan, Omzet iklan, dan ROAS iklan = angka hari itu di laporan all iklan
+    (bukan tumpukan budget). Budget di Shopee = budget yang sudah berjalan,
+    Budget di rencana = usulan. Saran membandingkan biaya hari itu dengan rencana.
     """
     cols = list(AD_DAILY_COLS)
     if start is None or end is None or end < start:
@@ -1271,38 +1271,31 @@ def ad_daily_progress(
     if not part.empty:
         for row in part.itertuples(index=False):
             by_day[str(row.Tanggal)[:10]] = (float(row.Biaya), float(row.Omzet))
-    plan_hari = float(budget_setup or 0) if float(budget_setup or 0) > 0 else float(budget_plan or 0)
+    # Sesuai rencana = vs usulan, bukan vs budget yang sudah berjalan.
+    plan_hari = float(budget_plan or 0) if float(budget_plan or 0) > 0 else float(budget_setup or 0)
     rows = []
-    cum_biaya = 0.0
-    cum_omzet = 0.0
-    seen = False
     day = start
     while day <= end:
         hit = by_day.get(day.isoformat())
         if hit is not None:
             realisasi, omzet_hari = hit
-            cum_biaya += realisasi
-            cum_omzet += omzet_hari
-            seen = True
         else:
-            realisasi = float("nan")
-        biaya_show = cum_biaya if seen else float("nan")
-        omzet_show = cum_omzet if seen else float("nan")
+            realisasi, omzet_hari = float("nan"), float("nan")
         roas = (
-            omzet_show / biaya_show
-            if biaya_show == biaya_show and biaya_show > 0 and omzet_show == omzet_show
+            omzet_hari / realisasi
+            if realisasi == realisasi and realisasi > 0 and omzet_hari == omzet_hari
             else float("nan")
         )
-        if plan_hari <= 0 and realisasi == realisasi and realisasi > _ACTIVE_SPEND:
-            note = "Tidak sesuai rencana. Jeda / hentikan."
-        elif hit is None and not seen:
+        if hit is None:
             note = "Belum ada di laporan."
+        elif plan_hari <= 0 and realisasi == realisasi and realisasi > _ACTIVE_SPEND:
+            note = "Tidak sesuai rencana. Jeda / hentikan."
         else:
             note = day_decision_note(
                 plan_hari=plan_hari,
                 realisasi_hari=realisasi,
-                biaya_sejak=cum_biaya,
-                sales_iklan=cum_omzet,
+                biaya_sejak=realisasi,
+                sales_iklan=omzet_hari,
                 sales_all=float("nan"),
                 target_roas=target_roas,
             )
@@ -1310,8 +1303,8 @@ def ad_daily_progress(
             "Tanggal": day.isoformat(),
             "Budget di rencana/hari": float(budget_plan or 0),
             "Budget di Shopee/hari": float(budget_setup or 0),
-            "Biaya iklan": biaya_show,
-            "Omzet iklan": omzet_show,
+            "Biaya iklan": realisasi,
+            "Omzet iklan": omzet_hari,
             "ROAS iklan": roas,
             "Saran": note,
         })

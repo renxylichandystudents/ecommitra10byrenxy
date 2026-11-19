@@ -334,9 +334,23 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         ])
         self.assertTrue(pd.isna(hist.iloc[0]["Biaya iklan"]))
         self.assertTrue(pd.isna(hist.iloc[1]["Biaya iklan"]))
-        self.assertAlmostEqual(hist.iloc[-1]["Biaya iklan"], 3_100_000)
-        self.assertAlmostEqual(hist.iloc[-1]["Omzet iklan"], 33_000_000)
-        self.assertAlmostEqual(hist.iloc[-1]["ROAS iklan"], 33_000_000 / 3_100_000)
+        # Tiap baris = biaya hari itu, bukan tumpukan.
+        self.assertAlmostEqual(hist.iloc[2]["Biaya iklan"], 1_000_000)
+        self.assertAlmostEqual(hist.iloc[3]["Biaya iklan"], 1_200_000)
+        self.assertAlmostEqual(hist.iloc[-1]["Biaya iklan"], 900_000)
+        self.assertAlmostEqual(hist.iloc[-1]["Omzet iklan"], 11_000_000)
+        self.assertAlmostEqual(hist.iloc[-1]["ROAS iklan"], 11_000_000 / 900_000)
+        self.assertAlmostEqual(hist.iloc[-1]["Budget di Shopee/hari"], 1_400_000)
+        beda = Mon.ad_daily_progress(
+            daily, "produk:1",
+            start=date(2026, 11, 18), end=date(2026, 11, 18),
+            budget_plan=4_750_000, budget_setup=7_510_784, target_roas=22,
+        )
+        self.assertAlmostEqual(beda.iloc[0]["Budget di rencana/hari"], 4_750_000)
+        self.assertAlmostEqual(beda.iloc[0]["Budget di Shopee/hari"], 7_510_784)
+        self.assertAlmostEqual(beda.iloc[0]["Biaya iklan"], 900_000)
+        # 900 rb < 60% dari rencana 4,75 jt → naikkan, bukan dari budget yang sudah berjalan.
+        self.assertIn("Naikkan budget", beda.iloc[0]["Saran"])
         frame = pd.DataFrame([{
             "_key": "produk:1",
             "Budget usulan/hari": 1_400_000,

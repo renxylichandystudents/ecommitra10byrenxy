@@ -1,5 +1,9 @@
 # Status terbaru aplikasi
 
+Diperbarui: 19 November 2026 (malam, budget Shopee bukan salinan rencana).
+
+- Budget di Shopee pada kartu dan riwayat iklan = Budget harian sekarang (yang sudah berjalan), bukan usulan. Biaya/omzet/ROAS di tabel riwayat = angka hari itu, bukan tumpukan budget. Kartu tetap jumlah sejak campaign.
+
 Diperbarui: 19 November 2026 (malam, kartu iklan = tabel harian).
 
 - Bila snapshot 14–18 Nov terpotong tetapi MTD 19 Nov utuh ada, biaya/omzet per iklan diisi dari file lengkap yang sama. Kartu dan tabel riwayat memakai jumlah itu. Tanggal tanpa selisih harian tetap kosong.

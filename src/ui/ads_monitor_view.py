@@ -102,6 +102,21 @@ def _planned_budgets(cur: dict, *, start: date, report_end: date | None) -> dict
     return week_vals
 
 
+def _attach_running_budget(frame: pd.DataFrame, acts_saved: pd.DataFrame) -> pd.DataFrame:
+    """Budget di Shopee = Budget harian sekarang (yang sudah berjalan), bukan salinan usulan."""
+    if frame is None or frame.empty or "_key" not in frame.columns:
+        return frame if frame is not None else pd.DataFrame()
+    if acts_saved is None or acts_saved.empty or "key" not in acts_saved.columns or "Budget harian sekarang" not in acts_saved.columns:
+        return frame
+    mapping = {
+        str(k): float(v or 0)
+        for k, v in zip(acts_saved["key"], pd.to_numeric(acts_saved["Budget harian sekarang"], errors="coerce").fillna(0))
+    }
+    out = frame.copy()
+    out["Budget harian sekarang"] = out["_key"].map(lambda k: mapping.get(str(k), 0.0))
+    return out
+
+
 def _period_sales(track: dict | None, factor: float) -> dict:
     """Sales & TACoS **sejak campaign** saja (bukan MTD)."""
     empty = {"produk": float("nan"), "bersih": float("nan"), "tacos_produk": float("nan"), "tacos_bersih": float("nan"),
@@ -207,7 +222,10 @@ def _ad_row_card(
     jenis = str(r.get("Jenis") or "")
     act = str(r.get("Tindakan") or "–")
     plan = float(r.get("Budget usulan/hari") or r.get("Budget di rencana/hari") or 0)
-    setup = float(r.get("Budget efektif Shopee/hari") or r.get("Budget di Shopee/hari") or 0)
+    efektif = float(r.get("Budget efektif Shopee/hari") or 0)
+    sekarang = float(r.get("Budget harian sekarang") or 0)
+    # Di Shopee = yang sudah berjalan saat rencana disimpan, bukan usulan yang disalin.
+    setup = sekarang if sekarang > 0 else efektif
     since = float(r.get("Biaya aktual/hari") or r.get("Terpakai sejak campaign/hari") or 0)
     month = r.get("Biaya bulan ini/hari")
     month_v = float(month) if month == month and month is not None else float("nan")
@@ -400,11 +418,13 @@ def _ad_row_card(
             "Tiap baris = **satu tanggal** sejak campaign"
             + (f" (**{period_txt}**" if period_txt else "")
             + (", hari ini belum dihitung). " if period_txt else ". ")
-            + "**Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** terkumpul sejak tanggal campaign; "
-            "baris terakhir sama dengan angka di kartu ini. "
-            "Sumbernya laporan all iklan per tanggal, sama dengan progress harian di atas. "
-            "**Saran** memakai aturan yang sama: Sesuai rencana, Tidak sesuai rencana, ROAS lemah, "
-            "Naikkan budget, Turunkan budget, Naikkan Target ROAS."
+            + "**Biaya iklan**, **Omzet iklan**, dan **ROAS iklan** = angka hari itu di laporan all iklan, "
+            "bukan jumlah yang ditumpuk dan bukan budget harian. "
+            "Jumlah semua tanggal ada di kartu di atas. "
+            "**Budget di rencana** = usulan campaign. **Budget di Shopee** = budget yang sudah berjalan "
+            "(bukan salinan usulan). "
+            "**Saran** membandingkan biaya hari itu dengan rencana: Sesuai rencana, Tidak sesuai rencana, "
+            "ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
         )
         if window_start is not None and win_hi is not None and unit_daily is not None:
             hist = Mon.ad_daily_progress(
@@ -441,7 +461,7 @@ def _ad_row_card(
                 noun="tanggal",
                 first=max(len(hist), 1),
                 height=360,
-                groups={"Sejak campaign": ("Biaya iklan", "Omzet iklan", "ROAS iklan")},
+                groups={},
                 kinds={
                     "Budget di rencana/hari": "money",
                     "Budget di Shopee/hari": "money",
@@ -774,6 +794,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     else:
         cid = int(cur.get("id") or 0)
         singles = Mon.planned_single_codes(acts_saved)
+        in_plan = _attach_running_budget(in_plan, acts_saved)
+        out_plan = _attach_running_budget(out_plan, acts_saved)
         exe = Mon.partition_execution(in_plan, target_roas=roas)
 
         # Jendela evaluasi = periode campaign (mulai–selesai), dibatasi hari penuh (kemarin)
