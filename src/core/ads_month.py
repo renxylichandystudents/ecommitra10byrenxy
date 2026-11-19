@@ -122,23 +122,35 @@ def daily_ad_totals(
             d = row.lo
             by_day[d] = {"Biaya": float(row.biaya), "Omzet": float(row.omzet), "Sumber": "laporan 1 hari"}
 
-    # 2) MTD / rentang sama-lo: selisih kumulatif antar hi berurutan 1 hari
+    # 2) MTD / rentang sama-lo: selisih kumulatif antar hi berurutan 1 hari.
+    # Unggahan parsial (total mengecil atau nol) dibuang agar tidak menghasilkan hari negatif.
     for lo, part in snaps.groupby("lo", sort=True):
-        part = part.sort_values("hi")
-        prev = None
+        part = part.sort_values(["hi", "submitted"])
+        kept = []
         for row in part.itertuples(index=False):
+            if float(row.biaya) <= 0 and float(row.omzet) <= 0:
+                continue
+            if kept and (float(row.biaya) + 1 < float(kept[-1].biaya) or float(row.omzet) + 1 < float(kept[-1].omzet)):
+                continue
+            if kept and row.hi <= kept[-1].hi:
+                continue
+            kept.append(row)
+        prev = None
+        for row in kept:
             if prev is not None and row.hi == prev.hi + timedelta(days=1):
                 d = row.hi
-                # Jangan timpa angka dari laporan 1 hari yang lebih eksplisit
+                biaya = float(row.biaya) - float(prev.biaya)
+                omzet = float(row.omzet) - float(prev.omzet)
+                if biaya < 0 or omzet < 0:
+                    prev = row
+                    continue
                 if d not in by_day or by_day[d].get("Sumber") != "laporan 1 hari":
                     by_day[d] = {
-                        "Biaya": float(row.biaya) - float(prev.biaya),
-                        "Omzet": float(row.omzet) - float(prev.omzet),
+                        "Biaya": biaya,
+                        "Omzet": omzet,
                         "Sumber": f"selisih MTD {lo.isoformat()}→{d.isoformat()}",
                     }
             prev = row
-            # hi pertama dengan hari=1 sudah tertangani; bila MTD panjang tanpa pasangan
-            # sebelumnya, hari di dalamnya tidak diarang.
 
     if not by_day:
         return pd.DataFrame(columns=cols)

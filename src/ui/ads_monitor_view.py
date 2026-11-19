@@ -452,12 +452,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     roas = float(s.get("roas") or 8.0)
     budget_daily = float(s.get("biaya_harian_rencana") or s.get("budget_harian") or 0)
 
-    # ---- Performa toko dari laporan all iklan per tanggal dalam periode campaign
+    # ---- Angka campaign: all iklan per tanggal + transaksi (Ringkasan) / performa bila transaksi belum ada
     # Contoh Campaign 15–22 Nov, hari ini 19 → ambil 15 s.d. 18 (hari penuh; 19 belum dihitung)
     since_start = Mon.campaign_eval_start(cur) or start
     eval_end = Mon.campaign_eval_end(cur, today=today)
-    if eval_end is not None and first_open is not None:
-        eval_end = min(eval_end, first_open - timedelta(days=1))
     last_data = eval_end
     store_since = {"biaya": 0.0, "omzet": 0.0, "hari": 0}
     if since_start and eval_end and since_start <= eval_end and ads_overall is not None:
@@ -601,8 +599,8 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     a = st.columns(4)
     card(a[0], "Biaya iklan periode campaign", fmt_idr(spent_since),
          hint=f"rencana {fmt_idr(wallet['jalur_sejak'])} · <b>{biaya_status_label}</b> · dari all iklan per tanggal")
-    card(a[1], "Omzet dari iklan periode campaign", fmt_idr(omzet_since),
-         hint="penjualan dikaitkan ke iklan di laporan all iklan (bukan sales toko keseluruhan)")
+    card(a[1], "Omzet iklan periode campaign", fmt_idr(omzet_since),
+         hint="Omzet iklan di laporan all iklan (bukan Sales bruto / Sales bersih toko)")
     card(a[2], "ROAS iklan", fmt_num(store_roas, 1) if store_roas == store_roas else "–",
          hint=f"target {fmt_num(roas, 1)} · <b style='color:{_tone(store_roas >= roas * 0.9 if store_roas == store_roas else False)}'>"
               f"{'sudah mendekati target' if store_roas == store_roas and store_roas >= roas * 0.9 else 'masih di bawah target'}</b>")
@@ -637,20 +635,25 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     card(left, "Persentase biaya vs sales bersih",
          fmt_pct(tacos_mtd_b, 1) if tacos_mtd_b == tacos_mtd_b else "–",
          hint="berapa persen biaya iklan dari sales bersih bulan ini · makin kecil makin hemat")
-    right.markdown("**Sejak campaign disimpan**")
-    card(right, "Sales produk sejak campaign",
-         fmt_idr(period["produk"]) if period["produk"] == period["produk"] else "–",
-         hint=("perkiraan sementara · simpan ulang rencana agar angka pasti"
-               if period.get("est") else "nilai jual produk toko sejak campaign disimpan"))
+    camp_sales = Mon._daily_store_sales(orders, since_start, eval_end, performance=performance) if since_start and eval_end else {}
+    sum_bruto = sum(float(v.get("bruto") or 0) for v in camp_sales.values()) if camp_sales else float("nan")
+    sum_bersih = sum(float(v.get("bersih") or 0) for v in camp_sales.values()) if camp_sales else float("nan")
+    sum_produk = sum(float(v.get("produk") or 0) for v in camp_sales.values() if v.get("sumber") == "transaksi") if camp_sales else float("nan")
+    has_produk = any(v.get("sumber") == "transaksi" for v in camp_sales.values()) if camp_sales else False
+    right.markdown("**Sejak campaign**")
+    card(right, "Sales bruto sejak campaign",
+         fmt_idr(sum_bruto) if sum_bruto == sum_bruto and camp_sales else "–",
+         hint="Sales bruto: transaksi semua status, atau performa Pesanan Dibuat bila transaksi hari itu belum ada")
     card(right, "Sales bersih sejak campaign",
-         fmt_idr(period["bersih"]) if period["bersih"] == period["bersih"] else "–",
-         hint="sales bersih toko sejak campaign disimpan")
-    card(right, "Persentase biaya vs sales produk",
-         fmt_pct(period["tacos_produk"], 1) if period["tacos_produk"] == period["tacos_produk"] else "–",
-         hint="biaya iklan sejak campaign dibanding sales produk periode yang sama")
+         fmt_idr(sum_bersih) if sum_bersih == sum_bersih and camp_sales else "–",
+         hint="Sales bersih: Total Pembayaran − batal − Belum Bayar − retur, atau performa Pesanan Dibayar bila transaksi belum ada")
+    card(right, "Sales produk sejak campaign",
+         fmt_idr(sum_produk) if has_produk else "–",
+         hint="Sales produk = Harga Setelah Diskon × QTY (sama Ringkasan). Hanya dari transaksi.")
+    tacos_p, tacos_b = _tacos_pair(float(spent_since or 0), sum_produk if has_produk else float("nan"), sum_bersih if camp_sales else float("nan"))
     card(right, "Persentase biaya vs sales bersih",
-         fmt_pct(period["tacos_bersih"], 1) if period["tacos_bersih"] == period["tacos_bersih"] else "–",
-         hint="biaya iklan sejak campaign dibanding sales bersih periode yang sama")
+         fmt_pct(tacos_b, 1) if tacos_b == tacos_b else "–",
+         hint="Biaya iklan periode campaign dibanding Sales bersih periode yang sama")
 
     tip = Mon.spend_gap_tip(wallet, store_since, summary)
     if tip:
@@ -777,26 +780,26 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             )
         else:
             st.caption(
-                "Tiap baris = **satu tanggal kalender** dalam periode campaign."
+                "Tiap baris = satu tanggal dalam periode campaign."
                 + period_caption
-                + " **Realisasi biaya** & **Omzet dari iklan** = laporan all iklan tanggal itu "
-                "(filter 1 hari / selisih MTD — bukan bagi rata). "
-                "**Sales produk** & **Sales bersih** = akumulasi dari data pesanan, "
-                "istilah dan definisi sama halaman Ringkasan (bukan omzet iklan × faktor)."
+                + " **Biaya iklan** dan **Omzet iklan** = laporan all iklan tanggal itu (selisih MTD berurutan, unggahan yang totalnya mengecil diabaikan). "
+                "**Sales bruto** = semua pesanan (transaksi, atau performa Pesanan Dibuat). "
+                "**Sales bersih** = Total Pembayaran − batal − Belum Bayar − retur (transaksi, atau performa Pesanan Dibayar). "
+                "**Sales produk** = Harga Setelah Diskon × QTY, hanya dari transaksi — sama halaman Ringkasan. "
+                "Hari ini tidak dihitung."
             )
             with st.expander(f"Tabel progress harian · {fmt_num(len(progress))} catatan", expanded=False):
                 show_table(
                     progress,
                     kinds={
                         "Budget plan/hari": "money",
-                        "Realisasi biaya iklan (hari itu)": "money",
-                        "Omzet dari iklan sejak campaign": "money",
+                        "Biaya iklan (hari itu)": "money",
+                        "Omzet iklan sejak campaign": "money",
                         "ROAS iklan": "dec",
-                        "Sales produk sejak campaign": "money",
+                        "Sales bruto sejak campaign": "money",
                         "Sales bersih sejak campaign": "money",
+                        "Sales produk sejak campaign": "money",
                         "ROAS sales bersih": "dec",
-                        "Sales MTD produk": "money",
-                        "Sales MTD bersih": "money",
                     },
                     column_config={
                         "Analisa keputusan hari itu": st.column_config.TextColumn(width="large"),

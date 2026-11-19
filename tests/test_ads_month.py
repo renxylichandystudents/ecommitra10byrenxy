@@ -68,6 +68,25 @@ def test_daily_ad_totals_from_consecutive_mtd():
     assert round(daily.iloc[0]["Biaya"]) == 8_154_135
 
 
+def test_daily_ad_totals_skips_shrinking_snapshot():
+    # Unggahan parsial (total mengecil) tidak boleh menghasilkan biaya/omzet negatif
+    ov = pd.DataFrame([
+        {"Periode laporan (teks)": "01/11/2026 - 14/11/2026", "period": "2026-11-01",
+         "cost": 142_070_246, "ad_sales": 2_314_769_000, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-14T07:00:00+07:00", "_source_key": "ads_overall"},
+        {"Periode laporan (teks)": "01/11/2026 - 15/11/2026", "period": "2026-11-01",
+         "cost": 150_819_653, "ad_sales": 2_445_061_768, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-15T20:00:00+07:00", "_source_key": "ads_overall"},
+        {"Periode laporan (teks)": "01/11/2026 - 11/11/2026", "period": "2026-11-01",
+         "cost": 0, "ad_sales": 0, "product_code": "", "Nama Iklan": "x",
+         "_submitted_at": "2026-11-11T08:00:00+07:00", "_source_key": "ads_overall"},
+    ])
+    daily = M.daily_ad_totals(ov, start=date(2026, 11, 15), end=date(2026, 11, 15))
+    assert len(daily) == 1
+    assert round(daily.iloc[0]["Biaya"]) == 8_749_407
+    assert daily.iloc[0]["Biaya"] > 0 and daily.iloc[0]["Omzet"] > 0
+
+
 def test_daily_ad_totals_does_not_invent_prorata_from_month_blob():
     ov = _overall([("01/11/2026", "18/11/2026", 18e6, 200e6)])
     daily = M.daily_ad_totals(ov, start=date(2026, 11, 1), end=date(2026, 11, 18))

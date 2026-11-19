@@ -292,12 +292,12 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         )
         self.assertEqual(list(prog["Tanggal"]), ["2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18"])
         # 15–16 belum ada laporan → NaN; 17–18 terisi
-        self.assertTrue(pd.isna(prog.iloc[0]["Realisasi biaya iklan (hari itu)"]))
-        self.assertTrue(pd.isna(prog.iloc[1]["Realisasi biaya iklan (hari itu)"]))
-        self.assertAlmostEqual(prog.iloc[2]["Realisasi biaya iklan (hari itu)"], 7_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Realisasi biaya iklan (hari itu)"], 8_154_135)
-        self.assertAlmostEqual(prog.iloc[2]["Omzet dari iklan sejak campaign"], 100_000_000)
-        self.assertAlmostEqual(prog.iloc[3]["Omzet dari iklan sejak campaign"], 228_168_508)
+        self.assertTrue(pd.isna(prog.iloc[0]["Biaya iklan (hari itu)"]))
+        self.assertTrue(pd.isna(prog.iloc[1]["Biaya iklan (hari itu)"]))
+        self.assertAlmostEqual(prog.iloc[2]["Biaya iklan (hari itu)"], 7_000_000)
+        self.assertAlmostEqual(prog.iloc[3]["Biaya iklan (hari itu)"], 8_154_135)
+        self.assertAlmostEqual(prog.iloc[2]["Omzet iklan sejak campaign"], 100_000_000)
+        self.assertAlmostEqual(prog.iloc[3]["Omzet iklan sejak campaign"], 228_168_508)
         # Sales produk/bersih dari orders (Ringkasan) — tanpa orders tetap NaN, bukan omzet×faktor
         self.assertTrue(pd.isna(prog.iloc[3]["Sales produk sejak campaign"]))
         self.assertTrue(pd.isna(prog.iloc[3]["Sales bersih sejak campaign"]))

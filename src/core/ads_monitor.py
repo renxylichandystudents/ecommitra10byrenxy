@@ -742,14 +742,13 @@ def execution_counts(parts: dict[str, pd.DataFrame]) -> dict[str, int]:
 PROGRESS_COLS = [
     "Tanggal",
     "Budget plan/hari",
-    "Realisasi biaya iklan (hari itu)",
-    "Omzet dari iklan sejak campaign",
+    "Biaya iklan (hari itu)",
+    "Omzet iklan sejak campaign",
     "ROAS iklan",
-    "Sales produk sejak campaign",
+    "Sales bruto sejak campaign",
     "Sales bersih sejak campaign",
+    "Sales produk sejak campaign",
     "ROAS sales bersih",
-    "Sales MTD produk",
-    "Sales MTD bersih",
     "Analisa keputusan hari itu",
 ]
 
@@ -870,8 +869,9 @@ def _daily_store_sales(
             m = order_metrics(lines, day, day, normalized=True)
             produk = float(net_sku_sales(lines, day, day, normalized=True)["sales"].sum())
             bersih = float(m.get("sales_bersih") or 0.0)
-            if produk > 0 or bersih > 0:
-                out[key] = {"produk": produk, "bersih": bersih}
+            bruto = float(m.get("sales_bruto") or 0.0)
+            if produk > 0 or bersih > 0 or bruto > 0:
+                out[key] = {"produk": produk, "bersih": bersih, "bruto": bruto, "sumber": "transaksi"}
             day += timedelta(days=1)
 
     # Lengkapi hari kosong dari performa toko (unggahan harian / hasil selisih MTD)
@@ -896,17 +896,21 @@ def _daily_store_sales(
                 if day_d is None or day_d < start or day_d > end:
                     continue
                 key = day_d.isoformat()
-                if key in out and (out[key]["produk"] > 0 or out[key]["bersih"] > 0):
+                if key in out and out[key].get("sumber") == "transaksi":
                     continue
-                produk = 0.0
+                # Performa: Total Penjualan harian = Sales bruto (Pesanan Dibuat).
+                # _sales_bersih_hari = Pesanan Dibayar. Bukan Sales produk (itu dari transaksi).
+                bruto = 0.0
                 if "Total Penjualan (IDR)" in work.columns:
-                    produk = float(perf_number(pd.Series([row["Total Penjualan (IDR)"]])).iloc[0] or 0)
+                    bruto = float(perf_number(pd.Series([row["Total Penjualan (IDR)"]])).iloc[0] or 0)
                 elif "sales" in work.columns:
-                    produk = float(perf_number(pd.Series([row["sales"]])).iloc[0] or 0)
-                bersih = produk
+                    bruto = float(perf_number(pd.Series([row["sales"]])).iloc[0] or 0)
+                bersih = bruto
                 if "_sales_bersih_hari" in work.columns and pd.notna(row.get("_sales_bersih_hari")):
                     bersih = float(row["_sales_bersih_hari"])
-                out[key] = {"produk": produk, "bersih": bersih}
+                if bruto <= 0 and bersih <= 0:
+                    continue
+                out[key] = {"produk": 0.0, "bersih": bersih, "bruto": bruto, "sumber": "performa"}
     return out
 
 
@@ -988,12 +992,19 @@ def campaign_daily_progress(
                 "sumber": str(r.get("Sumber") or ""),
             }
 
+    setelan = ((campaign or {}).get("setelan") or {})
+    plan_default = _finite(setelan.get("biaya_harian_rencana"))
+    if plan_default != plan_default or plan_default <= 0:
+        plan_default = _finite(setelan.get("budget_harian"), 0.0)
     rows = []
     cum_biaya = 0.0
     cum_omzet = 0.0
     cum_produk = 0.0
     cum_bersih = 0.0
-    has_store = False
+    cum_bruto = 0.0
+    seen_produk = False
+    seen_bersih = False
+    seen_bruto = False
     for day in day_list:
         day_d = _as_day(day)
         if day_d is None or day_d > last_full:
@@ -1001,8 +1012,10 @@ def campaign_daily_progress(
         toko = (meta.get(day) or {}).get("toko") or {}
         items = (meta.get(day) or {}).get("items") or []
         plan = _finite(toko.get("budget_plan_hari"), float(sum(float(it.get("budget_plan") or 0) for it in items)))
+        if plan != plan or plan <= 0:
+            plan = plan_default
         hit = daily_map.get(day)
-        if hit is not None:
+        if hit is not None and float(hit["biaya"]) >= 0 and float(hit["omzet"]) >= 0:
             realisasi = float(hit["biaya"])
             cum_biaya += realisasi
             cum_omzet += float(hit["omzet"])
@@ -1010,19 +1023,27 @@ def campaign_daily_progress(
             sumber = hit.get("sumber") or ""
         else:
             realisasi = float("nan")
-            omzet_iklan = float("nan")
+            omzet_iklan = cum_omzet if cum_omzet > 0 else float("nan")
             sumber = ""
         store = store_daily.get(day)
         if store is not None:
-            cum_produk += float(store.get("produk") or 0.0)
+            if store.get("sumber") == "transaksi":
+                cum_produk += float(store.get("produk") or 0.0)
+                seen_produk = True
+            cum_bruto += float(store.get("bruto") or 0.0)
             cum_bersih += float(store.get("bersih") or 0.0)
-            has_store = True
-            sales_produk = cum_produk
+            seen_bruto = True
+            seen_bersih = True
+            sales_bruto = cum_bruto
             sales_bersih = cum_bersih
+            sales_produk = cum_produk if seen_produk else float("nan")
+            asal_sales = store.get("sumber") or ""
         else:
-            sales_produk = float("nan")
-            sales_bersih = float("nan")
-        biaya_cum = cum_biaya if hit is not None else float("nan")
+            sales_bruto = cum_bruto if seen_bruto else float("nan")
+            sales_bersih = cum_bersih if seen_bersih else float("nan")
+            sales_produk = cum_produk if seen_produk else float("nan")
+            asal_sales = ""
+        biaya_cum = cum_biaya if hit is not None and realisasi == realisasi else float("nan")
         roas_iklan = (
             omzet_iklan / biaya_cum
             if biaya_cum == biaya_cum and biaya_cum > 0 and omzet_iklan == omzet_iklan
@@ -1033,11 +1054,10 @@ def campaign_daily_progress(
             if biaya_cum == biaya_cum and biaya_cum > 0 and sales_bersih == sales_bersih
             else float("nan")
         )
-        if hit is None:
+        if hit is None or realisasi != realisasi:
             note = (
                 "Belum ada angka all iklan untuk tanggal ini. "
-                "Unggah laporan Keseluruhan iklan per hari (filter 1 tanggal di SC) "
-                "atau unggah MTD setiap hari berurutan agar selisih antar hari bisa dibaca."
+                "Unggah laporan Keseluruhan iklan MTD berurutan (atau filter 1 tanggal)."
             )
         else:
             note = day_decision_note(
@@ -1049,20 +1069,21 @@ def campaign_daily_progress(
                 target_roas=target_roas,
             )
             if sumber:
-                note = f"{note} · sumber: {sumber}"
-            if not has_store:
-                note = f"{note} · Sales produk/bersih menunggu data pesanan (sama sumber Ringkasan)"
+                note = f"{note} · iklan: {sumber}"
+            if asal_sales == "performa":
+                note = f"{note} · Sales bruto/bersih dari performa toko (transaksi hari itu belum ada)"
+            elif asal_sales == "transaksi":
+                note = f"{note} · Sales produk & Sales bersih dari transaksi (sama Ringkasan)"
         rows.append({
             "Tanggal": day,
             "Budget plan/hari": plan,
-            "Realisasi biaya iklan (hari itu)": realisasi,
-            "Omzet dari iklan sejak campaign": omzet_iklan,
+            "Biaya iklan (hari itu)": realisasi,
+            "Omzet iklan sejak campaign": omzet_iklan,
             "ROAS iklan": roas_iklan,
-            "Sales produk sejak campaign": sales_produk,
+            "Sales bruto sejak campaign": sales_bruto,
             "Sales bersih sejak campaign": sales_bersih,
+            "Sales produk sejak campaign": sales_produk,
             "ROAS sales bersih": roas_bersih,
-            "Sales MTD produk": _finite(toko.get("produk_mtd")),
-            "Sales MTD bersih": _finite(toko.get("bersih_mtd")),
             "Analisa keputusan hari itu": note,
         })
     return pd.DataFrame(rows, columns=cols)
