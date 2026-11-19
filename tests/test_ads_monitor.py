@@ -225,6 +225,37 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         self.assertAlmostEqual(hist.iloc[1]["Rata-rata terpakai bulan ini"], 17_000_000)
         self.assertNotIn("Actual pemakaian/hari", hist.columns)
 
+    def test_group_members_review_flags_weak_and_strong(self):
+        members = pd.DataFrame([
+            {"unit": "grup:G1", "periode": "2026-11", "product_code": "A", "nama": "Andalan",
+             "biaya": 50_000, "omzet": 1_200_000, "terjual": 10},
+            {"unit": "grup:G1", "periode": "2026-11", "product_code": "B", "nama": "Lemah",
+             "biaya": 40_000, "omzet": 40_000, "terjual": 1},
+            {"unit": "grup:G1", "periode": "2026-11", "product_code": "C", "nama": "Mati",
+             "biaya": 30_000, "omzet": 0, "terjual": 0},
+            {"unit": "grup:G1", "periode": "2026-11", "product_code": "D", "nama": "Biasa",
+             "biaya": 20_000, "omzet": 400_000, "terjual": 5},
+        ])
+        # target 22 → A ROAS 24 kuat + porsi besar; B ROAS 1 lemah; C tanpa omzet; D ROAS 20 hampir target
+        out = Mon.group_members_review(members, "grup:G1", target_roas=22.0)
+        self.assertEqual(len(out), 4)
+        by = out.set_index("Kode produk")["Tindakan"].to_dict()
+        self.assertEqual(by["C"], "Keluarkan dari grup")
+        self.assertEqual(by["B"], "Keluarkan dari grup")
+        self.assertEqual(by["A"], "Pisahkan jadi iklan tunggal")
+        self.assertEqual(by["D"], "Pertahankan di grup")
+        tip = Mon.group_members_summary(out)
+        self.assertIn("dikeluarkan", tip)
+        self.assertIn("andalan", tip.lower())
+
+    def test_group_members_review_empty_for_single(self):
+        members = pd.DataFrame([
+            {"unit": "produk:1", "periode": "2026-11", "product_code": "1", "nama": "X",
+             "biaya": 10_000, "omzet": 100_000, "terjual": 1},
+        ])
+        out = Mon.group_members_review(members, "produk:1", target_roas=8.0)
+        self.assertTrue(out.empty)
+
     def test_rename_budget_triad(self):
         frame = pd.DataFrame([{
             "Budget usulan/hari": 1, "Budget efektif Shopee/hari": 2,

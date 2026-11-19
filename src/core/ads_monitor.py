@@ -577,6 +577,179 @@ def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = N
     return pd.DataFrame(rows)
 
 
+_MEMBER_RANK = {
+    "Keluarkan dari grup": 0,
+    "Kurangi porsi / tinjau": 1,
+    "Pisahkan jadi iklan tunggal": 2,
+    "Pertahankan di grup": 3,
+}
+
+
+def group_members_review(
+    members: pd.DataFrame | None,
+    group_key: str,
+    *,
+    target_roas: float,
+    contribution: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    """Performa + saran tiap produk di dalam satu iklan grup (periode laporan terakhir).
+
+    Tujuan Pantau: grup tidak memaksa item lemah ikut dilanjutkan. Angka biaya/omzet = rata-rata
+    harian di bulan laporan terakhir (dari laporan iklan grup).
+    """
+    cols = [
+        "Produk", "Kode produk", "Biaya/hari", "Omzet/hari", "ROAS",
+        "Porsi omzet grup", "Porsi biaya grup", "Tindakan", "Saran",
+    ]
+    if members is None or getattr(members, "empty", True) or not group_key:
+        return pd.DataFrame(columns=cols)
+    key = str(group_key)
+    if not key.startswith("grup:"):
+        return pd.DataFrame(columns=cols)
+    need = {"unit", "periode", "product_code", "nama", "biaya", "omzet"}
+    if not need <= set(members.columns):
+        return pd.DataFrame(columns=cols)
+    work = members.loc[members["unit"].astype(str) == key]
+    if work.empty:
+        # cocokkan nama grup tanpa prefix bila key berbeda sedikit
+        tail = key.split(":", 1)[-1].strip().lower()
+        work = members.loc[
+            members["unit"].astype(str).str.startswith("grup:")
+            & members["unit"].astype(str).str.lower().str.endswith(tail)
+        ]
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+    latest = str(sorted(work["periode"].astype(str).unique())[-1])
+    part = (
+        work.loc[work["periode"].astype(str) == latest]
+        .groupby("product_code", as_index=False)
+        .agg(nama=("nama", "last"), biaya=("biaya", "mean"), omzet=("omzet", "mean"))
+    )
+    if part.empty:
+        return pd.DataFrame(columns=cols)
+    total_omzet = float(part["omzet"].sum())
+    total_biaya = float(part["biaya"].sum())
+    group_roas = total_omzet / total_biaya if total_biaya > 0 else float("nan")
+    contrib = contribution or {}
+    rows = []
+    for r in part.itertuples(index=False):
+        biaya = float(r.biaya or 0)
+        omzet = float(r.omzet or 0)
+        roas = omzet / biaya if biaya > 0 else float("nan")
+        share_o = omzet / total_omzet if total_omzet > 0 else 0.0
+        share_c = biaya / total_biaya if total_biaya > 0 else 0.0
+        margin = contrib.get(str(r.product_code))
+        if biaya > 0 and omzet <= 0:
+            act = "Keluarkan dari grup"
+            tip = (
+                f"Ada biaya {_rp_hari(biaya)} tanpa omzet di laporan terakhir. "
+                "Keluarkan dari grup agar tidak menyerap budget anggota lain."
+            )
+        elif margin is not None and margin <= 0 and biaya > 0:
+            act = "Keluarkan dari grup"
+            tip = (
+                "Margin kotor di bawah potongan Shopee (rugi per unit) tetapi masih berbiaya di grup. "
+                "Keluarkan dari grup."
+            )
+        elif (
+            biaya > 0
+            and roas == roas
+            and (
+                (target_roas > 0 and roas < target_roas * 0.5)
+                or (group_roas == group_roas and roas < group_roas * 0.4)
+            )
+        ):
+            act = "Keluarkan dari grup"
+            tip = (
+                f"ROAS {roas:.1f}× jauh di bawah "
+                + (f"target {target_roas:.1f}×" if target_roas > 0 else "acuan")
+                + (f" dan rata-rata grup {group_roas:.1f}×" if group_roas == group_roas else "")
+                + f". Porsi biaya {share_c * 100:.0f}% — keluarkan agar grup tidak menopang item lemah."
+            )
+        elif (
+            biaya > 0
+            and roas == roas
+            and (
+                (target_roas > 0 and roas < target_roas * 0.9)
+                or (group_roas == group_roas and roas < group_roas * 0.7)
+            )
+        ):
+            act = "Kurangi porsi / tinjau"
+            tip = (
+                f"ROAS {roas:.1f}× masih lemah vs grup"
+                + (f" ({group_roas:.1f}×)" if group_roas == group_roas else "")
+                + ". Jangan naikkan budget grup demi item ini; tinjau di Seller Center atau keluarkan bila tetap lemah."
+            )
+        elif (
+            share_o >= 0.3
+            and len(part) > 2
+            and roas == roas
+            and (
+                (target_roas > 0 and roas >= target_roas * 0.8)
+                or (group_roas == group_roas and roas >= group_roas)
+            )
+        ):
+            act = "Pisahkan jadi iklan tunggal"
+            tip = (
+                f"Andalan grup ({share_o * 100:.0f}% omzet, ROAS {roas:.1f}×). "
+                "Pertimbangkan iklan produk tunggal agar budget & Target ROAS dikendalikan sendiri."
+            )
+        else:
+            act = "Pertahankan di grup"
+            if biaya <= 0 and omzet <= 0:
+                tip = "Belum ada biaya/omzet di laporan terakhir — belum menyerap budget grup."
+            elif roas == roas:
+                tip = (
+                    f"ROAS {roas:.1f}× sejalan dengan grup"
+                    + (f" ({group_roas:.1f}×)" if group_roas == group_roas else "")
+                    + f". Porsi omzet {share_o * 100:.0f}% — aman dilanjutkan di grup."
+                )
+            else:
+                tip = "Belum cukup data ROAS; pantau lagi setelah laporan berikutnya."
+        rows.append({
+            "Produk": str(r.nama or r.product_code),
+            "Kode produk": str(r.product_code),
+            "Biaya/hari": biaya,
+            "Omzet/hari": omzet,
+            "ROAS": roas,
+            "Porsi omzet grup": share_o * 100,
+            "Porsi biaya grup": share_c * 100,
+            "Tindakan": act,
+            "Saran": tip,
+        })
+    frame = pd.DataFrame(rows, columns=cols)
+    if frame.empty:
+        return frame
+    frame["_rank"] = frame["Tindakan"].map(lambda t: _MEMBER_RANK.get(t, 9))
+    return (
+        frame.sort_values(["_rank", "Biaya/hari"], ascending=[True, False])
+        .drop(columns=["_rank"])
+        .reset_index(drop=True)
+    )
+
+
+def group_members_summary(member_frame: pd.DataFrame) -> str:
+    """Satu kalimat ringkas untuk kartu grup dari hasil `group_members_review`."""
+    if member_frame is None or member_frame.empty or "Tindakan" not in member_frame.columns:
+        return ""
+    out = int((member_frame["Tindakan"] == "Keluarkan dari grup").sum())
+    tinjau = int((member_frame["Tindakan"] == "Kurangi porsi / tinjau").sum())
+    andalan = int((member_frame["Tindakan"] == "Pisahkan jadi iklan tunggal").sum())
+    ok = int((member_frame["Tindakan"] == "Pertahankan di grup").sum())
+    bits = []
+    if out:
+        bits.append(f"{out} produk sebaiknya dikeluarkan (menyedot budget tanpa hasil)")
+    if tinjau:
+        bits.append(f"{tinjau} produk lemah — jangan naikkan budget grup demi item ini")
+    if andalan:
+        bits.append(f"{andalan} andalan layak dipertimbangkan jadi iklan tunggal")
+    if not bits and ok:
+        return f"Isi grup sehat: {ok} produk sejalan dengan performa grup."
+    if not bits:
+        return ""
+    return "Anggota grup: " + "; ".join(bits) + "."
+
+
 def attach_month_daily(frame: pd.DataFrame, current: dict[str, dict] | None) -> pd.DataFrame:
     """Tambah `Biaya bulan ini/hari` = total biaya laporan bulan berjalan ÷ hari laporan.
 

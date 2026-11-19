@@ -2,6 +2,12 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Iklan grup: analisa per produk anggota
+
+- Kartu grup di Pantau punya expander **Anggota grup · performa & saran**: biaya/omzet/ROAS/porsi + tindakan per produk.
+- Item lemah (tanpa omzet / ROAS jauh di bawah target atau rata-rata grup) → **Keluarkan dari grup**; andalan → **Pisahkan jadi iklan tunggal**; yang sehat → **Pertahankan di grup**.
+- Ringkasan anggota ditambahkan ke saran kartu grup agar tidak memaksa item jelek ikut dilanjutkan.
+
 ## 2026-11-19 · Rombak tabel riwayat evaluasi campaign
 
 - Tabel Detailed diganti: **Patokan di rencana/Shopee**, **Tambahan biaya/omzet hari ini** (selisih vs catatan sebelumnya), **Total sejak campaign**, **ROAS sejak campaign**, **Rata-rata terpakai sejak campaign** vs **Rata-rata terpakai bulan ini** (MTD), **Saran saat itu**.

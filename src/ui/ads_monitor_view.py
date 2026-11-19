@@ -144,10 +144,24 @@ def _plan_setup_labels(plan: float, setup: float) -> tuple[str, str]:
     return _fmt_hari(plan), _fmt_hari(setup)
 
 
-def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: str, cid: int) -> None:
-    """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis."""
+def _ad_row_card(
+    r: pd.Series,
+    *,
+    cur: dict,
+    report_end: date | None,
+    prefix: str,
+    cid: int,
+    members: pd.DataFrame | None = None,
+    target_roas: float = 8.0,
+    contribution: dict | None = None,
+) -> None:
+    """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis.
+
+    Untuk iklan grup: lampiran performa & saran tiap produk anggota agar item lemah tidak dipaksa lanjut.
+    """
     name = str(r.get("Iklan") or r.get("_key") or "")
     key = str(r.get("_key") or "")
+    jenis = str(r.get("Jenis") or "")
     act = str(r.get("Tindakan") or "–")
     color = DOWN if act.startswith(("Jeda", "Turunkan")) else (UP if act == "Pertahankan" else WARN)
     plan = float(r.get("Budget usulan/hari") or r.get("Budget di rencana/hari") or 0)
@@ -163,6 +177,15 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         f"Hasil iklan sejak campaign: {fmt_idr(omzet)}"
         + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
     )
+    is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
+    member_frame = (
+        Mon.group_members_review(members, key, target_roas=target_roas, contribution=contribution)
+        if is_group else pd.DataFrame()
+    )
+    member_note = Mon.group_members_summary(member_frame) if not member_frame.empty else ""
+    saran_txt = str(r.get("Saran") or "")
+    if member_note:
+        saran_txt = f"{saran_txt} {member_note}".strip() if saran_txt else member_note
     st.markdown(
         f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.75rem .9rem;margin:.4rem 0;background:#fff'>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.5rem 1rem;justify-content:space-between;align-items:baseline'>"
@@ -170,7 +193,7 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         f"<span style='color:{color}'>{html.escape(act)}</span></div>"
         f"<div style='color:#475569;font-size:var(--fs-sm)'>{hasil}</div></div>"
         f"<div style='color:#475569;font-size:var(--fs-sm);margin-top:.35rem;line-height:1.5'>"
-        f"{html.escape(str(r.get('Saran') or ''))}</div>"
+        f"{html.escape(saran_txt)}</div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-top:.45rem;font-size:var(--fs-sm)'>"
         f"<span><b>Di rencana</b> {html.escape(plan_txt)}</span>"
         f"<span><b>Di Shopee</b> {html.escape(setup_txt)}</span>"
@@ -178,6 +201,41 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}</span></div></div>",
         unsafe_allow_html=True,
     )
+    if is_group:
+        n_mem = len(member_frame)
+        need_mem = (
+            int((member_frame["Tindakan"] != "Pertahankan di grup").sum())
+            if n_mem and "Tindakan" in member_frame.columns else 0
+        )
+        label = (
+            f"Anggota grup · performa & saran ({fmt_num(n_mem)} produk"
+            + (f", {fmt_num(need_mem)} perlu tindakan" if need_mem else "")
+            + ")"
+        )
+        with st.expander(label, expanded=need_mem > 0):
+            st.caption(
+                "Angka dari laporan iklan grup (bulan terakhir). "
+                "Item lemah sebaiknya dikeluarkan agar budget grup tidak terpakai untuk produk yang tidak menghasilkan. "
+                "Andalan bisa dipertimbangkan jadi iklan tunggal."
+            )
+            if member_frame.empty:
+                st.info(
+                    "Belum ada baris produk di laporan iklan grup untuk campaign ini. "
+                    "Unggah laporan iklan grup terbaru, atau aktifkan grup di Seller Center dulu."
+                )
+            else:
+                show_table(
+                    member_frame,
+                    kinds={
+                        "Biaya/hari": "money", "Omzet/hari": "money", "ROAS": "dec",
+                        "Porsi omzet grup": "pct", "Porsi biaya grup": "pct",
+                    },
+                    column_config={
+                        "Produk": st.column_config.TextColumn(width="large"),
+                        "Saran": st.column_config.TextColumn(width="large"),
+                    },
+                    key=f"grp-mem-{prefix}-{cid}-{key}",
+                )
     with st.expander("Lihat riwayat evaluasi campaign", expanded=False):
         st.caption(
             "Catatan tersimpan tiap kali Pantau dibuka / laporan diunggah. Cara baca: "
@@ -459,7 +517,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             if not need.empty:
                 st.markdown(f"**Perlu tindakan** · {fmt_num(len(need))} iklan (dari analisa terakhir)")
             for _, r in in_plan.iterrows():
-                _ad_row_card(r, cur=cur, report_end=report_end, prefix="in", cid=cid)
+                _ad_row_card(
+                    r, cur=cur, report_end=report_end, prefix="in", cid=cid,
+                    members=members, target_roas=roas, contribution=contribution,
+                )
 
             view = Mon.rename_budget_triad(in_plan)
             view_cols = [c for c in [
@@ -485,7 +546,10 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                 "Ditampilkan terpisah supaya tidak tercampur dengan rencana."
             )
             for _, r in out_plan.iterrows():
-                _ad_row_card(r, cur=cur, report_end=report_end, prefix="out", cid=cid)
+                _ad_row_card(
+                    r, cur=cur, report_end=report_end, prefix="out", cid=cid,
+                    members=members, target_roas=roas, contribution=contribution,
+                )
             out_view = Mon.rename_budget_triad(out_plan)
             out_cols = [c for c in [
                 "Iklan", "Jenis", "Status SC", "Status goals", "Tindakan",
