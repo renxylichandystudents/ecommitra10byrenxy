@@ -7,18 +7,21 @@ Diperbarui: 19 November 2026 (sore).
 Localhost:8501 / Cloud ikut push `main`.
 
 **Sudah selesai sore ini**
-- **Pelaksanaan** dirombak: sesuai plan (efektif / tidak efektif / boros) vs tidak sesuai plan vs di luar plan.
-- Progress harian komitmen vs realisasi dari `pantau_harian`.
-- Poin **2 · Yang harus diiklankan** dan **3 · Cuplikan rencana tersimpan** dihapus dari Pantau.
-- Kartu “sudah di tempat lain”: tampilkan realisasi di iklan lain (bukan Rp 0 seolah gagal).
+- **Pelaksanaan** dirombak + hapus poin 2 & 3.
+- **Progress harian** diperluas: budget plan/actual, omzet kotor + ROAS kotor, sales bersih + ROAS bersih (÷ biaya keluar), MTD produk/bersih, dampak iklan vs sales all (organik).
 
 **Cek saat lanjut**
-- Kloset FSA0159: harus **Naikkan budget** (bukan Buat/aktifkan) — sudah omzet 12 jt.
-- Pintu Kamar Mandi: saran “bukan belum setup”.
-- Progress harian terisi setelah unggah laporan lagi (checkpoint).
+- Baris progress lama tanpa `toko`: biaya/omzet/plan dari items; sales bersih/MTD terisi setelah buka Pantau lagi (live + checkpoint baru).
+- Kloset FSA0159 / Pintu: label Belum setup sudah diperbaiki sebelumnya.
 
 **Belum dikerjakan / bisa lanjut**
 - Tesis docx.
+
+## 2026-11-19 · Progress harian: kotor, bersih, MTD, dampak organik
+
+- Checkpoint menyimpan ringkasan `toko` (biaya, omzet kotor klaim iklan, bersih sejak, MTD).
+- Tabel: Budget plan/actual · Biaya · Omzet kotor + ROAS kotor · Sales bersih + ROAS bersih · Omzet produk MTD · Sales bersih MTD · Dampak iklan ke sales all.
+- ROAS memakai **biaya yang sudah keluar** sebagai penyebut; omzet kotor = klaim SC (inkl. belum bayar).
 
 ## 2026-11-19 · Pantau: rombak Pelaksanaan + hapus poin 2 & 3
 

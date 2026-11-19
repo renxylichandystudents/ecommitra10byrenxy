@@ -739,57 +739,199 @@ def execution_counts(parts: dict[str, pd.DataFrame]) -> dict[str, int]:
     }
 
 
+PROGRESS_COLS = [
+    "Tanggal",
+    "Budget plan/hari",
+    "Budget actual/hari",
+    "Biaya sejak campaign",
+    "Omzet kotor sejak campaign",
+    "ROAS kotor",
+    "Sales bersih sejak campaign",
+    "ROAS bersih",
+    "Omzet produk MTD",
+    "Sales bersih MTD",
+    "Dampak iklan ke sales all",
+    "Iklan tercatat",
+]
+
+
+def _finite(value, default: float = float("nan")) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if v == v else default
+
+
+def ads_impact_note(
+    *,
+    biaya: float,
+    omzet_kotor: float,
+    produk_sejak: float,
+    bersih_sejak: float,
+    produk_mtd: float = float("nan"),
+    bersih_mtd: float = float("nan"),
+) -> str:
+    """Keterangan singkat: klaim iklan vs sales toko (inkl. organik) + beban biaya vs bersih."""
+    parts: list[str] = []
+    if biaya == biaya and biaya > 0 and omzet_kotor == omzet_kotor and omzet_kotor > 0:
+        parts.append(f"klaim iklan (kotor, inkl. belum bayar) {omzet_kotor / biaya:.1f}× biaya")
+    if (
+        omzet_kotor == omzet_kotor and omzet_kotor > 0
+        and produk_sejak == produk_sejak and produk_sejak > 0
+    ):
+        share = omzet_kotor / produk_sejak * 100
+        if share > 100:
+            parts.append(
+                f"klaim iklan {share:.0f}% sales produk sejak campaign "
+                "(bisa >100% karena belum bayar; sisanya organik/kanal lain)"
+            )
+        else:
+            parts.append(
+                f"klaim iklan ~{share:.0f}% sales produk sejak campaign · "
+                f"~{max(0.0, 100 - share):.0f}% organik/kanal lain"
+            )
+    elif produk_sejak == produk_sejak and produk_sejak > 0:
+        parts.append("sales produk toko ada, tetapi klaim omzet iklan masih tipis")
+    if biaya == biaya and biaya > 0 and bersih_sejak == bersih_sejak and bersih_sejak > 0:
+        parts.append(f"biaya {biaya / bersih_sejak * 100:.1f}% sales bersih sejak campaign")
+    if not parts:
+        return "Belum cukup data sales toko untuk menakar dampak iklan vs organik"
+    return " · ".join(parts[:3])
+
+
 def campaign_daily_progress(
     campaign: dict | None,
     plan_keys: set[str] | frozenset | None = None,
+    *,
+    live_toko: dict | None = None,
+    live_tanggal: str | date | None = None,
 ) -> pd.DataFrame:
-    """Progress harian komitmen vs realisasi dari checkpoint Pantau (agregat semua iklan dalam rencana)."""
-    cols = [
-        "Tanggal", "Komitmen budget/hari", "Biaya kumulatif sejak campaign",
-        "Omzet kumulatif sejak campaign", "ROAS kumulatif",
-        "Naik biaya vs catatan lalu", "Naik omzet vs catatan lalu", "Iklan tercatat",
-    ]
+    """Progress harian: budget plan/actual, omzet kotor iklan, sales bersih, MTD, dampak ke sales all.
+
+    `live_toko` mengisi/memperbarui baris tanggal laporan terbaru (tanpa menunggu checkpoint lama).
+    """
+    cols = list(PROGRESS_COLS)
     log = list((campaign or {}).get("pantau_harian") or [])
-    if not log:
+    if not log and not live_toko:
         return pd.DataFrame(columns=cols)
     keys = {str(k) for k in (plan_keys or set())} or None
+    live_day = str(live_tanggal or "")[:10] if live_tanggal is not None else ""
     raw = []
     for entry in log:
         day = str(entry.get("tanggal") or "")[:10]
         items = list(entry.get("items") or [])
         if keys is not None:
             items = [it for it in items if str(it.get("key") or "") in keys]
-        if not items:
+        if not items and not entry.get("toko"):
             continue
-        biaya = float(sum(float(it.get("biaya") or 0) for it in items))
-        omzet = float(sum(float(it.get("omzet") or 0) for it in items))
-        komitmen = float(sum(float(it.get("budget_plan") or 0) for it in items))
+        toko = dict(entry.get("toko") or {})
+        if live_toko and live_day and day == live_day:
+            toko = {**toko, **{k: v for k, v in live_toko.items() if v is not None}}
+        biaya = _finite(toko.get("biaya_sejak"), float(sum(float(it.get("biaya") or 0) for it in items)))
+        omzet = _finite(toko.get("omzet_kotor_sejak"), float(sum(float(it.get("omzet") or 0) for it in items)))
+        plan = _finite(toko.get("budget_plan_hari"), float(sum(float(it.get("budget_plan") or 0) for it in items)))
+        actual = _finite(toko.get("budget_actual_hari"), float(sum(float(it.get("budget_setup") or 0) for it in items)))
         raw.append({
-            "tanggal": day, "biaya": biaya, "omzet": omzet, "komitmen": komitmen, "n": len(items),
+            "tanggal": day,
+            "plan": plan,
+            "actual": actual,
+            "biaya": biaya,
+            "omzet": omzet,
+            "bersih": _finite(toko.get("bersih_sejak")),
+            "produk_sejak": _finite(toko.get("produk_sejak")),
+            "produk_mtd": _finite(toko.get("produk_mtd")),
+            "bersih_mtd": _finite(toko.get("bersih_mtd")),
+            "n": len(items) if items else int(toko.get("iklan_tercatat") or 0),
+            "note": str(toko.get("dampak") or ""),
+        })
+    if live_toko and live_day and live_day not in {r["tanggal"] for r in raw}:
+        raw.append({
+            "tanggal": live_day,
+            "plan": _finite(live_toko.get("budget_plan_hari")),
+            "actual": _finite(live_toko.get("budget_actual_hari")),
+            "biaya": _finite(live_toko.get("biaya_sejak")),
+            "omzet": _finite(live_toko.get("omzet_kotor_sejak")),
+            "bersih": _finite(live_toko.get("bersih_sejak")),
+            "produk_sejak": _finite(live_toko.get("produk_sejak")),
+            "produk_mtd": _finite(live_toko.get("produk_mtd")),
+            "bersih_mtd": _finite(live_toko.get("bersih_mtd")),
+            "n": int(live_toko.get("iklan_tercatat") or 0),
+            "note": str(live_toko.get("dampak") or ""),
         })
     raw = sorted(raw, key=lambda r: r["tanggal"])
-    rows, prev = [], None
+    rows = []
     for item in raw:
-        add_b = float("nan") if prev is None else item["biaya"] - prev["biaya"]
-        add_o = float("nan") if prev is None else item["omzet"] - prev["omzet"]
-        roas = item["omzet"] / item["biaya"] if item["biaya"] > 0 else float("nan")
+        roas_kotor = item["omzet"] / item["biaya"] if item["biaya"] > 0 else float("nan")
+        roas_bersih = item["bersih"] / item["biaya"] if item["biaya"] > 0 and item["bersih"] == item["bersih"] else float("nan")
+        note = item["note"] or ads_impact_note(
+            biaya=item["biaya"],
+            omzet_kotor=item["omzet"],
+            produk_sejak=item["produk_sejak"],
+            bersih_sejak=item["bersih"],
+            produk_mtd=item["produk_mtd"],
+            bersih_mtd=item["bersih_mtd"],
+        )
         rows.append({
             "Tanggal": item["tanggal"],
-            "Komitmen budget/hari": item["komitmen"],
-            "Biaya kumulatif sejak campaign": item["biaya"],
-            "Omzet kumulatif sejak campaign": item["omzet"],
-            "ROAS kumulatif": roas,
-            "Naik biaya vs catatan lalu": add_b,
-            "Naik omzet vs catatan lalu": add_o,
+            "Budget plan/hari": item["plan"],
+            "Budget actual/hari": item["actual"],
+            "Biaya sejak campaign": item["biaya"],
+            "Omzet kotor sejak campaign": item["omzet"],
+            "ROAS kotor": roas_kotor,
+            "Sales bersih sejak campaign": item["bersih"],
+            "ROAS bersih": roas_bersih,
+            "Omzet produk MTD": item["produk_mtd"],
+            "Sales bersih MTD": item["bersih_mtd"],
+            "Dampak iklan ke sales all": note,
             "Iklan tercatat": item["n"],
         })
-        prev = item
     return pd.DataFrame(rows, columns=cols)
 
 
+def build_toko_snapshot(
+    *,
+    budget_plan_hari: float = 0.0,
+    budget_actual_hari: float = 0.0,
+    biaya_sejak: float = 0.0,
+    omzet_kotor_sejak: float = 0.0,
+    bersih_sejak: float = float("nan"),
+    produk_sejak: float = float("nan"),
+    produk_mtd: float = float("nan"),
+    bersih_mtd: float = float("nan"),
+    iklan_tercatat: int = 0,
+) -> dict:
+    """Ringkasan toko untuk checkpoint progress (sejajar kartu Pantau)."""
+    dampak = ads_impact_note(
+        biaya=float(biaya_sejak or 0),
+        omzet_kotor=float(omzet_kotor_sejak or 0),
+        produk_sejak=_finite(produk_sejak),
+        bersih_sejak=_finite(bersih_sejak),
+        produk_mtd=_finite(produk_mtd),
+        bersih_mtd=_finite(bersih_mtd),
+    )
+    return {
+        "budget_plan_hari": round(float(budget_plan_hari or 0), 2),
+        "budget_actual_hari": round(float(budget_actual_hari or 0), 2),
+        "biaya_sejak": round(float(biaya_sejak or 0), 2),
+        "omzet_kotor_sejak": round(float(omzet_kotor_sejak or 0), 2),
+        "bersih_sejak": None if _finite(bersih_sejak) != _finite(bersih_sejak) else round(float(bersih_sejak), 2),
+        "produk_sejak": None if _finite(produk_sejak) != _finite(produk_sejak) else round(float(produk_sejak), 2),
+        "produk_mtd": None if _finite(produk_mtd) != _finite(produk_mtd) else round(float(produk_mtd), 2),
+        "bersih_mtd": None if _finite(bersih_mtd) != _finite(bersih_mtd) else round(float(bersih_mtd), 2),
+        "iklan_tercatat": int(iklan_tercatat or 0),
+        "dampak": dampak,
+    }
 
-def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: pd.DataFrame) -> tuple[dict, bool]:
-    """Simpan/timpa checkpoint harian per iklan di campaign['pantau_harian']. True bila ada perubahan."""
+
+def record_daily_checkpoint(
+    campaign: dict,
+    *,
+    report_date: date | None,
+    rows: pd.DataFrame,
+    toko: dict | None = None,
+) -> tuple[dict, bool]:
+    """Simpan/timpa checkpoint harian per iklan + ringkasan toko di campaign['pantau_harian']."""
     if report_date is None or rows is None or (isinstance(rows, pd.DataFrame) and rows.empty):
         return campaign, False
     day = report_date.isoformat()
@@ -820,10 +962,27 @@ def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: p
             "hari": hari,
             "tindakan": str(r.get("Tindakan") or ""),
         })
-    entry = {"tanggal": day, "items": items}
+    # Lengkapi toko dari agregat items bila pemanggil belum mengisi budget/biaya/omzet
+    snap = dict(toko or {})
+    if items:
+        snap.setdefault("budget_plan_hari", round(sum(float(it["budget_plan"]) for it in items), 2))
+        snap.setdefault("budget_actual_hari", round(sum(float(it["budget_setup"]) for it in items), 2))
+        snap.setdefault("biaya_sejak", round(sum(float(it["biaya"]) for it in items), 2))
+        snap.setdefault("omzet_kotor_sejak", round(sum(float(it["omzet"]) for it in items), 2))
+        snap.setdefault("iklan_tercatat", len(items))
+    if "dampak" not in snap:
+        snap["dampak"] = ads_impact_note(
+            biaya=_finite(snap.get("biaya_sejak"), 0.0),
+            omzet_kotor=_finite(snap.get("omzet_kotor_sejak"), 0.0),
+            produk_sejak=_finite(snap.get("produk_sejak")),
+            bersih_sejak=_finite(snap.get("bersih_sejak")),
+            produk_mtd=_finite(snap.get("produk_mtd")),
+            bersih_mtd=_finite(snap.get("bersih_mtd")),
+        )
+    entry = {"tanggal": day, "items": items, "toko": snap}
     log = list(campaign.get("pantau_harian") or [])
     prev = next((e for e in log if str(e.get("tanggal") or "")[:10] == day), None)
-    if prev is not None and prev.get("items") == items:
+    if prev is not None and prev.get("items") == items and (prev.get("toko") or {}) == snap:
         return campaign, False
     log = [e for e in log if str(e.get("tanggal") or "")[:10] != day]
     log.append(entry)

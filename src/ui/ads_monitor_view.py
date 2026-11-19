@@ -510,10 +510,27 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             contribution=contribution, planned_singles=singles,
         )
         classified = in_plan
-        # Checkpoint harian ke depan (satu entri per tanggal laporan) — setelah hygiene anggota
+        # Checkpoint harian + ringkasan toko (sales kotor/bersih/MTD) — setelah hygiene anggota
         if features is not None and not in_plan.empty and report_end is not None:
             merged = in_plan if out_plan.empty else pd.concat([in_plan, out_plan], ignore_index=True)
-            updated, changed = Mon.record_daily_checkpoint(cur, report_date=report_end, rows=merged)
+            period_now = _period_sales(track, factor)
+            plan_hari = float(pd.to_numeric(merged.get("Budget usulan/hari"), errors="coerce").fillna(0).sum()) if "Budget usulan/hari" in merged.columns else 0.0
+            actual_hari = float(pd.to_numeric(merged.get("Budget efektif Shopee/hari"), errors="coerce").fillna(0).sum()) if "Budget efektif Shopee/hari" in merged.columns else 0.0
+            # Utamakan angka toko (Keseluruhan iklan + track), bukan jumlah kartu per iklan
+            toko_snap = Mon.build_toko_snapshot(
+                budget_plan_hari=plan_hari,
+                budget_actual_hari=actual_hari,
+                biaya_sejak=float(spent_since or 0),
+                omzet_kotor_sejak=float(omzet_since or 0),
+                bersih_sejak=period_now.get("bersih"),
+                produk_sejak=period_now.get("produk"),
+                produk_mtd=float(mtd_produk) if mtd_produk is not None else float("nan"),
+                bersih_mtd=float(mtd) if mtd is not None else float("nan"),
+                iklan_tercatat=len(merged),
+            )
+            updated, changed = Mon.record_daily_checkpoint(
+                cur, report_date=report_end, rows=merged, toko=toko_snap,
+            )
             if changed:
                 store = C.Store(features, "iklan")
                 all_c = [updated if int(c.get("id", 0)) == int(updated.get("id", 0)) else c for c in store.all()]
@@ -688,10 +705,30 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     units=units, products=products, planned_singles=singles,
                 )
 
-        # Progress harian komitmen → realisasi
+        # Progress harian: plan/actual + kotor/bersih + MTD + dampak ke sales all
         plan_keys = {str(k) for k in (planned or {})}
-        progress = Mon.campaign_daily_progress(cur, plan_keys)
-        st.markdown("#### Progress harian · komitmen vs realisasi")
+        period_live = _period_sales(track, factor)
+        live_toko = Mon.build_toko_snapshot(
+            budget_plan_hari=float(
+                pd.to_numeric(in_plan.get("Budget usulan/hari"), errors="coerce").fillna(0).sum()
+            ) if not in_plan.empty and "Budget usulan/hari" in in_plan.columns else float(
+                wallet.get("rencana_harian") or 0
+            ),
+            budget_actual_hari=float(
+                pd.to_numeric(in_plan.get("Budget efektif Shopee/hari"), errors="coerce").fillna(0).sum()
+            ) if not in_plan.empty and "Budget efektif Shopee/hari" in in_plan.columns else 0.0,
+            biaya_sejak=float(spent_since or 0),
+            omzet_kotor_sejak=float(omzet_since or 0),
+            bersih_sejak=period_live.get("bersih"),
+            produk_sejak=period_live.get("produk"),
+            produk_mtd=float(mtd_produk) if mtd_produk is not None else float("nan"),
+            bersih_mtd=float(mtd) if mtd is not None else float("nan"),
+            iklan_tercatat=len(in_plan) if not in_plan.empty else 0,
+        )
+        progress = Mon.campaign_daily_progress(
+            cur, plan_keys, live_toko=live_toko, live_tanggal=report_end,
+        )
+        st.markdown("#### Progress harian · sejak campaign dibuat")
         if progress.empty:
             st.info(
                 "Belum ada catatan harian. Buka Pantau lagi setelah unggah laporan — "
@@ -700,20 +737,29 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         else:
             st.caption(
                 "Tiap baris = satu tanggal Pantau/unggah. "
-                "**Komitmen** = jumlah budget rencana iklan hari itu. "
-                "**Biaya/omzet kumulatif** = realisasi sejak campaign. "
-                "**Naik vs catatan lalu** = pergerakan antar hari (bukan rata-rata)."
+                "**Budget plan** = komitmen campaign · **Budget actual** = yang terpasang di Shopee. "
+                "**Omzet kotor** = klaim iklan Seller Center (termasuk belum bayar) · "
+                "**ROAS kotor** = omzet kotor ÷ biaya yang sudah keluar. "
+                "**Sales bersih** & **ROAS bersih** = penjualan bersih toko ÷ biaya (biaya sudah pasti). "
+                "**MTD** = bulan berjalan (produk & bersih, termasuk organik). "
+                "**Dampak** = porsi klaim iklan vs sales all (organik + beriklan)."
             )
             show_table(
                 progress,
                 kinds={
-                    "Komitmen budget/hari": "money",
-                    "Biaya kumulatif sejak campaign": "money",
-                    "Omzet kumulatif sejak campaign": "money",
-                    "ROAS kumulatif": "dec",
-                    "Naik biaya vs catatan lalu": "money",
-                    "Naik omzet vs catatan lalu": "money",
+                    "Budget plan/hari": "money",
+                    "Budget actual/hari": "money",
+                    "Biaya sejak campaign": "money",
+                    "Omzet kotor sejak campaign": "money",
+                    "ROAS kotor": "dec",
+                    "Sales bersih sejak campaign": "money",
+                    "ROAS bersih": "dec",
+                    "Omzet produk MTD": "money",
+                    "Sales bersih MTD": "money",
                     "Iklan tercatat": "count",
+                },
+                column_config={
+                    "Dampak iklan ke sales all": st.column_config.TextColumn(width="large"),
                 },
                 key=f"camp-progress-{cid}",
             )
