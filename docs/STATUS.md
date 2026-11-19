@@ -2,6 +2,11 @@
 
 Diperbarui: 19 November 2026.
 
+## 2026-11-19 · Rombak tabel riwayat evaluasi campaign
+
+- Tabel Detailed diganti: **Patokan di rencana/Shopee**, **Tambahan biaya/omzet hari ini** (selisih vs catatan sebelumnya), **Total sejak campaign**, **ROAS sejak campaign**, **Rata-rata terpakai sejak campaign** vs **Rata-rata terpakai bulan ini** (MTD), **Saran saat itu**.
+- Checkpoint menyimpan `biaya_bulan_hari`; caption menjelaskan cara baca agar atribusi tidak rancu.
+
 ## 2026-11-19 · Budget Rp 0 di campaign = sengaja dihentikan
 
 - Iklan tetap di daftar campaign walau budget rencana 0 (status jeda). Label kartu: **Di rencana dihentikan (Rp 0)** / **Di Shopee tidak diisi**; saran menjelaskan bukan data hilang.

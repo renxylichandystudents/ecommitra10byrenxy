@@ -178,10 +178,13 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         f"<span><b>Terpakai sejak campaign</b> {_fmt_hari(since)}</span></div></div>",
         unsafe_allow_html=True,
     )
-    with st.expander("Lihat riwayat harian", expanded=False):
+    with st.expander("Lihat riwayat evaluasi campaign", expanded=False):
         st.caption(
-            "Catatan harian tersimpan setiap kali Pantau dibuka atau laporan diunggah. "
-            "Sebelum fitur ini aktif, yang tampil hanya titik saat campaign disimpan dan hari ini."
+            "Catatan tersimpan tiap kali Pantau dibuka / laporan diunggah. Cara baca: "
+            "**Patokan** = budget campaign (bukan pemakaian). "
+            "**Tambahan hari ini** = selisih vs catatan sebelumnya (pergerakan). "
+            "**Total sejak campaign** = akumulasi sejak campaign disimpan. "
+            "**Rata-rata bulan ini** = pemakaian di bulan berjalan (MTD), terpisah dari sejak campaign."
         )
         base_dt = None
         if cur.get("setelan", {}).get("data_sampai"):
@@ -192,7 +195,8 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
         today_row = {
             "tanggal": report_end.isoformat() if report_end else "",
             "biaya": biaya, "omzet": omzet, "roas": (omzet / biaya) if biaya > 0 else float("nan"),
-            "biaya_hari": since, "budget_plan": plan, "budget_setup": setup, "tindakan": act,
+            "biaya_hari": since, "biaya_bulan_hari": month_v, "budget_plan": plan, "budget_setup": setup,
+            "tindakan": act,
         }
         hist = Mon.daily_history_for(
             cur, key,
@@ -200,12 +204,17 @@ def _ad_row_card(r: pd.Series, *, cur: dict, report_end: date | None, prefix: st
             today_row=today_row,
         )
         if hist.empty:
-            st.info("Belum ada catatan harian untuk iklan ini.")
+            st.info("Belum ada catatan evaluasi untuk iklan ini.")
         else:
             show_table(
                 hist,
-                kinds={"Biaya sejak disimpan": "money", "Omzet iklan sejak disimpan": "money", "ROAS": "dec",
-                       "Actual pemakaian/hari": "money", "Budget plan": "money", "Budget setup SC": "money"},
+                kinds={
+                    "Patokan di rencana": "money", "Patokan di Shopee": "money",
+                    "Tambahan biaya hari ini": "money", "Tambahan omzet hari ini": "money",
+                    "Total biaya sejak campaign": "money", "Total omzet sejak campaign": "money",
+                    "ROAS sejak campaign": "dec",
+                    "Rata-rata terpakai sejak campaign": "money", "Rata-rata terpakai bulan ini": "money",
+                },
                 key=f"hist-{prefix}-{cid}-{key}",
             )
 

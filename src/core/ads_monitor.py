@@ -470,6 +470,8 @@ def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: p
             continue
         biaya = float(r.get("Biaya sejak disimpan") or 0)
         omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
+        month = r.get("Biaya bulan ini/hari")
+        month_v = float(month) if month == month and month is not None else None
         items.append({
             "key": key,
             "iklan": str(r.get("Iklan") or key),
@@ -477,6 +479,7 @@ def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: p
             "omzet": round(omzet, 2),
             "roas": round(omzet / biaya, 4) if biaya > 0 else None,
             "biaya_hari": round(float(r.get("Biaya aktual/hari") or 0), 2),
+            "biaya_bulan_hari": round(month_v, 2) if month_v is not None else None,
             "budget_plan": round(float(r.get("Budget usulan/hari") or 0), 2),
             "budget_setup": round(float(r.get("Budget efektif Shopee/hari") or 0), 2),
             "tindakan": str(r.get("Tindakan") or ""),
@@ -494,52 +497,84 @@ def record_daily_checkpoint(campaign: dict, *, report_date: date | None, rows: p
 
 def daily_history_for(campaign: dict, key: str, *, baseline_row: dict | None = None,
                       today_row: dict | None = None) -> pd.DataFrame:
-    """Riwayat harian satu iklan: checkpoint tersimpan + titik baseline/hari ini bila belum ada log."""
-    rows = []
+    """Riwayat evaluasi campaign per tanggal — patokan, pergerakan, kumulatif, dan rata-rata bulan ini.
+
+    Kolom disusun agar atribusi jelas:
+    - Patokan di rencana / di Shopee = acuan campaign (bukan realisasi)
+    - Tambahan hari ini = selisih vs catatan sebelumnya (pergerakan)
+    - Total sejak campaign = akumulasi sejak campaign disimpan
+    - Rata-rata terpakai sejak campaign vs rata-rata bulan ini (MTD)
+    """
+    raw: list[dict] = []
     for entry in campaign.get("pantau_harian") or []:
         day = str(entry.get("tanggal") or "")[:10]
         for it in entry.get("items") or []:
             if str(it.get("key")) != str(key):
                 continue
-            roas = it.get("roas")
-            rows.append({
-                "Tanggal": day,
-                "Biaya sejak disimpan": float(it.get("biaya") or 0),
-                "Omzet iklan sejak disimpan": float(it.get("omzet") or 0),
-                "ROAS": float(roas) if roas is not None and roas == roas else float("nan"),
-                "Actual pemakaian/hari": float(it.get("biaya_hari") or 0),
-                "Budget plan": float(it.get("budget_plan") or 0),
-                "Budget setup SC": float(it.get("budget_setup") or 0),
-                "Tindakan": str(it.get("tindakan") or ""),
+            month = it.get("biaya_bulan_hari")
+            raw.append({
+                "tanggal": day,
+                "biaya": float(it.get("biaya") or 0),
+                "omzet": float(it.get("omzet") or 0),
+                "roas": it.get("roas"),
+                "biaya_hari": float(it.get("biaya_hari") or 0),
+                "biaya_bulan_hari": float(month) if month is not None and month == month else float("nan"),
+                "budget_plan": float(it.get("budget_plan") or 0),
+                "budget_setup": float(it.get("budget_setup") or 0),
+                "tindakan": str(it.get("tindakan") or ""),
             })
-    if not rows and baseline_row is not None:
-        rows.append({
-            "Tanggal": str(baseline_row.get("tanggal") or "baseline")[:10],
-            "Biaya sejak disimpan": 0.0,
-            "Omzet iklan sejak disimpan": 0.0,
-            "ROAS": float("nan"),
-            "Actual pemakaian/hari": 0.0,
-            "Budget plan": float(baseline_row.get("budget_plan") or 0),
-            "Budget setup SC": float(baseline_row.get("budget_setup") or 0),
-            "Tindakan": "titik saat campaign disimpan",
+    if not raw and baseline_row is not None:
+        raw.append({
+            "tanggal": str(baseline_row.get("tanggal") or "baseline")[:10],
+            "biaya": 0.0, "omzet": 0.0, "roas": None, "biaya_hari": 0.0,
+            "biaya_bulan_hari": float("nan"),
+            "budget_plan": float(baseline_row.get("budget_plan") or 0),
+            "budget_setup": float(baseline_row.get("budget_setup") or 0),
+            "tindakan": "titik awal campaign",
         })
     if today_row is not None:
         day = str(today_row.get("tanggal") or "")[:10]
-        if not any(r["Tanggal"] == day for r in rows):
-            rows.append({
-                "Tanggal": day or "hari ini",
-                "Biaya sejak disimpan": float(today_row.get("biaya") or 0),
-                "Omzet iklan sejak disimpan": float(today_row.get("omzet") or 0),
-                "ROAS": float(today_row["roas"]) if today_row.get("roas") == today_row.get("roas") else float("nan"),
-                "Actual pemakaian/hari": float(today_row.get("biaya_hari") or 0),
-                "Budget plan": float(today_row.get("budget_plan") or 0),
-                "Budget setup SC": float(today_row.get("budget_setup") or 0),
-                "Tindakan": str(today_row.get("tindakan") or ""),
+        if day and not any(r["tanggal"] == day for r in raw):
+            month = today_row.get("biaya_bulan_hari")
+            raw.append({
+                "tanggal": day or "hari ini",
+                "biaya": float(today_row.get("biaya") or 0),
+                "omzet": float(today_row.get("omzet") or 0),
+                "roas": today_row.get("roas"),
+                "biaya_hari": float(today_row.get("biaya_hari") or 0),
+                "biaya_bulan_hari": float(month) if month is not None and month == month else float("nan"),
+                "budget_plan": float(today_row.get("budget_plan") or 0),
+                "budget_setup": float(today_row.get("budget_setup") or 0),
+                "tindakan": str(today_row.get("tindakan") or ""),
             })
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    return out.sort_values("Tanggal").reset_index(drop=True)
+    raw = sorted(raw, key=lambda r: str(r.get("tanggal") or ""))
+    rows = []
+    prev = None
+    for item in raw:
+        biaya = float(item["biaya"])
+        omzet = float(item["omzet"])
+        if prev is None:
+            add_biaya = float("nan")
+            add_omzet = float("nan")
+        else:
+            add_biaya = biaya - float(prev["biaya"])
+            add_omzet = omzet - float(prev["omzet"])
+        roas = item.get("roas")
+        rows.append({
+            "Tanggal": item["tanggal"],
+            "Patokan di rencana": float(item["budget_plan"]),
+            "Patokan di Shopee": float(item["budget_setup"]),
+            "Tambahan biaya hari ini": add_biaya,
+            "Tambahan omzet hari ini": add_omzet,
+            "Total biaya sejak campaign": biaya,
+            "Total omzet sejak campaign": omzet,
+            "ROAS sejak campaign": float(roas) if roas is not None and roas == roas else float("nan"),
+            "Rata-rata terpakai sejak campaign": float(item["biaya_hari"]),
+            "Rata-rata terpakai bulan ini": float(item["biaya_bulan_hari"]),
+            "Saran saat itu": item["tindakan"],
+        })
+        prev = item
+    return pd.DataFrame(rows)
 
 
 def attach_month_daily(frame: pd.DataFrame, current: dict[str, dict] | None) -> pd.DataFrame:

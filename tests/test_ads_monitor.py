@@ -182,8 +182,8 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         rows = pd.DataFrame([{
             "_key": "produk:1", "Iklan": "A",
             "Biaya sejak disimpan": 100_000, "Omzet iklan sejak disimpan": 1_500_000,
-            "Biaya aktual/hari": 50_000, "Budget usulan/hari": 50_000,
-            "Budget efektif Shopee/hari": 50_000, "Tindakan": "Pertahankan",
+            "Biaya aktual/hari": 50_000, "Biaya bulan ini/hari": 80_000,
+            "Budget usulan/hari": 50_000, "Budget efektif Shopee/hari": 50_000, "Tindakan": "Pertahankan",
         }])
         updated, changed = Mon.record_daily_checkpoint(campaign, report_date=date(2026, 11, 17), rows=rows)
         self.assertTrue(changed)
@@ -197,6 +197,33 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
         )
         self.assertGreaterEqual(len(hist), 1)
         self.assertEqual(hist.iloc[-1]["Tanggal"], "2026-11-17")
+        self.assertIn("Total biaya sejak campaign", hist.columns)
+        self.assertIn("Rata-rata terpakai bulan ini", hist.columns)
+        self.assertAlmostEqual(hist.iloc[-1]["Rata-rata terpakai bulan ini"], 80_000)
+
+    def test_history_shows_day_delta_and_mtd_separate(self):
+        campaign = {
+            "pantau_harian": [
+                {"tanggal": "2026-11-18", "items": [{
+                    "key": "produk:1", "biaya": 78_521_003, "omzet": 1_538_347_407, "roas": 19.59,
+                    "biaya_hari": 19_630_251, "biaya_bulan_hari": 18_000_000,
+                    "budget_plan": 4_750_000, "budget_setup": 4_750_000, "tindakan": "Turunkan budget",
+                }]},
+                {"tanggal": "2026-11-19", "items": [{
+                    "key": "produk:1", "biaya": 87_686_532, "omzet": 1_716_947_237, "roas": 19.58,
+                    "biaya_hari": 17_537_306, "biaya_bulan_hari": 17_000_000,
+                    "budget_plan": 4_750_000, "budget_setup": 4_750_000, "tindakan": "Turunkan budget",
+                }]},
+            ]
+        }
+        hist = Mon.daily_history_for(campaign, "produk:1")
+        self.assertEqual(len(hist), 2)
+        self.assertTrue(pd.isna(hist.iloc[0]["Tambahan biaya hari ini"]))  # baris pertama: belum ada selisih
+        self.assertAlmostEqual(hist.iloc[1]["Tambahan biaya hari ini"], 87_686_532 - 78_521_003)
+        self.assertAlmostEqual(hist.iloc[1]["Total biaya sejak campaign"], 87_686_532)
+        self.assertAlmostEqual(hist.iloc[1]["Rata-rata terpakai sejak campaign"], 17_537_306)
+        self.assertAlmostEqual(hist.iloc[1]["Rata-rata terpakai bulan ini"], 17_000_000)
+        self.assertNotIn("Actual pemakaian/hari", hist.columns)
 
     def test_rename_budget_triad(self):
         frame = pd.DataFrame([{
