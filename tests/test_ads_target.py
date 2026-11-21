@@ -390,6 +390,53 @@ class MarginAwareSelectionTest(unittest.TestCase):
         self.assertIn("margin minus", sel.loc["new_bad", "Alasan"])
 
 
+class OccupiedNoDuplicateTest(unittest.TestCase):
+    def test_occupied_codes_are_not_proposed_as_new_singles(self):
+        import pandas as pd
+
+        products = pd.DataFrame([
+            {"product_code": "free", "nama": "Free", "omzet_harian": 3_000_000, "qty_harian": 5, "stok_room": 1e6, "stok": 40},
+            {"product_code": "busy", "nama": "Busy Auto", "omzet_harian": 5_000_000, "qty_harian": 8, "stok_room": 1e6, "stok": 40},
+        ])
+        sel = A.product_selection(pd.DataFrame(), [], products, {"free": 0.2, "busy": 0.2}, target_roas=8, focus=False,
+                                  occupied={"busy"}).set_index("Kode produk")
+        self.assertEqual(sel.loc["busy", "Saran"], "Sudah di iklan lain")
+        self.assertEqual(sel.loc["free", "Saran"], "Buat iklan tunggal")
+        self.assertIn("dobel", sel.loc["busy", "Alasan"])
+
+
+class SellerCenterSetupTest(unittest.TestCase):
+    def test_setup_export_has_two_sheets_floors_and_roas_cap(self):
+        import pandas as pd
+
+        acts = pd.DataFrame([
+            {"Tindakan": "Naikkan budget", "Iklan": "Kloset", "Jenis": "Produk tunggal", "Kode produk": "1",
+             "Budget harian usulan": 10_000, "Target ROAS Shopee": 45.0, "Catatan": "x"},
+            {"Tindakan": "Buat iklan baru", "Iklan": "Lem baru", "Jenis": "Grup", "Kode produk": "2",
+             "Budget harian usulan": 50_000, "Target ROAS Shopee": 12.0, "Catatan": "y"},
+        ])
+        sheets = A.seller_center_setup(acts, None, campaign="uji", target_roas=40, period="1–10 Nov")
+        self.assertEqual(set(sheets), {"Ringkas", "Setelan Seller Center"})
+        setup = sheets["Setelan Seller Center"]
+        self.assertEqual(list(setup.columns)[0], "Urutan")
+        # Floor: tunggal 10rb → 25rb; grup 50rb → 100rb
+        by_iklan = setup.set_index("Iklan")
+        self.assertEqual(by_iklan.loc["Kloset", "Budget harian isi (Rp)"], A.SHOPEE_MIN_SINGLE)
+        self.assertEqual(by_iklan.loc["Lem baru", "Budget harian isi (Rp)"], A.SHOPEE_MIN_GROUP)
+        self.assertLessEqual(float(by_iklan.loc["Kloset", "Target ROAS isi"]), A.MAX_SHOPEE_ROAS)
+        self.assertIn("30", sheets["Ringkas"]["Nilai"].astype(str).str.cat(sep=" "))
+
+    def test_target_actions_never_exceed_roas_30_and_apply_floors(self):
+        u = A.Unit(key="produk:1", nama="X", jenis="Produk tunggal", status="Berjalan", mode="GMV Max",
+                   daily_cost=25_000, daily_sales=2_000_000, a=5_000_000, b=20_000, spread=0.2, members=["1"], contribution=0.2)
+        plan = A.allocate_target([u], gap_daily=10_000_000, target_roas=2, budget_daily=100_000)
+        acts = A.target_actions([u], plan, target_roas=2)
+        self.assertFalse(acts.empty)
+        self.assertTrue((acts["Target ROAS Shopee"].fillna(0) <= A.MAX_SHOPEE_ROAS).all())
+        active = acts.loc[acts["Budget harian usulan"] > 0]
+        self.assertTrue((active["Budget harian usulan"] >= A.SHOPEE_MIN_SINGLE).all())
+
+
 class RecOptionsUnderwaterTest(unittest.TestCase):
     def test_underwater_pick_prefers_contribution_not_max_sales(self):
         from src.ui.ads_target import _rec_options

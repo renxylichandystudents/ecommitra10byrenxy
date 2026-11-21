@@ -75,7 +75,13 @@ def _candidates(table: pd.DataFrame, data: FeatureData, margin_min: float, roas_
 
 
 def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
-    """Unit iklan + ekonomi per Kode Produk: kontribusi sebelum iklan (margin kotor − potongan Shopee) dan ruang stok (Rp/hari)."""
+    """Unit iklan + ekonomi per Kode Produk: kontribusi sebelum iklan (margin kotor − potongan Shopee) dan ruang stok (Rp/hari).
+
+    Hasil disimpan per sesi agar buka Rekomendasi sistem tidak menghitung ulang fee/margin tiap rerun Streamlit.
+    Mengembalikan (units, members, contribution, products, occupied) — occupied = kode yang sudah di iklan mana pun
+    (termasuk otomatis) supaya saran tidak membuat iklan dobel."""
+    import streamlit as st
+
     from src.core import ads_strategy as A
     from src.core import shopee_fee as fee
     from src.core.margin_file import sku_key
@@ -84,12 +90,32 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
 
     ads = list(getattr(frames, "ads", []) or [])
     auto, group, overall = (ads + [pd.DataFrame()] * 3)[:3]
+    stamp = (
+        len(table), float(pd.to_numeric(table.get("sales_total"), errors="coerce").fillna(0).sum()) if table is not None and not table.empty else 0.0,
+        days_left,
+        len(auto) if isinstance(auto, pd.DataFrame) else 0,
+        len(group) if isinstance(group, pd.DataFrame) else 0,
+        len(overall) if isinstance(overall, pd.DataFrame) else 0,
+        str(getattr(frames, "stock", pd.DataFrame()).get("_submitted_at", pd.Series(dtype=str)).astype(str).max())
+        if isinstance(getattr(frames, "stock", None), pd.DataFrame) and not getattr(frames, "stock").empty and "_submitted_at" in frames.stock.columns
+        else "-",
+        st.session_state.get("_feature-version", 0),
+    )
+    cached = st.session_state.get("_ads-inputs-cache")
+    if isinstance(cached, tuple) and cached[0] == stamp:
+        return cached[1]
+
     units, members = A.parse_units(group, overall, auto)
     if not units:
-        return [], members, {}, pd.DataFrame()
-    latest = max(p for u in units for p, _c, _s in u.history) if any(u.history for u in units) else ""
+        empty = ([], members, {}, pd.DataFrame(), frozenset())
+        st.session_state["_ads-inputs-cache"] = (stamp, empty)
+        return empty
     recent = sorted({p for u in units for p, _c, _s in u.history})[-2:]
     units = [u for u in units if u.status.lower().startswith(("berjalan", "dijeda")) or (u.history and u.history[-1][0] in recent)]
+    # Semua kode yang sudah di iklan (termasuk otomatis) sebelum filter kejar-target.
+    occupied = {c for u in units for c in u.members}
+    if isinstance(members, pd.DataFrame) and not members.empty and "product_code" in members.columns:
+        occupied |= set(members["product_code"].astype(str))
     stock = getattr(frames, "stock", pd.DataFrame())
     code_of: dict[str, str] = {}
     if isinstance(stock, pd.DataFrame) and not stock.empty and {"sku", "product_code"} <= set(stock.columns):
@@ -149,8 +175,9 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
     products["stok_room"] = products["product_code"].map(room)
     # Fokus kejar target: hanya iklan produk tunggal & grup; iklan baru diusulkan oleh pemilihan produk (A.build_plan).
     units = [u for u in units if u.jenis in A.TARGET_KINDS]
-    del latest
-    return units, members, contribution, products
+    result = (units, members, contribution, products, frozenset(occupied))
+    st.session_state["_ads-inputs-cache"] = (stamp, result)
+    return result
 
 
 def show_ads_strategy(table: pd.DataFrame, *, features, data: FeatureData, params: dict, window_start: date, username: str, can_edit: bool,

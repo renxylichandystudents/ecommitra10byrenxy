@@ -98,8 +98,8 @@ def _step(number: int, title: str, note: str = "") -> None:
     )
 
 
-ACT_COLS = ["Tindakan", "Iklan", "Jenis", "Anggota", "Budget harian sekarang", "Budget harian usulan", "Perubahan/hari", "Target ROAS Shopee",
-            "ROAS bulan terakhir", "Prediksi omzet produk/hari", "Omzet iklan usulan/hari", "Tambahan omzet/hari", "Catatan"]
+ACT_COLS = ["Tindakan", "Iklan", "Jenis", "Anggota", "Kode produk", "Budget harian sekarang", "Budget harian usulan", "Perubahan/hari",
+            "Target ROAS Shopee", "ROAS bulan terakhir", "Prediksi omzet produk/hari", "Omzet iklan usulan/hari", "Tambahan omzet/hari", "Catatan"]
 ACT_KINDS = {"Budget harian sekarang": "money", "Budget harian usulan": "money", "Perubahan/hari": "money", "Tambahan omzet/hari": "money",
              "Prediksi omzet produk/hari": "money", "Omzet iklan usulan/hari": "money",
              "Anggota": "count", "ROAS bulan terakhir": "dec", "Target ROAS Shopee": "dec"}
@@ -153,18 +153,19 @@ def _day_shape_of(orders: pd.DataFrame | None, last: date):
 
 
 def _fixed_plan(units, members, products, contribution, *, weeks, blocks, gap_ads: float, roas: float, budget_daily: float, lift: float, shape, key: tuple,
-                select_roas: float | None = None, exclude: frozenset = frozenset(), min_marginal: float = A.MIN_MARGINAL) -> dict:
+                select_roas: float | None = None, exclude: frozenset = frozenset(), min_marginal: float = A.MIN_MARGINAL,
+                occupied: frozenset = frozenset(), base_selection=None) -> dict:
     """Rencana budget & ROAS tetap (dengan batas stok) + kalender budget harian; disimpan per sesi seperti rekomendasi."""
     cache = st.session_state.setdefault("adt-fixed-cache", {})
     full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), round(budget_daily), lift, select_roas, len(units), round(sum(u.daily_cost for u in units)),
-            round(sum(u.daily_sales for u in units)), len(products), tuple(sorted(exclude)), min_marginal)
+            round(sum(u.daily_sales for u in units)), len(products), tuple(sorted(exclude)), min_marginal, tuple(sorted(occupied)))
     if full not in cache:
         if len(cache) > 8:
             cache.clear()
         run_days = max(sum(weeks), 1)
         plan_units, plan, selection = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
                                                    budget_daily=budget_daily, lift=lift, stock_cap=True, select_roas=select_roas, exclude=exclude,
-                                                   min_marginal=min_marginal)
+                                                   min_marginal=min_marginal, occupied=occupied, base_selection=base_selection)
         steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas, budget_total=budget_daily * run_days, first=plan, min_marginal=min_marginal)
         calendar, timing = F.day_plan(plan_units, steps, blocks, shape)
         cache[full] = {"units": plan_units, "plan": plan, "selection": selection, "steps": steps, "eff": A.ramp_effect(plan_units, steps),
@@ -191,20 +192,21 @@ def _calendar_view(calendar: pd.DataFrame) -> pd.DataFrame:
 
 
 def _option_plan(units, members, products, contribution, *, weeks, gap_ads: float, roas: float, budget_daily: float | None, lift: float, key: tuple,
-                 stock: bool = True, select_roas: float | None = None, exclude: frozenset = frozenset(), min_marginal: float = A.MIN_MARGINAL) -> dict:
+                 stock: bool = True, select_roas: float | None = None, exclude: frozenset = frozenset(), min_marginal: float = A.MIN_MARGINAL,
+                 occupied: frozenset = frozenset(), base_selection=None) -> dict:
     """Hasil iklan untuk ROAS & budget harian tertentu (None = tanpa batas); stock=False: stok dianggap cukup. Disimpan per sesi.
 
     Selain angka `ramp_effect`, `kurang_stok` = daftar iklan yang tambahan penjualannya melebihi stok tersisa (nilai jual)."""
     cache = st.session_state.setdefault("adt-option-cache", {})
     full = (*key, tuple(weeks), round(gap_ads), round(roas, 2), -1 if budget_daily is None else round(budget_daily), lift, stock, select_roas, len(units),
-            round(sum(u.daily_cost for u in units)), len(products), tuple(sorted(exclude)), min_marginal)
+            round(sum(u.daily_cost for u in units)), len(products), tuple(sorted(exclude)), min_marginal, tuple(sorted(occupied)))
     if full not in cache:
         if len(cache) > 300:
             cache.clear()
         run_days = max(sum(weeks), 1)
         plan_units, plan, _sel = A.build_plan(units, members, products, contribution, gap_daily=gap_ads / run_days, target_roas=roas,
                                               budget_daily=budget_daily, lift=lift, stock_cap=stock, select_roas=select_roas, exclude=exclude,
-                                              min_marginal=min_marginal)
+                                              min_marginal=min_marginal, occupied=occupied, base_selection=base_selection)
         steps = A.ramp(plan_units, weeks=weeks, gap_total=gap_ads, target_roas=roas,
                        budget_total=None if budget_daily is None else budget_daily * run_days, first=plan, min_marginal=min_marginal)
         result = dict(A.ramp_effect(plan_units, steps))
@@ -386,9 +388,9 @@ def _fixed_strategy(res: dict, *, rec: dict | None, target: float, projection: f
             st.caption(f"Pengali hanya untuk {fmt_num(len(timing.get('ikut', ())))} iklan bertanda 'Ikut kalender' (masih bisa tumbuh); iklan lain tetap di budget mingguannya. "
                        "Pengali 0,7–1,4 menjaga perubahan antarhari maks. 2× sehingga perlindungan ROAS Shopee tetap aktif.")
             show_table(cal_view, kinds={"Budget/hari": "money", "Omzet iklan/hari": "money", "ROAS hari": "dec", "Pola hari": "dec", "Pengali budget": "dec", "Minggu": "count"})
-    sheets = {"Perbandingan": pd.DataFrame(rows_cmp, columns=["Ukuran", "Rekomendasi sistem", "Budget dikunci"]),
-              "Budget per iklan": acts[cols] if not acts.empty else pd.DataFrame(), "Kalender harian": cal_view}
-    download_excel(sheets, f"strategi_iklan_budget_dikunci_{periode}.xlsx", key="xl-adt-fixed", label="Unduh strategi")
+    setup = A.seller_center_setup(acts, None, campaign="Fitur khusus · budget dikunci", target_roas=roas, period=f"{period_days} hari")
+    download_excel(setup, f"setelan_seller_center_budget_dikunci_{periode}.xlsx", key="xl-adt-fixed",
+                   label="Unduh setelan Seller Center")
 
 
 def _apply_fixed(set_key_roas: str, roas: float, set_key_budget: str, budget: float, mode_key: str) -> None:
@@ -813,10 +815,15 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     _mode, cur = cmp.panel("iklan", features=features, today=today, can_edit=can_edit, username=username, describe=_describe, toggle=False)
 
     has_ads = frames is not None and any(isinstance(f, pd.DataFrame) and not f.empty for f in (getattr(frames, "ads", []) or []))
-    units, members, contribution, products = [], pd.DataFrame(), {}, pd.DataFrame()
+    units, members, contribution, products, occupied = [], pd.DataFrame(), {}, pd.DataFrame(), frozenset()
     if has_ads and inputs is not None:
         with st.spinner("Membaca riwayat iklan produk tunggal & grup..."):
-            units, members, contribution, products = inputs(table, features, frames, days_left)
+            packed = inputs(table, features, frames, days_left)
+            if len(packed) == 5:
+                units, members, contribution, products, occupied = packed
+            else:
+                units, members, contribution, products = packed
+                occupied = frozenset(c for u in units for c in u.members)
     running = [u for u in units if u.daily_cost > 0 and A._running(u)]
     cost_now = sum(u.daily_cost for u in running)
     sales_now = sum(u.daily_sales for u in running)
@@ -885,15 +892,31 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     excluded = _excluded_codes(features, products, members)
     lift = A.FREE_LIFT
     select = F.selection_roas(base_units) if base_units else None
+    # Pemilihan produk dihitung sekali (ROAS acuan tetap) lalu dipakai ulang saat scan opsi — hemat besar.
+    base_selection = None
+    if base_units:
+        sel_key = (periode, select, tuple(sorted(excluded)), tuple(sorted(occupied)), len(members), len(products),
+                   round(sum(u.daily_cost for u in base_units)), round(sum(contribution.values()), 4) if contribution else 0)
+        sel_box = st.session_state.setdefault("adt-sel-cache", {})
+        if sel_key not in sel_box:
+            if len(sel_box) > 4:
+                sel_box.clear()
+            sel_box[sel_key] = A.product_selection(members, base_units, products, contribution, target_roas=select or 8.0,
+                                                   exclude=excluded, occupied=occupied)
+        base_selection = sel_box[sel_key]
 
     def option(r: float, daily: float, gap_now: float, mm: float = A.MIN_MARGINAL) -> dict:
         return _option_plan(base_units, members, products, contribution, weeks=weeks, gap_ads=max(gap_now / factor, 0.0), roas=r, budget_daily=daily, lift=lift,
-                            key=(periode, start, end), stock=True, select_roas=select, exclude=excluded, min_marginal=mm)
+                            key=(periode, start, end), stock=True, select_roas=select, exclude=excluded, min_marginal=mm,
+                            occupied=occupied, base_selection=base_selection)
 
-    def best_roas(daily: float, gap_now: float, mm: float = A.MIN_MARGINAL) -> float:
+    def best_roas(daily: float, gap_now: float, mm: float = A.MIN_MARGINAL, *, fine: bool = False) -> float:
+        """Pilih Target ROAS ≤ 30. `fine=False` (daftar opsi) memakai grid kasar agar halaman cepat terbuka."""
         if daily <= 0:
-            return current_roas or 8.0
-        return F.shopee_roas(option(F.pick_roas(lambda r: option(r, daily, gap_now, mm)["omzet_tambahan"]), daily, gap_now, mm)["roas_rencana"])
+            return min(current_roas or 8.0, A.MAX_SHOPEE_ROAS)
+        grid = A.ROAS_GRID if fine else A.OPTION_ROAS_GRID
+        picked = F.pick_roas(lambda r: option(r, daily, gap_now, mm)["omzet_tambahan"], grid=grid)
+        return min(F.shopee_roas(option(picked, daily, gap_now, mm)["roas_rencana"]), A.MAX_SHOPEE_ROAS)
 
     def spend_of(month_budget: float, roas: float, gap_now: float, mm: float = A.MIN_MARGINAL) -> float:
         """Biaya iklan harian yang benar-benar dibelanjakan rencana per iklan (setelah pemilihan produk, pengecualian,
@@ -964,19 +987,40 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         budget_daily = remaining / days_left
         budget = budget_daily * period_days
         reach = final / target * 100 if target > 0 else 0.0
+        roas = min(float(roas), A.MAX_SHOPEE_ROAS)
         with st.spinner("Membagi budget ke iklan..."):
             fixed = _fixed_plan(base_units, members, products, contribution, weeks=weeks, blocks=blocks, gap_ads=max(target - projection, 0.0) / factor, roas=roas,
                                 budget_daily=budget_daily, lift=lift, shape=_day_shape_of(orders, last), key=(periode, start, end), select_roas=select,
-                                exclude=excluded, min_marginal=mm)
+                                exclude=excluded, min_marginal=mm, occupied=occupied, base_selection=base_selection)
         units, plan, selection, steps = fixed["units"], fixed["plan"], fixed["selection"], fixed["steps"]
         eff = fixed["eff"]
         week_table = A.weekly_table(units, steps, blocks)
         used_daily = sum(plan.cost.values())
         fixed_used = True
         acts = A.target_actions(units, plan, target_roas=roas)
+        setup_sheets = A.seller_center_setup(acts, selection, campaign=source, target_roas=roas, period=week_text)
 
-        # ---------------- 3. Pemilihan produk
-        _step(n0, "Pemilihan produk iklan", "· siapa masuk iklan tunggal, siapa di grup, siapa dikeluarkan")
+        # ---------------- Unduh setelan Seller Center (utama)
+        _step(n0, "Unduh setelan Seller Center", "· hanya instruksi yang diisi di Shopee untuk strategi ini")
+        st.caption("File berisi 2 sheet: Ringkas + Setelan Seller Center. Bukan dump analisa. Budget sudah menyesuaikan minimum "
+                   f"Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)}/hari (tunggal) dan Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)}/hari (grup); Target ROAS ≤ 30. "
+                   "Iklan yang sudah jalan: pertahankan / ubah budget / jeda — jangan buat iklan baru untuk produk yang sama.")
+        download_excel(setup_sheets, f"setelan_seller_center_{periode}.xlsx", key=f"xl-adt-setup-{key}",
+                       label="Unduh setelan Seller Center")
+        if not acts.empty:
+            preview_cols = ["Urutan", "Langkah di Seller Center", "Iklan", "Jenis", "Kode produk", "Budget harian isi (Rp)",
+                            "Target ROAS isi", "Pertahankan / ubah iklan yang sudah jalan"]
+            setup_view = setup_sheets["Setelan Seller Center"]
+            show_table(setup_view[preview_cols].head(40) if len(setup_view) > 40 else setup_view[preview_cols],
+                       kinds={"Budget harian isi (Rp)": "money", "Target ROAS isi": "dec", "Urutan": "count"},
+                       row_height=35, max_height=520,
+                       column_config={"Langkah di Seller Center": st.column_config.TextColumn(width="large"),
+                                      "Iklan": st.column_config.TextColumn(width="medium")})
+            if len(setup_view) > 40:
+                st.caption(f"Menampilkan 40 dari {fmt_num(len(setup_view))} baris — unduh Excel untuk semua langkah.")
+
+        # ---------------- 3. Pemilihan produk (lazy: expander)
+        _step(n0 + 1, "Pemilihan produk iklan", "· siapa masuk iklan tunggal, siapa di grup, siapa dikeluarkan")
         _exclusion_editor(features, products, members, excluded, can_edit=can_edit, username=username)
         if selection.empty:
             st.info("Belum ada data produk iklan (laporan iklan grup / keseluruhan) untuk dianalisa.")
@@ -986,7 +1030,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 ("Pertahankan iklan tunggal", "✅", "#64748b", ""), ("Tambahkan ke grup", "➕", UP, "belum diiklankan"),
                 ("Pertahankan di grup", "✅", "#64748b", ""), ("Pindahkan ke grup", "↘️", DOWN, "iklan tunggal kurang efisien"),
                 ("Keluarkan dari grup", "➖", DOWN, "menyedot budget"), (A.SMALL_SALES, "🔻", DOWN, "potensi sales & qty kecil"), (A.MANUAL_OUT, "🚫", DOWN, "daftar pengecualian"),
-                ("Jeda sampai restock", "⏸️", DOWN, "stok 0"),
+                ("Jeda sampai restock", "⏸️", DOWN, "stok 0"), ("Sudah di iklan lain", "🔁", "#64748b", "jangan buat dobel"),
             ]
             chips = []
             for name, icon, color, note in sel_groups:
@@ -995,36 +1039,32 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                     chips.append(f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.25rem .75rem;font-size:var(--fs-sm);background:#fff'>{icon} "
                                  f"<b style='color:{color}'>{name}</b> {fmt_num(count)} produk" + (f" · {note}" if note else "") + "</span>")
             st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + "".join(chips) + "</div>", unsafe_allow_html=True)
-            names = [g[0] for g in sel_groups if (selection["Saran"] == g[0]).any()]
-            default_pick = [n for n in names if not n.startswith("Pertahankan")]
-            picked = st.multiselect("Tampilkan saran", names, default=default_pick, key="adt-sel-pick", placeholder="Semua saran")
+            with st.expander("Tabel pemilihan produk (rincian analisa — bukan file yang diisi di Shopee)", expanded=False):
+                names = [g[0] for g in sel_groups if (selection["Saran"] == g[0]).any()]
+                default_pick = [n for n in names if not n.startswith("Pertahankan") and n != "Sudah di iklan lain"]
+                picked = st.multiselect("Tampilkan saran", names, default=default_pick, key="adt-sel-pick", placeholder="Semua saran")
+                sel_drop = selection.drop(columns=["_unit"], errors="ignore")
+                sel_view = sel_drop.loc[sel_drop["Saran"].isin(picked)] if picked else sel_drop
+                sel_kinds = {"Biaya iklan/hari": "money", "Omzet iklan/hari": "money", "ROAS 2 bulan": "dec", "Porsi omzet grup": "pct",
+                             "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money"}
+                batched_view(
+                    len(sel_view), key="adt-sel", noun="produk",
+                    render=lambda lo, hi: show_table(sel_view.iloc[lo:hi], kinds=sel_kinds, max_height=10_000, row_height=35,
+                                                     column_config={"Produk": st.column_config.TextColumn(width="medium"), "Alasan": st.column_config.TextColumn(width="large")}),
+                    download=lambda: download_excel(sel_drop, f"pemilihan_produk_iklan_{periode}.xlsx", key="xl-adt-sel",
+                                                    label="Unduh rincian analisa produk"),
+                )
             selection = selection.drop(columns=["_unit"], errors="ignore")
-            sel_view = selection.loc[selection["Saran"].isin(picked)] if picked else selection
-            sel_kinds = {"Biaya iklan/hari": "money", "Omzet iklan/hari": "money", "ROAS 2 bulan": "dec", "Porsi omzet grup": "pct",
-                         "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money"}
-            batched_view(
-                len(sel_view), key="adt-sel", noun="produk",
-                render=lambda lo, hi: show_table(sel_view.iloc[lo:hi], kinds=sel_kinds, max_height=10_000, row_height=35,
-                                                 column_config={"Produk": st.column_config.TextColumn(width="medium"), "Alasan": st.column_config.TextColumn(width="large"),
-                                                                "Prediksi omzet/hari": st.column_config.Column(help="Prediksi omzet harian produk dari analisa (semua kanal penjualan)"),
-                                                                "Iklan di rencana": st.column_config.Column(help="Iklan tempat produk ini berada sesudah perubahan; sama dengan baris di tabel Budget per iklan"),
-                                                                "Budget usulan iklan/hari": st.column_config.Column(help="Budget harian usulan iklan tersebut di tabel Budget per iklan (untuk grup: budget seluruh grup)")}),
-                download=lambda: download_excel(selection, f"pemilihan_produk_iklan_{periode}.xlsx", key="xl-adt-sel"),
-            )
             floor_sales, floor_qty = A.potential_floors(products)
             dup_count = int((selection["Saran"] == "Sudah di iklan lain").sum())
             if dup_count:
-                st.caption(f"{fmt_num(dup_count)} baris lain adalah produk di iklan yang sudah dijeda/berakhir yang juga ada di iklan aktif: "
-                           "tidak perlu tindakan, omzetnya hanya dihitung di iklan aktifnya (ada di unduhan Excel).")
-            st.caption(f"Dasar: hasil iklan 2 bulan terakhir per produk, prediksi omzet dari analisa, stok, margin (File margin), dan target ROAS {fmt_num(roas, 1)}. "
-                       f"Layak diiklankan = potensi sales ≥ {fmt_idr(floor_sales)}/hari (produk pembentuk 95% sales toko) atau laku ≥ {fmt_num(floor_qty, 1)} unit/hari; "
-                       "di bawah itu iklan dihentikan (Stop iklan · sales kecil) dan produk belum diiklankan tidak diusulkan. "
-                       "Strategi biaya/omzet: jadikan iklan tunggal hanya andalan bermargin positif (porsi ≥ 30% di grup & ROAS ≥ 80% target); "
-                       "produk margin minus / ROAS lemah dikeluarkan dari grup atau dipindah ke grup hemat; iklan tunggal baru hanya untuk kandidat "
-                       "yang bisa menutup gap dengan kontribusi positif. Satu produk hanya di satu iklan. Kerjakan bersamaan dengan perubahan budget hari Senin.")
+                st.caption(f"{fmt_num(dup_count)} produk sudah di iklan lain (aktif/otomatis/dijeda): tidak diusulkan iklan baru agar tidak dobel.")
+            st.caption(f"Dasar: hasil iklan 2 bulan + prediksi + stok + margin · target ROAS {fmt_num(roas, 1)} (maks. 30). "
+                       f"Layak iklan ≥ {fmt_idr(floor_sales)}/hari atau ≥ {fmt_num(floor_qty, 1)} unit/hari. "
+                       "Iklan tunggal hanya andalan bermargin positif; produk yang sudah diiklankan tidak dibuat ulang.")
 
-        # ---------------- 4. Rencana per iklan
-        _step(n0 + 1, "Budget per iklan", f"· ubah di Shopee mulai {fmt_date(start)}, berlaku s.d. {fmt_date(end)}")
+        # ---------------- 4. Rencana per iklan (lazy)
+        _step(n0 + 2, "Budget per iklan", f"· ubah di Shopee mulai {fmt_date(start)}, berlaku s.d. {fmt_date(end)}")
         if acts.empty:
             st.info("Tidak ada perubahan iklan yang disarankan.")
         else:
@@ -1043,40 +1083,28 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                     f"{fmt_num(len(part))} iklan" + (f" · <b style='color:{color}'>{'+' if delta > 0 else '−'}{fmt_idr(abs(delta))}/hari</b>" if abs(delta) >= 1 else "") + "</span>"
                 )
             st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + "".join(chips) + "</div>", unsafe_allow_html=True)
-            f1, f2 = st.columns([1, 2])
-            kind_pick = f1.segmented_control("Jenis iklan", ["Semua", "Produk tunggal", "Grup"], default="Semua", key="adt-kind") if hasattr(st, "segmented_control") else "Semua"
-            act_names = [g[0] for g in groups if (acts["Tindakan"] == g[0]).any()]
-            act_pick = f2.multiselect("Tindakan", act_names, key="adt-act", placeholder="Semua tindakan")
-            shown = acts
-            if kind_pick and kind_pick != "Semua":
-                shown = shown.loc[shown["Jenis"] == kind_pick]
-            if act_pick:
-                shown = shown.loc[shown["Tindakan"].isin(act_pick)]
-            cols = ["Tindakan", "Iklan", "Jenis", "Anggota", "Budget harian sekarang", "Budget harian usulan", "Perubahan/hari", "Target ROAS Shopee",
-                    "ROAS bulan terakhir", "Prediksi omzet produk/hari", "Omzet iklan usulan/hari", "Tambahan omzet/hari", "Catatan"]
-            kinds = {"Budget harian sekarang": "money", "Budget harian usulan": "money", "Perubahan/hari": "money", "Tambahan omzet/hari": "money",
-                     "Prediksi omzet produk/hari": "money", "Omzet iklan usulan/hari": "money",
-                     "Anggota": "count", "ROAS bulan terakhir": "dec", "Target ROAS Shopee": "dec"}
-            settings = pd.DataFrame([
-                {"Setelan": "Bulan", "Nilai": month_name}, {"Setelan": "Periode campaign", "Nilai": week_text}, {"Setelan": "Target sales", "Nilai": fmt_idr(target)},
-                {"Setelan": "Target ROAS", "Nilai": fmt_num(roas, 1)}, {"Setelan": f"Budget campaign ({period_days} hari)", "Nilai": fmt_idr(budget)},
-                {"Setelan": "Proyeksi dengan rencana", "Nilai": f"{fmt_idr(final)} ({fmt_pct(reach, 1)})"},
-            ])
-            batched_view(
-                len(shown), key="adt-units", noun="iklan",
-                render=lambda lo, hi: show_table(shown.iloc[lo:hi][cols], kinds=kinds, max_height=10_000, row_height=35,
-                                                 column_config={"Iklan": st.column_config.TextColumn(width="medium"), "Catatan": st.column_config.TextColumn(width="large"),
-                                                                "Target ROAS Shopee": st.column_config.Column(help="ROAS rata-rata iklan ini pada budget usulan (maks. 30); isi di pengaturan iklan GMV Max ROAS Shopee"),
-                                                                "Prediksi omzet produk/hari": st.column_config.Column(help="Prediksi omzet harian (analisa, semua kanal) produk yang tinggal di iklan ini"),
-                                                                "Omzet iklan usulan/hari": st.column_config.Column(help="Omzet yang tercatat di iklan Shopee pada budget usulan; tambahannya dibatasi daya dorong iklan × prediksi omzet produk")}),
-                download=lambda: download_excel({"Setelan": settings, "Rencana per iklan": acts[cols], "Pemilihan produk": selection}, f"strategi_iklan_{periode}.xlsx", key="xl-adt"),
-            )
+            with st.expander("Tabel budget per iklan (rincian)", expanded=False):
+                f1, f2 = st.columns([1, 2])
+                kind_pick = f1.segmented_control("Jenis iklan", ["Semua", "Produk tunggal", "Grup"], default="Semua", key="adt-kind") if hasattr(st, "segmented_control") else "Semua"
+                act_names = [g[0] for g in groups if (acts["Tindakan"] == g[0]).any()]
+                act_pick = f2.multiselect("Tindakan", act_names, key="adt-act", placeholder="Semua tindakan")
+                shown = acts
+                if kind_pick and kind_pick != "Semua":
+                    shown = shown.loc[shown["Jenis"] == kind_pick]
+                if act_pick:
+                    shown = shown.loc[shown["Tindakan"].isin(act_pick)]
+                cols = [c for c in ACT_COLS if c in shown.columns]
+                batched_view(
+                    len(shown), key="adt-units", noun="iklan",
+                    render=lambda lo, hi: show_table(shown.iloc[lo:hi][cols], kinds=ACT_KINDS, max_height=10_000, row_height=35,
+                                                     column_config={"Iklan": st.column_config.TextColumn(width="medium"), "Catatan": st.column_config.TextColumn(width="large"),
+                                                                    "Target ROAS Shopee": st.column_config.Column(help="Maks. 30 di Seller Center")}),
+                )
         unit_weeks = A.unit_weekly_budget(units, steps)
         if len(week_table) > 1:
-            st.markdown("**Jadwal budget per minggu** · tabel di atas = budget minggu 1; tiap Senin budget per iklan dinaikkan maks. 2× dari minggu sebelumnya")
-            show_table(week_table, kinds={"Budget/hari": "money", "Omzet iklan/hari": "money", "ROAS": "dec", "Tambahan omzet": "money", "Hari": "count", "Iklan aktif": "count"})
-            if not unit_weeks.empty:
-                download_excel(unit_weeks.drop(columns=["_key"]), f"budget_iklan_per_minggu_{periode}.xlsx", key="xl-adt-weeks", label="Unduh budget per iklan per minggu")
+            with st.expander("Jadwal budget per minggu (opsional)", expanded=False):
+                st.caption("Tabel di atas = budget minggu 1; tiap Senin naik maks. 2× dari minggu sebelumnya.")
+                show_table(week_table, kinds={"Budget/hari": "money", "Omzet iklan/hari": "money", "ROAS": "dec", "Tambahan omzet": "money", "Hari": "count", "Iklan aktif": "count"})
         stock_flags = int(acts["Catatan"].str.contains("stok kurang").sum()) if not acts.empty else 0
         loss_flags = int(acts["Catatan"].str.contains("margin minus").sum()) if not acts.empty else 0
         if stock_flags or loss_flags:
@@ -1088,15 +1116,15 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                              "Tetap dijalankan karena prioritas target sales; tinjau harga setelah target aman.")
             _box("Catatan stok & margin (tidak menghentikan rencana)", "<br>".join(notes), "#b45309")
 
-        steps = [
-            f"<b>{fmt_date(start)}</b> — ubah susunan produk (Pemilihan produk) serta budget harian & Target ROAS tiap iklan (Budget per iklan) di Shopee, lalu simpan sebagai campaign di bawah agar terkunci. "
-            "Budget naik maks. 2× atau turun ke ≥ ½ agar perlindungan ROAS Shopee tetap aktif.",
-            "<b>Selasa–Minggu</b> — jangan ubah budget; biarkan algoritma Shopee belajar. Pantau stok produk yang ditandai ⚠️.",
-            "<b>Tiap Senin</b> — unggah laporan iklan minggu lalu dan buka menu ini: campaign tersimpan dicek dengan data terbaru. Bila statusnya perlu ditinjau, "
-            "buat campaign baru dari saran (campaign lama dihentikan otomatis); budget naik maks. 2× per minggu.",
+        todo = [
+            f"<b>Unduh setelan Seller Center</b> — isi Modal Harian & Target ROAS (≤ 30) persis angka di file; iklan yang sudah jalan cukup diubah/dijeda, jangan dibuat ulang.",
+            f"<b>{fmt_date(start)}</b> — kerjakan langkah berurutan: keluarkan produk yang diminta, baru ubah budget / buat iklan tunggal untuk kode yang belum diiklan. "
+            f"Budget min. Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)} (tunggal) / Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)} (grup); naik maks. 2× per evaluasi.",
+            "<b>Selasa–Minggu</b> — jangan ubah budget; biarkan algoritma Shopee belajar.",
+            "<b>Tiap Senin</b> — unggah laporan iklan & buka Pantau; buat campaign baru dari saran bila perlu ditinjau.",
             "<b>Akhir bulan</b> — evaluasi di Laporan › Iklan; unggah target bulan berikutnya di Upload data › Target.",
         ]
-        _box("Tindak lanjut", "<ol style='margin:0 0 0 1.1rem;padding:0'>" + "".join(f"<li>{t}</li>" for t in steps) + "</ol>", "#ee4d2d")
+        _box("Tindak lanjut", "<ol style='margin:0 0 0 1.1rem;padding:0'>" + "".join(f"<li>{t}</li>" for t in todo) + "</ol>", "#ee4d2d")
         with st.expander("Cara rencana dihitung"):
             explain([
                 ("Iklan yang dihitung", "iklan produk tunggal dan iklan grup dari laporan iklan bulanan, plus usulan iklan produk tunggal baru untuk produk laris yang belum diiklankan"),
@@ -1240,7 +1268,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         remaining = max(month_budget - spent, 0.0)
         budget_daily = remaining / days_left
         with st.spinner("Membagi sisa budget ke iklan dan memilih Target ROAS..."):
-            roas = best_roas(budget_daily, target - projection) if auto else min(float(submitted.get("roas") or 8.0), A.MAX_SHOPEE_ROAS)
+            roas = best_roas(budget_daily, target - projection, fine=True) if auto else min(float(submitted.get("roas") or 8.0), A.MAX_SHOPEE_ROAS)
         final, extra, by_curve, effective = project(target, month_budget, roas)
         used_daily_eff = max(effective - spent, 0.0) / days_left
         reach = final / target * 100

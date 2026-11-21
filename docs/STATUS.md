@@ -1,5 +1,12 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Rekomendasi sistem: cepat + unduhan Seller Center).
+
+- Halaman Rekomendasi sistem lebih cepat: cache input iklan/margin per sesi, pemilihan produk dihitung sekali, scan Target ROAS opsi memakai grid kasar (hasil akhir tetap ≤ 30).
+- Unduhan utama = **Setelan Seller Center** (sheet Ringkas + langkah isi Shopee saja). Rincian analisa produk/budget dipindah ke expander, bukan file utama.
+- Iklan yang sudah jalan: pertahankan / ubah / jeda; produk di iklan lain (termasuk otomatis) tidak diusulkan “buat baru” (hindari dobel). Pisah dari grup = keluarkan dulu, baru buat tunggal.
+- Budget usulan mengikuti min Seller Center Rp 25.000 (tunggal) / Rp 100.000 (grup); Target ROAS tidak pernah > 30.
+
 Diperbarui: 21 November 2026 (Rekomendasi sistem sadar margin + tunggal vs grup).
 
 - Rekomendasi › Rekomendasi sistem: bila kontribusi toko di bawah titik impas iklan (contoh Nov: marginal ±1,4 sales bersih / Rp iklan vs kontribusi −10%), opsi utama memilih estimasi kontribusi sesudah iklan terbaik — bukan sales tertinggi dengan spend besar. Opsi “100% target” disembunyikan bila mengejarnya menambah rugi.

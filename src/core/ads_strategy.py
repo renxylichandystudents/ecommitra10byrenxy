@@ -533,15 +533,24 @@ def plan_effect(units: list[Unit], plan: Plan, *, days: int) -> dict:
 
 
 def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.DataFrame:
-    """Tindakan per iklan untuk rencana Kejar target: urut Naikkan → Buat baru → Aktifkan → Turunkan → Jeda → Pertahankan."""
+    """Tindakan per iklan untuk rencana Kejar target: urut Naikkan → Buat baru → Aktifkan → Turunkan → Jeda → Pertahankan.
+
+    Budget usulan = angka yang bisa diisi di Seller Center (min 25 rb tunggal / 100 rb grup, atau 0 = jeda).
+    Target ROAS Shopee selalu ≤ 30."""
     rows = []
     for u in units:
-        new, now = plan.cost[u.key], _base(u)
+        raw, now = plan.cost[u.key], _base(u)
+        kind = "Grup" if u.jenis == "Grup" else "Produk tunggal"
+        new = implementable_budget(raw, kind if raw > 0 else u.key)
+        # Bila usulan mentah di bawah minimum dan tidak bisa naik ke min dalam batas 2×, tetap di raw ter-round (bisa 0).
+        if raw > 0 and new > 0 and now > 0 and new > now * MAX_CHANGE + 1 and raw < seller_min_budget(kind):
+            new = round_budget(raw, lo=now / MAX_CHANGE, hi=now * MAX_CHANGE, min_floor=0.0)
         running = _running(u)
         if u.locked:
             if now <= 0:
                 continue
             act = "Jeda"
+            new = 0.0
         elif u.jenis.endswith("(baru)"):
             if new <= 0:
                 continue
@@ -574,10 +583,22 @@ def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.D
             notes.append(f"tiap Rp 1 terakhir hanya kembali Rp {u.marginal(new):.1f}: dananya dipindah ke iklan yang lebih efektif".replace(".", ","))
         elif act in {"Naikkan budget", "Aktifkan kembali", "Buat iklan baru", "Pisahkan jadi iklan tunggal"}:
             notes.append(f"tiap Rp 1 tambahan kembali ±Rp {u.marginal(new):.1f}".replace(".", ","))
-        if act == "Pisahkan jadi iklan tunggal" and u.origin:
-            notes.append(f"budget awal diambil dari grup {u.origin}")
+        if act == "Pisahkan jadi iklan tunggal":
+            codes = ", ".join(u.members) if u.members else ""
+            notes.append(
+                f"LANGKAH: (1) keluarkan produk {codes} dari grup {u.origin or 'asal'}; "
+                f"(2) buat iklan produk tunggal baru — jangan biarkan produk tetap di grup (hindari dobel)"
+            )
+        elif act == "Buat iklan baru":
+            codes = ", ".join(u.members) if u.members else ""
+            notes.append(f"LANGKAH: buat iklan produk tunggal baru untuk kode {codes} (produk belum di iklan lain)")
+            notes.append(f"budget min. Seller Center Rp {seller_min_budget(kind):,.0f}/hari".replace(",", "."))
         elif u.jenis == "Grup" and u.origin and not u.locked:
             notes.append(u.origin)
+        if new > 0 and new != raw and raw > 0:
+            notes.append(
+                f"budget di Seller Center Rp {new:,.0f}/hari (min. {seller_min_budget(kind):,.0f}; usulan mentah Rp {raw:,.0f})".replace(",", ".")
+            )
         if np.isfinite(u.demand) and not u.locked and d_sales >= uplift_cap(u) - 1 and d_sales > 0:
             notes.append("tambahan omzet sudah di batas permintaan produk (+50% prediksi): budget lebih tidak menambah omzet")
         if np.isfinite(u.stock_room) and d_sales > u.stock_room + 1:
@@ -590,9 +611,12 @@ def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.D
             estimate = f"{roas_shopee:.1f}".replace(".", ",")
             notes.append(f"Target ROAS diisi {MAX_SHOPEE_ROAS:.0f} (maks. Shopee); perkiraan ROAS iklan ini {estimate}")
             roas_shopee = MAX_SHOPEE_ROAS
+        if roas_shopee == roas_shopee:
+            roas_shopee = min(max(round(roas_shopee * 2) / 2, 1.0), MAX_SHOPEE_ROAS)
         rows.append({
-            "key": u.key, "Tindakan": act, "Iklan": u.nama, "Jenis": "Produk tunggal" if u.jenis.startswith("Produk tunggal") else u.jenis,
-            "Anggota": len(u.members), "Budget harian sekarang": now, "Budget harian usulan": new,
+            "key": u.key, "Tindakan": act, "Iklan": u.nama, "Jenis": kind,
+            "Anggota": len(u.members), "Kode produk": ", ".join(u.members),
+            "Budget harian sekarang": now, "Budget harian usulan": new,
             "Perubahan/hari": new - now, "Target ROAS Shopee": round(roas_shopee, 1) if roas_shopee == roas_shopee else np.nan,
             "ROAS bulan terakhir": u.roas, "Prediksi omzet produk/hari": u.demand if np.isfinite(u.demand) else np.nan,
             "Omzet iklan usulan/hari": planned, "Tambahan omzet/hari": d_sales, "Catatan": "; ".join(notes),
@@ -605,6 +629,97 @@ def target_actions(units: list[Unit], plan: Plan, *, target_roas: float) -> pd.D
     frame["_o"] = frame["Tindakan"].map(order).fillna(9)
     frame["_v"] = frame["Tambahan omzet/hari"].abs()
     return frame.sort_values(["_o", "_v"], ascending=[True, False]).drop(columns=["_o", "_v"]).reset_index(drop=True)
+
+
+def seller_center_setup(acts: pd.DataFrame, selection: pd.DataFrame | None = None, *,
+                        campaign: str = "", target_roas: float = 8.0, period: str = "") -> dict[str, pd.DataFrame]:
+    """Unduhan ringkas: hanya instruksi setelan Seller Center untuk strategi terpilih (bukan dump analisa).
+
+    Satu sheet utama `Setelan Seller Center` + `Ringkas` (parameter campaign)."""
+    ringkas = pd.DataFrame([
+        {"Isian": "Periode campaign", "Nilai": period or "–"},
+        {"Isian": "Nama / sumber rencana", "Nilai": campaign or "–"},
+        {"Isian": "Target ROAS acuan toko (maks. 30)", "Nilai": f"{min(float(target_roas), MAX_SHOPEE_ROAS):.1f}".replace(".", ",")},
+        {"Isian": "Budget min. iklan tunggal / hari", "Nilai": f"Rp {SHOPEE_MIN_SINGLE:,.0f}".replace(",", ".")},
+        {"Isian": "Budget min. iklan grup / hari", "Nilai": f"Rp {SHOPEE_MIN_GROUP:,.0f}".replace(",", ".")},
+        {"Isian": "Cara pakai", "Nilai": "Ikuti baris Setelan Seller Center berurutan. Jangan buat iklan baru untuk produk yang sudah diiklankan."},
+    ])
+    if acts is None or acts.empty:
+        return {"Ringkas": ringkas, "Setelan Seller Center": pd.DataFrame(columns=[
+            "Urutan", "Langkah di Seller Center", "Iklan", "Jenis", "Kode produk", "Budget harian isi (Rp)",
+            "Target ROAS isi", "Pertahankan / ubah iklan yang sudah jalan", "Catatan",
+        ])}
+
+    step_map = {
+        "Jeda": "Jeda / matikan iklan yang sudah jalan (jangan buat iklan baru pengganti kecuali baris lain bilang buat)",
+        "Turunkan budget": "Buka iklan yang sudah jalan → turunkan Modal Harian ke angka Budget harian isi",
+        "Naikkan budget": "Buka iklan yang sudah jalan → naikkan Modal Harian ke angka Budget harian isi (maks. 2× dari sekarang)",
+        "Pertahankan": "Biarkan iklan yang sudah jalan: Modal Harian & Target ROAS sesuai kolom",
+        "Aktifkan kembali": "Aktifkan kembali iklan yang dijeda → isi Modal Harian & Target ROAS",
+        "Buat iklan baru": "Buat iklan produk tunggal BARU hanya untuk kode di kolom Kode produk (produk belum diiklan)",
+        "Pisahkan jadi iklan tunggal": "KELUARKAN dulu produk dari grup asal, lalu buat iklan tunggal baru (jangan biarkan dobel di grup)",
+    }
+    keep_map = {
+        "Jeda": "Ambil keluar / jeda",
+        "Turunkan budget": "Pertahankan iklan, ubah budget",
+        "Naikkan budget": "Pertahankan iklan, ubah budget",
+        "Pertahankan": "Pertahankan iklan",
+        "Aktifkan kembali": "Pertahankan iklan (aktifkan lagi)",
+        "Buat iklan baru": "Iklan baru (bukan duplikat)",
+        "Pisahkan jadi iklan tunggal": "Iklan baru setelah keluar dari grup",
+    }
+    work = acts.copy()
+    kinds = work["Jenis"] if "Jenis" in work.columns else pd.Series("Produk tunggal", index=work.index)
+    if "Budget harian usulan" in work.columns:
+        work["Budget harian usulan"] = [
+            implementable_budget(float(b or 0), j if float(b or 0) > 0 else None)
+            for b, j in zip(work["Budget harian usulan"], kinds)
+        ]
+    if "Target ROAS Shopee" in work.columns:
+        work["Target ROAS Shopee"] = pd.to_numeric(work["Target ROAS Shopee"], errors="coerce").clip(upper=MAX_SHOPEE_ROAS)
+        work["Target ROAS Shopee"] = work["Target ROAS Shopee"].apply(
+            lambda x: min(max(math.floor(float(x) * 2) / 2, 1.0), MAX_SHOPEE_ROAS) if x == x else np.nan
+        )
+    # Dulu rapikan produk di iklan yang sudah jalan, baru ubah budget / buat iklan.
+    product_steps: list[dict] = []
+    if selection is not None and not selection.empty and "Saran" in selection.columns:
+        for saran, label in (
+            ("Keluarkan dari grup", "Keluarkan produk dari grup (jangan diiklankan dobel)"),
+            ("Pindahkan ke grup", "Pindahkan produk dari iklan tunggal ke grup hemat"),
+            (SMALL_SALES, "Jeda / stop iklan produk sales kecil"),
+            (MANUAL_OUT, "Keluarkan produk sesuai daftar pengecualian"),
+            ("Jeda sampai restock", "Jeda iklan sampai stok masuk"),
+        ):
+            part = selection.loc[selection["Saran"] == saran]
+            for row in part.to_dict("records"):
+                product_steps.append({
+                    "Langkah di Seller Center": label,
+                    "Iklan": str(row.get("Iklan sekarang") or row.get("Iklan di rencana") or "–"),
+                    "Jenis": "Produk",
+                    "Kode produk": str(row.get("Kode produk") or ""),
+                    "Budget harian isi (Rp)": 0.0,
+                    "Target ROAS isi": np.nan,
+                    "Pertahankan / ubah iklan yang sudah jalan": "Ambil keluar dari iklan yang sudah jalan",
+                    "Catatan": str(row.get("Alasan") or ""),
+                })
+    for row in work.to_dict("records"):
+        act = str(row.get("Tindakan") or "")
+        product_steps.append({
+            "Langkah di Seller Center": step_map.get(act, act),
+            "Iklan": str(row.get("Iklan") or ""),
+            "Jenis": str(row.get("Jenis") or ""),
+            "Kode produk": str(row.get("Kode produk") or ""),
+            "Budget harian isi (Rp)": float(row.get("Budget harian usulan") or 0),
+            "Target ROAS isi": row.get("Target ROAS Shopee"),
+            "Pertahankan / ubah iklan yang sudah jalan": keep_map.get(act, "Ikuti catatan"),
+            "Catatan": str(row.get("Catatan") or ""),
+        })
+    setup = pd.DataFrame(product_steps)
+    if not setup.empty:
+        setup.insert(0, "Urutan", range(1, len(setup) + 1))
+    cols = ["Urutan", "Langkah di Seller Center", "Iklan", "Jenis", "Kode produk", "Budget harian isi (Rp)",
+            "Target ROAS isi", "Pertahankan / ubah iklan yang sudah jalan", "Catatan"]
+    return {"Ringkas": ringkas, "Setelan Seller Center": setup.reindex(columns=cols) if not setup.empty else pd.DataFrame(columns=cols)}
 
 
 def _extra(units: list[Unit], plan: Plan) -> float:
@@ -783,7 +898,8 @@ NEW_KINDS = ("Produk tunggal (baru)", "Produk tunggal (dari grup)")
 
 def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                       target_roas: float, plan: Plan | None = None, top_single: int = 15, top_group: int = 60,
-                      max_promote: int = 10, focus: bool = True, exclude: frozenset | set = frozenset()) -> pd.DataFrame:
+                      max_promote: int = 10, focus: bool = True, exclude: frozenset | set = frozenset(),
+                      occupied: frozenset | set = frozenset()) -> pd.DataFrame:
     """Pemilihan produk untuk iklan produk tunggal vs iklan grup, per Kode Produk (satu produk = satu iklan).
 
     Dasar: hasil iklan 2 bulan terakhir per produk (biaya, omzet, ROAS, porsi omzet di grup), prediksi omzet harian dari
@@ -800,11 +916,13 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
       pembentuk 95% sales toko DAN prediksi qty di bawah batas laku banyak (`potential_floors`). Produk belum diiklankan yang
       tidak lolos batas ini juga tidak diusulkan.
     - Dikecualikan pengguna: Kode Produk di `exclude` (daftar pengecualian) dikeluarkan dari semua iklan dan tidak diusulkan.
+    - `occupied`: Kode Produk yang sudah ada di iklan lain (termasuk otomatis / di luar rencana) — jangan diusulkan iklan baru (hindari dobel).
     Kolom `_unit` = kunci iklan asal (kosong untuk produk belum diiklankan); dipakai `restructure`.
     """
     cols = ["Saran", "Produk", "Kode produk", "Iklan sekarang", "Biaya iklan/hari", "Omzet iklan/hari", "ROAS 2 bulan", "Porsi omzet grup",
             "Prediksi omzet/hari", "Prediksi qty/hari", "Stok", "Alasan", "_unit"]
     target = min(float(target_roas), MAX_SHOPEE_ROAS)
+    occupied = {str(c) for c in occupied}
     by_key = {u.key: u for u in units}
     prod = products.set_index("product_code") if not products.empty else pd.DataFrame(columns=["nama", "omzet_harian", "stok_room", "stok"])
     demand = prod["omzet_harian"].fillna(0.0) if "omzet_harian" in prod.columns else pd.Series(dtype=float)
@@ -935,7 +1053,23 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
                      "Prediksi omzet/hari": float(demand.get(code, np.nan)) if code in demand.index else np.nan,
                      "Prediksi qty/hari": float(qty.get(code, np.nan)) if code in qty.index else np.nan, "Stok": stok,
                      "Alasan": notes_for(code, reason), "_unit": r.unit})
-    advertised = {c for u in units if u.jenis in ("Produk tunggal", "Grup") for c in u.members} | seen
+    advertised = {c for u in units if u.jenis in ("Produk tunggal", "Grup") for c in u.members} | seen | occupied
+    # Produk di iklan otomatis / unit di luar rencana: tandai agar tidak disarankan "buat baru" (hindari dobel).
+    if occupied:
+        for code in sorted(occupied - seen):
+            if code in exclude:
+                continue
+            name = str(prod.loc[code, "nama"]) if code in prod.index else code
+            stok, _room = stock_of(code)
+            rows.append({
+                "Saran": "Sudah di iklan lain", "Produk": name, "Kode produk": code,
+                "Iklan sekarang": "Iklan lain (otomatis/berjalan)", "Biaya iklan/hari": 0.0, "Omzet iklan/hari": 0.0,
+                "ROAS 2 bulan": np.nan, "Porsi omzet grup": np.nan,
+                "Prediksi omzet/hari": float(demand.get(code, np.nan)) if code in demand.index else np.nan,
+                "Prediksi qty/hari": float(qty.get(code, np.nan)) if code in qty.index else np.nan, "Stok": stok,
+                "Alasan": "sudah diiklankan di iklan lain: jangan buat iklan baru agar budget tidak dobel", "_unit": "",
+            })
+            seen.add(code)
     # Produk baru: utamakan yang bisa menutup gap dengan kontribusi positif (skor omzet × bobot margin).
     def _new_score(code: str) -> float:
         base = float(demand.get(code, 0.0) or 0.0)
@@ -972,7 +1106,7 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
             act, reason = "Buat iklan tunggal", [
                 f"urutan {singles_made} kandidat menutup gap (prediksi omzet tinggi"
                 + (", kontribusi positif" if contrib is not None and contrib > 0 else "")
-                + ")"
+                + "; belum di iklan mana pun — jangan dobel dengan iklan yang sudah jalan)"
             ]
         elif position <= top_group:
             act, reason = "Tambahkan ke grup", [f"urutan {position} prediksi omzet di antara produk belum diiklankan: masukkan ke grup produk sejenis"]
@@ -1119,15 +1253,21 @@ def _unit_of(selection: pd.DataFrame, plan_units: list[Unit]) -> list[str]:
 def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                gap_daily: float, target_roas: float, budget_daily: float | None, lift: float = DEMAND_LIFT,
                stock_cap: bool = False, select_roas: float | None = None, exclude: frozenset | set = frozenset(),
-               min_marginal: float = MIN_MARGINAL) -> tuple[list[Unit], Plan, pd.DataFrame]:
+               min_marginal: float = MIN_MARGINAL, occupied: frozenset | set = frozenset(),
+               base_selection: pd.DataFrame | None = None) -> tuple[list[Unit], Plan, pd.DataFrame]:
     """Satu alur: pemilihan produk → susunan iklan baru → rencana budget, sehingga langkah 3 & 4 selalu sejalan.
 
     Iklan tunggal baru / hasil pisah yang tidak mendapat budget di rencana dikembalikan (tetap di grup / masuk grup),
     lalu rencana dihitung ulang. stock_cap: tambahan omzet tiap iklan juga dibatasi ruang stok produknya.
     select_roas: ROAS acuan pemilihan produk (bawaan = target_roas).
+    base_selection: hasil `product_selection` yang sudah dihitung (hindari hitung ulang saat scan opsi).
     Mengembalikan (unit rencana, rencana, pemilihan + kolom budget usulan)."""
-    selection = product_selection(members, units, products, contribution_by_code,
-                                  target_roas=target_roas if select_roas is None else select_roas, exclude=exclude)
+    if base_selection is not None:
+        selection = base_selection.copy()
+    else:
+        selection = product_selection(members, units, products, contribution_by_code,
+                                      target_roas=target_roas if select_roas is None else select_roas, exclude=exclude,
+                                      occupied=occupied)
     plan_units, plan = [], Plan("Kejar target", {}, {})
     for _ in range(3):
         plan_units = [replace(u, lift=lift) for u in restructure(units, selection, products, contribution_by_code)]
@@ -1246,6 +1386,8 @@ def unit_weekly_budget(units: list[Unit], steps: list[tuple[int, Plan]]) -> pd.D
 
 
 ROAS_GRID = (30, 25, 20, 18, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
+# Grid kasar untuk daftar opsi rekomendasi sistem (jauh lebih cepat; hasil akhir tetap di-refine di rencana terpilih).
+OPTION_ROAS_GRID = (30, 20, 15, 12, 10, 8, 6, 4, 2)
 
 
 def recommend(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame, contribution_by_code: dict[str, float], *,
