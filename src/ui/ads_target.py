@@ -334,7 +334,7 @@ def _fixed_strategy(res: dict, *, rec: dict | None, target: float, projection: f
     acts = A.target_actions(units, plan, target_roas=roas)
     todo = []
     if not acts.empty:
-        up = acts.loc[acts["Tindakan"].isin(["Naikkan budget", "Buat iklan baru", "Pisahkan jadi iklan tunggal", "Aktifkan kembali"])]
+        up = acts.loc[acts["Tindakan"].isin(["Naikkan budget", "Buat iklan baru", "Pisahkan jadi iklan tunggal"])]
         down = acts.loc[acts["Tindakan"].isin(["Turunkan budget", "Jeda"])]
         todo.append(f"<b>Mulai {fmt_date(start)}: ubah budget iklan di Shopee</b> — {fmt_num(len(up))} iklan dinaikkan/dibuat, {fmt_num(len(down))} diturunkan/dijeda, "
                     f"total {fmt_idr(float(acts['Budget harian usulan'].sum()))}/hari di minggu pertama; isi Target ROAS tiap iklan sesuai tabel <i>Budget per iklan</i>.")
@@ -823,7 +823,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 units, members, contribution, products, occupied = packed
             else:
                 units, members, contribution, products = packed
-                occupied = frozenset(c for u in units for c in u.members)
+                occupied = frozenset(c for u in units if A._running(u) for c in u.members)
     running = [u for u in units if u.daily_cost > 0 and A._running(u)]
     cost_now = sum(u.daily_cost for u in running)
     sales_now = sum(u.daily_sales for u in running)
@@ -1057,19 +1057,23 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             selection = selection.drop(columns=["_unit"], errors="ignore")
             floor_sales, floor_qty = A.potential_floors(products)
             dup_count = int((selection["Saran"] == "Sudah di iklan lain").sum())
+            paused_count = int((selection["Saran"] == A.PAUSED_IDLE).sum()) if hasattr(A, "PAUSED_IDLE") else 0
             if dup_count:
-                st.caption(f"{fmt_num(dup_count)} produk sudah di iklan lain (aktif/otomatis/dijeda): tidak diusulkan iklan baru agar tidak dobel.")
+                st.caption(f"{fmt_num(dup_count)} produk sudah di iklan AKTIF lain (otomatis/berjalan): tidak diusulkan iklan baru agar tidak dobel.")
+            if paused_count:
+                st.caption(f"{fmt_num(paused_count)} produk di iklan yang sudah dijeda/nonaktif: biarkan (bukan langkah setel ulang di Seller Center). "
+                           "Bila masih perlu diiklankan dan belum di iklan aktif, bisa muncul sebagai buat iklan baru.")
             st.caption(f"Dasar: hasil iklan 2 bulan + prediksi + stok + margin · target ROAS {fmt_num(roas, 1)} (maks. 30). "
                        f"Layak iklan ≥ {fmt_idr(floor_sales)}/hari atau ≥ {fmt_num(floor_qty, 1)} unit/hari. "
-                       "Iklan tunggal hanya andalan bermargin positif; produk yang sudah diiklankan tidak dibuat ulang.")
+                       "Iklan tunggal hanya andalan bermargin positif; hanya iklan yang sedang berjalan yang diubah/dijeda.")
 
         # ---------------- 4. Rencana per iklan (lazy)
         _step(n0 + 2, "Budget per iklan", f"· ubah di Shopee mulai {fmt_date(start)}, berlaku s.d. {fmt_date(end)}")
         if acts.empty:
-            st.info("Tidak ada perubahan iklan yang disarankan.")
+            st.info("Tidak ada perubahan iklan yang disarankan (iklan dijeda/nonaktif tidak diisi ulang).")
         else:
             groups = [
-                ("Naikkan budget", "⬆️", UP), ("Pisahkan jadi iklan tunggal", "⭐", UP), ("Buat iklan baru", "🆕", UP), ("Aktifkan kembali", "▶️", UP),
+                ("Naikkan budget", "⬆️", UP), ("Pisahkan jadi iklan tunggal", "⭐", UP), ("Buat iklan baru", "🆕", UP),
                 ("Turunkan budget", "⬇️", DOWN), ("Jeda", "⏸️", DOWN), ("Pertahankan", "➖", "#64748b"),
             ]
             chips = []
@@ -1117,8 +1121,9 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             _box("Catatan stok & margin (tidak menghentikan rencana)", "<br>".join(notes), "#b45309")
 
         todo = [
-            f"<b>Unduh setelan Seller Center</b> — isi Modal Harian & Target ROAS (≤ 30) persis angka di file; iklan yang sudah jalan cukup diubah/dijeda, jangan dibuat ulang.",
-            f"<b>{fmt_date(start)}</b> — kerjakan langkah berurutan: keluarkan produk yang diminta, baru ubah budget / buat iklan tunggal untuk kode yang belum diiklan. "
+            f"<b>Unduh setelan Seller Center</b> — isi Modal Harian & Target ROAS (≤ 30) persis angka di file; hanya iklan yang SEDANG BERJALAN yang diubah/dijeda. "
+            "Iklan dijeda/nonaktif tidak perlu diaktifkan atau diisi ulang.",
+            f"<b>{fmt_date(start)}</b> — kerjakan langkah berurutan: keluarkan produk yang diminta dari iklan aktif, baru ubah budget / buat iklan tunggal untuk kode yang belum di iklan aktif. "
             f"Budget min. Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)} (tunggal) / Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)} (grup); naik maks. 2× per evaluasi.",
             "<b>Selasa–Minggu</b> — jangan ubah budget; biarkan algoritma Shopee belajar.",
             "<b>Tiap Senin</b> — unggah laporan iklan & buka Pantau; buat campaign baru dari saran bila perlu ditinjau.",

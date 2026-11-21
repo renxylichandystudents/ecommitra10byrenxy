@@ -50,15 +50,17 @@ class AllocateTargetTest(unittest.TestCase):
         self.assertIn("stok kurang", weak["Catatan"])
         self.assertIn("margin minus", weak["Catatan"])
 
-    def test_paused_ad_counts_from_zero(self):
+    def test_paused_ad_gets_no_budget_and_no_reactivate_action(self):
+        """Iklan dijeda: jangan alokasi budget / 'Aktifkan kembali' — bukan langkah setel ulang Seller Center."""
         paused = unit("paused", cost=100_000, a=6_000_000, b=300_000, status="Dijeda")
-        plan = A.allocate_target([paused], gap_daily=500_000, target_roas=4, budget_daily=200_000)
-        eff = A.plan_effect([paused], plan, days=10)
-        self.assertGreater(plan.cost["paused"], 0)
-        self.assertAlmostEqual(eff["omzet_tambahan"], paused.sales_at(plan.cost["paused"]) * 10, places=0)
-        acts = A.target_actions([paused], plan, target_roas=4)
-        self.assertEqual(acts.iloc[0]["Tindakan"], "Aktifkan kembali")
-        self.assertEqual(acts.iloc[0]["Budget harian sekarang"], 0.0)
+        active = unit("active", cost=100_000, a=6_000_000, b=300_000, status="Berjalan")
+        plan = A.allocate_target([paused, active], gap_daily=500_000, target_roas=4, budget_daily=200_000)
+        self.assertEqual(plan.cost["paused"], 0.0)
+        self.assertGreater(plan.cost["active"], 0)
+        acts = A.target_actions([paused, active], plan, target_roas=4)
+        self.assertFalse((acts["key"] == "paused").any())
+        self.assertNotIn("Aktifkan kembali", set(acts["Tindakan"].astype(str)))
+        self.assertTrue((acts["key"] == "active").any())
 
     def test_budget_needed_and_roas_for_budget_close_the_gap(self):
         gap = 300_000
@@ -186,8 +188,9 @@ class UnifiedPlanTest(unittest.TestCase):
         self.assertIn("baru:9", acts.index)
         self.assertEqual(sel.loc["9", "Saran"], "Buat iklan tunggal")
         self.assertAlmostEqual(sel.loc["9", "Budget usulan iklan/hari"], plan.cost["baru:9"])
-        dup = sel.loc[sel["Saran"] == "Sudah di iklan lain"]
-        self.assertEqual(set(dup.index), {"1", "4"})
+        # Duplikat di iklan berakhir/dijeda = konteks "Biarkan dijeda", bukan langkah Seller Center.
+        idle = sel.loc[(sel["Saran"] == A.PAUSED_IDLE) & (sel["_unit"] == "grup:Lama")]
+        self.assertEqual(set(idle.index), {"1", "4"})
         self.assertNotIn("1", by["grup:Kloset"].members)
         self.assertAlmostEqual(by["grup:Kloset"].demand, 300_000)
 
@@ -426,6 +429,29 @@ class SellerCenterSetupTest(unittest.TestCase):
         self.assertLessEqual(float(by_iklan.loc["Kloset", "Target ROAS isi"]), A.MAX_SHOPEE_ROAS)
         self.assertIn("30", sheets["Ringkas"]["Nilai"].astype(str).str.cat(sep=" "))
 
+    def test_setup_omits_reactivate_and_paused_selection_rows(self):
+        import pandas as pd
+
+        acts = pd.DataFrame([
+            {"Tindakan": "Aktifkan kembali", "Iklan": "Lama dijeda", "Jenis": "Produk tunggal", "Kode produk": "9",
+             "Budget harian usulan": 50_000, "Target ROAS Shopee": 8.0, "Catatan": "jangan muncul"},
+            {"Tindakan": "Naikkan budget", "Iklan": "Aktif", "Jenis": "Produk tunggal", "Kode produk": "1",
+             "Budget harian usulan": 50_000, "Target ROAS Shopee": 8.0, "Catatan": "ok"},
+        ])
+        selection = pd.DataFrame([
+            {"Saran": A.PAUSED_IDLE, "Produk": "P", "Kode produk": "9", "Iklan sekarang": "Lama (dijeda)",
+             "Alasan": "biarkan", "Biaya iklan/hari": 0, "Omzet iklan/hari": 0},
+            {"Saran": "Keluarkan dari grup", "Produk": "Q", "Kode produk": "2", "Iklan sekarang": "Grup Semen",
+             "Alasan": "dobel", "Biaya iklan/hari": 10_000, "Omzet iklan/hari": 0},
+        ])
+        setup = A.seller_center_setup(acts, selection, campaign="uji", target_roas=8, period="1–10")["Setelan Seller Center"]
+        text = setup.astype(str).to_string() if not setup.empty else ""
+        self.assertNotIn("Aktifkan kembali", text)
+        self.assertNotIn("Lama dijeda", text)
+        self.assertNotIn("Biarkan dijeda", text)
+        self.assertIn("Aktif", text)
+        self.assertIn("Keluarkan", text)
+
     def test_target_actions_never_exceed_roas_30_and_apply_floors(self):
         u = A.Unit(key="produk:1", nama="X", jenis="Produk tunggal", status="Berjalan", mode="GMV Max",
                    daily_cost=25_000, daily_sales=2_000_000, a=5_000_000, b=20_000, spread=0.2, members=["1"], contribution=0.2)
@@ -435,6 +461,46 @@ class SellerCenterSetupTest(unittest.TestCase):
         self.assertTrue((acts["Target ROAS Shopee"].fillna(0) <= A.MAX_SHOPEE_ROAS).all())
         active = acts.loc[acts["Budget harian usulan"] > 0]
         self.assertTrue((active["Budget harian usulan"] >= A.SHOPEE_MIN_SINGLE).all())
+
+
+class PausedAdsSelectionTest(unittest.TestCase):
+    def test_paused_product_labeled_idle_and_can_get_new_ad_if_not_active(self):
+        import pandas as pd
+
+        paused = A.Unit(key="produk:9", nama="Keramik lama", jenis="Produk tunggal", status="Dijeda", mode="GMV Max",
+                        daily_cost=50_000, daily_sales=0, a=1, b=1, spread=0.2, members=["9"])
+        members = pd.DataFrame([
+            {"unit": "produk:9", "periode": "2026-10", "product_code": "9", "nama": "Keramik", "biaya": 20_000, "omzet": 100_000, "terjual": 1},
+        ])
+        products = pd.DataFrame([
+            {"product_code": "9", "nama": "Keramik", "omzet_harian": 2_000_000, "qty_harian": 4, "stok_room": 1e6, "stok": 40},
+            {"product_code": "8", "nama": "Laris", "omzet_harian": 3_000_000, "qty_harian": 5, "stok_room": 1e6, "stok": 40},
+        ])
+        sel = A.product_selection(members, [paused], products, {"9": 0.2, "8": 0.2}, target_roas=8, focus=False)
+        idle = sel.loc[sel["Saran"] == A.PAUSED_IDLE]
+        self.assertFalse(idle.empty)
+        self.assertIn("dijeda", idle.iloc[0]["Alasan"].lower())
+        # Produk hanya di iklan dijeda boleh diusulkan buat baru (belum di iklan aktif)
+        news = sel.loc[sel["Saran"] == "Buat iklan tunggal", "Kode produk"].astype(str).tolist()
+        self.assertIn("9", news)
+        self.assertIn("8", news)
+        plan = A.allocate_target([paused], gap_daily=100_000, target_roas=8, budget_daily=50_000)
+        self.assertEqual(plan.cost.get("produk:9", 0), 0.0)
+        acts = A.target_actions([paused], plan, target_roas=8)
+        self.assertTrue(acts.empty)
+        setup = A.seller_center_setup(acts, sel, campaign="uji", target_roas=8)["Setelan Seller Center"]
+        # Sheet tindakan tidak memuat iklan dijeda sebagai langkah setel ulang
+        if not setup.empty:
+            self.assertNotIn("Keramik lama", setup["Iklan"].astype(str).tolist())
+            self.assertFalse(setup["Langkah di Seller Center"].astype(str).str.contains("Aktifkan", case=False).any())
+
+    def test_active_ad_still_gets_keep_change_pause(self):
+        active = unit("produk:1", cost=100_000, a=6_000_000, b=300_000, status="Berjalan")
+        plan = A.allocate_target([active], gap_daily=0, target_roas=30, budget_daily=None)
+        acts = A.target_actions([active], plan, target_roas=30)
+        self.assertFalse(acts.empty)
+        self.assertIn(acts.iloc[0]["Tindakan"], {"Pertahankan", "Turunkan budget", "Jeda", "Naikkan budget"})
+        self.assertEqual(acts.iloc[0]["Status iklan"], "Berjalan")
 
 
 class RecOptionsUnderwaterTest(unittest.TestCase):

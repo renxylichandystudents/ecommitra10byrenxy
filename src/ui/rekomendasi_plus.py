@@ -78,8 +78,9 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
     """Unit iklan + ekonomi per Kode Produk: kontribusi sebelum iklan (margin kotor − potongan Shopee) dan ruang stok (Rp/hari).
 
     Hasil disimpan per sesi agar buka Rekomendasi sistem tidak menghitung ulang fee/margin tiap rerun Streamlit.
-    Mengembalikan (units, members, contribution, products, occupied) — occupied = kode yang sudah di iklan mana pun
-    (termasuk otomatis) supaya saran tidak membuat iklan dobel."""
+    Mengembalikan (units, members, contribution, products, occupied) — occupied = kode di **iklan yang sedang
+    berjalan** (termasuk otomatis aktif) supaya saran tidak membuat iklan dobel aktif. Kode hanya di iklan dijeda
+    tidak menghalangi usulan iklan baru."""
     import streamlit as st
 
     from src.core import ads_strategy as A
@@ -100,6 +101,7 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
         if isinstance(getattr(frames, "stock", None), pd.DataFrame) and not getattr(frames, "stock").empty and "_submitted_at" in frames.stock.columns
         else "-",
         st.session_state.get("_feature-version", 0),
+        "occupied-active-v1",  # bump cache setelah occupied = aktif saja
     )
     cached = st.session_state.get("_ads-inputs-cache")
     if isinstance(cached, tuple) and cached[0] == stamp:
@@ -112,10 +114,8 @@ def _ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
         return empty
     recent = sorted({p for u in units for p, _c, _s in u.history})[-2:]
     units = [u for u in units if u.status.lower().startswith(("berjalan", "dijeda")) or (u.history and u.history[-1][0] in recent)]
-    # Semua kode yang sudah di iklan (termasuk otomatis) sebelum filter kejar-target.
-    occupied = {c for u in units for c in u.members}
-    if isinstance(members, pd.DataFrame) and not members.empty and "product_code" in members.columns:
-        occupied |= set(members["product_code"].astype(str))
+    # Hanya kode di iklan yang SEDANG BERJALAN (hindari dobel aktif; iklan dijeda tidak mengunci produk).
+    occupied = {c for u in units if A._running(u) for c in u.members}
     stock = getattr(frames, "stock", pd.DataFrame())
     code_of: dict[str, str] = {}
     if isinstance(stock, pd.DataFrame) and not stock.empty and {"sku", "product_code"} <= set(stock.columns):
