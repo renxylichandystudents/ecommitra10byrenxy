@@ -930,17 +930,12 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
         _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, may_edit=may_edit, username=username, require=require,
                     hist=hist)
     with tab_ongkir:
-        _ongkir_area_panel(orders)
+        _ongkir_area_panel(orders, features=features)
 
 
 def _transaksi_for_ongkir(orders: pd.DataFrame | None) -> pd.DataFrame:
-    """Frame transaksi yang punya kota + ongkir (bersih atau mentah dari pustaka)."""
-    if isinstance(orders, pd.DataFrame) and not orders.empty:
-        has_city = "city" in orders.columns and orders["city"].astype(str).str.strip().ne("").any()
-        has_ship = any(c in orders.columns for c in ("estimated_shipping", "buyer_shipping", "shipping_rebate"))
-        if has_city and has_ship:
-            return orders
-    # Laporan mentah dari pustaka aktif (kolom Provinsi / Kota / Perkiraan Ongkos Kirim).
+    """Utamakan laporan mentah pustaka (Total Berat + ongkir); fallback frame bersih."""
+    # Mentah dulu: kolom Total Berat & dimensi hanya ada di ekspor Seller Centre.
     try:
         from src.library import load_months
 
@@ -952,17 +947,35 @@ def _transaksi_for_ongkir(orders: pd.DataFrame | None) -> pd.DataFrame:
                 return source
     except Exception:
         pass
+    if isinstance(orders, pd.DataFrame) and not orders.empty:
+        has_city = "city" in orders.columns and orders["city"].astype(str).str.strip().ne("").any()
+        has_ship = any(c in orders.columns for c in ("estimated_shipping", "buyer_shipping", "shipping_rebate"))
+        if has_city and has_ship:
+            return orders
     return orders if isinstance(orders, pd.DataFrame) else pd.DataFrame()
 
 
-def _ongkir_area_panel(orders: pd.DataFrame | None) -> None:
-    """Saran harga Ongkir per Area Provinsi: +15% dari median transaksi, harga terisi tetap."""
+def _carton_dimensions(features) -> pd.DataFrame:
+    """Ukuran karton SKU (untuk berat volumetrik) dari Setting gudang bila ada."""
+    if features is None:
+        return pd.DataFrame()
+    try:
+        frame = features.read("carton_dimension")
+    except Exception:
+        return pd.DataFrame()
+    return frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+
+
+def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
+    """Saran Ongkir Area Provinsi: sadar berat dikenakan (aktual vs volumetrik), +15%, terisi tetap."""
     from src.core import ongkir_area as OA
 
     st.markdown("**Saran harga ongkir per area**")
     st.caption(
-        "Dari laporan transaksi: median ongkir per kota/kabupaten × 15%, dibulatkan ke rupiah bulat. "
-        "Nilai Ongkir yang sudah Anda isi di template Area Provinsi tidak diganti — hanya sel kosong yang diisi saran."
+        "Dasar per kota/kabupaten memakai **berat dikenakan** = maks(berat aktual dari Total Berat, "
+        "berat volumetrik P×L×T/6000 dari ukuran karton) — sama seperti jasa kirim Shopee. "
+        "Tarif = median (ongkir ÷ berat dikenakan) × median berat dikenakan di kota itu, lalu × **15%** "
+        "dan dibulatkan ke rupiah bulat. Ongkir yang sudah Anda isi di template tidak diganti."
     )
 
     default_path = OA.DEFAULT_TEMPLATE
@@ -993,14 +1006,20 @@ def _ongkir_area_panel(orders: pd.DataFrame | None) -> None:
         return
 
     source = _transaksi_for_ongkir(orders)
-    shipping = OA.order_shipping_by_city(source)
+    cartons = _carton_dimensions(features)
+    shipping = OA.order_shipping_by_city(source, cartons=cartons)
     suggestions = OA.build_suggestions(template, shipping)
     counts = OA.summary_counts(suggestions)
 
     c1, c2, c3, c4 = st.columns(4)
     card(c1, "Total area", fmt_num(counts["total"]), hint=template_label)
     card(c2, "Sudah diisi (tetap)", fmt_num(counts["tetap"]), hint="tidak diganti di unduhan")
-    card(c3, "Saran dari transaksi", fmt_num(counts["saran"]), hint="median × 1,15 (bulat)")
+    card(
+        c3,
+        "Saran dari transaksi",
+        fmt_num(counts["saran"]),
+        hint=f"{fmt_num(counts.get('pakai_berat', 0))} pakai berat dikenakan · lalu ×1,15",
+    )
     card(c4, "Belum ada data", fmt_num(counts["kosong"]), hint="belum ada invoice cocok")
 
     if shipping.empty:
@@ -1009,18 +1028,43 @@ def _ongkir_area_panel(orders: pd.DataFrame | None) -> None:
             "(Perkiraan Ongkos Kirim atau Ongkos Kirim Dibayar Pembeli). "
             "Unggah laporan pesanan Shopee lengkap di data latih, lalu buka lagi halaman ini."
         )
+    elif counts.get("pakai_berat", 0) == 0 and counts["saran"] > 0:
+        st.info(
+            "Saran memakai median ongkir saja karena kolom **Total Berat** (dan/atau ukuran karton) "
+            "belum terbaca. Unggah laporan pesanan yang memuat Total Berat, atau lengkapi dimensi karton "
+            "di Setting › Kapasitas gudang agar berat volumetrik ikut dihitung.",
+            icon=":material/info:",
+        )
 
-    view = suggestions[
-        ["Provinsi", "Area", "Ongkir terisi", "Ongkir median transaksi", "Saran ongkir", "Ongkir usulan", "Status", "Invoice"]
-    ].copy()
+    cols = [
+        "Provinsi",
+        "Area",
+        "Ongkir terisi",
+        "Ongkir median transaksi",
+        "Berat dikenakan median (kg)",
+        "Rp per kg median",
+        "Saran ongkir",
+        "Ongkir usulan",
+        "Metode",
+        "Status",
+        "Invoice",
+    ]
+    view = suggestions[[c for c in cols if c in suggestions.columns]].copy()
     show = view.rename(
         columns={
             "Ongkir terisi": "Ongkir sekarang",
-            "Ongkir median transaksi": "Median transaksi",
+            "Ongkir median transaksi": "Dasar transaksi",
+            "Berat dikenakan median (kg)": "Berat dikenakan (kg)",
+            "Rp per kg median": "Rp / kg",
             "Saran ongkir": "Saran (+15%)",
             "Ongkir usulan": "Nilai di unduhan",
+            "Metode": "Dasar hitung",
         }
     )
+    if "Dasar hitung" in show.columns:
+        show["Dasar hitung"] = show["Dasar hitung"].map(
+            {"berat_dikenakan": "Berat dikenakan", "ongkir_saja": "Ongkir saja"}
+        ).fillna(show["Dasar hitung"])
     filter_opt = st.segmented_control(
         "Tampilkan",
         ["Semua", "Sudah diisi", "Ada saran", "Belum ada data"],
@@ -1047,7 +1091,8 @@ def _ongkir_area_panel(orders: pd.DataFrame | None) -> None:
     dl1.markdown(
         "<div class='field-hint'><b>Unduh saran harga ongkir</b> — file Excel siap tempel ke pengaturan area pengiriman Shopee. "
         f"Harga yang sudah terisi ({fmt_num(counts['tetap'])} area) tetap; "
-        f"{fmt_num(counts['saran'])} area kosong diisi saran dari transaksi; "
+        f"{fmt_num(counts['saran'])} area kosong diisi saran dari transaksi"
+        f" ({fmt_num(counts.get('pakai_berat', 0))} memakai berat dikenakan); "
         f"{fmt_num(counts['kosong'])} area tanpa data transaksi dibiarkan kosong.</div>",
         unsafe_allow_html=True,
     )

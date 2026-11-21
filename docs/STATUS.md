@@ -1,5 +1,11 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Kalkulator ongkir: berat dikenakan aktual + volumetrik).
+
+- Saran ongkir area memakai **berat dikenakan** = maks(Total Berat kg, volumetrik P×L×T/6000), sama aturan Shopee Reguler/Hemat Kargo.
+- Dasar kota = median(ongkir ÷ berat dikenakan) × median(berat dikenakan); lalu × **15%** bulat. Tanpa kolom berat → fallback median ongkir.
+- Volumetrik dari dimensi laporan (bila ada) atau tabel **carton_dimension** gudang. Ongkir template yang sudah terisi tetap tidak diganti; unduhan Excel sama.
+
 Diperbarui: 21 November 2026 (Kalkulator: saran harga ongkir area + unduhan Excel).
 
 - Setting › Kalkulator biaya › tab **Saran ongkir area**: saran dari median ongkir transaksi per kota/kabupaten × **15%**, dibulatkan ke rupiah bulat.
