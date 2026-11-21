@@ -305,11 +305,14 @@ ORDER_PROMO_COLUMNS: dict[str, tuple[str, ...]] = {
     "card_discount": ("diskon kartu kredit",),
     "buyer_shipping": ("ongkos kirim dibayar oleh pembeli", "ongkos kirim dibayar pembeli"),
     "shipping_rebate": ("estimasi potongan biaya pengiriman",),
+    "estimated_shipping": ("perkiraan ongkos kirim",),
 }
 
 ORDER_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
     "shipping_option": ("opsi pengiriman",),
     "payment_method": ("metode pembayaran",),
+    "province": ("provinsi",),
+    "city": ("kota/kabupaten", "kota", "kabupaten/kota"),
 }
 
 
@@ -351,7 +354,7 @@ def _attach_promo_columns(frame: pd.DataFrame, table: pd.DataFrame) -> pd.DataFr
             raw_values = table.loc[frame.index, column]
             money = _parse_money(raw_values).fillna(0).clip(lower=0)
             # Koreksi ×1000 tidak masuk akal bila potongan jadi lebih besar dari nilai pesanan (mis. Rp632 asli) → pakai nilai asli.
-            if name not in {"buyer_shipping", "shipping_rebate"}:
+            if name not in {"buyer_shipping", "shipping_rebate", "estimated_shipping"}:
                 plain = _parse_number(raw_values).fillna(0).clip(lower=0)
                 money = money.where(~((money > order_base) & (order_base > 0)), plain)
             frame[name] = money * share

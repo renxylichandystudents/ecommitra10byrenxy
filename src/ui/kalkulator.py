@@ -859,7 +859,9 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
     fees = _category_fees(features)
     programs, order_fee, _old_limit = _programs(features)
     md = load_margin(features)
-    tab_sum, tab_sim, tab_param = st.tabs(["📊 Ringkasan & prioritas", "🧮 Simulasi per SKU", "⚙️ Parameter biaya"])
+    tab_sum, tab_sim, tab_param, tab_ongkir = st.tabs(
+        ["📊 Ringkasan & prioritas", "🧮 Simulasi per SKU", "⚙️ Parameter biaya", "🚚 Saran ongkir area"]
+    )
     start = end = None
     period_label = "bulan berjalan"
     with tab_sum:
@@ -927,6 +929,143 @@ def show_calculator(features, table: pd.DataFrame, data, *, username: str, today
                                key="xl-calc-all", label="Unduh semua SKU")
         _simulation(features, table, data, rows, port, fees, programs, order_fee, acuan, md, may_edit=may_edit, username=username, require=require,
                     hist=hist)
+    with tab_ongkir:
+        _ongkir_area_panel(orders)
+
+
+def _transaksi_for_ongkir(orders: pd.DataFrame | None) -> pd.DataFrame:
+    """Frame transaksi yang punya kota + ongkir (bersih atau mentah dari pustaka)."""
+    if isinstance(orders, pd.DataFrame) and not orders.empty:
+        has_city = "city" in orders.columns and orders["city"].astype(str).str.strip().ne("").any()
+        has_ship = any(c in orders.columns for c in ("estimated_shipping", "buyer_shipping", "shipping_rebate"))
+        if has_city and has_ship:
+            return orders
+    # Laporan mentah dari pustaka aktif (kolom Provinsi / Kota / Perkiraan Ongkos Kirim).
+    try:
+        from src.library import load_months
+
+        analysis = st.session_state.get("analysis") or {}
+        keys = [str(k) for k in (analysis.get("library_keys") or st.session_state.get("active-library-keys") or []) if k]
+        if keys:
+            source, _meta = load_months(keys)
+            if isinstance(source, pd.DataFrame) and not source.empty:
+                return source
+    except Exception:
+        pass
+    return orders if isinstance(orders, pd.DataFrame) else pd.DataFrame()
+
+
+def _ongkir_area_panel(orders: pd.DataFrame | None) -> None:
+    """Saran harga Ongkir per Area Provinsi: +15% dari median transaksi, harga terisi tetap."""
+    from src.core import ongkir_area as OA
+
+    st.markdown("**Saran harga ongkir per area**")
+    st.caption(
+        "Dari laporan transaksi: median ongkir per kota/kabupaten × 15%, dibulatkan ke rupiah bulat. "
+        "Nilai Ongkir yang sudah Anda isi di template Area Provinsi tidak diganti — hanya sel kosong yang diisi saran."
+    )
+
+    default_path = OA.DEFAULT_TEMPLATE
+    upload = st.file_uploader(
+        "Unggah template Area Provinsi Pengiriman Shopee (opsional)",
+        type=["xlsx", "xls"],
+        key="calc-ongkir-template",
+        help="Kosongkan untuk memakai template bawaan di data aplikasi. Layout: Provinsi | Area | Ongkir (tiga blok).",
+    )
+    template_bytes: bytes | None = None
+    template_label = "template bawaan"
+    if upload is not None:
+        template_bytes = upload.getvalue()
+        template_label = upload.name
+    elif default_path.is_file():
+        template_bytes = default_path.read_bytes()
+    else:
+        st.warning("Template Area Provinsi belum tersedia. Unggah file Excel dari Seller Centre.")
+        return
+
+    try:
+        template = OA.parse_area_template(template_bytes)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Template tidak bisa dibaca: {exc}")
+        return
+    if template.empty:
+        st.info("Template tidak memuat baris Area.")
+        return
+
+    source = _transaksi_for_ongkir(orders)
+    shipping = OA.order_shipping_by_city(source)
+    suggestions = OA.build_suggestions(template, shipping)
+    counts = OA.summary_counts(suggestions)
+
+    c1, c2, c3, c4 = st.columns(4)
+    card(c1, "Total area", fmt_num(counts["total"]), hint=template_label)
+    card(c2, "Sudah diisi (tetap)", fmt_num(counts["tetap"]), hint="tidak diganti di unduhan")
+    card(c3, "Saran dari transaksi", fmt_num(counts["saran"]), hint="median × 1,15 (bulat)")
+    card(c4, "Belum ada data", fmt_num(counts["kosong"]), hint="belum ada invoice cocok")
+
+    if shipping.empty:
+        st.info(
+            "Data transaksi belum memuat kolom Kota/Kabupaten dan ongkir "
+            "(Perkiraan Ongkos Kirim atau Ongkos Kirim Dibayar Pembeli). "
+            "Unggah laporan pesanan Shopee lengkap di data latih, lalu buka lagi halaman ini."
+        )
+
+    view = suggestions[
+        ["Provinsi", "Area", "Ongkir terisi", "Ongkir median transaksi", "Saran ongkir", "Ongkir usulan", "Status", "Invoice"]
+    ].copy()
+    show = view.rename(
+        columns={
+            "Ongkir terisi": "Ongkir sekarang",
+            "Ongkir median transaksi": "Median transaksi",
+            "Saran ongkir": "Saran (+15%)",
+            "Ongkir usulan": "Nilai di unduhan",
+        }
+    )
+    filter_opt = st.segmented_control(
+        "Tampilkan",
+        ["Semua", "Sudah diisi", "Ada saran", "Belum ada data"],
+        default="Ada saran" if counts["saran"] else "Semua",
+        key="calc-ongkir-filter",
+    ) or "Semua"
+    if filter_opt == "Sudah diisi":
+        show = show.loc[show["Status"].astype(str).str.startswith("Tetap")]
+    elif filter_opt == "Ada saran":
+        show = show.loc[show["Status"].eq("Saran dari transaksi")]
+    elif filter_opt == "Belum ada data":
+        show = show.loc[show["Status"].eq("Belum ada data transaksi")]
+
+    st.markdown(
+        f"<div class='field-hint'>Pratinjau · {fmt_num(len(show))} area "
+        f"(filter: {html.escape(filter_opt)}). Unduh Excel di bawah memakai layout Seller Centre yang sama.</div>",
+        unsafe_allow_html=True,
+    )
+    show_table(show, key="calc-ongkir-table")
+
+    export_bytes = OA.export_area_excel(suggestions, template_source=template_bytes)
+    filled_or_saran = counts["tetap"] + counts["saran"]
+    dl1, dl2 = st.columns([3, 1.2], vertical_alignment="center")
+    dl1.markdown(
+        "<div class='field-hint'><b>Unduh saran harga ongkir</b> — file Excel siap tempel ke pengaturan area pengiriman Shopee. "
+        f"Harga yang sudah terisi ({fmt_num(counts['tetap'])} area) tetap; "
+        f"{fmt_num(counts['saran'])} area kosong diisi saran dari transaksi; "
+        f"{fmt_num(counts['kosong'])} area tanpa data transaksi dibiarkan kosong.</div>",
+        unsafe_allow_html=True,
+    )
+    with dl2:
+        st.download_button(
+            label="Unduh saran harga ongkir (Excel)",
+            data=export_bytes,
+            file_name=f"saran_harga_ongkir_area_{(date.today()).isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="calc-ongkir-download",
+            icon=":material/download:",
+            use_container_width=True,
+            help=(
+                f"Excel Area Provinsi: {filled_or_saran} area punya harga "
+                f"({counts['tetap']} tetap + {counts['saran']} saran). "
+                "Sel yang sudah diisi tidak diubah."
+            ),
+        )
 
 
 def _bar(parts: list[tuple[str, float, str]], base: float) -> str:

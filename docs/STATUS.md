@@ -1,5 +1,12 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Kalkulator: saran harga ongkir area + unduhan Excel).
+
+- Setting › Kalkulator biaya › tab **Saran ongkir area**: saran dari median ongkir transaksi per kota/kabupaten × **15%**, dibulatkan ke rupiah bulat.
+- Harga **Ongkir yang sudah terisi** di template Area Provinsi **tidak diganti**; hanya sel kosong yang diisi saran.
+- Tombol **Unduh saran harga ongkir (Excel)** — layout Seller Centre sama (3 blok Provinsi|Area|Ongkir); template bawaan di `data/Area_Provinsi_Pengiriman_Shopee.xlsx` (bisa diganti unggahan).
+- Frame transaksi bersih ikut membawa `province` / `city` / `estimated_shipping` bila kolom ada di laporan.
+
 Diperbarui: 21 November 2026 (Exposure media sosial: volume fleksibel + kalender expand).
 
 - Rekomendasi › Exposure: hilangkan plafon kaku **14 konten/minggu**; volume = **maks. produk/hari** (user) × hari periode.
