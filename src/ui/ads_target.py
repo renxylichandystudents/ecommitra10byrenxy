@@ -892,17 +892,21 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     excluded = _excluded_codes(features, products, members)
     lift = A.FREE_LIFT
     select = F.selection_roas(base_units) if base_units else None
-    # Pemilihan produk dihitung sekali (ROAS acuan tetap) lalu dipakai ulang saat scan opsi — hemat besar.
+    # Kekurangan sales → omzet iklan harian yang perlu ditutup (sama dasar gap di build_plan / Fitur khusus).
+    gap_ads_daily = max(float(goals.target_sales) - projection, 0.0) / max(factor, 1e-9) / max(days_left, 1)
+    # Pemilihan produk dihitung sekali (ROAS acuan tetap + gap bulan) lalu dipakai ulang saat scan opsi — hemat besar.
+    # Satu jalur untuk Fitur khusus & Rekomendasi sistem: audit katalog prediksi saat gap besar, bukan hanya rapikan iklan jalan.
     base_selection = None
     if base_units:
-        sel_key = (periode, select, tuple(sorted(excluded)), tuple(sorted(occupied)), len(members), len(products),
-                   round(sum(u.daily_cost for u in base_units)), round(sum(contribution.values()), 4) if contribution else 0)
+        sel_key = (periode, select, round(gap_ads_daily), tuple(sorted(excluded)), tuple(sorted(occupied)), len(members), len(products),
+                   round(sum(u.daily_cost for u in base_units)), round(sum(contribution.values()), 4) if contribution else 0,
+                   "gap-catalog-v1")
         sel_box = st.session_state.setdefault("adt-sel-cache", {})
         if sel_key not in sel_box:
             if len(sel_box) > 4:
                 sel_box.clear()
             sel_box[sel_key] = A.product_selection(members, base_units, products, contribution, target_roas=select or 8.0,
-                                                   exclude=excluded, occupied=occupied)
+                                                   exclude=excluded, occupied=occupied, gap_daily=gap_ads_daily)
         base_selection = sel_box[sel_key]
 
     def option(r: float, daily: float, gap_now: float, mm: float = A.MIN_MARGINAL) -> dict:
@@ -988,10 +992,17 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         budget = budget_daily * period_days
         reach = final / target * 100 if target > 0 else 0.0
         roas = min(float(roas), A.MAX_SHOPEE_ROAS)
+        gap_ads = max(target - projection, 0.0) / max(factor, 1e-9)
+        plan_gap_daily = gap_ads / max(run_days, 1)
+        # Satu logika pemilihan untuk Fitur khusus & Rekomendasi sistem. Bila target beda dari acuan cache, hitung ulang.
+        sel_for_plan = base_selection
+        if base_units and (base_selection is None or abs(float(target) - float(goals.target_sales or 0)) > 1.0):
+            sel_for_plan = A.product_selection(members, base_units, products, contribution, target_roas=select or 8.0,
+                                               exclude=excluded, occupied=occupied, gap_daily=plan_gap_daily)
         with st.spinner("Membagi budget ke iklan..."):
-            fixed = _fixed_plan(base_units, members, products, contribution, weeks=weeks, blocks=blocks, gap_ads=max(target - projection, 0.0) / factor, roas=roas,
+            fixed = _fixed_plan(base_units, members, products, contribution, weeks=weeks, blocks=blocks, gap_ads=gap_ads, roas=roas,
                                 budget_daily=budget_daily, lift=lift, shape=_day_shape_of(orders, last), key=(periode, start, end), select_roas=select,
-                                exclude=excluded, min_marginal=mm, occupied=occupied, base_selection=base_selection)
+                                exclude=excluded, min_marginal=mm, occupied=occupied, base_selection=sel_for_plan)
         units, plan, selection, steps = fixed["units"], fixed["plan"], fixed["selection"], fixed["steps"]
         eff = fixed["eff"]
         week_table = A.weekly_table(units, steps, blocks)
@@ -1058,14 +1069,19 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             floor_sales, floor_qty = A.potential_floors(products)
             dup_count = int((selection["Saran"] == "Sudah di iklan lain").sum())
             paused_count = int((selection["Saran"] == A.PAUSED_IDLE).sum()) if hasattr(A, "PAUSED_IDLE") else 0
+            new_count = int((selection["Saran"] == "Buat iklan tunggal").sum())
             if dup_count:
                 st.caption(f"{fmt_num(dup_count)} produk sudah di iklan AKTIF lain (otomatis/berjalan): tidak diusulkan iklan baru agar tidak dobel.")
             if paused_count:
                 st.caption(f"{fmt_num(paused_count)} produk di iklan yang sudah dijeda/nonaktif: biarkan (bukan langkah setel ulang di Seller Center). "
                            "Bila masih perlu diiklankan dan belum di iklan aktif, bisa muncul sebagai buat iklan baru.")
-            st.caption(f"Dasar: hasil iklan 2 bulan + prediksi + stok + margin · target ROAS {fmt_num(roas, 1)} (maks. 30). "
-                       f"Layak iklan ≥ {fmt_idr(floor_sales)}/hari atau ≥ {fmt_num(floor_qty, 1)} unit/hari. "
-                       "Iklan tunggal hanya andalan bermargin positif; hanya iklan yang sedang berjalan yang diubah/dijeda.")
+            if new_count:
+                st.caption(f"{fmt_num(new_count)} produk dari katalog prediksi diusulkan **buat iklan tunggal** (belum di iklan aktif) untuk membantu menutup target.")
+            st.caption(f"Dasar: audit katalog (prediksi + hasil iklan 2 bulan + stok + margin) · target ROAS {fmt_num(roas, 1)} (maks. 30). "
+                       f"Layak iklan ≥ {fmt_idr(floor_sales)}/hari atau ≥ {fmt_num(floor_qty, 1)} unit/hari"
+                       + (" · kuota produk baru diperluas karena kekurangan target" if gap_ads_daily >= 1_000_000 else "") + ". "
+                       "Rapikan iklan jalan bila berguna; produk laris belum diiklan aktif ikut diusulkan. "
+                       "Hanya iklan yang sedang berjalan yang diubah/dijeda di Seller Center.")
 
         # ---------------- 4. Rencana per iklan (lazy)
         _step(n0 + 2, "Budget per iklan", f"· ubah di Shopee mulai {fmt_date(start)}, berlaku s.d. {fmt_date(end)}")
