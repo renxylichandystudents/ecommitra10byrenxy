@@ -408,6 +408,77 @@ class OccupiedNoDuplicateTest(unittest.TestCase):
         self.assertIn("dobel", sel.loc["busy", "Alasan"])
 
 
+class GapCatalogAuditTest(unittest.TestCase):
+    """Campaign baru / gap besar: audit katalog prediksi, bukan hanya rapikan iklan yang sedang jalan."""
+
+    def test_large_gap_surfaces_many_new_singles_from_catalog(self):
+        import pandas as pd
+
+        # Satu iklan jalan lemah + banyak produk belum diiklan dengan prediksi menengah (di bawah lantai 95% ketat).
+        running = A.Unit(key="produk:r", nama="Running", jenis="Produk tunggal", status="Berjalan", mode="GMV Max",
+                         daily_cost=80_000, daily_sales=200_000, a=400_000, b=80_000, spread=0.2, members=["r"])
+        members = pd.DataFrame([
+            {"unit": "produk:r", "periode": "2026-10", "product_code": "r", "nama": "Running", "biaya": 80_000, "omzet": 200_000, "terjual": 2},
+        ])
+        # Dominan sales → lantai 95% tinggi; produk mid biasanya tersaring tanpa mode gap.
+        rows = [{"product_code": "r", "nama": "Running", "omzet_harian": 20_000_000, "qty_harian": 10, "stok_room": 1e6, "stok": 50}]
+        for i in range(1, 25):
+            rows.append({
+                "product_code": f"n{i}", "nama": f"New {i}", "omzet_harian": 400_000 + i * 10_000,
+                "qty_harian": 1.2, "stok_room": 1e6, "stok": 30,
+            })
+        products = pd.DataFrame(rows)
+        contrib = {r["product_code"]: 0.12 for r in rows}
+        tight = A.product_selection(members, [running], products, contrib, target_roas=8, focus=True, gap_daily=0)
+        loose = A.product_selection(members, [running], products, contrib, target_roas=8, focus=True, gap_daily=5_000_000)
+        new_tight = int((tight["Saran"] == "Buat iklan tunggal").sum())
+        new_loose = int((loose["Saran"] == "Buat iklan tunggal").sum())
+        self.assertGreater(new_loose, new_tight)
+        self.assertGreaterEqual(new_loose, 8)
+        # Produk di iklan aktif tetap tidak digandakan.
+        self.assertFalse(((loose["Saran"] == "Buat iklan tunggal") & (loose["Kode produk"] == "r")).any())
+
+    def test_high_sales_margin_minus_single_kept_when_chasing_target(self):
+        import pandas as pd
+
+        big = A.Unit(key="produk:1", nama="Star", jenis="Produk tunggal", status="Berjalan", mode="GMV Max",
+                     daily_cost=200_000, daily_sales=3_000_000, a=5_000_000, b=200_000, spread=0.2, members=["1"])
+        small = A.Unit(key="produk:2", nama="Weak", jenis="Produk tunggal", status="Berjalan", mode="GMV Max",
+                       daily_cost=50_000, daily_sales=40_000, a=80_000, b=50_000, spread=0.2, members=["2"])
+        members = pd.DataFrame([
+            {"unit": "produk:1", "periode": "2026-10", "product_code": "1", "nama": "Star", "biaya": 200_000, "omzet": 3_000_000, "terjual": 20},
+            {"unit": "produk:2", "periode": "2026-10", "product_code": "2", "nama": "Weak", "biaya": 50_000, "omzet": 40_000, "terjual": 1},
+        ])
+        products = pd.DataFrame([
+            {"product_code": "1", "nama": "Star", "omzet_harian": 4_000_000, "qty_harian": 8, "stok_room": 1e6, "stok": 40},
+            {"product_code": "2", "nama": "Weak", "omzet_harian": 50_000, "qty_harian": 0.2, "stok_room": 1e6, "stok": 40},
+        ])
+        # Target ROAS tinggi → ROAS star (15) < target, margin minus: dulu selalu Pindahkan; sekarang star dipertahankan.
+        sel = A.product_selection(members, [big, small], products, {"1": -0.1, "2": -0.1}, target_roas=20, focus=False,
+                                  gap_daily=3_000_000).set_index("Kode produk")
+        self.assertEqual(sel.loc["1", "Saran"], "Pertahankan iklan tunggal")
+        self.assertIn("mengejar target", sel.loc["1", "Alasan"])
+        self.assertEqual(sel.loc["2", "Saran"], "Pindahkan ke grup")
+
+    def test_build_plan_gap_passes_through_to_new_units(self):
+        import pandas as pd
+
+        products = pd.DataFrame([
+            {"product_code": f"n{i}", "nama": f"N{i}", "omzet_harian": 800_000 + i * 50_000, "qty_harian": 2,
+             "stok_room": 1e6, "stok": 40}
+            for i in range(12)
+        ])
+        contrib = {f"n{i}": 0.15 for i in range(12)}
+        units, plan, sel = A.build_plan(
+            [], pd.DataFrame(), products, contrib,
+            gap_daily=4_000_000, target_roas=6, budget_daily=2_000_000,
+        )
+        news = sel.loc[sel["Saran"] == "Buat iklan tunggal"]
+        self.assertGreaterEqual(len(news), 5)
+        funded = [u for u in units if u.jenis.endswith("(baru)") and plan.cost.get(u.key, 0) > 0]
+        self.assertGreaterEqual(len(funded), 3)
+
+
 class SellerCenterSetupTest(unittest.TestCase):
     def test_setup_export_has_two_sheets_floors_and_roas_cap(self):
         import pandas as pd

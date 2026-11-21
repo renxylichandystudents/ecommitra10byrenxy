@@ -412,9 +412,35 @@ def allocate_target(units: list[Unit], *, gap_daily: float, target_roas: float, 
     def _idle(u: Unit) -> bool:
         return u.locked or (not _running(u) and not (u.jenis.endswith("(baru)") or u.jenis.endswith("(dari grup)")))
 
+    # Gap besar: iklan baru boleh naik lebih dari 2× NEW_DAILY agar katalog penutup target kebagian budget terukur.
+    new_cap = NEW_DAILY * (4.0 if float(gap_daily or 0) >= 1_000_000 else 2.0)
     cost = {u.key: 0.0 if _idle(u) else _base(u) for u in units}
-    caps = {u.key: 0.0 if _idle(u) else max(u.daily_cost * max_change if u.daily_cost > 0 else NEW_DAILY * 2, cost[u.key]) for u in units}
+    caps = {
+        u.key: (
+            0.0 if _idle(u)
+            else max(u.daily_cost * max_change if u.daily_cost > 0 else new_cap, cost[u.key])
+        )
+        for u in units
+    }
     lower = {u.key: cost[u.key] / max_change for u in units}
+    # Seed iklan baru (katalog penutup gap) dengan lantai Seller Center agar tidak selalu berakhir budget 0
+    # lalu terdegradasi ke "Tambahkan ke grup" saat kekurangan target besar.
+    if float(gap_daily or 0) >= 1_000_000:
+        newcomers = sorted(
+            [u for u in units if u.jenis.endswith("(baru)") and not _idle(u) and caps.get(u.key, 0) > 0],
+            key=lambda u: -(u.demand if np.isfinite(u.demand) else 0.0),
+        )
+        spent0 = sum(cost.values())
+        room = (float(budget_daily) - spent0) if budget_daily is not None else float("inf")
+        reserve = min(max(room, 0.0) * 0.30, sum(seller_min_budget("Produk tunggal") for _ in newcomers[:30]))
+        for u in newcomers:
+            seed = seller_min_budget(u.jenis if u.jenis.startswith("Grup") else "Produk tunggal")
+            if reserve + 1 < seed or cost[u.key] > 0:
+                continue
+            if seed > caps[u.key] + 1:
+                continue
+            cost[u.key] = seed
+            reserve -= seed
     sales = {u.key: ad_sales(u, cost[u.key]) for u in units}
     total_cost, total_sales = sum(cost.values()), sum(sales.values())
     target_left = gap_daily - sum(sales[u.key] - _now_sales(u) for u in units)
@@ -919,10 +945,33 @@ def potential_floors(products: pd.DataFrame, *, pareto: float = SALES_PARETO, mi
 NEW_KINDS = ("Produk tunggal (baru)", "Produk tunggal (dari grup)")
 
 
+def _gap_expand_quotas(*, gap_daily: float, demand_total: float, top_single: int, top_group: int, max_promote: int
+                       ) -> tuple[bool, int, int, int, float]:
+    """Bila kekurangan ke target besar, perluas kuota iklan baru (audit katalog), bukan hanya merapikan iklan jalan.
+
+    Mengembalikan (expand, top_single, top_group, max_promote, gap_sales_floor_factor)."""
+    gap = max(float(gap_daily or 0.0), 0.0)
+    total = max(float(demand_total or 0.0), 0.0)
+    ratio = (gap / total) if total > 0 else (1.0 if gap >= 1_000_000 else 0.0)
+    # Kekurangan ≥ 15% prediksi omzet harian toko (atau ≥ Rp 1 jt/hari) → mode campaign baru / kejar target.
+    expand = ratio >= 0.15 or gap >= 1_000_000
+    if not expand:
+        return False, top_single, top_group, max_promote, 1.0
+    # Makin besar gap, makin banyak kandidat baru dari prediksi (batas aman agar unduhan tetap bisa dikerjakan).
+    boost = min(max(ratio, 0.15) / 0.15, 4.0)
+    return (
+        True,
+        max(top_single, min(50, int(round(top_single * (1.5 + boost))))),
+        max(top_group, min(150, int(round(top_group * (1.3 + 0.5 * boost))))),
+        max(max_promote, min(25, int(round(max_promote * (1.2 + 0.4 * boost))))),
+        max(0.12, 0.35 / boost),  # lantai potensi lebih rendah untuk kandidat baru penutup gap
+    )
+
+
 def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.DataFrame, contribution_by_code: dict[str, float], *,
                       target_roas: float, plan: Plan | None = None, top_single: int = 15, top_group: int = 60,
                       max_promote: int = 10, focus: bool = True, exclude: frozenset | set = frozenset(),
-                      occupied: frozenset | set = frozenset()) -> pd.DataFrame:
+                      occupied: frozenset | set = frozenset(), gap_daily: float = 0.0) -> pd.DataFrame:
     """Pemilihan produk untuk iklan produk tunggal vs iklan grup, per Kode Produk (satu produk = satu iklan).
 
     Dasar: hasil iklan 2 bulan terakhir per produk (biaya, omzet, ROAS, porsi omzet di grup), prediksi omzet harian dari
@@ -931,13 +980,14 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
     - Jadikan iklan tunggal: andalan grup (porsi omzet ≥ 30% di grup > 2 produk, ROAS ≥ 80% target) atau omzet iklan
       tertinggi dengan ROAS ≥ target → budget & target ROAS dikendalikan sendiri (maks. `max_promote` per minggu, sisanya kandidat).
     - Keluarkan dari grup: ada biaya tanpa omzet, atau ROAS < 50% target.
-    - Pindahkan ke grup: iklan tunggal dengan ROAS < 50% target dan omzet di bawah median iklan tunggal.
-    - Buat iklan tunggal / Tambahkan ke grup: produk belum diiklankan & stok ada, urut prediksi omzet tertinggi
-      (urutan 1..top_single / berikutnya sampai top_group).
+    - Pindahkan ke grup: iklan tunggal lemah (ROAS rendah + omzet kecil). Iklan tunggal beromzet besar tetap dipertahankan
+      saat mengejar target (meski margin minus), supaya gap tidak hanya ditutup dengan merapikan susunan.
+    - Buat iklan tunggal / Tambahkan ke grup: audit katalog produk berprediksi & stok (bukan hanya yang sudah di iklan jalan),
+      urut skor prediksi×margin. `gap_daily` besar → kuota & lantai potensi diperlonggar agar produk penutup target muncul.
     - Jeda sampai restock: produk diiklankan yang stoknya 0.
     - Stop iklan · sales kecil (focus=True): potensi sales (maks. omzet iklan/hari, prediksi omzet/hari) di bawah batas produk
       pembentuk 95% sales toko DAN prediksi qty di bawah batas laku banyak (`potential_floors`). Produk belum diiklankan yang
-      tidak lolos batas ini juga tidak diusulkan.
+      tidak lolos batas ini juga tidak diusulkan (kecuali mode gap: lantai lebih rendah untuk kandidat baru).
     - Dikecualikan pengguna: Kode Produk di `exclude` (daftar pengecualian) dikeluarkan dari semua iklan dan tidak diusulkan.
     - `occupied`: Kode Produk yang sudah di **iklan aktif** lain (otomatis / di luar rencana) — jangan diusulkan iklan baru (hindari dobel aktif).
       Kode hanya di iklan dijeda tidak dihitung occupied.
@@ -953,12 +1003,23 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
     demand = prod["omzet_harian"].fillna(0.0) if "omzet_harian" in prod.columns else pd.Series(dtype=float)
     qty = prod["qty_harian"].fillna(0.0) if "qty_harian" in prod.columns else pd.Series(dtype=float)
     sales_floor, qty_floor = potential_floors(products) if focus else (0.0, float("inf"))
+    expand, top_single, top_group, max_promote, gap_floor_factor = _gap_expand_quotas(
+        gap_daily=gap_daily, demand_total=float(demand.sum()) if len(demand) else 0.0,
+        top_single=top_single, top_group=top_group, max_promote=max_promote,
+    )
+    new_sales_floor = sales_floor * gap_floor_factor if expand and focus else sales_floor
+    new_qty_floor = max(0.5, qty_floor * gap_floor_factor) if expand and focus and qty_floor < float("inf") else qty_floor
 
-    def potential(code: str, ad_omzet: float) -> tuple[bool, float, float]:
-        """(layak diiklankan?, potensi sales Rp/hari, prediksi qty/hari)."""
+    def potential(code: str, ad_omzet: float, *, for_new: bool = False) -> tuple[bool, float, float]:
+        """(layak diiklankan?, potensi sales Rp/hari, prediksi qty/hari).
+
+        `for_new=True` memakai lantai lebih rendah saat gap besar, agar katalog prediksi ikut diaudit
+        (bukan hanya produk yang sudah di iklan jalan / puncak 95%)."""
         value = max(float(ad_omzet or 0.0), float(demand.get(code, 0.0)) if code in demand.index else 0.0)
         units_day = float(qty.get(code, 0.0)) if code in qty.index else 0.0
-        return value >= sales_floor or units_day >= qty_floor, value, units_day
+        floor_s = new_sales_floor if for_new else sales_floor
+        floor_q = new_qty_floor if for_new else qty_floor
+        return value >= floor_s or units_day >= floor_q, value, units_day
 
     def small_reason(value: float, units_day: float) -> str:
         return (f"potensi sales kecil (Rp {value:,.0f}/hari, {units_day:.1f} unit/hari) di bawah batas layak iklan "
@@ -1061,11 +1122,18 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
                     else []
                 )
         else:
+            pred_omzet = float(demand.get(code, 0.0)) if code in demand.index else 0.0
+            strong_sales = r.omzet >= single_median or pred_omzet >= max(sales_floor * 0.5, single_median)
             if r.biaya > 0 and r.omzet <= 0:
                 act, reason = "Pindahkan ke grup", ["ada biaya tanpa omzet: tidak layak budget sendiri"]
-            elif loss and (roas != roas or roas < target):
+            elif loss and (roas != roas or roas < target) and not strong_sales:
                 act, reason = "Pindahkan ke grup", [
-                    "margin minus + ROAS lemah: jangan pakai budget tunggal; masuk grup hemat atau jeda sampai harga diperbaiki"
+                    "margin minus + ROAS lemah + omzet kecil: jangan pakai budget tunggal; masuk grup hemat atau jeda sampai harga diperbaiki"
+                ]
+            elif loss and strong_sales and (roas != roas or roas < target):
+                # Omzet/prediksi besar: pertahankan saat mengejar target; margin ditinjau terpisah (bukan hanya rapikan susunan).
+                act, reason = "Pertahankan iklan tunggal", [
+                    "margin minus tetapi omzet/prediksi besar: pertahankan untuk mengejar target sales; tinjau harga terpisah"
                 ]
             elif roas == roas and roas < target * 0.5 and r.omzet < single_median:
                 act, reason = "Pindahkan ke grup", [f"ROAS {roas:.1f} < 50% target dan omzet kecil: lebih efisien ditopang produk lain di grup".replace(".", ",")]
@@ -1103,7 +1171,7 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
             })
             seen.add(code)
             advertised.add(code)
-    # Produk baru: utamakan yang bisa menutup gap dengan kontribusi positif (skor omzet × bobot margin).
+    # Produk baru dari katalog prediksi: audit semua yang belum di iklan aktif (bukan hanya merapikan yang jalan).
     def _new_score(code: str) -> float:
         base = float(demand.get(code, 0.0) or 0.0)
         c = contrib_of(str(code))
@@ -1111,9 +1179,16 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
             return base
         if c > 0:
             return base * (1.0 + 2.0 * min(c, 0.3))
-        return base * 0.15  # margin minus: hampir tidak diusulkan sebagai iklan tunggal baru
+        # Margin minus: tetap bisa diusulkan saat gap besar (skor dipangkas, bukan dieliminasi).
+        return base * (0.45 if expand else 0.15)
 
     ranked_new = sorted((str(c) for c in demand.index), key=_new_score, reverse=True)
+    # Ambang skor: saat expand, izinkan margin-minus di paruh atas kandidat baru agar katalog ikut menutup target.
+    eligible_scores = [
+        _new_score(c) for c in ranked_new
+        if c not in advertised and c not in exclude and float(demand.get(c, 0) or 0) > 0
+    ]
+    score_cut = float(pd.Series(eligible_scores).quantile(0.5)) if expand and len(eligible_scores) >= 4 else float("inf")
     position = 0
     singles_made = 0
     for code in ranked_new:
@@ -1122,27 +1197,39 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
         stok, _room = stock_of(code)
         if stok == stok and stok <= 0:
             continue
-        if not potential(code, 0.0)[0]:
+        if not potential(code, 0.0, for_new=True)[0]:
             continue
         position += 1
         contrib = contrib_of(code)
-        if contrib is not None and contrib <= 0:
-            # Jangan buat iklan tunggal baru untuk produk rugi: paling jauh masuk grup hemat (bila masih di kuota grup).
+        score = _new_score(code)
+        loss_new = contrib is not None and contrib <= 0
+        allow_loss_single = expand and loss_new and score >= score_cut and score > 0
+        if loss_new and not allow_loss_single:
+            # Margin minus di luar kuota gap: paling jauh masuk grup hemat.
             if position <= top_group:
                 act, reason = "Tambahkan ke grup", [
                     f"urutan {position} prediksi omzet tetapi margin minus: jangan budget tunggal; masuk grup hemat sambil perbaiki harga"
+                    + (" · katalog diaudit karena kekurangan target" if expand else "")
                 ]
             else:
                 continue
-        elif singles_made < top_single and (contrib is None or contrib > 0):
+        elif singles_made < top_single and (contrib is None or contrib > 0 or allow_loss_single):
             singles_made += 1
+            margin_bit = (
+                ", kontribusi positif" if contrib is not None and contrib > 0
+                else (", margin minus — mengejar target sales; tinjau harga" if allow_loss_single
+                      else "")
+            )
+            gap_bit = "; audit katalog penutup target" if expand else ""
             act, reason = "Buat iklan tunggal", [
-                f"urutan {singles_made} kandidat menutup gap (prediksi omzet tinggi"
-                + (", kontribusi positif" if contrib is not None and contrib > 0 else "")
-                + "; belum di iklan mana pun — jangan dobel dengan iklan yang sudah jalan)"
+                f"urutan {singles_made} kandidat menutup gap (prediksi omzet tinggi{margin_bit}{gap_bit}"
+                f"; belum di iklan aktif — jangan dobel dengan iklan yang sudah jalan)"
             ]
         elif position <= top_group:
-            act, reason = "Tambahkan ke grup", [f"urutan {position} prediksi omzet di antara produk belum diiklankan: masukkan ke grup produk sejenis"]
+            act, reason = "Tambahkan ke grup", [
+                f"urutan {position} prediksi omzet di antara produk belum di iklan aktif: masukkan ke grup produk sejenis"
+                + (" · diperluas karena kekurangan target" if expand else "")
+            ]
         else:
             break
         rows.append({"Saran": act, "Produk": str(prod.loc[code, "nama"]), "Kode produk": code, "Iklan sekarang": "Belum diiklankan",
@@ -1311,7 +1398,7 @@ def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame,
     else:
         selection = product_selection(members, units, products, contribution_by_code,
                                       target_roas=target_roas if select_roas is None else select_roas, exclude=exclude,
-                                      occupied=occupied)
+                                      occupied=occupied, gap_daily=gap_daily)
     plan_units, plan = [], Plan("Kejar target", {}, {})
     for _ in range(3):
         plan_units = [replace(u, lift=lift) for u in restructure(units, selection, products, contribution_by_code)]

@@ -1,5 +1,12 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Rekomendasi: campaign baru audit katalog penutup target).
+
+- Fitur khusus & Rekomendasi sistem memakai **satu** pemilihan produk: saat kekurangan ke target besar, katalog prediksi diaudit ulang (bukan hanya merapikan iklan yang sedang jalan).
+- Kuota **Buat iklan tunggal** / tambah ke grup diperluas; lantai potensi untuk kandidat baru diturunkan; iklan tunggal beromzet besar tetap dipertahankan meski margin minus.
+- Iklan baru mendapat seed budget (lantai Seller Center) + plafon lebih longgar agar tidak selalu terdegradasi ke “Tambahkan ke grup”.
+- Aturan lama tetap: tidak dobel iklan aktif, ROAS ≤ 30, lantai 25 rb/100 rb, iklan dijeda bukan langkah setel ulang.
+
 Diperbarui: 21 November 2026 (Rekomendasi: iklan dijeda bukan langkah setel ulang).
 
 - Iklan **dijeda/nonaktif** tidak lagi muncul sebagai tindakan “Aktifkan kembali” / setel ulang di Rekomendasi sistem maupun unduhan **Setelan Seller Center**.
