@@ -1,5 +1,11 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Exposure media sosial: volume fleksibel + kalender expand).
+
+- Rekomendasi › Exposure: hilangkan plafon kaku **14 konten/minggu**; volume = **maks. produk/hari** (user) × hari periode.
+- Horizon rencana **hari / minggu / bulan**; kalender tetap sel ringkas, klik **Detail hari** untuk lihat semua nama & hook.
+- Brief diaudit: hook menyebut produk/merek, **Caption** siap tempel Shopee Video/Reels/TikTok, hashtag lebih relevan.
+
 Diperbarui: 21 November 2026 (Rekomendasi: campaign baru audit katalog penutup target).
 
 - Fitur khusus & Rekomendasi sistem memakai **satu** pemilihan produk: saat kekurangan ke target besar, katalog prediksi diaudit ulang (bukan hanya merapikan iklan yang sedang jalan).

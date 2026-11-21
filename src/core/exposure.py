@@ -11,8 +11,9 @@ yang tertarik tidak menemui stok habis):
 Video Shopee terus di-crawl selama produk tidak diturunkan, jadi produk bernilai tinggi diutamakan.
 Skor = 30% peringkat prediksi omzet + 15% nilai produk (harga) + 15% potensi viral + 15% margin + 15% tren 14 hari + 5% kesiapan
 stok + 5% bonus segmen naik/stok lebih/viral.
-Jadwal: tiap minggu `per_week` konten, ditaruh di hari & jam dengan pesanan terbanyak untuk kategori produk itu
-(dari riwayat pesanan), maks. 2 konten per hari, produk yang sama tidak diulang dalam 14 hari.
+Jadwal: horizon hari / minggu / bulan; jumlah konten mengikuti kebutuhan pengguna (`max_per_day` × hari periode),
+tanpa plafon kaku 14/minggu. Slot diisi bergilir antar segmen pada jam ramai kategori; produk sama tidak diulang
+dalam `REPEAT_DAYS` hari. Brief/caption diaudit agar spesifik produk (hook, poin, ajakan, hashtag, naskah).
 """
 
 from __future__ import annotations
@@ -41,6 +42,12 @@ READY_DAYS = 14
 HERO_TOP = 30
 REPEAT_DAYS = 14
 WEEKDAYS = ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu")
+HORIZON_DAY = "hari"
+HORIZON_WEEK = "minggu"
+HORIZON_MONTH = "bulan"
+HORIZONS = (HORIZON_DAY, HORIZON_WEEK, HORIZON_MONTH)
+DEFAULT_MAX_PER_DAY = 2
+MAX_PER_DAY_CEILING = 50  # plafon UI agar tidak membanjiri; isi tetap mengikuti kebutuhan pengguna hingga batas ini
 
 # kategori: (kata kunci nama, format utama, sudut cerita, hook masalah, hashtag)
 PLAYBOOK: tuple[tuple[str, tuple[str, ...], str, str, str, str], ...] = (
@@ -247,74 +254,178 @@ def _price_text(value: float) -> str:
     return "Rp " + f"{math.floor(value / 1000) * 1000:,.0f}".replace(",", ".")
 
 
+def _short_name(name: str, limit: int = 42) -> str:
+    text = re.sub(r"\s+", " ", str(name or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1].rsplit(" ", 1)[0]
+    return (cut or text[: limit - 1]) + "…"
+
+
+def _hashtags(name: str, play_tags: str, brand: str, kategori: str) -> str:
+    """Hashtag berguna: toko + kategori playbook + merek + 1–2 kata produk (bukan spam generik)."""
+    tags = ["#mitra10", "#mitra10officialstore"]
+    tags.extend(t for t in str(play_tags or "").split() if t.startswith("#"))
+    if brand:
+        tags.append(f"#{re.sub(r'[^a-z0-9]', '', brand.lower())}")
+    cat = re.sub(r"[^a-z0-9]", "", str(kategori or "").lower())
+    if cat and f"#{cat}" not in {t.lower() for t in tags}:
+        tags.append(f"#{cat}")
+    # Kata bermakna dari nama (hindari kode SKU / angka murni).
+    for word in re.findall(r"[A-Za-z][A-Za-z]{3,}", str(name or "")):
+        slug = word.lower()
+        if slug in {"include", "packing", "kayu", "official", "store", "mitra"}:
+            continue
+        tag = f"#{slug}"
+        if tag.lower() not in {t.lower() for t in tags}:
+            tags.append(tag)
+        if len(tags) >= 8:
+            break
+    return " ".join(dict.fromkeys(tags))
+
+
 def brief(row: dict, slot_index: int = 0) -> dict:
-    """Brief konten satu produk: format, hook, poin jual, ajakan harga, hashtag, dan naskah 30 detik."""
+    """Brief + caption sosial satu produk: spesifik nama/merek/poin, bukan template generik saja."""
     play = play_for(row["nama"])
-    points = list(row.get("poin") or [])
+    points = [p for p in list(row.get("poin") or []) if str(p).strip()]
     brand = brand_of(row["nama"])
     price = float(row.get("harga") or 0)
-    hook = play[4] if row.get("segmen") != LOW_CONV else f"Masih ragu pilih {play[0].lower()}? Lihat langsung cara pakainya."
-    if row.get("segmen") == OVERSTOCK:
-        cta = f"Harga spesial mulai {_price_text(price)} — stok terbatas di Mitra10 Official Store, klik keranjang kuning."
+    seg = str(row.get("segmen") or "")
+    kategori = play[0]
+    short = _short_name(row.get("nama") or row.get("label") or kategori, 48)
+    brand_bit = f" {brand}" if brand else ""
+
+    if seg == LOW_CONV:
+        hook = f"Masih ragu pilih {short}? Lihat cara pakai & hasilnya di rumah — biar yakin sebelum checkout."
+    elif seg == RISING:
+        hook = f"{short} lagi dicari renovator — lihat kenapa stoknya cepat berkurang."
+    elif seg == OVERSTOCK:
+        hook = f"Stok {short} masih ada: cocok buat yang lagi renovasi bulan ini."
+    elif seg == VIRAL:
+        hook = play[4] if play[4] else f"Demo cepat {short}: hasil kelihatan di detik pertama."
+    else:
+        # Andalan: pakai masalah playbook + sebut produk agar tidak generik antar SKU.
+        hook = f"{play[4]} — {short}{brand_bit}."
+
+    if seg == OVERSTOCK:
+        cta = f"Harga spesial mulai {_price_text(price)} di Mitra10 Official Store — stok terbatas, klik keranjang kuning."
+    elif seg == LOW_CONV:
+        cta = f"Bandingkan detail & ukuran di video, lalu checkout mulai {_price_text(price)} — Mitra10 Official Store."
+    elif price >= 1_500_000:
+        cta = f"Mulai {_price_text(price)} · packing aman · Mitra10 Official Store — klik keranjang kuning / tanya di Live."
     else:
         cta = f"Mulai {_price_text(price)} di Mitra10 Official Store — klik keranjang kuning di video."
-    tags = " ".join(dict.fromkeys(f"#mitra10 #mitra10officialstore {play[5]}".split() + ([f"#{brand.lower()}"] if brand else [])))
-    live = price >= 500_000 and row.get("segmen") in (HERO, LOW_CONV)
-    fmt = play[2] + (" · lanjutkan sesi Shopee Live tanya-jawab (produk bernilai tinggi)" if live else "") + " · unggah ulang ke Reels & TikTok"
+
+    tags = _hashtags(row.get("nama") or "", play[5], brand, kategori)
+    live = price >= 500_000 and seg in (HERO, LOW_CONV)
+    fmt = play[2] + (" · lanjutkan sesi Shopee Live tanya-jawab" if live else "") + " · unggah ulang ke Reels & TikTok"
     p = points + ["", "", ""]
+    point_line = p[0] or "produk terpasang di rumah"
+    extra = f" dan {p[1]}" if p[1] else ""
+    mid = f"{p[2]}; " if p[2] else ""
     script = "\n".join([
         f"0–3 dtk  : {hook}",
-        f"3–12 dtk : tunjukkan {p[0] or 'produk terpasang di rumah'}" + (f" dan {p[1]}" if p[1] else ""),
-        f"12–22 dtk: {(p[2] + '; ') if p[2] else ''}tunjukkan hasilnya: {play[3]}",
+        f"3–12 dtk : tunjukkan {point_line}{extra}",
+        f"12–22 dtk: {mid}tunjukkan hasilnya: {play[3]}",
         f"22–30 dtk: {cta}",
     ])
-    return {"Format": fmt, "Hook": hook, "Poin jual": " • ".join(points) if points else "–", "Ajakan": cta, "Hashtag": tags, "Naskah 30 dtk": script}
+    # Caption pendek untuk kolom caption Shopee Video / Reels / TikTok (bukan naskah penuh).
+    point_cap = points[0] if points else play[3]
+    caption = f"{hook} {point_cap}. {cta} {tags}"
+    caption = re.sub(r"\s+", " ", caption).strip()
+    if len(caption) > 420:
+        caption = caption[:417].rsplit(" ", 1)[0] + "…"
+    return {
+        "Format": fmt, "Hook": hook, "Poin jual": " • ".join(points) if points else "–",
+        "Ajakan": cta, "Hashtag": tags, "Caption": caption, "Naskah 30 dtk": script,
+    }
 
 
-def calendar(cands: pd.DataFrame, start: date, *, weeks: int = 4, per_week: int = 5, times: dict[str, tuple[int, str]] | None = None,
-             per_day: int = 2) -> pd.DataFrame:
-    """Jadwal konten mingguan dengan brief per baris. start = Senin minggu pertama."""
-    cols = ["Tanggal", "Hari", "Jam tayang", "Segmen", "SKU", "Produk", "Kategori", "Format", "Hook", "Poin jual", "Ajakan", "Hashtag",
-            "Omzet 30 hari", "Stok siap (hari)", "Alasan dipilih", "Naskah 30 dtk"]
+def _next_candidate(by_seg: dict[str, list], used: dict[str, date], day: date, rotation: list[str], turn: int) -> dict | None:
+    """Ambil kandidat berikutnya bergilir segmen; hormati jeda ulang produk."""
+    order = rotation[turn % len(rotation):] + rotation[: turn % len(rotation)]
+    for seg in order:
+        for r in by_seg.get(seg, []):
+            last = used.get(r["sku"])
+            if last is not None and (day - last).days < REPEAT_DAYS:
+                continue
+            return r
+    return None
+
+
+def calendar(cands: pd.DataFrame, start: date, *, weeks: int | None = None, per_week: int | None = None,
+             times: dict[str, tuple[int, str]] | None = None, per_day: int = DEFAULT_MAX_PER_DAY,
+             end: date | None = None, max_per_day: int | None = None) -> pd.DataFrame:
+    """Jadwal konten untuk rentang tanggal: hingga `max_per_day` per hari (tanpa plafon kaku per minggu).
+
+    Kompatibilitas: `weeks` + `per_week` lama masih dipakai bila `end` tidak diisi — diubah menjadi
+    end = start + weeks*7 - 1 dan max_per_day = max(per_day, ceil(per_week/7)).
+    """
+    cols = ["Tanggal", "Hari", "Jam tayang", "Segmen", "SKU", "Produk", "Kategori", "Format", "Hook", "Poin jual", "Ajakan",
+            "Hashtag", "Caption", "Omzet 30 hari", "Stok siap (hari)", "Alasan dipilih", "Naskah 30 dtk"]
     if cands is None or cands.empty:
         return pd.DataFrame(columns=cols)
     times = times or {"*": (5, "19.00–21.00")}
+    day_cap = int(max_per_day if max_per_day is not None else per_day)
+    day_cap = max(1, min(day_cap, MAX_PER_DAY_CEILING))
+    if end is None:
+        week_n = max(int(weeks or 1), 1)
+        end = start + timedelta(days=7 * week_n - 1)
+        if per_week is not None and per_week > 0:
+            # Setara lama: sebar per_week ke 7 hari, tapi hormati day_cap.
+            day_cap = max(day_cap, min(MAX_PER_DAY_CEILING, math.ceil(per_week / 7)))
+    if end < start:
+        return pd.DataFrame(columns=cols)
+
     pool = cands.to_dict("records")
     by_seg = {s: [r for r in pool if r["segmen"] == s] for s in SEGMENTS}
+    rotation = [HERO, VIRAL, OVERSTOCK, RISING, HERO, LOW_CONV, VIRAL]
     used: dict[str, date] = {}
-    rows = []
-    for week in range(weeks):
-        monday = start + timedelta(days=7 * week)
-        load: dict[int, int] = {}
-        chosen: list[dict] = []
-        turn = 0
-        while len(chosen) < per_week:
-            progressed = False
-            for seg in (HERO, VIRAL, OVERSTOCK, RISING, HERO, LOW_CONV, VIRAL):
-                if len(chosen) >= per_week:
-                    break
-                for r in by_seg[seg]:
-                    last = used.get(r["sku"])
-                    if r in chosen or (last is not None and (monday - last).days < REPEAT_DAYS):
-                        continue
-                    chosen.append(r)
-                    progressed = True
-                    break
-            turn += 1
-            if not progressed or turn > per_week * 3:
+    rows: list[dict] = []
+    # Isi tiap hari sampai day_cap atau kandidat habis (volume mengikuti kebutuhan, bukan 14/minggu).
+    day = start
+    slot = 0
+    while day <= end:
+        placed = 0
+        # Slot 1 = jam ramai kategori; slot berikutnya = siang / sore agar tidak bentrok unggah.
+        while placed < day_cap:
+            cand = _next_candidate(by_seg, used, day, rotation, slot)
+            if cand is None:
                 break
-        for index, r in enumerate(chosen):
-            dow, hours = times.get(r["kategori"], times["*"])
-            for shift in range(7):
-                d = (dow + shift) % 7
-                if load.get(d, 0) < per_day:
-                    break
-            load[d] = load.get(d, 0) + 1
-            day = monday + timedelta(days=d)
-            used[r["sku"]] = monday
-            b = brief(r, index)
-            rows.append({"Tanggal": day, "Hari": WEEKDAYS[d], "Jam tayang": hours, "Segmen": r["segmen"], "SKU": r["sku"], "Produk": r["label"],
-                         "Kategori": r["kategori"], "Format": b["Format"], "Hook": b["Hook"], "Poin jual": b["Poin jual"], "Ajakan": b["Ajakan"],
-                         "Hashtag": b["Hashtag"], "Omzet 30 hari": r["omzet_30"], "Stok siap (hari)": min(r["hari_stok"], 999),
-                         "Alasan dipilih": r["alasan"], "Naskah 30 dtk": b["Naskah 30 dtk"]})
+            by_seg[cand["segmen"]] = [r for r in by_seg[cand["segmen"]] if r["sku"] != cand["sku"]]
+            _dow, peak_hours = times.get(cand["kategori"], times["*"])
+            if placed == 0:
+                hours = peak_hours
+            elif placed == 1:
+                hours = "12.00–14.00" if not str(peak_hours).startswith("12") else "19.00–21.00"
+            else:
+                start_h = min(6 + placed * 2, 20)
+                hours = f"{start_h:02d}.00–{start_h + 2:02d}.00"
+            used[cand["sku"]] = day
+            b = brief(cand, slot)
+            rows.append({
+                "Tanggal": day, "Hari": WEEKDAYS[day.weekday()], "Jam tayang": hours, "Segmen": cand["segmen"],
+                "SKU": cand["sku"], "Produk": cand["label"], "Kategori": cand["kategori"],
+                "Format": b["Format"], "Hook": b["Hook"], "Poin jual": b["Poin jual"], "Ajakan": b["Ajakan"],
+                "Hashtag": b["Hashtag"], "Caption": b["Caption"], "Omzet 30 hari": cand["omzet_30"],
+                "Stok siap (hari)": min(cand["hari_stok"], 999), "Alasan dipilih": cand["alasan"],
+                "Naskah 30 dtk": b["Naskah 30 dtk"],
+            })
+            placed += 1
+            slot += 1
+        day += timedelta(days=1)
     return pd.DataFrame(rows, columns=cols).sort_values(["Tanggal", "Jam tayang"]).reset_index(drop=True)
+
+
+def period_bounds(today: date, horizon: str, *, anchor: date | None = None) -> tuple[date, date]:
+    """Batas tanggal default untuk horizon hari / minggu / bulan (inklusif)."""
+    anchor = anchor or today
+    if horizon == HORIZON_DAY:
+        return anchor, anchor
+    if horizon == HORIZON_WEEK:
+        monday = anchor - timedelta(days=anchor.weekday())
+        return monday, monday + timedelta(days=6)
+    # bulan
+    first = anchor.replace(day=1)
+    last = (pd.Timestamp(first) + pd.offsets.MonthEnd(0)).date()
+    return first, last
