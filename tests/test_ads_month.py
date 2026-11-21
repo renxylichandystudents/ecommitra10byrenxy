@@ -267,3 +267,17 @@ class RatioBudgetTest(unittest.TestCase):
         self.assertEqual(budget_for_ratio(project, pct=3.0, gross_ratio=1.5, spent=90_000_000, start=1), 90_000_000)
         self.assertAlmostEqual(store_contribution_rate({"a": 0.1, "b": -0.2}, {"a": 3, "b": 1}), 0.025)
         self.assertIsNone(store_contribution_rate({}, {}))
+
+
+class BreakEvenAndProfitCapTest(unittest.TestCase):
+    def test_negative_margin_always_deepens_loss(self):
+        self.assertTrue(M.ads_deepens_loss(-0.101, 1.4))
+        self.assertTrue(M.ads_deepens_loss(0.0, 10.0))
+        self.assertFalse(M.ads_deepens_loss(0.25, 5.0))  # need 20%; have 25%
+        self.assertTrue(M.ads_deepens_loss(0.10, 1.4))   # need ~71%
+        self.assertAlmostEqual(M.break_even_contrib(1.4), 1 / 1.4, places=4)
+        self.assertEqual(M.profitable_monthly_cap(None, 0.2), None)
+        self.assertEqual(M.profitable_monthly_cap(M.StoreCurve(0, 100, 50, [], "x"), -0.1), 0.0)
+        # a·contrib − b = 100*0.5 − 50 = 0 → tepat di batas
+        self.assertEqual(M.profitable_monthly_cap(M.StoreCurve(0, 100, 50, [], "x"), 0.5), 0.0)
+        self.assertGreater(M.profitable_monthly_cap(M.StoreCurve(0, 200, 50, [], "x"), 0.5), 0)

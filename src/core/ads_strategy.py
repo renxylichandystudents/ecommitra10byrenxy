@@ -385,7 +385,9 @@ def priority(u: Unit) -> float:
         return 1.0
     if c > 0:
         return 1.0 + 2.0 * min(c, 0.3)
-    return 0.85 if u.fast else 0.6
+    # Margin minus: dipangkas lebih dulu / jarang dinaikkan. Produk laku banyak tetap punya bobot, tapi lebih rendah
+    # dari sebelumnya agar budget tidak tersedot mengejar omzet yang menambah rugi.
+    return 0.55 if u.fast else 0.35
 
 
 MIN_MARGINAL = 5.0  # tiap tambahan Rp 1 biaya iklan minimal kembali Rp 5 omzet iklan (biaya ≤ 20% omzet tambahan)
@@ -857,8 +859,13 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
         if room == room and room <= 0 and not (stok == stok and stok <= 0):
             out.append("stok hanya cukup untuk penjualan biasa: siapkan restock bila iklan dinaikkan")
         if contrib is not None and contrib <= 0:
-            out.append("margin minus (info)")
+            out.append(f"margin minus {contrib * 100:.0f}%: tiap penjualan menambah rugi sebelum iklan".replace(".", ","))
+        elif contrib is not None and contrib > 0:
+            out.append(f"kontribusi sebelum iklan {contrib * 100:.0f}%".replace(".", ","))
         return "; ".join(out)
+
+    def contrib_of(code: str) -> float | None:
+        return contribution_by_code.get(code)
 
     rows, seen = [], set()
     for r in hist.itertuples(index=False):
@@ -869,6 +876,8 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
         running = unit is not None and _running(unit)
         is_group = r.unit.startswith("grup:")
         share = r.omzet / group_total[r.unit] if is_group and group_total.get(r.unit, 0) > 0 else float("nan")
+        contrib = contrib_of(code)
+        loss = contrib is not None and contrib <= 0
         reason: list[str] = []
         if code in exclude:
             act, reason = MANUAL_OUT, ["dikeluarkan dari iklan sesuai daftar pengecualian pengguna"]
@@ -882,17 +891,35 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
         elif is_group:
             if r.biaya > 0 and r.omzet <= 0:
                 act, reason = "Keluarkan dari grup", ["ada biaya tanpa omzet 2 bulan terakhir"]
+            elif loss and (roas != roas or roas < target or r.biaya >= 5_000):
+                # Margin minus di grup: keluarkan kecuali andalan kuat (ditangani cabang jadikan tunggal di bawah hanya bila margin +).
+                act, reason = "Keluarkan dari grup", [
+                    f"margin minus: menyedot biaya grup tanpa kontribusi; perbaiki harga dulu atau iklankan produk bermargin positif"
+                ]
             elif roas == roas and roas < target * 0.5 and r.biaya >= 5_000:
                 act, reason = "Keluarkan dari grup", [f"ROAS {roas:.1f} < 50% target {target:.1f}: menyedot budget grup".replace(".", ",")]
-            elif (share == share and share >= 0.3 and group_size.get(r.unit, 0) > 2 and roas == roas and roas >= target * 0.8) or \
-                    (r.omzet >= top_ads and roas == roas and roas >= target):
-                act, reason = "Jadikan iklan tunggal", [f"andalan grup ({share * 100:.0f}% omzet grup, ROAS {roas:.1f}): budget & target ROAS dikendalikan sendiri".replace(".", ",")
-                                                        if share == share else f"omzet iklan tertinggi dengan ROAS {roas:.1f}".replace(".", ",")]
+            elif not loss and (
+                    (share == share and share >= 0.3 and group_size.get(r.unit, 0) > 2 and roas == roas and roas >= target * 0.8)
+                    or (r.omzet >= top_ads and roas == roas and roas >= target)):
+                # Iklan tunggal hanya untuk andalan yang tidak bermargin minus: kendalikan budget sendiri agar biaya grup
+                # tidak ikut naik untuk produk lain yang lemah.
+                margin_txt = "bermargin positif" if contrib is not None and contrib > 0 else "tanpa data margin minus"
+                act, reason = "Jadikan iklan tunggal", [
+                    f"andalan grup {margin_txt} ({share * 100:.0f}% omzet grup, ROAS {roas:.1f}): budget & target ROAS dikendalikan sendiri".replace(".", ",")
+                    if share == share else f"omzet iklan tertinggi dengan ROAS {roas:.1f} ({margin_txt})".replace(".", ",")
+                ]
             else:
-                act, reason = "Pertahankan di grup", []
+                act, reason = "Pertahankan di grup", (
+                    ["margin belum di File margin: tetap di grup agar biaya dibagi"] if contrib is None and share == share and share >= 0.3
+                    else []
+                )
         else:
             if r.biaya > 0 and r.omzet <= 0:
                 act, reason = "Pindahkan ke grup", ["ada biaya tanpa omzet: tidak layak budget sendiri"]
+            elif loss and (roas != roas or roas < target):
+                act, reason = "Pindahkan ke grup", [
+                    "margin minus + ROAS lemah: jangan pakai budget tunggal; masuk grup hemat atau jeda sampai harga diperbaiki"
+                ]
             elif roas == roas and roas < target * 0.5 and r.omzet < single_median:
                 act, reason = "Pindahkan ke grup", [f"ROAS {roas:.1f} < 50% target dan omzet kecil: lebih efisien ditopang produk lain di grup".replace(".", ",")]
             else:
@@ -909,9 +936,20 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
                      "Prediksi qty/hari": float(qty.get(code, np.nan)) if code in qty.index else np.nan, "Stok": stok,
                      "Alasan": notes_for(code, reason), "_unit": r.unit})
     advertised = {c for u in units if u.jenis in ("Produk tunggal", "Grup") for c in u.members} | seen
+    # Produk baru: utamakan yang bisa menutup gap dengan kontribusi positif (skor omzet × bobot margin).
+    def _new_score(code: str) -> float:
+        base = float(demand.get(code, 0.0) or 0.0)
+        c = contrib_of(str(code))
+        if c is None:
+            return base
+        if c > 0:
+            return base * (1.0 + 2.0 * min(c, 0.3))
+        return base * 0.15  # margin minus: hampir tidak diusulkan sebagai iklan tunggal baru
+
+    ranked_new = sorted((str(c) for c in demand.index), key=_new_score, reverse=True)
     position = 0
-    for code in demand.sort_values(ascending=False).index:
-        code = str(code)
+    singles_made = 0
+    for code in ranked_new:
         if code in advertised or code in exclude or demand.get(code, 0) <= 0:
             continue
         stok, _room = stock_of(code)
@@ -920,8 +958,22 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
         if not potential(code, 0.0)[0]:
             continue
         position += 1
-        if position <= top_single:
-            act, reason = "Buat iklan tunggal", [f"urutan {position} prediksi omzet di antara produk belum diiklankan"]
+        contrib = contrib_of(code)
+        if contrib is not None and contrib <= 0:
+            # Jangan buat iklan tunggal baru untuk produk rugi: paling jauh masuk grup hemat (bila masih di kuota grup).
+            if position <= top_group:
+                act, reason = "Tambahkan ke grup", [
+                    f"urutan {position} prediksi omzet tetapi margin minus: jangan budget tunggal; masuk grup hemat sambil perbaiki harga"
+                ]
+            else:
+                continue
+        elif singles_made < top_single and (contrib is None or contrib > 0):
+            singles_made += 1
+            act, reason = "Buat iklan tunggal", [
+                f"urutan {singles_made} kandidat menutup gap (prediksi omzet tinggi"
+                + (", kontribusi positif" if contrib is not None and contrib > 0 else "")
+                + ")"
+            ]
         elif position <= top_group:
             act, reason = "Tambahkan ke grup", [f"urutan {position} prediksi omzet di antara produk belum diiklankan: masukkan ke grup produk sejenis"]
         else:

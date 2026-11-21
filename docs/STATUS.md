@@ -1,5 +1,11 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Rekomendasi sistem sadar margin + tunggal vs grup).
+
+- Rekomendasi › Rekomendasi sistem: bila kontribusi toko di bawah titik impas iklan (contoh Nov: marginal ±1,4 sales bersih / Rp iklan vs kontribusi −10%), opsi utama memilih estimasi kontribusi sesudah iklan terbaik — bukan sales tertinggi dengan spend besar. Opsi “100% target” disembunyikan bila mengejarnya menambah rugi.
+- Laju iklan spike (≥1,5× rata-rata bulan) tidak lagi jadi saran utama; ada opsi “Kembalikan ke rata-rata bulan ini”. Plafon “maksimal efisien” dibatasi titik impas toko.
+- Pemilihan produk: iklan tunggal hanya andalan bermargin positif; margin minus dikeluarkan dari grup / tidak jadi iklan tunggal baru (paling jauh masuk grup hemat). Bobot prioritas budget margin minus diturunkan (0,55 laku banyak / 0,35 lainnya).
+
 Diperbarui: 20 November 2026 (dini, unggah laporan iklan satu hari untuk campaign).
 
 - Di bawah riwayat campaign iklan ada unggahan Semua Laporan Iklan yang periodenya satu hari. Biaya dan omzet tanggal itu menggantikan selisih MTD pada kartu, progress, dan riwayat iklan campaign. File MTD ditolak di slot ini dan tetap untuk data latih.
