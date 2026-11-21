@@ -1,5 +1,10 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Kalkulator ongkir: tampilan pecah dasar / markup / harga set).
+
+- Tab Saran ongkir area menampilkan tiga kolom jelas: **Dasar ongkir** (berat dikenakan), **Markup +15% (profit+PPN)**, **Harga set** (bulat). Rumus tetap `round(dasar × 1,15)`.
+- Unduhan Excel: sheet **Area Provinsi** (harga set, terisi tetap) + sheet **Rincian** (pecah dasar → markup → harga set).
+
 Diperbarui: 21 November 2026 (Kalkulator ongkir: berat dikenakan aktual + volumetrik).
 
 - Saran ongkir area memakai **berat dikenakan** = maks(Total Berat kg, volumetrik P×L×T/6000), sama aturan Shopee Reguler/Hemat Kargo.

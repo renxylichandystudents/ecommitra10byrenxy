@@ -15,7 +15,9 @@
    - Bila ada berat dikenakan: `median(ongkir / berat_dikenakan) × median(berat_dikenakan)` di kota itu
      (tarif Rp/kg khas × paket khas kota itu — tidak tertarik paket ringan/berat mentah).
    - Bila tidak ada berat: fallback `median(ongkir)` seperti sebelumnya.
-6. **Saran** = `round(dasar × 1,15)` bilangan bulat. Ongkir template yang sudah terisi **tidak diganti**.
+6. **Harga set** = `round(dasar × 1,15)` bilangan bulat.
+   Markup **+15%** disengaja: **profit + PPN** di atas biaya kirim. Bukan biaya kurir mentah.
+7. Ongkir template yang sudah terisi **tidak diganti**.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import openpyxl
 import pandas as pd
 
 MARKUP = 1.15
+MARKUP_PCT = round((MARKUP - 1.0) * 100)  # 15 — profit + PPN
 # Shopee ID: Reguler & Hemat Kargo memakai (P×L×T cm) / 6000 → kg volumetrik.
 VOLUMETRIC_DIVISOR = 6000.0
 DEFAULT_TEMPLATE = Path(__file__).resolve().parents[2] / "data" / "Area_Provinsi_Pengiriman_Shopee.xlsx"
@@ -41,6 +44,8 @@ _SPACE = re.compile(r"\s+")
 _KABUPATEN = re.compile(r"^KABUPATEN\s+", re.IGNORECASE)
 _KAB_DOT = re.compile(r"^KAB\.\s*", re.IGNORECASE)
 _KOTA_DOT = re.compile(r"^KOTA\.\s*", re.IGNORECASE)
+
+
 def normalize_area_key(name: str) -> str:
     """Kunci cocok Area template ↔ Kota/Kabupaten transaksi."""
     text = _SPACE.sub(" ", str(name or "").strip().upper())
@@ -53,10 +58,18 @@ def normalize_area_key(name: str) -> str:
 
 
 def suggest_price(cost: float) -> int | None:
-    """Dasar ongkir × 1,15 → bilangan bulat (None bila biaya tidak valid)."""
+    """Biaya dasar × markup (profit+PPN) → harga set bilangan bulat."""
     if cost is None or not np.isfinite(cost) or cost < 0:
         return None
     return int(round(float(cost) * MARKUP))
+
+
+def markup_amount(cost: float) -> int | None:
+    """Selisih harga set − biaya dasar (bagian +15% profit+PPN), bilangan bulat."""
+    tip = suggest_price(cost)
+    if tip is None or not np.isfinite(cost):
+        return None
+    return int(tip - round(float(cost)))
 
 
 def volumetric_kg(panjang_cm: float, lebar_cm: float, tinggi_cm: float, *, qty: float = 1.0) -> float:
@@ -448,7 +461,7 @@ def build_suggestions(
     template: pd.DataFrame,
     shipping: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Gabung template + dasar transaksi. Ongkir terisi dipertahankan; sisanya saran +15%."""
+    """Gabung template + biaya dasar. Ongkir terisi tetap; kosong → harga set (dasar + markup)."""
     if template is None or template.empty:
         return pd.DataFrame(
             columns=[
@@ -459,6 +472,7 @@ def build_suggestions(
                 "Berat dikenakan median (kg)",
                 "Rp per kg median",
                 "Metode",
+                "Markup Rp",
                 "Saran ongkir",
                 "Ongkir usulan",
                 "Status",
@@ -490,6 +504,9 @@ def build_suggestions(
     out["Saran ongkir"] = out["Ongkir median transaksi"].map(
         lambda v: suggest_price(v) if pd.notna(v) else None
     )
+    out["Markup Rp"] = out["Ongkir median transaksi"].map(
+        lambda v: markup_amount(v) if pd.notna(v) else None
+    )
 
     filled = pd.to_numeric(out["Ongkir terisi"], errors="coerce")
     saran = out["Saran ongkir"]
@@ -507,8 +524,60 @@ def build_suggestions(
             status.append("Belum ada data transaksi")
     out["Ongkir usulan"] = pd.Series(usulan, dtype=object)
     out["Saran ongkir"] = pd.Series(list(out["Saran ongkir"]), dtype=object)
+    out["Markup Rp"] = pd.Series(list(out["Markup Rp"]), dtype=object)
     out["Status"] = status
     return out
+
+
+def _rincian_export_frame(suggestions: pd.DataFrame) -> pd.DataFrame:
+    """Sheet rincian: dasar → markup profit+PPN → harga set (pecah, mudah dibaca)."""
+    if suggestions is None or suggestions.empty:
+        return pd.DataFrame(
+            columns=[
+                "Provinsi",
+                "Area",
+                "Ongkir sekarang",
+                "Dasar ongkir",
+                f"Markup +{MARKUP_PCT}% (profit+PPN)",
+                "Harga set",
+                "Status",
+                "Dasar hitung",
+                "Berat dikenakan (kg)",
+                "Rp / kg",
+                "Invoice",
+            ]
+        )
+    rows = []
+    for _, row in suggestions.iterrows():
+        base = row.get("Ongkir median transaksi")
+        tip = row.get("Saran ongkir")
+        markup = row.get("Markup Rp")
+        usulan = row.get("Ongkir usulan")
+        metode = str(row.get("Metode") or "")
+        rows.append(
+            {
+                "Provinsi": row.get("Provinsi"),
+                "Area": row.get("Area"),
+                "Ongkir sekarang": row.get("Ongkir terisi"),
+                "Dasar ongkir": int(round(float(base))) if pd.notna(base) else None,
+                f"Markup +{MARKUP_PCT}% (profit+PPN)": int(markup)
+                if markup is not None and pd.notna(markup)
+                else None,
+                "Harga set": int(usulan)
+                if usulan is not None and pd.notna(usulan)
+                else (int(tip) if tip is not None and pd.notna(tip) else None),
+                "Status": row.get("Status"),
+                "Dasar hitung": (
+                    "Berat dikenakan"
+                    if metode == "berat_dikenakan"
+                    else ("Ongkir saja" if metode == "ongkir_saja" else metode)
+                ),
+                "Berat dikenakan (kg)": row.get("Berat dikenakan median (kg)"),
+                "Rp / kg": row.get("Rp per kg median"),
+                "Invoice": row.get("Invoice"),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def export_area_excel(
@@ -516,7 +585,7 @@ def export_area_excel(
     *,
     template_source: str | Path | bytes | BinaryIO | None = None,
 ) -> bytes:
-    """Excel layout sama dengan template: isi Ongkir kosong dengan saran; yang terisi tidak diubah."""
+    """Excel: sheet Area Provinsi (harga set, terisi tetap) + sheet Rincian (dasar / markup / harga set)."""
     path_or_bytes = template_source if template_source is not None else DEFAULT_TEMPLATE
     if isinstance(path_or_bytes, (str, Path)):
         wb = openpyxl.load_workbook(Path(path_or_bytes))
@@ -528,6 +597,7 @@ def export_area_excel(
             data = data.encode("utf-8")
         wb = openpyxl.load_workbook(BytesIO(data))
     ws = wb.active
+    ws.title = "Area Provinsi"
 
     for _, row in suggestions.iterrows():
         if str(row.get("Status") or "") != "Saran dari transaksi":
@@ -541,6 +611,26 @@ def export_area_excel(
         if current is not None:
             continue
         ws.cell(r, c).value = int(value)
+
+    # Sheet rincian pecah: dasar → markup → harga set.
+    detail = _rincian_export_frame(suggestions)
+    if "Rincian" in wb.sheetnames:
+        del wb["Rincian"]
+    ws2 = wb.create_sheet("Rincian")
+    headers = list(detail.columns)
+    for col_i, name in enumerate(headers, start=1):
+        ws2.cell(1, col_i).value = name
+    for row_i, rec in enumerate(detail.to_dict("records"), start=2):
+        for col_i, name in enumerate(headers, start=1):
+            value = rec.get(name)
+            if value is None or (isinstance(value, float) and not np.isfinite(value)):
+                ws2.cell(row_i, col_i).value = None
+            elif isinstance(value, (np.integer,)):
+                ws2.cell(row_i, col_i).value = int(value)
+            elif isinstance(value, (np.floating, float)):
+                ws2.cell(row_i, col_i).value = float(value)
+            else:
+                ws2.cell(row_i, col_i).value = value
 
     buf = BytesIO()
     wb.save(buf)

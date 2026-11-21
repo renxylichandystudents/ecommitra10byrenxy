@@ -178,6 +178,14 @@ def _mini_template_bytes() -> bytes:
     return buf.getvalue()
 
 
+def test_markup_amount_profit_ppn():
+    assert OA.MARKUP_PCT == 15
+    assert OA.markup_amount(100_000) == 15_000
+    assert OA.suggest_price(100_000) == 115_000
+    # Pecah: dasar + markup = harga set
+    assert OA.markup_amount(100_000) + int(round(100_000)) == OA.suggest_price(100_000)
+
+
 def test_parse_and_export_preserves_filled_fills_rest():
     raw_bytes = _mini_template_bytes()
     template = OA.parse_area_template(raw_bytes)
@@ -191,12 +199,19 @@ def test_parse_and_export_preserves_filled_fills_rest():
         }
     )
     suggestions = OA.build_suggestions(template, shipping)
+    assert suggestions.loc[suggestions["Area"].str.contains("SERANG", case=False), "Markup Rp"].iloc[0] == 15_000
     exported = OA.export_area_excel(suggestions, template_source=raw_bytes)
     wb = openpyxl.load_workbook(BytesIO(exported), data_only=True)
-    ws = wb.active
+    assert "Area Provinsi" in wb.sheetnames and "Rincian" in wb.sheetnames
+    ws = wb["Area Provinsi"]
     assert ws["C2"].value == 207000
     assert ws["C3"].value == 115000
     assert ws["C4"].value == 230000
+    rincian = wb["Rincian"]
+    headers = [rincian.cell(1, c).value for c in range(1, 12)]
+    assert "Dasar ongkir" in headers
+    assert "Markup +15% (profit+PPN)" in headers
+    assert "Harga set" in headers
 
 
 def test_default_template_parses_and_keeps_user_fills():

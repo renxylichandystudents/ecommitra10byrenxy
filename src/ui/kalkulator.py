@@ -967,15 +967,19 @@ def _carton_dimensions(features) -> pd.DataFrame:
 
 
 def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
-    """Saran Ongkir Area Provinsi: sadar berat dikenakan (aktual vs volumetrik), +15%, terisi tetap."""
+    """Saran Ongkir Area Provinsi: pecah dasar → markup profit+PPN → harga set; terisi tetap."""
     from src.core import ongkir_area as OA
 
+    pct = OA.MARKUP_PCT
     st.markdown("**Saran harga ongkir per area**")
-    st.caption(
-        "Dasar per kota/kabupaten memakai **berat dikenakan** = maks(berat aktual dari Total Berat, "
-        "berat volumetrik P×L×T/6000 dari ukuran karton) — sama seperti jasa kirim Shopee. "
-        "Tarif = median (ongkir ÷ berat dikenakan) × median berat dikenakan di kota itu, lalu × **15%** "
-        "dan dibulatkan ke rupiah bulat. Ongkir yang sudah Anda isi di template tidak diganti."
+    st.markdown(
+        f"<div class='field-hint' style='line-height:1.55;margin:.25rem 0 .6rem'>"
+        f"<b>Cara baca harga set</b> (tiga langkah): "
+        f"<b>1. Dasar ongkir</b> — biaya dari transaksi (berat dikenakan = maks(Total Berat, volumetrik P×L×T/6000)). "
+        f"<b>2. Markup +{pct}%</b> — profit + PPN di atas biaya kirim. "
+        f"<b>3. Harga set</b> — <code>round(dasar × 1,{pct:02d})</code> rupiah bulat; ini yang masuk unduhan bila sel masih kosong. "
+        f"Ongkir yang sudah Anda isi di template <b>tidak diganti</b>.</div>",
+        unsafe_allow_html=True,
     )
 
     default_path = OA.DEFAULT_TEMPLATE
@@ -983,7 +987,7 @@ def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
         "Unggah template Area Provinsi Pengiriman Shopee (opsional)",
         type=["xlsx", "xls"],
         key="calc-ongkir-template",
-        help="Kosongkan untuk memakai template bawaan di data aplikasi. Layout: Provinsi | Area | Ongkir (tiga blok).",
+        help="Kosongkan untuk memakai template bawaan. Layout Seller Centre: Provinsi | Area | Ongkir (tiga blok).",
     )
     template_bytes: bytes | None = None
     template_label = "template bawaan"
@@ -1016,9 +1020,9 @@ def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
     card(c2, "Sudah diisi (tetap)", fmt_num(counts["tetap"]), hint="tidak diganti di unduhan")
     card(
         c3,
-        "Saran dari transaksi",
+        "Saran harga set",
         fmt_num(counts["saran"]),
-        hint=f"{fmt_num(counts.get('pakai_berat', 0))} pakai berat dikenakan · lalu ×1,15",
+        hint=f"dasar + {pct}% profit & PPN · {fmt_num(counts.get('pakai_berat', 0))} pakai berat dikenakan",
     )
     card(c4, "Belum ada data", fmt_num(counts["kosong"]), hint="belum ada invoice cocok")
 
@@ -1030,41 +1034,39 @@ def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
         )
     elif counts.get("pakai_berat", 0) == 0 and counts["saran"] > 0:
         st.info(
-            "Saran memakai median ongkir saja karena kolom **Total Berat** (dan/atau ukuran karton) "
-            "belum terbaca. Unggah laporan pesanan yang memuat Total Berat, atau lengkapi dimensi karton "
-            "di Setting › Kapasitas gudang agar berat volumetrik ikut dihitung.",
+            "Dasar ongkir memakai median biaya saja karena kolom **Total Berat** (dan/atau ukuran karton) "
+            "belum terbaca. Unggah laporan yang memuat Total Berat, atau lengkapi dimensi karton "
+            "di Setting › Kapasitas gudang agar berat volumetrik ikut.",
             icon=":material/info:",
         )
 
-    cols = [
+    # Pecah kolom: dasar → markup → harga set (bukan satu angka “×1,15” yang membingungkan).
+    show = suggestions.copy()
+    dasar = pd.to_numeric(show.get("Ongkir median transaksi"), errors="coerce")
+    show["Dasar ongkir"] = dasar.map(lambda v: int(round(float(v))) if pd.notna(v) else None)
+    show[f"Markup +{pct}% (profit+PPN)"] = show.get("Markup Rp")
+    show["Harga set"] = show["Ongkir usulan"]
+    show["Ongkir sekarang"] = show.get("Ongkir terisi")
+    show["Berat dikenakan (kg)"] = show.get("Berat dikenakan median (kg)")
+    show["Rp / kg"] = show.get("Rp per kg median")
+    show["Dasar hitung"] = show.get("Metode", pd.Series("", index=show.index)).map(
+        {"berat_dikenakan": "Berat dikenakan", "ongkir_saja": "Ongkir saja"}
+    ).fillna("")
+    display_cols = [
         "Provinsi",
         "Area",
-        "Ongkir terisi",
-        "Ongkir median transaksi",
-        "Berat dikenakan median (kg)",
-        "Rp per kg median",
-        "Saran ongkir",
-        "Ongkir usulan",
-        "Metode",
+        "Ongkir sekarang",
+        "Dasar ongkir",
+        f"Markup +{pct}% (profit+PPN)",
+        "Harga set",
+        "Berat dikenakan (kg)",
+        "Rp / kg",
+        "Dasar hitung",
         "Status",
         "Invoice",
     ]
-    view = suggestions[[c for c in cols if c in suggestions.columns]].copy()
-    show = view.rename(
-        columns={
-            "Ongkir terisi": "Ongkir sekarang",
-            "Ongkir median transaksi": "Dasar transaksi",
-            "Berat dikenakan median (kg)": "Berat dikenakan (kg)",
-            "Rp per kg median": "Rp / kg",
-            "Saran ongkir": "Saran (+15%)",
-            "Ongkir usulan": "Nilai di unduhan",
-            "Metode": "Dasar hitung",
-        }
-    )
-    if "Dasar hitung" in show.columns:
-        show["Dasar hitung"] = show["Dasar hitung"].map(
-            {"berat_dikenakan": "Berat dikenakan", "ongkir_saja": "Ongkir saja"}
-        ).fillna(show["Dasar hitung"])
+    show = show[[c for c in display_cols if c in show.columns]]
+
     filter_opt = st.segmented_control(
         "Tampilkan",
         ["Semua", "Sudah diisi", "Ada saran", "Belum ada data"],
@@ -1079,8 +1081,9 @@ def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
         show = show.loc[show["Status"].eq("Belum ada data transaksi")]
 
     st.markdown(
-        f"<div class='field-hint'>Pratinjau · {fmt_num(len(show))} area "
-        f"(filter: {html.escape(filter_opt)}). Unduh Excel di bawah memakai layout Seller Centre yang sama.</div>",
+        f"<div class='field-hint'>Pratinjau · {fmt_num(len(show))} area (filter: {html.escape(filter_opt)}). "
+        f"Kolom <b>Harga set</b> = yang ditulis ke sheet Area Provinsi saat unduh "
+        f"(sel kosong saja; yang sudah diisi tetap).</div>",
         unsafe_allow_html=True,
     )
     show_table(show, key="calc-ongkir-table")
@@ -1089,11 +1092,11 @@ def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
     filled_or_saran = counts["tetap"] + counts["saran"]
     dl1, dl2 = st.columns([3, 1.2], vertical_alignment="center")
     dl1.markdown(
-        "<div class='field-hint'><b>Unduh saran harga ongkir</b> — file Excel siap tempel ke pengaturan area pengiriman Shopee. "
-        f"Harga yang sudah terisi ({fmt_num(counts['tetap'])} area) tetap; "
-        f"{fmt_num(counts['saran'])} area kosong diisi saran dari transaksi"
-        f" ({fmt_num(counts.get('pakai_berat', 0))} memakai berat dikenakan); "
-        f"{fmt_num(counts['kosong'])} area tanpa data transaksi dibiarkan kosong.</div>",
+        "<div class='field-hint'><b>Unduh saran harga ongkir</b> — dua sheet: "
+        "<b>Area Provinsi</b> (layout Seller Centre, kolom Ongkir = harga set; yang sudah terisi tetap) dan "
+        f"<b>Rincian</b> (Dasar ongkir → Markup +{pct}% profit+PPN → Harga set). "
+        f"{fmt_num(counts['tetap'])} area tetap · {fmt_num(counts['saran'])} area diisi harga set · "
+        f"{fmt_num(counts['kosong'])} tanpa data.</div>",
         unsafe_allow_html=True,
     )
     with dl2:
@@ -1106,9 +1109,8 @@ def _ongkir_area_panel(orders: pd.DataFrame | None, *, features=None) -> None:
             icon=":material/download:",
             use_container_width=True,
             help=(
-                f"Excel Area Provinsi: {filled_or_saran} area punya harga "
-                f"({counts['tetap']} tetap + {counts['saran']} saran). "
-                "Sel yang sudah diisi tidak diubah."
+                f"Sheet Area Provinsi + Rincian (dasar / +{pct}% / harga set). "
+                f"{filled_or_saran} area punya harga ({counts['tetap']} tetap + {counts['saran']} saran)."
             ),
         )
 
