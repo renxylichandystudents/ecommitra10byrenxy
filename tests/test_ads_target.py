@@ -358,3 +358,83 @@ class MarginPriorityTest(unittest.TestCase):
         self.assertGreater(A.priority(fast_bad), A.priority(bad))
         plan = A.allocate_target([good, bad], gap_daily=10_000_000, target_roas=2, budget_daily=250_000)
         self.assertGreater(plan.cost["good"], plan.cost["bad"])
+
+
+class MarginAwareSelectionTest(unittest.TestCase):
+    def test_negative_margin_not_promoted_to_single_and_new_singles_prefer_profit(self):
+        import pandas as pd
+
+        group = A.Unit(key="grup:G", nama="G", jenis="Grup", status="Berjalan", mode="GMV Max", daily_cost=100_000, daily_sales=1_200_000,
+                       a=1, b=1, spread=0.2, members=["star", "loss", "mid"])
+        members = pd.DataFrame([
+            {"unit": "grup:G", "periode": "2026-09", "product_code": "star", "nama": "Star", "biaya": 40_000, "omzet": 700_000, "terjual": 5},
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "star", "nama": "Star", "biaya": 40_000, "omzet": 700_000, "terjual": 5},
+            {"unit": "grup:G", "periode": "2026-09", "product_code": "loss", "nama": "Loss", "biaya": 40_000, "omzet": 400_000, "terjual": 4},
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "loss", "nama": "Loss", "biaya": 40_000, "omzet": 400_000, "terjual": 4},
+            {"unit": "grup:G", "periode": "2026-09", "product_code": "mid", "nama": "Mid", "biaya": 20_000, "omzet": 100_000, "terjual": 1},
+            {"unit": "grup:G", "periode": "2026-10", "product_code": "mid", "nama": "Mid", "biaya": 20_000, "omzet": 100_000, "terjual": 1},
+        ])
+        products = pd.DataFrame([
+            {"product_code": "star", "nama": "Star", "omzet_harian": 900_000, "qty_harian": 3, "stok_room": 1e6, "stok": 50},
+            {"product_code": "loss", "nama": "Loss", "omzet_harian": 800_000, "qty_harian": 3, "stok_room": 1e6, "stok": 50},
+            {"product_code": "mid", "nama": "Mid", "omzet_harian": 200_000, "qty_harian": 1, "stok_room": 1e6, "stok": 50},
+            {"product_code": "new_good", "nama": "New Good", "omzet_harian": 2_000_000, "qty_harian": 5, "stok_room": 1e6, "stok": 40},
+            {"product_code": "new_bad", "nama": "New Bad", "omzet_harian": 3_000_000, "qty_harian": 6, "stok_room": 1e6, "stok": 40},
+        ])
+        contrib = {"star": 0.18, "loss": -0.12, "mid": 0.05, "new_good": 0.22, "new_bad": -0.15}
+        sel = A.product_selection(members, [group], products, contrib, target_roas=8, focus=False).set_index("Kode produk")
+        self.assertEqual(sel.loc["star", "Saran"], "Jadikan iklan tunggal")
+        self.assertEqual(sel.loc["loss", "Saran"], "Keluarkan dari grup")
+        self.assertEqual(sel.loc["new_good", "Saran"], "Buat iklan tunggal")
+        self.assertEqual(sel.loc["new_bad", "Saran"], "Tambahkan ke grup")
+        self.assertIn("margin minus", sel.loc["new_bad", "Alasan"])
+
+
+class RecOptionsUnderwaterTest(unittest.TestCase):
+    def test_underwater_pick_prefers_contribution_not_max_sales(self):
+        from src.ui.ads_target import _rec_options
+        from src.core.ads_month import StoreCurve
+
+        # Kurva lemah: marginal di laju tinggi ≈ 1,4 → butuh kontribusi ≥ 71%; kita kasih −10%.
+        curve = StoreCurve(s0=2e9, a=2e8, b=1e8, points=[("2026-08", 1e8, 2.2e9), ("2026-09", 2e8, 2.4e9), ("2026-10", 2.5e8, 2.5e9)], source="uji")
+        target, projection, spent = 5_000_000_000, 3_300_000_000, 190_000_000
+        days_left, month_days, run_days = 10, 30, 10
+        spent_daily, cost_now = 9_500_000, 40_000_000
+        pace_total = spent + cost_now * days_left
+
+        def best_roas(daily, gap, mm=5.0):
+            return 8.0
+
+        def option(r, daily, gap, mm=5.0):
+            # "Efisien" menyerap hampir semua daily; lean (mm tinggi) lebih hemat.
+            use = daily * (0.4 if mm >= 10 else 0.9)
+            return {"biaya_total": use * run_days, "omzet_tambahan": use * 6 * run_days, "roas_rencana": 6.0}
+
+        def project(tgt, budget, roas, mm=5.0):
+            used_daily = max(budget - spent, 0) / days_left * (0.4 if mm >= 10 else 0.9)
+            effective = spent + used_daily * days_left
+            extra = (budget - spent) * 0.02
+            return projection + extra, extra, True, effective
+
+        def economics(final, effective):
+            return effective / final * 100, final * (-0.101) - effective
+
+        def ratio_budget():
+            return 150_000_000
+
+        opts, info = _rec_options(
+            target=target, projection=projection, spent=spent, cost_now=cost_now, days_left=days_left, month_days=month_days,
+            run_days=run_days, pace_total=pace_total, curve=curve, spent_daily=spent_daily, best_roas=best_roas, option=option,
+            project=project, units=[], factor=0.85, month_name="November 2026", economics=economics, ratio_budget=ratio_budget,
+            user_budget=300_000_000, contrib_rate=-0.101,
+        )
+        self.assertTrue(info["underwater"])
+        self.assertTrue(info["high_burn"])
+        utama = next(o for o in opts if o["utama"])
+        self.assertFalse(utama["nama"].startswith("A · Laju tinggi") or "Laju tinggi" in utama["nama"])
+        # Saran utama harus punya laba (paling tidak buruk) ≥ opsi sales-max yang lebih boros.
+        boros = max(opts, key=lambda o: o["efektif"])
+        self.assertGreaterEqual(utama["laba"], boros["laba"])
+        self.assertLessEqual(utama["efektif"], boros["efektif"])
+        self.assertTrue(any("Kembalikan ke rata-rata" in o["nama"] for o in opts))
+        self.assertFalse(any("100% target" in o["nama"] for o in opts))

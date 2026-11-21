@@ -483,9 +483,13 @@ def _submitted_setting(features, periode: str) -> dict | None:
 
 def _rec_options(*, target: float, projection: float, spent: float, cost_now: float, days_left: int, month_days: int, run_days: int, pace_total: float,
                  curve, spent_daily: float, best_roas, option, project, units, factor: float, month_name: str,
-                 economics, ratio_budget, user_budget: float | None = None, user_note: str = "") -> tuple[list[dict], dict]:
-    """Opsi rekomendasi sistem (semua memakai biaya yang benar-benar bisa dibelanjakan efisien):
-    A laju sekarang, B maksimal yang efisien, H hemat biaya (tiap Rp 1 kembali ≥ Rp 10), C budget 100% target bila masih efisien.
+                 economics, ratio_budget, user_budget: float | None = None, user_note: str = "",
+                 contrib_rate: float | None = None) -> tuple[list[dict], dict]:
+    """Opsi rekomendasi sistem (biaya yang benar-benar bisa dibelanjakan efisien + sadar margin):
+
+    - Budget Anda / laju sekarang / maksimal efisien / hemat / minimum Shopee / 100% target (hanya bila tidak menambah rugi).
+    - Bila kontribusi toko di bawah titik impas iklan, opsi utama = yang estimasi kontribusi sesudah iklan paling baik
+      (bukan sales tertinggi dengan biaya gila).
     Mengembalikan (opsi, info kebutuhan 100% target)."""
     from src.core import ads_month as M
 
@@ -493,6 +497,10 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
     out: list[dict] = []
     strict = 2 * A.MIN_MARGINAL
     res_share = max(days_left, 0) / max(month_days, 1)
+    m_now = curve.marginal(cost_now * month_days) if curve is not None and cost_now > 0 else (
+        curve.marginal(spent_daily * month_days) if curve is not None and spent_daily > 0 else float("nan"))
+    underwater = M.ads_deepens_loss(contrib_rate, m_now) if m_now == m_now else (contrib_rate is not None and contrib_rate <= 0)
+    profit_cap = M.profitable_monthly_cap(curve, contrib_rate)
 
     def make(name: str, budget: float, action: str, extra_lines: list[str] | None = None, *, mm: float = A.MIN_MARGINAL, origin: str = "") -> dict:
         daily = max(budget - spent, 0.0) / max(days_left, 1)
@@ -529,39 +537,92 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
 
     if user_budget:
         out.append(make("Budget Anda", float(user_budget),
-                        "jalankan budget yang Anda isi di Fitur khusus; sistem membagi sisanya ke iklan dan produk paling efektif (tabel di bawah).",
+                        "jalankan budget yang Anda isi di Fitur khusus; sistem membagi sisanya ke iklan bermargin positif / ROAS tinggi dulu (lihat Pemilihan produk).",
                         origin=f"diisi di Fitur khusus{(' · ' + user_note) if user_note else ''}"))
+    # Laju sekarang: jangan disajikan sebagai jalur wajar bila jauh di atas rata-rata bulan ini.
+    pace_vs_avg = cost_now / spent_daily if spent_daily > 0 and cost_now > 0 else 1.0
+    high_burn = pace_vs_avg >= 1.5
     if not user_budget or abs(pace_total - user_budget) > 0.02 * max(user_budget, 1):
-        out.append(make(f"Laju iklan sekarang diteruskan ({fmt_idr(cost_now)}/hari)", max(pace_total, spent),
-                        "budget harian iklan tetap seperti sekarang; rapikan pemilihan produk & Target ROAS sesuai tabel di bawah.",
-                        origin=f"terpakai {fmt_idr(spent)} + iklan berjalan {fmt_idr(cost_now)}/hari × {days_left} hari"))
+        if high_burn:
+            out.append(make(
+                f"Laju tinggi sekarang ({fmt_idr(cost_now)}/hari · +{fmt_pct((pace_vs_avg - 1) * 100, 0)} vs rata-rata)",
+                max(pace_total, spent),
+                "turunkan dulu ke laju mendekati rata-rata bulan ini, lalu rapikan produk: iklan tunggal untuk andalan bermargin positif, "
+                "grup untuk sisanya, jeda yang ROAS lemah.",
+                [f"⚠️ Laju berjalan {fmt_idr(cost_now)}/hari vs rata-rata 1–hari-data {fmt_idr(spent_daily)}/hari. "
+                 "Meneruskan laju ini tanpa seleksi produk biasanya boros dan (bila margin toko lemah) menambah rugi."],
+                origin=f"terpakai {fmt_idr(spent)} + iklan berjalan {fmt_idr(cost_now)}/hari × {days_left} hari (bukan saran utama)",
+            ))
+        else:
+            out.append(make(f"Laju iklan sekarang diteruskan ({fmt_idr(cost_now)}/hari)", max(pace_total, spent),
+                            "budget harian iklan tetap seperti sekarang; rapikan pemilihan produk (tunggal vs grup) & Target ROAS sesuai tabel di bawah.",
+                            origin=f"terpakai {fmt_idr(spent)} + iklan berjalan {fmt_idr(cost_now)}/hari × {days_left} hari"))
     res = M.month_plan(curve, target=target, projection=projection, spent=spent, cost_now_daily=spent_daily, days_left=days_left,
                        month_days=month_days, budget_total=None)
     need_total = _round_m(res["budget_dibutuhkan"]) if res.get("ada_kurva") else None
-    big = max((need_total - spent) / max(days_left, 1) if need_total else 0.0, cost_now * 4, 1.0)
+    # Plafon pencarian: jangan pakai cost_now×4 bila laju berjalan sudah absurd — pakai rata-rata / kebutuhan kurva.
+    search_daily = max(
+        (need_total - spent) / max(days_left, 1) if need_total else 0.0,
+        spent_daily * 2 if spent_daily > 0 else 0.0,
+        min(cost_now, spent_daily * 1.5) if spent_daily > 0 else cost_now,
+        1.0,
+    )
+    big = max(search_daily, 1.0)
     absorbed = min(float(option(best_roas(big, gap), big, gap)["biaya_total"]) / max(run_days, 1), big)
     max_total = _round_m(spent + absorbed * days_left)
+    # Batas titik impas toko: jangan usulkan "maksimal efisien" di atas laju di mana marginal sales × kontribusi < 1.
+    if profit_cap is not None and days_left > 0:
+        cap_total = _round_m(spent + max(profit_cap, 0.0) * (days_left / max(month_days, 1)))
+        if underwater:
+            max_total = min(max_total, max(cap_total, spent))
+        elif cap_total > spent:
+            max_total = min(max_total, cap_total)
     lean_daily = min(float(option(best_roas(big, gap, strict), big, gap, strict)["biaya_total"]) / max(run_days, 1), big)
     lean_total = _round_m(spent + lean_daily * days_left)
-    if max_total > max(o["efektif"] for o in out) * 1.02:
+    # Acuan laju sehat ≈ rata-rata bulan ini (bukan spike berjalan).
+    avg_pace_total = _round_m(spent + spent_daily * days_left) if spent_daily > 0 else pace_total
+    if high_burn and abs(avg_pace_total - pace_total) > 0.02 * max(pace_total, 1):
+        out.append(make(
+            f"Kembalikan ke rata-rata bulan ini ({fmt_idr(spent_daily)}/hari)",
+            max(avg_pace_total, spent),
+            "turunkan budget iklan ke laju rata-rata 1–hari-data; pindahkan budget ke iklan tunggal produk bermargin positif yang ROAS-nya kuat, "
+            "sisanya di grup hemat.",
+            ["Jalur terukur dari data terbaru: biaya ikut histori bulan ini, bukan spike harian yang sedang jalan."],
+            origin=f"terpakai {fmt_idr(spent)} + rata-rata {fmt_idr(spent_daily)}/hari × {days_left} hari",
+        ))
+    if out and max_total > max(o["efektif"] for o in out) * 1.02:
+        eff_lines = [f"Ini batas biaya yang masih efisien menurut ROAS iklan: iklan yang ada + usulan iklan baru ±{fmt_idr(absorbed)}/hari. "
+                     f"Di atas itu tambahan Rp 1 kembali kurang dari Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan."]
+        if underwater:
+            eff_lines.append("⚠️ Kontribusi toko di bawah titik impas: opsi ini menaikkan omzet tetapi estimasi kontribusi sesudah iklan bisa lebih buruk. "
+                             "Utamakan opsi hemat / minimum Shopee bila prioritasnya tidak menambah rugi.")
         out.append(make("Maksimal yang bisa dibelanjakan efisien", max_total,
-                        "naikkan budget iklan yang masih efektif bertahap (maks. 2× tiap Senin) dan buat iklan baru untuk produk laris sesuai Pemilihan produk.",
-                        [f"Ini batas biaya yang masih efisien: iklan yang ada + usulan iklan baru ±{fmt_idr(absorbed)}/hari. Di atas itu tambahan Rp 1 "
-                         f"kembali kurang dari Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan."],
-                        origin=f"batas biaya yang tiap tambahan Rp 1 masih kembali ≥ Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan"))
-    if lean_total < min(o["efektif"] for o in out) * 0.98:
+                        "naikkan hanya iklan tunggal bermargin positif yang masih efektif (maks. 2× tiap Senin); produk lemah tetap di grup atau dikeluarkan.",
+                        eff_lines,
+                        origin=f"batas biaya yang tiap tambahan Rp 1 masih kembali ≥ Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan"
+                               + (" · dibatasi titik impas toko" if profit_cap is not None else "")))
+    if out and lean_total < min(o["efektif"] for o in out) * 0.98:
         out.append(make(f"Hemat biaya (tiap Rp 1 kembali ≥ Rp {fmt_num(strict, 0)})", lean_total,
-                        "pangkas/jeda iklan dan produk yang hasilnya rendah, pertahankan hanya iklan paling produktif.",
-                        ["Opsi ini mengutamakan penghematan: biaya turun, sales sedikit berkurang dibanding opsi lain."], mm=strict,
+                        "pangkas/jeda iklan dan produk yang hasilnya rendah; pertahankan iklan tunggal andalan bermargin positif, sisanya di grup hemat.",
+                        ["Opsi ini menekan biaya iklan sambil menjaga omzet dari produk yang benar-benar merespons."], mm=strict,
                         origin=f"hanya iklan yang tiap tambahan Rp 1 kembali ≥ Rp {fmt_num(strict, 0)} omzet iklan"))
     min_total = ratio_budget()
-    if min_total is not None and min_total < min(o["efektif"] for o in out) * 0.98:
+    if min_total is not None and out and min_total < min(o["efektif"] for o in out) * 0.98:
         out.append(make(f"Minimum {fmt_num(M.SHOPEE_MIN_AD_PCT, 0)}% sales bruto (syarat Shopee)", min_total,
-                        "turunkan budget iklan ke batas minimum agar benefit Shopee tetap didapat; budget hanya untuk iklan dengan ROAS tertinggi.",
-                        ["Opsi paling hemat yang masih memenuhi syarat minimum biaya iklan Shopee: biaya turun paling banyak, sales ikut turun sesuai kurva toko."],
+                        "turunkan budget iklan ke batas minimum agar benefit Shopee tetap didapat; budget hanya untuk iklan tunggal ROAS tertinggi bermargin positif.",
+                        ["Opsi paling hemat yang masih memenuhi syarat minimum biaya iklan Shopee."],
                         origin=f"{fmt_num(M.SHOPEE_MIN_AD_PCT, 0)}% × sales bruto proyeksi bulan ini (tidak kurang dari yang sudah terpakai)"))
-    info = {"need": need_total, "max_efisien": max(max(o["efektif"] for o in out), spent + absorbed * days_left), "gap": gap, "absorbed": absorbed}
-    if need_total is not None and gap > 0 and need_total <= info["max_efisien"] * 1.02:
+    info = {
+        "need": need_total,
+        "max_efisien": max((max(o["efektif"] for o in out) if out else 0.0), spent + absorbed * days_left),
+        "gap": gap,
+        "absorbed": absorbed,
+        "underwater": underwater,
+        "profit_cap": profit_cap,
+        "high_burn": high_burn,
+    }
+    # 100% target hanya ditawarkan bila tidak secara jelas menambah rugi.
+    if need_total is not None and gap > 0 and need_total <= info["max_efisien"] * 1.02 and not underwater:
         lines = []
         room = sum(max(u.stock_room, 0.0) for u in units if np.isfinite(u.stock_room))
         need_extra_daily = gap / max(days_left, 1) / max(factor, 1e-9)
@@ -569,15 +630,34 @@ def _rec_options(*, target: float, projection: float, spent: float, cost_now: fl
             lines.append(f"⚠️ Ruang stok produk yang diiklankan ±{fmt_idr(room)}/hari, di bawah tambahan penjualan yang dibutuhkan ±{fmt_idr(need_extra_daily)}/hari: "
                          "ajukan restock/PO agar target tidak tertahan stok.")
         out.append(make("Budget untuk 100% target", need_total,
-                        "naikkan budget iklan efektif bertahap tiap Senin, buat iklan baru untuk produk laris, dan pastikan stok cukup.", lines,
-                        origin="kurva respons toko: biaya sebulan agar proyeksi = target"))
-    if gap <= 0:
+                        "naikkan budget iklan efektif bertahap tiap Senin pada produk bermargin positif, buat iklan tunggal untuk andalan, dan pastikan stok cukup.",
+                        lines, origin="kurva respons toko: biaya sebulan agar proyeksi = target"))
+    elif need_total is not None and gap > 0 and underwater:
+        info["need_blocked"] = True
+
+    if not out:
+        return out, info
+
+    if underwater:
+        # Prioritas: estimasi kontribusi sesudah iklan terbaik (paling sedikit rugi), lalu biaya terkecil.
+        with_laba = [o for o in out if o["laba"] is not None]
+        pick = max(with_laba, key=lambda o: (o["laba"], -o["efektif"])) if with_laba else min(out, key=lambda o: o["efektif"])
+    elif gap <= 0:
         ok = [o for o in out if o["proyeksi"] >= target - 1]
         pick = min(ok, key=lambda o: o["efektif"]) if ok else max(out, key=lambda o: o["proyeksi"])
     else:
-        # Sales tertinggi, tapi bila opsi lain hanya kalah ≤ 0,5% target dengan biaya lebih kecil, pilih yang lebih hemat.
+        # Sales tertinggi, tapi bila opsi lain hanya kalah ≤ 0,5% target dengan biaya lebih kecil / laba lebih baik, pilih yang lebih sehat.
         best = max(o["proyeksi"] for o in out)
-        pick = min((o for o in out if o["proyeksi"] >= best - max(0.005 * target, 1.0)), key=lambda o: o["efektif"])
+        near = [o for o in out if o["proyeksi"] >= best - max(0.005 * target, 1.0)]
+        pick = min(near, key=lambda o: (o["efektif"], -(o["laba"] if o["laba"] is not None else -1e30)))
+    # Jangan jadikan opsi "laju tinggi / spike" sebagai utama.
+    if high_burn and pick["nama"].startswith("Laju tinggi"):
+        alts = [o for o in out if not o["nama"].startswith("Laju tinggi")]
+        if alts:
+            if underwater and any(o["laba"] is not None for o in alts):
+                pick = max([o for o in alts if o["laba"] is not None], key=lambda o: (o["laba"], -o["efektif"]))
+            else:
+                pick = min(alts, key=lambda o: o["efektif"]) if underwater else max(alts, key=lambda o: (o["proyeksi"], -o["efektif"]))
     pick["utama"] = True
     for i, o in enumerate(out):
         o["nama"] = f"{chr(65 + i)} · {o['nama']}"
@@ -936,12 +1016,12 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             if dup_count:
                 st.caption(f"{fmt_num(dup_count)} baris lain adalah produk di iklan yang sudah dijeda/berakhir yang juga ada di iklan aktif: "
                            "tidak perlu tindakan, omzetnya hanya dihitung di iklan aktifnya (ada di unduhan Excel).")
-            st.caption(f"Dasar: hasil iklan 2 bulan terakhir per produk, prediksi omzet dari analisa, stok, dan target ROAS {fmt_num(roas, 1)}. "
+            st.caption(f"Dasar: hasil iklan 2 bulan terakhir per produk, prediksi omzet dari analisa, stok, margin (File margin), dan target ROAS {fmt_num(roas, 1)}. "
                        f"Layak diiklankan = potensi sales ≥ {fmt_idr(floor_sales)}/hari (produk pembentuk 95% sales toko) atau laku ≥ {fmt_num(floor_qty, 1)} unit/hari; "
                        "di bawah itu iklan dihentikan (Stop iklan · sales kecil) dan produk belum diiklankan tidak diusulkan. "
-                       "Jadikan tunggal = porsi omzet ≥ 30% di grup dan ROAS ≥ 80% target; keluarkan/pindahkan = ROAS < 50% target atau biaya tanpa omzet. "
-                       "Satu produk hanya di satu iklan. Budget per iklan sudah dihitung dengan susunan ini: produk yang dikeluarkan/dijeda tidak lagi "
-                       "dihitung omzetnya, iklan tunggal hasil pisah mengambil budget dari grup asalnya. Kerjakan bersamaan dengan perubahan budget hari Senin.")
+                       "Strategi biaya/omzet: jadikan iklan tunggal hanya andalan bermargin positif (porsi ≥ 30% di grup & ROAS ≥ 80% target); "
+                       "produk margin minus / ROAS lemah dikeluarkan dari grup atau dipindah ke grup hemat; iklan tunggal baru hanya untuk kandidat "
+                       "yang bisa menutup gap dengan kontribusi positif. Satu produk hanya di satu iklan. Kerjakan bersamaan dengan perubahan budget hari Senin.")
 
         # ---------------- 4. Rencana per iklan
         _step(n0 + 1, "Budget per iklan", f"· ubah di Shopee mulai {fmt_date(start)}, berlaku s.d. {fmt_date(end)}")
@@ -1047,7 +1127,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                                       "dipakai untuk Target ROAS Shopee dan budget per iklan, bukan untuk proyeksi target"),
                 ("Stok", "tambahan omzet tiap iklan maks. ruang stok produknya sampai akhir bulan (stok − prediksi − SS); iklan yang tertahan stok ditandai untuk restock"),
                 ("Margin", "ikut menentukan prioritas budget: tambahan omzet dinilai × bobot margin (margin positif 1,0–1,6; margin tidak diketahui 1,0; "
-                       "margin minus 0,85 bila produk laku banyak, 0,6 bila tidak). Iklan margin minus tetap boleh untuk mengejar sales/qty, tetapi dipangkas "
+                       "margin minus 0,55 bila produk laku banyak, 0,35 bila tidak). Iklan margin minus tetap boleh untuk mengejar sales/qty, tetapi dipangkas "
                        "lebih dulu dan butuh hasil lebih tinggi (batas efisiensi Rp 5 ÷ bobot)"),
                 ("Proyeksi tanpa perubahan", "sales bersih aktual s.d. hari penuh terakhir + prediksi per tanggal berpola untuk sisa bulan "
                                              "(sama dengan Pantauan harian dan Kalkulator biaya)"),
@@ -1275,27 +1355,36 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     notes.append(f"Kesimpulan: {'target sudah terkejar dengan laju sekarang — opsi di bawah mencari budget paling hemat' if gap <= 0 else f'perlu tambahan {fmt_idr(gap)} sales bersih dalam {days_left} hari ({fmt_idr(gap / days_left)}/hari)'}.")
     st.markdown("<div class='field-hint'>" + "<br>".join(notes) + "</div>", unsafe_allow_html=True)
     if curve is not None and contrib_rate is not None:
-        m_now = curve.marginal(cost_now * month_days)
-        need_rate = 1 / m_now if m_now > 0 else float("inf")
-        if contrib_rate < need_rate:
-            _box("💰 Titik impas iklan",
+        m_now = curve.marginal(cost_now * month_days) if cost_now > 0 else curve.marginal(spent_daily * month_days)
+        need_rate = M.break_even_contrib(m_now)
+        if M.ads_deepens_loss(contrib_rate, m_now):
+            _box("💰 Titik impas iklan · jangan kejar target dengan biaya gila",
                  f"Pada laju sekarang, tambahan Rp 1 iklan menambah ±Rp {fmt_num(m_now, 1)} sales bersih. Agar tambahan itu tidak menambah rugi, kontribusi "
                  f"produk (margin kotor − potongan Shopee, sebelum iklan) perlu ≥ <b>{fmt_pct(need_rate * 100, 0)}</b>; rata-rata produk yang diprediksi "
-                 f"terjual sekarang <b>{fmt_pct(contrib_rate * 100, 1)}</b>. Artinya menaikkan budget mengejar target menambah sales sekaligus menambah rugi, "
-                 "dan menurunkan budget mengurangi rugi sekaligus sales. Pilih opsi sesuai prioritas bulan ini, iklankan produk bermargin positif lebih dulu, "
-                 "dan perbaiki harga produk yang marginnya minus (lihat catatan 'margin minus' di tabel).", "#b45309")
+                 f"terjual sekarang <b>{fmt_pct(contrib_rate * 100, 1)}</b>. "
+                 "<b>Opsi utama di bawah memilih jalur yang estimasi kontribusinya paling baik</b> (bukan sales tertinggi dengan spend besar). "
+                 "Strategi biaya/omzet: jadikan iklan tunggal hanya andalan bermargin positif, sisanya di grup hemat, keluarkan yang margin minus / ROAS lemah. "
+                 "Perbaiki harga produk rugi sebelum menaikkan budget.", DOWN)
     if not has_ads or not units:
         st.info("Laporan iklan (grup / keseluruhan) belum diunggah atau tidak ada iklan produk tunggal & grup: opsi iklan butuh riwayat biaya & omzet per iklan.")
         return
 
-    _step(2, "Opsi mencapai target", "· pilih satu opsi; rincian produk & budget per iklan serta tombol simpan ada di bawah")
+    step2_note = ("· opsi utama = estimasi kontribusi terbaik (margin toko di bawah titik impas)"
+                  if contrib_rate is not None and curve is not None and M.ads_deepens_loss(
+                      contrib_rate, curve.marginal(cost_now * month_days) if cost_now > 0 else curve.marginal(spent_daily * month_days))
+                  else "· pilih satu opsi; rincian produk & budget per iklan serta tombol simpan ada di bawah")
+    _step(2, "Opsi mencapai target (sadar margin)", step2_note)
     with st.spinner("Menghitung opsi..."):
         _sub = _submitted_setting(features, periode)
         opts, need_info = _rec_options(target=target, projection=projection, spent=spent, cost_now=cost_now, days_left=days_left, month_days=month_days, run_days=run_days,
                             pace_total=pace_total, curve=curve, spent_daily=spent_daily, best_roas=best_roas, option=option, project=project, units=base_units,
                             factor=factor, month_name=month_name, economics=economics, ratio_budget=ratio_budget,
                             user_budget=float(_sub["budget_bulan"]) if _sub else None,
-                            user_note=f"dikirim {_sub.get('oleh', '')} {_sub.get('dikirim', '')}".strip() if _sub else "")
+                            user_note=f"dikirim {_sub.get('oleh', '')} {_sub.get('dikirim', '')}".strip() if _sub else "",
+                            contrib_rate=contrib_rate)
+    if not opts:
+        st.info("Belum ada opsi budget yang bisa dihitung dari data iklan saat ini.")
+        return
     table_opts = pd.DataFrame([{"Opsi": o["nama"], "Asal angka budget": o["asal"], "Budget sebulan": o["budget"], "Biaya efektif sebulan": o["efektif"], "Hemat": max(o["budget"] - o["efektif"], 0.0),
                                 "Sisa/hari": o["harian"], "Target ROAS": o["roas"],
                                 "Proyeksi sales bersih akhir bulan": o["proyeksi"], "% target": o["proyeksi"] / target * 100, "Efek budget iklan": o["tambahan"],
@@ -1304,9 +1393,22 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     show_table(table_opts, kinds={"Budget sebulan": "money", "Biaya efektif sebulan": "money", "Hemat": "money", "Sisa/hari": "money", "Target ROAS": "dec", "Proyeksi sales bersih akhir bulan": "money", "% target": "pct",
                                   "Efek budget iklan": "money", "Biaya iklan % sales bruto": "pct", "Estimasi kontribusi": "money"},
                column_config={"Opsi": st.column_config.TextColumn(width="medium"), "Asal angka budget": st.column_config.TextColumn(width="large"),
-                              "Yang dilakukan": st.column_config.TextColumn(width="large")}, row_height=35)
+                              "Yang dilakukan": st.column_config.TextColumn(width="large"),
+                              "Estimasi kontribusi": st.column_config.Column(help="Sales bersih proyeksi × kontribusi sebelum iklan − biaya iklan efektif. Angka minus = jalur menambah rugi.")},
+               row_height=35)
     top = max(opts, key=lambda o: o["proyeksi"])
-    if need_info["gap"] > 0 and top["proyeksi"] < target - 1:
+    best_profit = max((o for o in opts if o["laba"] is not None), key=lambda o: o["laba"], default=None)
+    if need_info.get("underwater") and need_info.get("need"):
+        _box("🎯 Target omzet vs margin",
+             f"Kurva respons toko memperkirakan 100% target butuh biaya iklan ±<b>{fmt_idr(need_info['need'])}</b> sebulan, "
+             "tetapi kontribusi rata-rata toko di bawah titik impas: mengejar angka itu dengan iklan "
+             f"<b>memperbesar rugi</b>. Proyeksi omzet tertinggi di tabel {fmt_idr(top['proyeksi'])} "
+             f"({fmt_pct(top['proyeksi'] / target * 100, 1)} target)"
+             + (f"; jalur kontribusi terbaik ≈ {_signed(best_profit['laba'])} dengan biaya efektif {fmt_idr(best_profit['efektif'])}."
+                if best_profit is not None else ".")
+             + " Tutup sisa gap dengan Flash sale, Exposure, restock produk laris bermargin positif, atau sesuaikan target/harga — "
+             "bukan dengan menaikkan budget tanpa seleksi.", DOWN)
+    elif need_info["gap"] > 0 and top["proyeksi"] < target - 1:
         lack = target - top["proyeksi"]
         need_txt = (f"Menurut kurva respons toko, 100% target butuh biaya iklan ±<b>{fmt_idr(need_info['need'])}</b> sebulan, tetapi iklan yang ada + usulan "
                     f"iklan baru hanya bisa membelanjakan efisien ±<b>{fmt_idr(need_info['max_efisien'])}</b>. " if need_info["need"] else "")
@@ -1321,8 +1423,14 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         st.session_state["adt-rec-pick"] = best
     pick = st.radio("Opsi yang ingin dirinci", names, key="adt-rec-pick", horizontal=True)
     chosen = next(o for o in opts if o["nama"] == pick)
-    _box(f"💡 {html.escape(chosen['nama'])} · proyeksi {fmt_pct(chosen['proyeksi'] / target * 100, 1)} target",
-         "<br>".join(chosen["rincian"]), UP if chosen["proyeksi"] >= target - 1 else "#b45309")
+    chosen_color = UP if (chosen["laba"] is not None and chosen["laba"] >= 0) or chosen["proyeksi"] >= target - 1 else "#b45309"
+    if chosen.get("utama"):
+        badge = " · saran utama sistem"
+    else:
+        badge = ""
+    _box(f"💡 {html.escape(chosen['nama'])}{badge} · proyeksi {fmt_pct(chosen['proyeksi'] / target * 100, 1)} target"
+         + (f" · kontribusi {_signed(chosen['laba'])}" if chosen["laba"] is not None else ""),
+         "<br>".join(chosen["rincian"]), chosen_color)
     if curve is not None:
         with st.expander("Bandingkan budget sebulan lain & riwayat kurva"):
             rows = []

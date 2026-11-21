@@ -641,6 +641,34 @@ def plan_track(setelan: dict, *, mtd: float, last: date, spent: float, periode: 
 SHOPEE_MIN_AD_PCT = 3.0  # syarat minimum biaya iklan Shopee (% sales bruto sebulan) agar mendapat benefit program
 
 
+def break_even_contrib(marginal_sales: float) -> float:
+    """Kontribusi sebelum iklan minimum agar Rp 1 iklan tidak menambah rugi: 1 ÷ tambahan sales bersih per Rp."""
+    if marginal_sales is None or not np.isfinite(marginal_sales) or marginal_sales <= 0:
+        return float("inf")
+    return 1.0 / float(marginal_sales)
+
+
+def ads_deepens_loss(contrib_rate: float | None, marginal_sales: float) -> bool:
+    """True bila menaikkan biaya iklan pada laju ini menambah rugi (kontribusi ≤ 0 atau di bawah titik impas)."""
+    if contrib_rate is None or not np.isfinite(contrib_rate):
+        return False
+    if contrib_rate <= 0:
+        return True
+    return float(contrib_rate) < break_even_contrib(marginal_sales)
+
+
+def profitable_monthly_cap(curve: StoreCurve | None, contrib_rate: float | None) -> float | None:
+    """Laju biaya iklan bulanan maks di mana marginal sales × kontribusi ≥ 1 (titik impas toko).
+
+    None bila kurva/kontribusi tidak ada. 0 bila kontribusi ≤ 0 (setiap Rp tambahan menambah rugi)."""
+    if curve is None or contrib_rate is None or not np.isfinite(contrib_rate):
+        return None
+    if contrib_rate <= 0:
+        return 0.0
+    # a/(b+C) ≥ 1/contrib → C ≤ a·contrib − b
+    return max(float(curve.a) * float(contrib_rate) - float(curve.b), 0.0)
+
+
 def budget_for_ratio(project, *, pct: float, gross_ratio: float, spent: float, start: float, rounds: int = 6) -> float:
     """Budget sebulan yang membuat biaya iklan ≈ pct% dari sales bruto proyeksi bulan itu.
 
