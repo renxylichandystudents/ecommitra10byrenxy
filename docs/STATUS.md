@@ -1,5 +1,12 @@
 # Status terbaru aplikasi
 
+Diperbarui: 21 November 2026 (Rekomendasi: iklan dijeda bukan langkah setel ulang).
+
+- Iklan **dijeda/nonaktif** tidak lagi muncul sebagai tindakan “Aktifkan kembali” / setel ulang di Rekomendasi sistem maupun unduhan **Setelan Seller Center**.
+- Hanya iklan yang **sedang berjalan** mendapat keep / ubah budget / jeda. Produk di iklan dijeda dilabeli **Biarkan dijeda** (konteks; bukan langkah Seller Center).
+- `occupied` = kode di iklan aktif saja → produk hanya di iklan dijeda boleh diusulkan buat baru (hindari dobel aktif, tanpa mengunci produk idle).
+- Aturan lama tetap: tidak dobel iklan aktif, ROAS ≤ 30, lantai budget 25 rb tunggal / 100 rb grup, unduhan = instruksi setelan saja.
+
 Diperbarui: 21 November 2026 (Rekomendasi sistem: cepat + unduhan Seller Center).
 
 - Halaman Rekomendasi sistem lebih cepat: cache input iklan/margin per sesi, pemilihan produk dihitung sekali, scan Target ROAS opsi memakai grid kasar (hasil akhir tetap ≤ 30).
