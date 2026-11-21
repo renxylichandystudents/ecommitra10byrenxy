@@ -51,6 +51,41 @@ class CalendarTest(unittest.TestCase):
         self.assertLessEqual(plan.groupby("Tanggal").size().max(), 2)
         self.assertEqual(plan["SKU"].nunique(), 6)
         self.assertTrue(plan["Naskah 30 dtk"].str.contains("keranjang kuning").all())
+        self.assertTrue((plan["Caption"].str.len() > 20).all())
+        self.assertTrue(plan["Hook"].str.contains("Kloset|Tidy|ragu", case=False, regex=True).all())
+
+    def test_max_per_day_allows_more_than_two_without_weekly_cap(self):
+        items = pd.DataFrame([item(f"k{i}", f"Kloset Tidy Garansi 10 Tahun {i}", m_sales=1e8 - i * 1e5) for i in range(20)])
+        cands, _ = E.pick(items)
+        start, end = date(2026, 11, 16), date(2026, 11, 18)  # 3 hari
+        plan = E.calendar(cands, start, end=end, max_per_day=5)
+        self.assertGreater(len(plan), 6)  # lebih dari plafon lama 2/hari × 3
+        self.assertLessEqual(plan.groupby("Tanggal").size().max(), 5)
+        self.assertEqual(plan["SKU"].nunique(), len(plan))
+
+    def test_period_bounds_day_week_month(self):
+        d = date(2026, 11, 21)  # Sabtu
+        self.assertEqual(E.period_bounds(d, E.HORIZON_DAY), (d, d))
+        mon, sun = E.period_bounds(d, E.HORIZON_WEEK)
+        self.assertEqual(mon.weekday(), 0)
+        self.assertEqual((sun - mon).days, 6)
+        first, last = E.period_bounds(d, E.HORIZON_MONTH)
+        self.assertEqual(first, date(2026, 11, 1))
+        self.assertEqual(last, date(2026, 11, 30))
+
+    def test_brief_caption_mentions_product_and_hashtags(self):
+        row = {
+            "nama": "Kloset Toilet WC Duduk Tidy FSA0040 Garansi 15 Tahun",
+            "label": "FSA0040 · Kloset Toilet WC Duduk Tidy",
+            "segmen": E.HERO, "harga": 1_200_000,
+            "poin": ["Garansi 15 tahun", "Dikirim dengan packing kayu, aman sampai rumah"],
+        }
+        b = E.brief(row)
+        self.assertIn("Tidy", b["Hook"] + b["Caption"])
+        self.assertIn("#mitra10", b["Hashtag"])
+        self.assertIn("keranjang", b["Ajakan"].lower())
+        self.assertGreater(len(b["Caption"]), 40)
+        self.assertNotEqual(b["Hook"], E.play_for(row["nama"])[4])  # hook dipersonalisasi, bukan template mentah saja
 
 
 if __name__ == "__main__":

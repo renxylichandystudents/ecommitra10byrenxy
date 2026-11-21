@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import math
 from datetime import date
 
 import numpy as np
@@ -511,14 +512,21 @@ def _exposure_items(table: pd.DataFrame, data: FeatureData, orders: pd.DataFrame
     return items
 
 
-SEGMENT_ICON = {expo.HERO: "⭐", expo.RISING: "📈", expo.OVERSTOCK: "📦", expo.VIRAL: "🚀", expo.LOW_CONV: "🎯"}
+SEGMENT_ICON = {expo.HERO: "⭐", expo.RISING: "📈", expo.OVERSTOCK: "📦", expo.VIRAL: "🚀", expo.LOW_CONV: "💕"}
+CAL_PREVIEW = 2  # nama di sel kalender: tampilkan 2 dulu, sisanya lewat "lihat semua"
+
+
+def _product_short(label: object, limit: int = 36) -> str:
+    text = str(label or "")
+    name = text.split(" · ", 1)[1] if " · " in text else text
+    return _clip(name, limit)
 
 
 def _brief_picker(plan: pd.DataFrame, start: date, *, key: str) -> None:
     """Pilih konten untuk brief: saring per minggu, segmen, kategori, atau cari nama/SKU, lalu pilih dari daftar yang tersisa."""
     from datetime import timedelta
 
-    st.markdown("**Brief konten**")
+    st.markdown("**Brief & caption konten**")
     monday = start - timedelta(days=start.weekday())
     week_no = plan["Tanggal"].map(lambda d: (d - monday).days // 7 + 1).astype(int)
     weeks = sorted(int(w) for w in week_no.unique())
@@ -548,6 +556,7 @@ def _brief_picker(plan: pd.DataFrame, start: date, *, key: str) -> None:
     if chosen not in plan.index:
         chosen = options[0]
     row = plan.loc[chosen]
+    caption = str(row["Caption"]) if "Caption" in plan.columns and pd.notna(row.get("Caption")) else ""
     with st.container(border=True):
         st.markdown(f"{SEGMENT_ICON.get(row['Segmen'], '')} **{html.escape(str(row['Segmen']))}** · {html.escape(str(row['Produk']))}")
         st.markdown(f"**Kenapa produk ini:** {html.escape(str(row['Alasan dipilih']))}  \n"
@@ -557,6 +566,9 @@ def _brief_picker(plan: pd.DataFrame, start: date, *, key: str) -> None:
                     f"**Poin jual:** {html.escape(str(row['Poin jual']))}  \n"
                     f"**Ajakan:** {html.escape(str(row['Ajakan']))}  \n"
                     f"**Hashtag:** {html.escape(str(row['Hashtag']))}")
+        if caption:
+            st.caption("Caption siap tempel (Shopee Video / Reels / TikTok):")
+            st.code(caption, language=None, wrap_lines=True)
         st.caption("Naskah 30 detik (salin lewat ikon di pojok kanan):")
         st.code(str(row["Naskah 30 dtk"]) + "\n\n" + str(row["Hashtag"]), language=None, wrap_lines=True)
 
@@ -564,8 +576,40 @@ def _brief_picker(plan: pd.DataFrame, start: date, *, key: str) -> None:
 LEWAT = "<span style='color:#64748b;font-size:var(--fs-xs)'> · lewat</span>"
 
 
-def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end: date, *, key: str, per_week: int, peak: str,
-                     today: date | None = None) -> None:
+def _calendar_day_cell(day: date, part: pd.DataFrame, *, inside: bool, past: bool, key: str) -> None:
+    """Sel kalender proporsional: preview singkat + tombol lihat semua bila banyak / nama terpotong."""
+    n = len(part)
+    preview = part.head(CAL_PREVIEW)
+    lines = "".join(
+        f"<div title='{html.escape(str(p))}' style='font-size:var(--fs-xs);line-height:1.3;margin-top:4px;overflow-wrap:anywhere'>"
+        f"{SEGMENT_ICON.get(s, '')} <b>{html.escape(str(j))}</b><br>{html.escape(_product_short(p))}</div>"
+        for p, s, j in zip(preview["Produk"], preview["Segmen"], preview["Jam tayang"])
+    )
+    empty = "<div style='color:#cbd5e1;font-size:var(--fs-xs)'>–</div>"
+    more = n - len(preview)
+    more_html = (f"<div style='color:#0369a1;font-size:var(--fs-xs);margin-top:4px;font-weight:600'>+{more} lagi · lihat semua</div>"
+                 if more > 0 else "")
+    st.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:96px;"
+                f"background:{'#f1f5f9' if past and inside else '#fff' if inside else '#f8fafc'};"
+                f"opacity:{1 if inside else .45}'><b>{day.day}/{day.month}</b>"
+                f"{LEWAT if past and inside else ''}{lines or empty}{more_html}</div>",
+                unsafe_allow_html=True)
+    if inside and n > 0:
+        with st.expander(f"Detail {day.day}/{day.month} · {fmt_num(n)} konten", expanded=False):
+            for _, r in part.iterrows():
+                st.markdown(
+                    f"{SEGMENT_ICON.get(r['Segmen'], '')} **{html.escape(str(r['Jam tayang']))}** · "
+                    f"{html.escape(str(r['Produk']))}  \n"
+                    f"<span style='color:#64748b;font-size:var(--fs-xs)'>{html.escape(str(r['Segmen']))} · {html.escape(str(r['Kategori']))}</span>",
+                    unsafe_allow_html=True,
+                )
+                if "Hook" in r and pd.notna(r.get("Hook")):
+                    st.caption(f"Hook: {r['Hook']}")
+
+
+def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end: date, *, key: str, peak: str,
+                     today: date | None = None, max_per_day: int = expo.DEFAULT_MAX_PER_DAY,
+                     horizon: str = expo.HORIZON_MONTH) -> None:
     from datetime import timedelta
 
     from src.ui.common import card
@@ -577,13 +621,18 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
         counts = plan.drop_duplicates("SKU")["Segmen"].value_counts().to_dict()
         chips = "".join(_chip(SEGMENT_ICON[s], s, "#0f172a", f"{fmt_num(counts.get(s, 0))} produk") for s in expo.SEGMENTS if counts.get(s))
         st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.2rem 0 .6rem'>" + chips + "</div>", unsafe_allow_html=True)
+        days = max((end - start).days + 1, 1)
+        per_day_avg = len(plan) / days
+        horizon_label = {"hari": "harian", "minggu": "mingguan", "bulan": "bulanan"}.get(horizon, horizon)
         k = st.columns(4)
-        card(k[0], "Konten terjadwal", fmt_num(len(plan)), hint=f"{(end - start).days + 1} hari · {per_week} per minggu")
-        card(k[1], "Produk diangkat", fmt_num(plan["SKU"].nunique()), hint="tidak diulang dalam 14 hari")
+        card(k[0], "Konten terjadwal", fmt_num(len(plan)),
+             hint=f"{fmt_num(days)} hari · maks. {fmt_num(max_per_day)}/hari · rencana {horizon_label}")
+        card(k[1], "Produk diangkat", fmt_num(plan["SKU"].nunique()), hint=f"tidak diulang dalam {expo.REPEAT_DAYS} hari")
         card(k[2], "Prediksi omzet 30 hari produknya", fmt_idr(plan.drop_duplicates("SKU")["Prediksi omzet 30 hari"].sum()),
              hint="laju prediksi analisa × harga × 30 (sales produk, bukan penjualan 30 hari terakhir)")
-        card(k[3], "Jam ramai toko", peak, hint="dari riwayat pesanan; unggah ±1 jam sebelumnya")
+        card(k[3], "Jam ramai toko", peak, hint=f"rata-rata {per_day_avg:.1f} konten/hari · unggah ±1 jam sebelumnya".replace(".", ","))
         st.markdown("**Kalender konten**")
+        st.caption("Sel tetap ringkas; klik **Detail … · lihat semua** di hari yang padat untuk nama lengkap & hook.")
         head = st.columns(7)
         for column, name in zip(head, expo.WEEKDAYS):
             column.markdown(f"<div style='text-align:center;font-size:var(--fs-xs);color:#64748b;font-weight:700'>{name}</div>", unsafe_allow_html=True)
@@ -595,27 +644,21 @@ def _exposure_render(plan: pd.DataFrame, delayed: pd.DataFrame, start: date, end
                 inside = start <= day <= end
                 past = today is not None and day < today
                 part = plan.loc[plan["Tanggal"] == day]
-                lines = "".join(
-                    f"<div title='{html.escape(str(p))}' style='font-size:var(--fs-xs);line-height:1.3;margin-top:4px;overflow-wrap:anywhere'>"
-                    f"{SEGMENT_ICON.get(s, '')} <b>{html.escape(j)}</b><br>{html.escape(_clip(str(p).split(' · ')[1] if ' · ' in str(p) else p, 44))}</div>"
-                    for p, s, j in zip(part["Produk"], part["Segmen"], part["Jam tayang"]))
-                empty = "<div style='color:#cbd5e1;font-size:var(--fs-xs)'>–</div>"
-                column.markdown(f"<div style='border:1px solid #e2e8f0;border-radius:8px;padding:6px;min-height:110px;"
-                                f"background:{'#f1f5f9' if past and inside else '#fff' if inside else '#f8fafc'};"
-                                f"opacity:{1 if inside else .45}'><b>{day.day}/{day.month}</b>"
-                                f"{LEWAT if past and inside else ''}{lines or empty}</div>",
-                                unsafe_allow_html=True)
-        st.caption("⭐ produk andalan · 🚀 potensi viral · 📈 sedang naik · 📦 stok lebih · 🎯 banyak dilihat, jarang dibeli · "
+                with column:
+                    _calendar_day_cell(day, part, inside=inside, past=past, key=f"{key}-{day.isoformat()}")
+        st.caption("⭐ produk andalan · 🚀 potensi viral · 📈 sedang naik · 📦 stok lebih · 💕 banyak dilihat, jarang dibeli · "
                    "abu-abu = tanggal sudah lewat · pudar = di luar periode")
         _brief_picker(plan, start, key=key)
-        shown = plan.assign(Tanggal=plan["Tanggal"].map(fmt_date)).drop(columns=["Naskah 30 dtk"])
+        drop_cols = [c for c in ("Naskah 30 dtk",) if c in plan.columns]
+        shown = plan.assign(Tanggal=plan["Tanggal"].map(fmt_date)).drop(columns=drop_cols, errors="ignore")
         batched_view(
             len(shown), key=f"{key}-plan", noun="konten",
             render=lambda lo, hi: show_table(shown.iloc[lo:hi], kinds={"Prediksi omzet 30 hari": "money", "Stok siap (hari)": "count", "Harga normal": "money",
                                                                       "Bottom price": "money", "Harga promo (seller centre)": "money", "Diskon promo (%)": "pct"},
                                              max_height=10_000,
                                              column_config={"Produk": st.column_config.TextColumn(width="large"), "Format": st.column_config.TextColumn(width="large"),
-                                                            "Hook": st.column_config.TextColumn(width="large"), "Poin jual": st.column_config.TextColumn(width="large")}),
+                                                            "Hook": st.column_config.TextColumn(width="large"), "Poin jual": st.column_config.TextColumn(width="large"),
+                                                            "Caption": st.column_config.TextColumn(width="large")}),
             download=lambda: download_excel({"Brief konten": plan, "Ditunda (stok)": delayed}, f"brief_konten_{start.isoformat()}.xlsx", key=f"xl-{key}"),
         )
     if delayed is not None and not delayed.empty:
@@ -656,7 +699,9 @@ def _with_promo(plan: pd.DataFrame, items: pd.DataFrame, bottom: dict) -> pd.Dat
 def _exposure_describe(c: dict) -> str:
     rows = c.get("jadwal") or []
     s = c.get("setelan", {}) or {}
-    return (f"{fmt_num(s.get('per_minggu', 0))} konten/minggu · {fmt_num(len(rows))} konten · "
+    horizon = s.get("horizon") or expo.HORIZON_WEEK
+    per_day = s.get("max_per_day") or s.get("per_hari") or (math.ceil(int(s.get("per_minggu") or 0) / 7) if s.get("per_minggu") else expo.DEFAULT_MAX_PER_DAY)
+    return (f"rencana {horizon} · maks. {fmt_num(per_day)}/hari · {fmt_num(len(rows))} konten · "
             f"{fmt_num(len({r.get('SKU') for r in rows}))} produk")
 
 
@@ -675,8 +720,11 @@ def _exposure_history(features, today: date) -> None:
         pick = st.selectbox("Campaign", [c["id"] for c in reversed(past)], key="ex-hist-pick",
                             format_func=lambda i: next(f"#{c['id']} · {c.get('nama', '')} · {C.status_of(c, today)}" for c in past if c["id"] == i))
         chosen = next(c for c in past if c["id"] == pick)
+        sett = chosen.get("setelan") or {}
         _exposure_render(cmp.frame_of(chosen.get("jadwal"), ("Tanggal",)), cmp.frame_of(chosen.get("ditunda")), as_date(chosen["mulai"]),
-                         as_date(chosen["selesai"]), key="ex-hist", per_week=int((chosen.get("setelan") or {}).get("per_minggu", 5)), peak="–", today=today)
+                         as_date(chosen["selesai"]), key="ex-hist", peak="–", today=today,
+                         max_per_day=int(sett.get("max_per_day") or sett.get("per_hari") or expo.DEFAULT_MAX_PER_DAY),
+                         horizon=str(sett.get("horizon") or expo.HORIZON_WEEK))
 
 
 def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: pd.DataFrame | None, frames, today: date, username: str, can_edit: bool) -> None:
@@ -688,8 +736,9 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
     if table is None or table.empty:
         st.write("Jalankan analisa terlebih dahulu.")
         return
-    st.caption("Produk yang paling layak dibuatkan konten, jadwal tayang mengikuti jam ramai pesanan, dan brief siap pakai "
-               "(hook, poin jual, ajakan, hashtag, naskah 30 detik). Hanya produk dengan stok siap ≥ 14 hari (toko + DC).")
+    st.caption("Produk yang paling layak dibuatkan konten, jadwal tayang mengikuti jam ramai pesanan, dan brief/caption siap pakai "
+               "(hook, poin jual, ajakan, hashtag, naskah 30 detik). Volume konten mengikuti kebutuhan Anda (hari / minggu / bulan) — "
+               f"bukan plafon kaku 14/minggu. Hanya produk dengan stok siap ≥ {expo.READY_DAYS} hari (toko + DC).")
     cmp.flash_message("exposure")
     mode, cur = cmp.panel("exposure", features=features, today=today, can_edit=can_edit, username=username, describe=_exposure_describe)
     items = _exposure_items(table, data, orders, frames, today)
@@ -705,6 +754,7 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
         saved_delayed = cmp.frame_of(cur.get("ditunda"))
         upcoming = plan.loc[plan["Tanggal"] >= today] if not plan.empty else plan
         bad = upcoming.loc[~upcoming["SKU"].astype(str).isin(set(cands["sku"].astype(str)))] if not upcoming.empty else upcoming
+        sett = cur.get("setelan") or {}
         if bad.empty:
             st.markdown(f"<div class='field-hint'>✅ <b>Campaign masih sesuai.</b> Dicek dengan data {fmt_date(today)}: "
                         f"{fmt_num(len(upcoming))} konten mendatang produknya masih punya stok siap ≥ {expo.READY_DAYS} hari.</div>", unsafe_allow_html=True)
@@ -715,25 +765,51 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
                        column_config={"Produk": st.column_config.TextColumn(width="large")})
             st.button("Buat campaign baru dari saran", key="ex-renew", on_click=cmp.switch_to_new, args=("exposure",), type="primary")
         plan = _with_promo(plan, items, _bottom_map(features))
-        _exposure_render(plan, saved_delayed, start, end, key="ex-saved", per_week=int((cur.get("setelan") or {}).get("per_minggu", 5)), peak=peak,
-                         today=today)
+        _exposure_render(plan, saved_delayed, start, end, key="ex-saved", peak=peak, today=today,
+                         max_per_day=int(sett.get("max_per_day") or sett.get("per_hari") or expo.DEFAULT_MAX_PER_DAY),
+                         horizon=str(sett.get("horizon") or expo.HORIZON_WEEK))
     else:
         month_first = today.replace(day=1)
         month_last = (pd.Timestamp(today) + pd.offsets.MonthEnd(0)).date()
         with st.container(border=True):
-            c1, c2 = st.columns([2, 1], vertical_alignment="bottom")
-            with c1:
-                # Kalender per bulan dari tanggal 1; konten baru hanya dijadwalkan mulai hari ini (tanggal lewat tampil abu-abu).
-                start, end = cmp.period_picker(key="ex-period", today=today, default=(month_first, month_last), lo=month_first,
-                                               hi=month_last + timedelta(days=62))
-            per_week = int(c2.number_input("Konten per minggu", min_value=2, max_value=14, value=5, step=1, key="ex-per-week"))
-        first_day = max(start, today)
-        monday = first_day - timedelta(days=first_day.weekday())
-        plan = expo.calendar(cands, monday, weeks=(end - monday).days // 7 + 1, per_week=per_week, times=times)
+            h1, h2, h3 = st.columns([1.2, 1.1, 1.2], vertical_alignment="bottom")
+            horizon = h1.selectbox(
+                "Horizon rencana",
+                list(expo.HORIZONS),
+                index=2,
+                key="ex-horizon",
+                format_func=lambda h: {"hari": "Per hari", "minggu": "Per minggu", "bulan": "Per bulan"}[h],
+                help="Hari = fokus satu hari; minggu = Senin–Minggu; bulan = tanggal 1–akhir bulan. Periode bisa digeser di bawah.",
+            )
+            max_per_day = int(h2.number_input(
+                "Maks. produk per hari",
+                min_value=1, max_value=expo.MAX_PER_DAY_CEILING, value=expo.DEFAULT_MAX_PER_DAY, step=1, key="ex-max-day",
+                help="Batas konten per tanggal menurut kapasitas Anda. Total konten = jumlah hari × nilai ini (selama ada produk layak).",
+            ))
+            h3.markdown(
+                f"<div class='field-hint' style='padding-top:.6rem'>Tanpa plafon 14/minggu. "
+                f"Contoh: {fmt_num(max_per_day)}/hari × 7 ≈ <b>{fmt_num(max_per_day * 7)}</b> konten/minggu.</div>",
+                unsafe_allow_html=True,
+            )
+            default_start, default_end = expo.period_bounds(today, horizon, anchor=today if horizon == expo.HORIZON_DAY else month_first)
+            if horizon == expo.HORIZON_MONTH:
+                default_start, default_end = month_first, month_last
+            elif horizon == expo.HORIZON_WEEK:
+                default_start, default_end = expo.period_bounds(today, expo.HORIZON_WEEK, anchor=today)
+            else:
+                default_start = default_end = today
+            start, end = cmp.period_picker(
+                key=f"ex-period-{horizon}", today=today, default=(default_start, default_end),
+                lo=month_first - timedelta(days=7), hi=month_last + timedelta(days=62),
+            )
+        # Konten baru hanya dijadwalkan mulai hari ini (tanggal lewat tetap terlihat abu-abu di kalender).
+        sched_start = max(start, today)
+        plan = expo.calendar(cands, sched_start, end=end, max_per_day=max_per_day, times=times)
         if not plan.empty:
-            plan = plan.loc[(plan["Tanggal"] >= max(start, today)) & (plan["Tanggal"] <= end)].reset_index(drop=True)
+            plan = plan.loc[(plan["Tanggal"] >= sched_start) & (plan["Tanggal"] <= end)].reset_index(drop=True)
         plan = _with_promo(plan, items, _bottom_map(features))
-        _exposure_render(plan, delayed, start, end, key="ex-new", per_week=per_week, peak=peak, today=today)
+        _exposure_render(plan, delayed, start, end, key="ex-new", peak=peak, today=today,
+                         max_per_day=max_per_day, horizon=horizon)
         if not plan.empty and features is not None:
             def _to_schedule(campaign: dict) -> None:
                 rows = pd.DataFrame({"periode": plan["Tanggal"].map(_periode), "tanggal": plan["Tanggal"], "sku": plan["SKU"], "label": plan["Produk"].str[:400],
@@ -744,8 +820,10 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
                 features.insert("exposure_schedule", rows, username=username, action="simpan:jadwal_exposure")
 
             cmp.save_controls("exposure", features=features, today=today, start=start, end=end, cur=cur, can_edit=can_edit, username=username,
-                              default_name=f"Konten {fmt_date(start)} – {fmt_date(end)}", after_save=_to_schedule,
-                              payload={"setelan": {"per_minggu": per_week}, "jadwal": cmp.records_of(plan), "ditunda": cmp.records_of(delayed)})
+                              default_name=f"Konten {horizon} {fmt_date(start)} – {fmt_date(end)}", after_save=_to_schedule,
+                              payload={"setelan": {"horizon": horizon, "max_per_day": max_per_day, "per_hari": max_per_day,
+                                                   "per_minggu": max_per_day * 7},
+                                       "jadwal": cmp.records_of(plan), "ditunda": cmp.records_of(delayed)})
     with st.expander("Cara produk & jadwal dipilih"):
         explain([
             ("Campaign", "jadwal konten yang disimpan terkunci untuk periodenya; tiap hari konten mendatang dicek dengan stok terbaru. "
@@ -753,10 +831,12 @@ def show_exposure(table: pd.DataFrame, *, features, data: FeatureData, orders: p
             ("Syarat", f"terjual 90 hari terakhir dan stok toko + DC cukup ≥ {expo.READY_DAYS} hari"),
             ("Segmen", "andalan = prediksi omzet top 30; sedang naik = tren 14 hari ≥ +30%; stok lebih = stok di atas SS ≥ 90 hari; "
                        "banyak dilihat jarang dibeli = klik iklan ≥ 50 dan konversi < 1%"),
-            ("Skor", "40% peringkat prediksi omzet + 20% margin + 20% tren 14 hari + 10% kesiapan stok + 10% bonus segmen naik/stok lebih"),
-            ("Jadwal", "tiap minggu bergilir antar segmen; hari & jam = waktu pesanan terbanyak untuk kategori produk itu; maks. 2 konten per hari; "
-                       "produk sama tidak diulang dalam 14 hari"),
-            ("Brief", "format & hook per kategori bahan bangunan, poin jual dari nama (garansi, packing kayu, material, ukuran) dan deskripsi produk"),
+            ("Skor", "30% prediksi omzet + 15% nilai produk + 15% viral + 15% margin + 15% tren 14 hari + 5% kesiapan stok + 5% bonus segmen"),
+            ("Jadwal", "horizon hari/minggu/bulan; volume = maks. produk/hari × hari periode (tanpa plafon 14/minggu); "
+                       f"jam = waktu pesanan terbanyak kategori; produk sama tidak diulang dalam {expo.REPEAT_DAYS} hari"),
+            ("Kalender", "sel tetap ringkas (2 nama); klik Detail hari untuk melihat semua konten & hook lengkap"),
+            ("Brief & caption", "hook menyebut produk/merek; caption siap tempel untuk Shopee Video/Reels/TikTok; "
+                                "poin jual dari nama (garansi, packing kayu, material, ukuran) + deskripsi"),
         ])
 
 
