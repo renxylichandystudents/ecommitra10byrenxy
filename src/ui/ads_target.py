@@ -973,23 +973,21 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                           factor=factor)
              if cur is not None else None)
 
-    # ---------------- Periode campaign (dipakai rencana mana pun yang disimpan)
-    hi = max(month_end, today + timedelta(days=6))
-    default_start = max(today, first_open) if max(today, first_open) <= month_end else today
-    with st.container(border=True):
-        start, end = cmp.period_picker(key=f"adt-period-{periode}", today=today, hi=hi,
-                                       default=(default_start, month_end if month_end >= default_start else default_start + timedelta(days=6)))
-    period_days = (end - start).days + 1
-    week_text = f"{fmt_date(start)} – {fmt_date(end)}"
-
-    # ---------------- Pilihan tampilan: Rekomendasi sistem = happy path; Fitur khusus = manual
-    views = [(VIEW_REC, "💡 Rekomendasi sistem"), (VIEW_CUSTOM, "🎛️ Fitur khusus · manual")]
+    # ---------------- Pilihan tampilan: Rekomendasi sistem = happy path; Fitur khusus = override
+    show_custom = bool(st.session_state.get("adt-show-custom")) or st.session_state.get("adt-view") == VIEW_CUSTOM
+    nxt = st.session_state.pop("adt-view-next", None)
+    if nxt == VIEW_CUSTOM:
+        show_custom = True
+        st.session_state["adt-show-custom"] = True
+        st.session_state["adt-view"] = VIEW_CUSTOM
+    elif nxt in (VIEW_REC, VIEW_TRACK):
+        st.session_state["adt-view"] = nxt
+    views = [(VIEW_REC, "💡 Rekomendasi sistem")]
     if cur is not None:
         views.append((VIEW_TRACK, "📌 Pantau rencana tersimpan"))
+    if show_custom:
+        views.append((VIEW_CUSTOM, "🎛️ Fitur khusus · override"))
     slugs = [v for v, _l in views]
-    nxt = st.session_state.pop("adt-view-next", None)
-    if nxt in slugs:
-        st.session_state["adt-view"] = nxt
     # Default: Pantau bila ada campaign; else Rekomendasi sistem (bukan Fitur khusus)
     if st.session_state.get("adt-view") not in slugs:
         st.session_state["adt-view"] = VIEW_TRACK if cur is not None else VIEW_REC
@@ -998,6 +996,30 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     if clicked and clicked != view:
         st.session_state["adt-view"] = clicked
         st.rerun()
+    if view != VIEW_CUSTOM:
+        with st.expander("Override · Fitur khusus (manual budget)", expanded=False):
+            st.caption(
+                "Jalur default = Rekomendasi sistem (pace picker → Pick SKU → unduh SC). "
+                "Fitur khusus hanya bila Anda ingin mengunci budget sebulan sendiri — engine-nya hampir sama."
+            )
+            if st.button("Buka Fitur khusus", key="adt-open-custom"):
+                st.session_state["adt-show-custom"] = True
+                st.session_state["adt-view-next"] = VIEW_CUSTOM
+                st.rerun()
+
+    # ---------------- Periode campaign: hanya saat buat/ubah rencana (bukan di Pantau)
+    hi = max(month_end, today + timedelta(days=6))
+    default_start = max(today, first_open) if max(today, first_open) <= month_end else today
+    if view != VIEW_TRACK:
+        with st.container(border=True):
+            start, end = cmp.period_picker(key=f"adt-period-{periode}", today=today, hi=hi,
+                                           default=(default_start, month_end if month_end >= default_start else default_start + timedelta(days=6)))
+    else:
+        # Pantau memakai periode campaign tersimpan — jangan tampilkan period picker di atas cockpit.
+        start = as_date(cur["mulai"]) if cur else default_start
+        end = as_date(cur["selesai"]) if cur else (month_end if month_end >= default_start else default_start + timedelta(days=6))
+    period_days = (end - start).days + 1
+    week_text = f"{fmt_date(start)} – {fmt_date(end)}"
 
     # Ringkas di Fitur khusus / Rekomendasi; tab Pantau punya cockpit sendiri
     if cur is not None and view != VIEW_TRACK:
@@ -1585,11 +1607,11 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         st.info("Laporan iklan (grup / keseluruhan) belum diunggah atau tidak ada iklan produk tunggal & grup: opsi iklan butuh riwayat biaya & omzet per iklan.")
         return
 
-    step2_note = ("· opsi utama = estimasi kontribusi terbaik (margin toko di bawah titik impas)"
+    step2_note = ("· pace picker: rata-rata / efisien / kejar — opsi utama sadar margin"
                   if contrib_rate is not None and curve is not None and M.ads_deepens_loss(
                       contrib_rate, curve.marginal(cost_now * month_days) if cost_now > 0 else curve.marginal(spent_daily * month_days))
-                  else "· pilih satu opsi; rincian produk & budget per iklan serta tombol simpan ada di bawah")
-    _step(2, "Opsi mencapai target (sadar margin)", step2_note)
+                  else "· pilih pace dulu; rincian produk & unduh SC di bawah")
+    _step(2, "Pilih pace budget", step2_note)
     with st.spinner("Menghitung opsi..."):
         _sub = _submitted_setting(features, periode)
         opts, need_info = _rec_options(target=target, projection=projection, spent=spent, cost_now=cost_now, days_left=days_left, month_days=month_days, run_days=run_days,
@@ -1601,24 +1623,91 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     if not opts:
         st.info("Belum ada opsi budget yang bisa dihitung dari data iklan saat ini.")
         return
-    table_opts = pd.DataFrame([{"Opsi": o["nama"], "Asal angka budget": o["asal"], "Budget sebulan": o["budget"], "Biaya efektif sebulan": o["efektif"], "Hemat": max(o["budget"] - o["efektif"], 0.0),
-                                "Sisa/hari": o["harian"], "Target ROAS": o["roas"],
-                                "Proyeksi sales bersih akhir bulan": o["proyeksi"], "% target": o["proyeksi"] / target * 100, "Efek budget iklan": o["tambahan"],
-                                "Biaya iklan % sales bruto": o["rasio"], "Estimasi kontribusi": o["laba"],
-                                "Yang dilakukan": o["aksi"]} for o in opts])
-    show_table(table_opts, kinds={"Budget sebulan": "money", "Biaya efektif sebulan": "money", "Hemat": "money", "Sisa/hari": "money", "Target ROAS": "dec", "Proyeksi sales bersih akhir bulan": "money", "% target": "pct",
-                                  "Efek budget iklan": "money", "Biaya iklan % sales bruto": "pct", "Estimasi kontribusi": "money"},
-               column_config={"Opsi": st.column_config.TextColumn(width="medium"), "Asal angka budget": st.column_config.TextColumn(width="large"),
-                              "Yang dilakukan": st.column_config.TextColumn(width="large"),
-                              "Estimasi kontribusi": st.column_config.Column(help="Sales bersih proyeksi × kontribusi sebelum iklan − biaya iklan efektif. Angka minus = jalur menambah rugi.")},
-               row_height=35)
+
+    def _pace_of(opt: dict) -> str:
+        name = str(opt.get("nama") or "").lower()
+        if "rata-rata" in name or "kembalikan" in name:
+            return "rata-rata"
+        if "efisien" in name or "hemat" in name or "minimum shopee" in name:
+            return "efisien"
+        if "100%" in name or "kejar" in name or "target" in name:
+            return "kejar"
+        if opt.get("utama"):
+            return "efisien" if (opt.get("laba") is not None and float(opt["laba"]) >= 0) else "rata-rata"
+        if "budget anda" in name:
+            return "kejar"
+        if "laju" in name:
+            return "kejar"
+        return "efisien"
+
+    for o in opts:
+        o["pace"] = _pace_of(o)
+    pace_order = ("rata-rata", "efisien", "kejar")
+    pace_labels = {
+        "rata-rata": ("Rata-rata bulan ini", "Kembalikan burn ke histori; aman saat spike."),
+        "efisien": ("Efisien / sadar margin", "Maksimal yang masih efisien; utamakan kontribusi."),
+        "kejar": ("Kejar target", "Budget Anda / laju sekarang / 100% target bila aman."),
+    }
+    by_pace: dict[str, list] = {p: [] for p in pace_order}
+    for o in opts:
+        by_pace.setdefault(o["pace"], []).append(o)
+    # Default pace = yang memuat opsi utama, else efisien
+    default_pace = next((o["pace"] for o in opts if o.get("utama")), "efisien")
+    if default_pace not in pace_order:
+        default_pace = "efisien"
+    if st.session_state.get("adt-pace") not in pace_order:
+        st.session_state["adt-pace"] = default_pace
+    pace_pick = st.radio(
+        "Pace budget",
+        list(pace_order),
+        format_func=lambda p: f"{pace_labels[p][0]} · {len(by_pace.get(p) or [])} opsi",
+        key="adt-pace",
+        horizontal=True,
+        help="Tiga jalur: rata-rata · efisien · kejar. Detail angka di expander.",
+    )
+    st.caption(pace_labels[pace_pick][1])
+    pace_opts = by_pace.get(pace_pick) or opts
+    # Kartu ringkas per opsi dalam pace — bukan tabel multi-metrik di muka
+    cols = st.columns(min(len(pace_opts), 3) or 1)
+    for i, o in enumerate(pace_opts[:3]):
+        with cols[i % len(cols)]:
+            badge = " · saran utama" if o.get("utama") else ""
+            st.markdown(
+                f"<div style='border:1px solid #e2e8f0;border-radius:12px;padding:.7rem .85rem;background:#fff;margin:.2rem 0'>"
+                f"<div style='font-weight:800'>{html.escape(o['nama'])}{badge}</div>"
+                f"<div style='margin-top:.35rem;font-size:var(--fs-sm);line-height:1.45;color:#334155'>"
+                f"Budget <b>{fmt_idr(o['budget'])}</b> · efektif {fmt_idr(o['efektif'])}<br>"
+                f"Proyeksi <b>{fmt_pct(o['proyeksi'] / target * 100, 1)}</b> target"
+                + (f" · kontribusi {_signed(o['laba'])}" if o.get("laba") is not None else "")
+                + f"</div></div>",
+                unsafe_allow_html=True,
+            )
+    with st.expander("Tabel lengkap semua opsi (metrik)", expanded=False):
+        table_opts = pd.DataFrame([{
+            "Pace": o["pace"], "Opsi": o["nama"], "Asal angka budget": o["asal"],
+            "Budget sebulan": o["budget"], "Biaya efektif sebulan": o["efektif"],
+            "Hemat": max(o["budget"] - o["efektif"], 0.0), "Sisa/hari": o["harian"], "Target ROAS": o["roas"],
+            "Proyeksi sales bersih akhir bulan": o["proyeksi"], "% target": o["proyeksi"] / target * 100,
+            "Efek budget iklan": o["tambahan"], "Biaya iklan % sales bruto": o["rasio"],
+            "Estimasi kontribusi": o["laba"], "Yang dilakukan": o["aksi"],
+        } for o in opts])
+        show_table(
+            table_opts,
+            kinds={"Budget sebulan": "money", "Biaya efektif sebulan": "money", "Hemat": "money", "Sisa/hari": "money",
+                   "Target ROAS": "dec", "Proyeksi sales bersih akhir bulan": "money", "% target": "pct",
+                   "Efek budget iklan": "money", "Biaya iklan % sales bruto": "pct", "Estimasi kontribusi": "money"},
+            column_config={"Opsi": st.column_config.TextColumn(width="medium"),
+                           "Asal angka budget": st.column_config.TextColumn(width="large"),
+                           "Yang dilakukan": st.column_config.TextColumn(width="large")},
+            row_height=35,
+        )
     top = max(opts, key=lambda o: o["proyeksi"])
     best_profit = max((o for o in opts if o["laba"] is not None), key=lambda o: o["laba"], default=None)
     if need_info.get("underwater") and need_info.get("need"):
         _box("🎯 Target omzet vs margin",
              f"Kurva respons toko memperkirakan 100% target butuh biaya iklan ±<b>{fmt_idr(need_info['need'])}</b> sebulan, "
              "tetapi kontribusi rata-rata toko di bawah titik impas: mengejar angka itu dengan iklan "
-             f"<b>memperbesar rugi</b>. Proyeksi omzet tertinggi di tabel {fmt_idr(top['proyeksi'])} "
+             f"<b>memperbesar rugi</b>. Proyeksi omzet tertinggi {fmt_idr(top['proyeksi'])} "
              f"({fmt_pct(top['proyeksi'] / target * 100, 1)} target)"
              + (f"; jalur kontribusi terbaik ≈ {_signed(best_profit['laba'])} dengan biaya efektif {fmt_idr(best_profit['efektif'])}."
                 if best_profit is not None else ".")
@@ -1633,8 +1722,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
              "Menambah budget di atas batas efisien hanya membuang biaya (tiap tambahan Rp 1 kembali kurang dari "
              f"Rp {fmt_num(A.MIN_MARGINAL, 0)} omzet iklan). Tutup kekurangan dengan cara lain: Flash sale toko, Exposure media sosial, "
              "restock produk laris yang stoknya menahan penjualan, atau sesuaikan target.", "#b45309")
-    names = [o["nama"] for o in opts]
-    best = next((o["nama"] for o in opts if o.get("utama")), names[-1])
+    names = [o["nama"] for o in pace_opts] or [o["nama"] for o in opts]
+    best = next((o["nama"] for o in pace_opts if o.get("utama")), names[0])
     if st.session_state.get("adt-rec-pick") not in names:
         st.session_state["adt-rec-pick"] = best
     pick = st.radio("Opsi yang ingin dirinci", names, key="adt-rec-pick", horizontal=True)

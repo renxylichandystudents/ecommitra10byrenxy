@@ -76,8 +76,19 @@ def _lifecycle_banner(cur: dict, today: date, *, life: str, hub: dict) -> None:
     )
 
 
+def _map_push_action(tip: str) -> str:
+    low = str(tip or "").lower()
+    if "jeda" in low or "hentikan" in low:
+        return A.PUSH_PAUSE
+    if "turunkan" in low:
+        return A.PUSH_HOLD
+    if "naikkan" in low or "pisahkan" in low or "buat" in low:
+        return A.PUSH_PRIORITIZE if "buat" in low or "pisah" in low else A.PUSH_SCALE
+    return A.PUSH_HOLD
+
+
 def _daily_actions_block(classified: pd.DataFrame, *, learning: bool) -> None:
-    """E0: aksi harian Prioritize/Scale/Hold/Pause — di atas cockpit analitik."""
+    """E0: strip prioritas harian (Prioritize/Scale/Hold/Pause) di atas cockpit."""
     st.markdown("### Aksi hari ini")
     if learning:
         st.info(
@@ -88,17 +99,12 @@ def _daily_actions_block(classified: pd.DataFrame, *, learning: bool) -> None:
     if not acts:
         st.caption("Tidak ada tindakan prioritas — sebagian besar iklan pada jalur Pertahankan.")
         return
+    counts = {A.PUSH_PRIORITIZE: 0, A.PUSH_SCALE: 0, A.PUSH_HOLD: 0, A.PUSH_PAUSE: 0}
     rows = []
     for a in acts:
         tip = str(a.get("tindakan") or "")
-        mapped = tip
-        low = tip.lower()
-        if "naikkan" in low or "pisahkan" in low or "buat" in low:
-            mapped = f"{A.PUSH_PRIORITIZE}/{A.PUSH_SCALE}"
-        elif "turunkan" in low:
-            mapped = A.PUSH_HOLD
-        elif "jeda" in low or "hentikan" in low:
-            mapped = A.PUSH_PAUSE
+        mapped = _map_push_action(tip)
+        counts[mapped] = counts.get(mapped, 0) + 1
         rows.append({
             "Aksi": mapped,
             "Iklan": a.get("iklan") or "",
@@ -106,13 +112,95 @@ def _daily_actions_block(classified: pd.DataFrame, *, learning: bool) -> None:
             "Tindakan SC": tip,
             "Saran": a.get("saran") or "",
             "Biaya/hari": a.get("biaya") or 0,
-            "ROAS": a.get("roas"),
+            "ROAS Gross": a.get("roas"),
         })
-    show_table(
-        pd.DataFrame(rows),
-        kinds={"Biaya/hari": "money", "ROAS": "dec"},
-        column_config={"Saran": st.column_config.TextColumn(width="large"), "Iklan": st.column_config.TextColumn(width="medium")},
+    # Strip ringkas — satu viewport aksi, bukan tabel akademik di atas
+    colors = {
+        A.PUSH_PRIORITIZE: ("#166534", "#dcfce7"),
+        A.PUSH_SCALE: ("#075985", "#e0f2fe"),
+        A.PUSH_HOLD: ("#334155", "#f1f5f9"),
+        A.PUSH_PAUSE: ("#991b1b", "#fee2e2"),
+    }
+    chips = []
+    for act in (A.PUSH_PRIORITIZE, A.PUSH_SCALE, A.PUSH_HOLD, A.PUSH_PAUSE):
+        n = counts.get(act, 0)
+        if not n:
+            continue
+        fg, bg = colors[act]
+        chips.append(
+            f"<span style='border-radius:999px;padding:.35rem .85rem;font-weight:800;font-size:var(--fs-sm);"
+            f"color:{fg};background:{bg};border:1px solid {fg}33'>{html.escape(act)} · {n}</span>"
+        )
+    top = rows[:3]
+    top_html = "".join(
+        f"<div style='flex:1;min-width:12rem;border:1px solid #e2e8f0;border-radius:10px;padding:.55rem .7rem;background:#fff'>"
+        f"<div style='font-size:var(--fs-xs);font-weight:800;color:#64748b'>{html.escape(r['Aksi'])}</div>"
+        f"<div style='font-weight:700;margin-top:.15rem'>{html.escape(str(r['Iklan'])[:48])}</div>"
+        f"<div style='font-size:var(--fs-xs);color:#475569;margin-top:.2rem;line-height:1.4'>"
+        f"{html.escape(str(r['Tindakan SC']))}</div></div>"
+        for r in top
     )
+    st.markdown(
+        f"<div style='display:flex;flex-wrap:wrap;gap:.45rem;margin:.25rem 0 .55rem'>{''.join(chips)}</div>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:.55rem;margin-bottom:.45rem'>{top_html}</div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander(f"Rincian aksi · {fmt_num(len(rows))} iklan", expanded=False):
+        show_table(
+            pd.DataFrame(rows),
+            kinds={"Biaya/hari": "money", "ROAS Gross": "dec"},
+            column_config={"Saran": st.column_config.TextColumn(width="large"), "Iklan": st.column_config.TextColumn(width="medium")},
+        )
+
+
+def _budget_sc_form(cur: dict, classified: pd.DataFrame, *, features, username: str, can_edit: bool) -> dict:
+    """TAM-1: isi Modal Harian SC secara manual — file all-iklan jarang punya kolom itu."""
+    st.markdown("### Modal Harian Seller Center")
+    meta = cur.get("budget_sc_meta") or {}
+    n_live = 0
+    if isinstance(classified, pd.DataFrame) and not classified.empty and "Sumber budget SC" in classified.columns:
+        n_live = int(classified["Sumber budget SC"].isin(["manual", "laporan"]).sum())
+    st.caption(
+        "File Semua Laporan Iklan biasanya **tidak** memuat Modal Harian yang Anda set di SC. "
+        "Isi di sini angka yang terpasang sekarang agar saran Naikkan/Turunkan tidak memakai snapshot basi. "
+        f"Saat ini {fmt_num(n_live)} iklan memakai sumber live (manual/laporan)."
+        + (f" Terakhir diisi {html.escape(str(meta.get('oleh') or ''))} {html.escape(str(meta.get('waktu') or ''))}."
+           if meta.get("waktu") else "")
+    )
+    if not can_edit or features is None or classified is None or classified.empty or "_key" not in classified.columns:
+        return cur
+    focus = classified.copy()
+    if "Budget usulan/hari" in focus.columns:
+        focus = focus.loc[pd.to_numeric(focus["Budget usulan/hari"], errors="coerce").fillna(0) > 0]
+    focus = focus.head(12)
+    if focus.empty:
+        return cur
+    with st.expander("Isi / perbarui Modal Harian (Rp/hari)", expanded=False):
+        updates: dict[str, float] = {}
+        for _, row in focus.iterrows():
+            key = str(row.get("_key") or "")
+            label = str(row.get("Iklan") or key)[:48]
+            current = row.get("Budget harian sekarang")
+            default = float(current) if current == current and current is not None else 0.0
+            src = str(row.get("Sumber budget SC") or "–")
+            val = st.number_input(
+                f"{label} · {key} ({src})",
+                min_value=0.0, step=25_000.0, value=float(default),
+                key=f"bud-sc-{cur.get('id')}-{key}",
+                help="Rp 0 = jeda di SC. Kosongkan tidak di sini — pakai 0 untuk jeda.",
+            )
+            updates[key] = float(val)
+        if st.button("Simpan Modal Harian", key=f"bud-sc-save-{cur.get('id')}", type="primary"):
+            now = pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")
+            updated = Mon.set_budget_sc(cur, updates, username=username or "lokal", now=now)
+            store = C.Store(features, "iklan")
+            all_c = [updated if int(c.get("id", 0)) == int(updated.get("id", 0)) else c for c in store.all()]
+            if not any(int(c.get("id", 0)) == int(updated.get("id", 0)) for c in all_c):
+                all_c.append(updated)
+            store.save(all_c, username=username or "lokal")
+            st.success("Modal Harian disimpan. Saran Pantau memakai angka ini.")
+            st.rerun()
+    return cur
 
 
 def _manual_override_block(cur: dict, *, features, username: str, can_edit: bool = True) -> dict:
@@ -277,36 +365,21 @@ def _planned_budgets(cur: dict, *, start: date, report_end: date | None) -> dict
     return week_vals
 
 
-def _attach_running_budget(frame: pd.DataFrame, acts_saved: pd.DataFrame) -> pd.DataFrame:
-    """Budget di Shopee = Budget harian sekarang saat rencana disimpan.
+def _attach_running_budget(
+    frame: pd.DataFrame,
+    acts_saved: pd.DataFrame,
+    *,
+    campaign: dict | None = None,
+    ads_overall=None,
+) -> pd.DataFrame:
+    """Budget di Shopee: override manual → Modal Harian laporan → snapshot saat simpan.
 
-    Bukan salinan usulan. Kunci `pisah:`/`baru:` dicocokkan ke `produk:`.
-    Iklan yang tidak punya catatan dibiarkan kosong, bukan diisi angka rencana.
+    Bukan rata-rata biaya. Bukan salinan usulan. Bila live diketahui, `Budget efektif
+    Shopee/hari` ikut diganti agar saran Naikkan/Turunkan memakai angka SC terkini.
     """
-    if frame is None or frame.empty or "_key" not in frame.columns:
-        return frame if frame is not None else pd.DataFrame()
-    out = frame.copy()
-    if acts_saved is None or acts_saved.empty or "key" not in acts_saved.columns or "Budget harian sekarang" not in acts_saved.columns:
-        out["Budget harian sekarang"] = float("nan")
-        return out
-    mapping: dict[str, float] = {}
-    for k, v in zip(acts_saved["key"], pd.to_numeric(acts_saved["Budget harian sekarang"], errors="coerce").fillna(0)):
-        key = str(k)
-        val = float(v or 0)
-        mapping[key] = val
-        mapping[Mon.report_alias(key)] = val
-
-    def _lookup(k: object) -> float:
-        key = str(k)
-        if key in mapping:
-            return mapping[key]
-        alias = Mon.report_alias(key)
-        if alias in mapping:
-            return mapping[alias]
-        return float("nan")
-
-    out["Budget harian sekarang"] = out["_key"].map(_lookup)
-    return out
+    return Mon.apply_live_sc_budget(
+        frame, campaign=campaign, ads_overall=ads_overall, acts_saved=acts_saved,
+    )
 
 
 def _period_sales(track: dict | None, factor: float) -> dict:
@@ -407,6 +480,7 @@ def _ad_row_card(
     window_start: date | None = None,
     window_end: date | None = None,
     unit_daily: pd.DataFrame | None = None,
+    net_factor: float = float("nan"),
 ) -> None:
     """Satu baris rekap iklan: insight singkat + budget + 2 angka terpakai + expander historis.
 
@@ -418,15 +492,19 @@ def _ad_row_card(
     jenis = str(r.get("Jenis") or "")
     act = str(r.get("Tindakan") or "–")
     plan = float(r.get("Budget usulan/hari") or r.get("Budget di rencana/hari") or 0)
-    # Laporan all iklan tidak punya kolom Modal Harian. Jangan isi dari rata-rata biaya
-    # (itu yang tampil Rp 7,5 jt) dan jangan salin usulan.
-    setup = float("nan")
+    # Modal Harian live (manual/laporan/snapshot) — jangan invent dari rata-rata biaya.
+    setup_raw = r.get("Budget harian sekarang")
+    if setup_raw != setup_raw or setup_raw is None:
+        setup_raw = r.get("Budget efektif Shopee/hari") if str(r.get("Sumber budget SC") or "") != "rencana" else float("nan")
+    setup = float(setup_raw) if setup_raw == setup_raw and setup_raw is not None else float("nan")
     since = float(r.get("Biaya aktual/hari") or r.get("Terpakai sejak campaign/hari") or 0)
     month = r.get("Biaya bulan ini/hari")
     month_v = float(month) if month == month and month is not None else float("nan")
     omzet = float(r.get("Omzet iklan sejak disimpan") or 0)
     biaya = float(r.get("Biaya sejak disimpan") or 0)
     roas = float(r["ROAS aktual"]) if r.get("ROAS aktual") == r.get("ROAS aktual") else float("nan")
+    net_roas = r.get("ROAS Net (bersih)")
+    net_roas_v = float(net_roas) if net_roas == net_roas and net_roas is not None else float("nan")
     days = int(r.get("Hari dievaluasi") or 0)
     if days <= 0 and since > 0 and biaya > 0:
         days = max(int(round(biaya / since)), 1)
@@ -459,7 +537,8 @@ def _ad_row_card(
                 if days > 0 else " (belum ada angka harian; hari ini belum dihitung)"
             )
             + f": omzet {fmt_idr(omzet)} · biaya {fmt_idr(biaya)}"
-            + (f" · ROAS {fmt_num(roas, 1)}×" if roas == roas else "")
+            + (f" · ROAS Gross {fmt_num(roas, 1)}×" if roas == roas else "")
+            + (f" · ROAS Net {fmt_num(net_roas_v, 1)}×" if net_roas_v == net_roas_v else "")
         )
     is_group = key.startswith("grup:") or jenis.strip().lower().startswith("grup")
     group_active = not (
@@ -618,16 +697,17 @@ def _ad_row_card(
             "Tanggal yang sudah diunggah sebagai laporan satu hari memakai angka file itu. "
             "Tanggal yang belum diunggah masih selisih laporan MTD. "
             "Jumlah semua tanggal ada di kartu di atas. "
-            "**Budget di rencana** = usulan campaign. **Budget di Shopee** kosong: file all iklan "
-            "tidak memuat Modal Harian yang diisi di Seller Center (bukan rata-rata biaya, bukan usulan). "
-            "**Saran** membandingkan biaya hari itu dengan rencana: Sesuai rencana, Tidak sesuai rencana, "
-            "ROAS lemah, Naikkan budget, Turunkan budget, Naikkan Target ROAS."
+            "**Budget di rencana** = usulan campaign. **Budget di Shopee** = Modal Harian live "
+            "(override manual / kolom laporan bila ada / snapshot saat simpan) — bukan rata-rata biaya. "
+            "**ROAS iklan** = Gross SC; **ROAS Net** = taksiran sales bersih. "
+            "**Saran** membandingkan biaya hari itu dengan Modal Harian live bila ada."
         )
         if window_start is not None and win_hi is not None and unit_daily is not None:
             hist = Mon.ad_daily_progress(
                 unit_daily, key,
                 start=window_start, end=win_hi,
                 budget_plan=plan, budget_setup=setup, target_roas=target_roas,
+                net_factor=net_factor,
             )
         else:
             base_dt = None
@@ -665,17 +745,19 @@ def _ad_row_card(
                     "Biaya iklan": "money",
                     "Omzet iklan": "money",
                     "ROAS iklan": "dec",
+                    "ROAS Net (bersih)": "dec",
                 },
                 wrap=("Saran",),
                 pin=("Tanggal",),
                 widths={
                     "Tanggal": 118,
-                    "Budget di rencana/hari": 170,
-                    "Budget di Shopee/hari": 170,
-                    "Biaya iklan": 140,
-                    "Omzet iklan": 150,
-                    "ROAS iklan": 110,
-                    "Saran": 420,
+                    "Budget di rencana/hari": 160,
+                    "Budget di Shopee/hari": 160,
+                    "Biaya iklan": 130,
+                    "Omzet iklan": 140,
+                    "ROAS iklan": 100,
+                    "ROAS Net (bersih)": 120,
+                    "Saran": 380,
                 },
             )
         else:
@@ -812,6 +894,9 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
             summary = Mon.execution_summary(in_plan, summary)
         in_plan = Mon.attach_month_daily(in_plan, current)
         out_plan = Mon.attach_month_daily(out_plan, current)
+        # Modal Harian live sebelum tip/aksi — agar Naikkan/Turunkan memakai angka SC terkini.
+        in_plan = _attach_running_budget(in_plan, acts_saved, campaign=cur, ads_overall=ads_overall)
+        out_plan = _attach_running_budget(out_plan, acts_saved, campaign=cur, ads_overall=ads_overall)
         in_plan = Mon.refresh_tips_after_month(
             in_plan, target_roas=roas, running_keys=running_keys, units=units, members=members,
         )
@@ -886,6 +971,11 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     learning = bool(hub.get("learning"))
     _lifecycle_banner(cur, today, life=life, hub=hub)
     _daily_actions_block(classified if isinstance(classified, pd.DataFrame) else pd.DataFrame(), learning=learning)
+    cur = _budget_sc_form(
+        cur,
+        classified if isinstance(classified, pd.DataFrame) else pd.DataFrame(),
+        features=features, username=username, can_edit=bool(features),
+    )
 
     # BEP aman dari kontribusi rata produk di rencana (bila ada)
     safe_bep = float("nan")
@@ -933,14 +1023,27 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
         "Omzet iklan = penjualan yang dikaitkan ke iklan di laporan itu."
     )
     period = _period_sales(track, factor)
+    bersih_v = period.get("bersih")
+    bersih_v = float(bersih_v) if bersih_v == bersih_v and bersih_v is not None else float("nan")
+    dual = Mon.dual_roas(biaya=spent_since, omzet_iklan=omzet_since, sales_bersih=bersih_v)
+    net_factor = (bersih_v / omzet_since) if omzet_since > 0 and bersih_v == bersih_v and bersih_v > 0 else float("nan")
     a = st.columns(4)
     card(a[0], "Biaya iklan periode campaign", fmt_idr(spent_since),
          hint=f"rencana {fmt_idr(wallet['jalur_sejak'])} · <b>{biaya_status_label}</b> · dari all iklan per tanggal")
     card(a[1], "Omzet iklan periode campaign", fmt_idr(omzet_since),
          hint="Omzet iklan di laporan all iklan (bukan Sales bruto / Sales bersih toko)")
-    card(a[2], "ROAS iklan", fmt_num(store_roas, 1) if store_roas == store_roas else "–",
-         hint=f"target {fmt_num(roas, 1)} · <b style='color:{_tone(store_roas >= roas * 0.9 if store_roas == store_roas else False)}'>"
-              f"{'sudah mendekati target' if store_roas == store_roas and store_roas >= roas * 0.9 else 'masih di bawah target'}</b>")
+    card(
+        a[2],
+        "ROAS Gross · Net",
+        (
+            f"{fmt_num(dual['gross'], 1) if dual['gross'] == dual['gross'] else '–'} · "
+            f"{fmt_num(dual['net'], 1) if dual['net'] == dual['net'] else '–'}"
+        ),
+        hint=(
+            f"Gross = omzet iklan SC ÷ biaya (target {fmt_num(roas, 1)}). "
+            "Net = sales bersih ÷ biaya — baca keduanya; ROAS Gross bagus bisa tetap rugi di Net."
+        ),
+    )
     if track and track.get("status") not in (None, "Menunggu data"):
         on = track["status"] == "On track"
         card(a[3], "Status sales bersih", "✅ On track" if on else "⚠️ Tertinggal",
@@ -1059,8 +1162,6 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
     else:
         cid = int(cur.get("id") or 0)
         singles = Mon.planned_single_codes(acts_saved)
-        in_plan = _attach_running_budget(in_plan, acts_saved)
-        out_plan = _attach_running_budget(out_plan, acts_saved)
         exe = Mon.partition_execution(in_plan, target_roas=roas)
 
         # Jendela evaluasi = periode campaign (mulai–selesai), dibatasi hari penuh (kemarin)
@@ -1074,6 +1175,7 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
                     members=members, target_roas=roas, contribution=contribution, scope=scope,
                     units=units, products=products, planned_singles=singles,
                     window_start=window_start, window_end=progress_end, unit_daily=unit_daily,
+                    net_factor=net_factor,
                 )
 
         # Progress: tiap hari kalender dalam periode campaign; biaya+omzet dari all iklan per tanggal

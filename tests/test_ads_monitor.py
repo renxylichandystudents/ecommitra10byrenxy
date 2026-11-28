@@ -805,3 +805,71 @@ class RollupNoneRoasTest(unittest.TestCase):
         self.assertIn("level", v)
         v2 = Mon.rollup(pd.DataFrame(), {}, track=None, target_roas=8.0, store_roas=None)
         self.assertEqual(v2["title"], "Menunggu laporan iklan baru")
+
+
+class LiveModalHarianTest(unittest.TestCase):
+    def test_parse_and_priority_override_over_snapshot(self):
+        frame = pd.DataFrame([{
+            "_key": "produk:1", "Jenis": "Produk tunggal",
+            "Budget usulan/hari": 1_000_000,
+            "Budget efektif Shopee/hari": 1_000_000,
+        }])
+        acts = pd.DataFrame([{"key": "produk:1", "Budget harian sekarang": 2_000_000}])
+        camp = {"budget_sc": {"produk:1": 4_750_000}}
+        out = Mon.apply_live_sc_budget(frame, campaign=camp, acts_saved=acts)
+        self.assertAlmostEqual(out.iloc[0]["Budget harian sekarang"], 4_750_000)
+        self.assertAlmostEqual(out.iloc[0]["Budget efektif Shopee/hari"], 4_750_000)
+        self.assertEqual(out.iloc[0]["Sumber budget SC"], "manual")
+
+    def test_modal_from_overall_column(self):
+        ads = pd.DataFrame([{
+            "product_code": "99", "product_name": "Kloset",
+            "modal_harian": 4_750_000, "cost": 100, "ad_sales": 1000,
+            "_submitted_at": "2026-11-28T10:00:00+07:00",
+        }])
+        got = Mon.unit_modal_from_overall(ads)
+        self.assertAlmostEqual(got["produk:99"], 4_750_000)
+
+    def test_dual_roas_gross_vs_net(self):
+        d = Mon.dual_roas(biaya=1_000_000, omzet_iklan=20_000_000, sales_bersih=8_000_000)
+        self.assertAlmostEqual(d["gross"], 20.0)
+        self.assertAlmostEqual(d["net"], 8.0)
+
+    def test_apply_daily_empty_key_does_not_keep_stacked_mtd(self):
+        frame = pd.DataFrame([{
+            "_key": "produk:missing",
+            "Budget usulan/hari": 1_400_000,
+            "Budget efektif Shopee/hari": 1_400_000,
+            "Biaya sejak disimpan": 1_400_000,  # angka basi / tumpukan
+            "Omzet iklan sejak disimpan": 20_000_000,
+            "Hari dievaluasi": 5,
+            "Biaya aktual/hari": 280_000,
+            "Omzet iklan aktual/hari": 4_000_000,
+            "ROAS aktual": 14.0,
+            "Rekomendasi dijalankan": "Ya",
+            "Catatan batas": "",
+            "Rasio vs efektif": 0.2,
+        }])
+        daily = pd.DataFrame([
+            {"Tanggal": "2026-11-16", "key": "produk:other", "Biaya": 100_000, "Omzet": 1_000_000},
+        ])
+        over = Mon.apply_daily_ad_window(frame, daily, start=date(2026, 11, 14), end=date(2026, 11, 18))
+        self.assertEqual(over.iloc[0]["Biaya sejak disimpan"], 0.0)
+        self.assertEqual(int(over.iloc[0]["Hari dievaluasi"]), 0)
+        self.assertIn("Belum ada angka harian", over.iloc[0]["Catatan batas"])
+
+    def test_ad_daily_progress_includes_net_roas_column(self):
+        daily = pd.DataFrame([
+            {"Tanggal": "2026-11-18", "key": "produk:1", "Biaya": 1_000_000, "Omzet": 10_000_000},
+        ])
+        hist = Mon.ad_daily_progress(
+            daily, "produk:1",
+            start=date(2026, 11, 18), end=date(2026, 11, 18),
+            budget_plan=1_000_000, budget_setup=4_750_000, target_roas=8,
+            net_factor=0.4,
+        )
+        self.assertAlmostEqual(hist.iloc[0]["Budget di Shopee/hari"], 4_750_000)
+        self.assertAlmostEqual(hist.iloc[0]["ROAS iklan"], 10.0)
+        self.assertAlmostEqual(hist.iloc[0]["ROAS Net (bersih)"], 4.0)
+        # Saran vs Modal Harian live 4,75 jt (bukan rata-rata)
+        self.assertIn("Naikkan budget", hist.iloc[0]["Saran"])

@@ -10,13 +10,58 @@ import pandas as pd
 import streamlit as st
 
 
+def _normalize_ctr(raw) -> float:
+    """CTR pecahan 0–1 dari kolom Persentase Klik SC (selalu persen: 1,5 → 0,015; 0,8 → 0,008)."""
+    num = pd.to_numeric(raw, errors="coerce")
+    if num != num or not np.isfinite(num):
+        return float("nan")
+    val = float(num)
+    if val < 0 or val > 100:
+        return float("nan")
+    # Ekspor Shopee = persen, bukan pecahan.
+    return val / 100.0
+
+
+def _ctr_by_product_code(*frames) -> dict[str, float]:
+    """Ambil CTR per Kode Produk dari laporan iklan (overall / grup / otomatis) bila kolom ada.
+
+    Tidak menginvent CTR: hanya kode yang punya nilai nyata. Unggahan lebih baru menimpa.
+    """
+    out: dict[str, float] = {}
+    for frame in frames:
+        if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        if "product_code" not in frame.columns:
+            continue
+        ctr_col = None
+        for name in ("ctr", "Persentase Klik", "CTR"):
+            if name in frame.columns:
+                ctr_col = name
+                break
+        if ctr_col is None:
+            continue
+        work = frame
+        if "_submitted_at" in work.columns:
+            work = work.sort_values("_submitted_at")
+        for code, raw in zip(work["product_code"].astype(str), work[ctr_col]):
+            text = str(code or "").strip()
+            if text.endswith(".0"):
+                text = text[:-2]
+            if not text.isdigit():
+                continue
+            val = _normalize_ctr(raw)
+            if val == val:
+                out[text] = val
+    return out
+
+
 def ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
     """Unit iklan + ekonomi per Kode Produk: kontribusi sebelum iklan (margin kotor − potongan Shopee) dan ruang stok (Rp/hari).
 
     Hasil disimpan per sesi agar buka Rekomendasi sistem tidak menghitung ulang fee/margin tiap rerun Streamlit.
     Mengembalikan (units, members, contribution, products, occupied) — occupied = kode di **iklan yang sedang
     berjalan** (termasuk otomatis aktif) supaya saran tidak membuat iklan dobel aktif. Kode hanya di iklan dijeda
-    tidak menghalangi usulan iklan baru."""
+    tidak menghalangi usulan iklan baru. Kolom `ctr` disuntik bila laporan iklan memuat Persentase Klik."""
     from src.core import ads_strategy as A
     from src.core import shopee_fee as fee
     from src.core.margin_file import sku_key
@@ -35,7 +80,7 @@ def ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
         if isinstance(getattr(frames, "stock", None), pd.DataFrame) and not getattr(frames, "stock").empty and "_submitted_at" in frames.stock.columns
         else "-",
         st.session_state.get("_feature-version", 0),
-        "occupied-active-v1",  # bump cache setelah occupied = aktif saja
+        "occupied-active-ctr-v1",  # bump: suntik CTR ke products untuk Push skor
     )
     cached = st.session_state.get("_ads-inputs-cache")
     if isinstance(cached, tuple) and cached[0] == stamp:
@@ -107,6 +152,14 @@ def ads_inputs(table: pd.DataFrame, features, frames, days_left: int):
     if "stok_10037" not in products.columns and "stok" in products.columns:
         products["stok_10037"] = products["stok"]
     products["stok_room"] = products["product_code"].map(room)
+    # CTR nyata dari laporan iklan → Push skor (penalti hanya jika kolom terisi).
+    ctr_map = _ctr_by_product_code(overall, group, auto)
+    if ctr_map and not products.empty and "product_code" in products.columns:
+        products["ctr"] = products["product_code"].astype(str).map(
+            lambda c: ctr_map.get(c, float("nan"))
+        )
+    else:
+        products["ctr"] = float("nan")
     # Fokus kejar target: hanya iklan produk tunggal & grup; iklan baru diusulkan oleh pemilihan produk (A.build_plan).
     units = [u for u in units if u.jenis in A.TARGET_KINDS]
     result = (units, members, contribution, products, frozenset(occupied))

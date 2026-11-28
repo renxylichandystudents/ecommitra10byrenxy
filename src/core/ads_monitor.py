@@ -28,6 +28,203 @@ _STATUS_RANK = {
 _ACTIVE_SPEND = 5_000.0
 
 
+def parse_modal_harian(value) -> float:
+    """Modal Harian dari ekspor SC / input manual → float Rupiah. NaN bila kosong/tidak valid."""
+    if value is None:
+        return float("nan")
+    if isinstance(value, (int, float)):
+        num = float(value)
+        return num if num == num and num >= 0 else float("nan")
+    text = str(value).strip().replace("Rp", "").replace("rp", "").replace(" ", "")
+    if not text or text.lower() in {"nan", "none", "-", "null"}:
+        return float("nan")
+    if text.count(".") > 1 and "," not in text:
+        text = text.replace(".", "")
+    elif text.count(",") > 1 and "." not in text:
+        text = text.replace(",", "")
+    elif "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    else:
+        text = text.replace(",", "")
+    try:
+        num = float(text)
+    except ValueError:
+        return float("nan")
+    return num if num == num and num >= 0 else float("nan")
+
+
+def unit_modal_from_overall(ads_overall: pd.DataFrame | None) -> dict[str, float]:
+    """Peta kunci unit → Modal Harian dari laporan all-iklan (bila kolom ada).
+
+    File Shopee sering tidak punya Modal Harian; dict kosong = tidak ada sinyal live.
+    Ambil nilai dari unggahan terbaru per kunci (submitted_at / baris terakhir).
+    """
+    from src.core.ads_month import _unit_key
+
+    if ads_overall is None or not isinstance(ads_overall, pd.DataFrame) or ads_overall.empty:
+        return {}
+    work = ads_overall.copy()
+    col = None
+    for name in ("modal_harian", "Modal Harian", "Daily Budget", "Budget Harian"):
+        if name in work.columns:
+            col = name
+            break
+    if col is None:
+        return {}
+    codes = work["product_code"] if "product_code" in work.columns else pd.Series([""] * len(work))
+    names = work["product_name"] if "product_name" in work.columns else (
+        work["Nama Iklan"] if "Nama Iklan" in work.columns else pd.Series([""] * len(work))
+    )
+    if "_submitted_at" in work.columns:
+        work = work.sort_values("_submitted_at")
+    out: dict[str, float] = {}
+    for code, nama, raw in zip(codes, names, work[col]):
+        key = _unit_key(code, nama)
+        if not key:
+            continue
+        val = parse_modal_harian(raw)
+        if val == val:
+            out[key] = val
+            out[report_alias(key)] = val
+    return out
+
+
+def budget_sc_overrides(campaign: dict | None) -> dict[str, float]:
+    """Override Modal Harian yang diisi manual di Pantau (`campaign['budget_sc']`)."""
+    raw = (campaign or {}).get("budget_sc") or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        val = parse_modal_harian(value)
+        if val != val:
+            continue
+        k = str(key)
+        out[k] = val
+        out[report_alias(k)] = val
+    return out
+
+
+def modal_from_daily_reports(campaign: dict | None) -> dict[str, float]:
+    """Modal Harian dari unggahan laporan 1 hari (kolom opsional) — tanggal terbaru menang."""
+    reports = [
+        r for r in (campaign or {}).get("laporan_harian") or []
+        if isinstance(r, dict) and r.get("tanggal")
+    ]
+    reports = sorted(reports, key=lambda r: str(r.get("tanggal") or "")[:10])
+    out: dict[str, float] = {}
+    for report in reports:
+        for item in report.get("iklan") or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "")
+            val = parse_modal_harian(item.get("modal_harian"))
+            if not key or val != val:
+                continue
+            out[key] = val
+            out[report_alias(key)] = val
+    return out
+
+
+def resolve_sc_budget(
+    key: str,
+    *,
+    overrides: dict[str, float] | None = None,
+    modal_map: dict[str, float] | None = None,
+    saved_now: float | None = None,
+) -> float:
+    """Prioritas Budget di Shopee: override manual → Modal Harian laporan → snapshot saat simpan.
+
+    NaN bila tidak ada sumber — jangan invent dari rata-rata biaya.
+    """
+    k = str(key or "")
+    alias = report_alias(k)
+    for mapping in (overrides, modal_map):
+        if not mapping:
+            continue
+        if k in mapping and mapping[k] == mapping[k]:
+            return float(mapping[k])
+        if alias in mapping and mapping[alias] == mapping[alias]:
+            return float(mapping[alias])
+    if saved_now is not None and saved_now == saved_now and float(saved_now) >= 0:
+        return float(saved_now)
+    return float("nan")
+
+
+def apply_live_sc_budget(
+    frame: pd.DataFrame,
+    *,
+    campaign: dict | None = None,
+    ads_overall: pd.DataFrame | None = None,
+    acts_saved: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Isi `Budget harian sekarang` + timpa `Budget efektif Shopee/hari` bila Modal Harian live diketahui.
+
+    Tanpa sumber live, `Budget efektif` tetap acuan rencana (lantai Shopee) — perilaku lama.
+    """
+    if frame is None or frame.empty or "_key" not in frame.columns:
+        return frame if frame is not None else pd.DataFrame()
+    out = frame.copy()
+    overrides = budget_sc_overrides(campaign)
+    modal_map = {**unit_modal_from_overall(ads_overall), **modal_from_daily_reports(campaign)}
+    saved: dict[str, float] = {}
+    if acts_saved is not None and not acts_saved.empty and "key" in acts_saved.columns and "Budget harian sekarang" in acts_saved.columns:
+        for k, v in zip(acts_saved["key"], pd.to_numeric(acts_saved["Budget harian sekarang"], errors="coerce")):
+            val = float(v) if v == v else float("nan")
+            key = str(k)
+            saved[key] = val
+            saved[report_alias(key)] = val
+    live_vals, efektif_vals, sumber = [], [], []
+    for _, row in out.iterrows():
+        key = str(row.get("_key") or "")
+        plan = float(row.get("Budget usulan/hari") or 0)
+        floor = float(row.get("Budget efektif Shopee/hari") or A.implementable_budget(plan, row.get("Jenis") or key))
+        saved_now = saved.get(key, saved.get(report_alias(key), float("nan")))
+        live = resolve_sc_budget(key, overrides=overrides, modal_map=modal_map, saved_now=saved_now)
+        live_vals.append(live)
+        if live == live:
+            # Live SC menang untuk matching tips; jangan naikkan di bawah lantai jika live 0 (jeda).
+            efektif_vals.append(float(live))
+            if key in overrides or report_alias(key) in overrides:
+                sumber.append("manual")
+            elif key in modal_map or report_alias(key) in modal_map:
+                sumber.append("laporan")
+            else:
+                sumber.append("snapshot")
+        else:
+            efektif_vals.append(floor)
+            sumber.append("rencana")
+    out["Budget harian sekarang"] = live_vals
+    out["Budget efektif Shopee/hari"] = efektif_vals
+    out["Sumber budget SC"] = sumber
+    return out
+
+
+def dual_roas(*, biaya: float, omzet_iklan: float, sales_bersih: float) -> dict[str, float]:
+    """Gross (klaim SC) vs Net/Actual (sales bersih ÷ biaya) — FinKami-style dual baca."""
+    gross = omzet_iklan / biaya if biaya and biaya > 0 and omzet_iklan == omzet_iklan else float("nan")
+    net = sales_bersih / biaya if biaya and biaya > 0 and sales_bersih == sales_bersih else float("nan")
+    return {"gross": gross, "net": net}
+
+
+def set_budget_sc(campaign: dict, updates: dict[str, float], *, username: str, now: str) -> dict:
+    """Gabungkan override Modal Harian ke campaign (Rp 0 = jeda di SC)."""
+    out = dict(campaign or {})
+    current = dict(out.get("budget_sc") or {})
+    for key, value in (updates or {}).items():
+        val = parse_modal_harian(value)
+        if val != val:
+            current.pop(str(key), None)
+            continue
+        current[str(key)] = round(float(val), 2)
+    out["budget_sc"] = current
+    out["budget_sc_meta"] = {"oleh": username or "lokal", "waktu": now}
+    return out
+
+
 def _code_from_ad_key(key: str) -> str:
     k = str(key or "")
     if k.startswith(("produk:", "pisah:", "baru:")):
@@ -1134,7 +1331,8 @@ AD_DAILY_COLS = [
     "Budget di Shopee/hari",
     "Biaya iklan",
     "Omzet iklan",
-    "ROAS iklan",
+    "ROAS iklan",           # Gross SC (omzet iklan ÷ biaya) — nama lama untuk kompatibilitas
+    "ROAS Net (bersih)",    # Actual/Net: omzet×faktor bersih/bruto ÷ biaya
     "Saran",
 ]
 
@@ -1183,20 +1381,27 @@ def apply_daily_ad_window(
         part = _rows_for_key(daily, str(row.get("_key") or ""))
         win = part.loc[(part["Tanggal"] >= lo) & (part["Tanggal"] <= hi)] if not part.empty else part
         if win.empty:
-            # Jangan menuliskan nol bila iklan ini tidak ada di deret harian.
-            biaya_s.append(float(row.get("Biaya sejak disimpan") or 0))
-            omzet_s.append(float(row.get("Omzet iklan sejak disimpan") or 0))
-            hari_s.append(int(row.get("Hari dievaluasi") or 0))
-            rate_s.append(float(row.get("Biaya aktual/hari") or 0))
-            sales_s.append(float(row.get("Omzet iklan aktual/hari") or 0))
-            roas_raw = row.get("ROAS aktual")
-            roas_s.append(float(roas_raw) if roas_raw == roas_raw and roas_raw is not None else float("nan"))
+            # Ada deret harian toko tetapi kunci ini kosong: JANGAN pakai delta MTD
+            # evaluasi (bisa menumpuk kumulatif ~jutaan). Tunggu unggah 1 hari / MTD H−1.
+            note = str(row.get("Catatan batas") or "")
+            for phrase in (
+                "baseline iklan tidak terekam — porsi proporsional bulan berjalan",
+                "baseline tanpa biaya terekam — porsi proporsional bulan berjalan",
+            ):
+                note = note.replace(phrase, "")
+            note = (note + " Belum ada angka harian all-iklan untuk kunci ini pada jendela campaign "
+                    "(unggah laporan 1 hari atau MTD s.d. H−1).").strip()
+            biaya_s.append(0.0)
+            omzet_s.append(0.0)
+            hari_s.append(0)
+            rate_s.append(0.0)
+            sales_s.append(0.0)
+            roas_s.append(float("nan"))
             month_raw = row.get("Biaya bulan ini/hari")
             month_s.append(float(month_raw) if month_raw == month_raw and month_raw is not None else float("nan"))
-            done_s.append(str(row.get("Rekomendasi dijalankan") or "Belum"))
-            notes.append(str(row.get("Catatan batas") or ""))
-            ratio_raw = row.get("Rasio vs efektif")
-            ratios.append(float(ratio_raw) if ratio_raw == ratio_raw and ratio_raw is not None else float("nan"))
+            done_s.append("Belum")
+            notes.append(note.strip(" ;"))
+            ratios.append(float("nan"))
             continue
         biaya = float(win["Biaya"].sum())
         omzet = float(win["Omzet"].sum())
@@ -1282,12 +1487,13 @@ def ad_daily_progress(
     budget_plan: float = 0.0,
     budget_setup: float = 0.0,
     target_roas: float = 0.0,
+    net_factor: float = float("nan"),
 ) -> pd.DataFrame:
     """Satu baris per tanggal penuh sejak campaign, untuk satu iklan.
 
-    Biaya iklan, Omzet iklan, dan ROAS iklan = angka hari itu di laporan all iklan
-    (bukan tumpukan budget). Budget di Shopee = budget yang sudah berjalan,
-    Budget di rencana = usulan. Saran membandingkan biaya hari itu dengan rencana.
+    Biaya/Omzet = angka **hari itu** (bukan tumpukan MTD). Budget di Shopee = Modal
+    Harian live bila ada, else snapshot. ROAS Gross = omzet iklan÷biaya; ROAS Net =
+    Gross × faktor bersih/bruto toko bila diketahui (bukan invent per-SKU).
     """
     cols = list(AD_DAILY_COLS)
     if start is None or end is None or end < start:
@@ -1297,8 +1503,13 @@ def ad_daily_progress(
     if not part.empty:
         for row in part.itertuples(index=False):
             by_day[str(row.Tanggal)[:10]] = (float(row.Biaya), float(row.Omzet))
-    # Sesuai rencana = vs usulan, bukan vs budget yang sudah berjalan.
-    plan_hari = float(budget_plan or 0) if float(budget_plan or 0) > 0 else float(budget_setup or 0)
+    # Bandingkan vs Modal Harian live bila ada; else vs usulan.
+    setup = float(budget_setup) if budget_setup == budget_setup else float("nan")
+    plan_hari = float(setup) if setup == setup else (
+        float(budget_plan or 0) if float(budget_plan or 0) > 0 else 0.0
+    )
+    if plan_hari <= 0 and float(budget_plan or 0) > 0:
+        plan_hari = float(budget_plan or 0)
     rows = []
     day = start
     while day <= end:
@@ -1307,10 +1518,14 @@ def ad_daily_progress(
             realisasi, omzet_hari = hit
         else:
             realisasi, omzet_hari = float("nan"), float("nan")
-        roas = (
-            omzet_hari / realisasi
-            if realisasi == realisasi and realisasi > 0 and omzet_hari == omzet_hari
-            else float("nan")
+        dual = dual_roas(
+            biaya=realisasi if realisasi == realisasi else 0.0,
+            omzet_iklan=omzet_hari if omzet_hari == omzet_hari else float("nan"),
+            sales_bersih=(
+                omzet_hari * net_factor
+                if omzet_hari == omzet_hari and net_factor == net_factor and net_factor > 0
+                else float("nan")
+            ),
         )
         if hit is None:
             note = "Belum ada di laporan."
@@ -1328,10 +1543,11 @@ def ad_daily_progress(
         rows.append({
             "Tanggal": day.isoformat(),
             "Budget di rencana/hari": float(budget_plan or 0),
-            "Budget di Shopee/hari": float(budget_setup or 0),
+            "Budget di Shopee/hari": setup if setup == setup else float("nan"),
             "Biaya iklan": realisasi,
             "Omzet iklan": omzet_hari,
-            "ROAS iklan": roas,
+            "ROAS iklan": dual["gross"],
+            "ROAS Net (bersih)": dual["net"],
             "Saran": note,
         })
         day += timedelta(days=1)

@@ -126,7 +126,8 @@ def _daily_report_box(kind, cur, store, can_edit, username) -> None:
     st.caption(
         "Untuk evaluasi campaign, unggah Semua Laporan Iklan yang periodenya satu hari "
         "(tanggal awal sama dengan tanggal akhir). Biaya dan omzet hari itu menggantikan selisih MTD. "
-        "Modal Harian tidak dibaca. Sales produk dan sales bersih tetap dari transaksi atau performa. "
+        "Modal Harian dibaca bila kolom ada di file; kalau tidak, isi di Pantau › Modal Harian SC. "
+        "Sales produk dan sales bersih tetap dari transaksi atau performa. "
         "File MTD (misalnya 1–18 November) ditolak; file itu untuk data latih, bukan untuk campaign."
     )
     if days:

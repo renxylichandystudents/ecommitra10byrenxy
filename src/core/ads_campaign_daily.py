@@ -2,8 +2,9 @@
 
 Data latih tetap MTD di ads_overall. Campaign memakai file yang periodenya
 tepat satu hari: Biaya dan Omzet Penjualan hari itu menggantikan selisih MTD.
-Modal Harian tidak dibaca. Sales produk dan sales bersih tetap dari transaksi
-atau performa.
+Modal Harian dibaca **bila kolom ada** di ekspor (jarang); kalau tidak, Pantau
+memakai override manual / snapshot. Sales produk dan sales bersih tetap dari
+transaksi atau performa.
 """
 
 from __future__ import annotations
@@ -65,18 +66,27 @@ def parse_daily_ad_file(data: bytes, filename: str) -> dict:
     cols = find_columns(frame.columns, SOURCE_SPECS["ads_overall"])
     if "cost" not in cols or "ad_sales" not in cols:
         raise ValueError(f"{name}: kolom Biaya atau Omzet Penjualan tidak ada.")
+    from src.core.ads_monitor import parse_modal_harian
+
     biaya = _number(frame[cols["cost"]])
     omzet = _number(frame[cols["ad_sales"]])
     codes = frame[cols["product_code"]] if "product_code" in cols else pd.Series([""] * len(frame))
     names = frame[cols["product_name"]] if "product_name" in cols else pd.Series([""] * len(frame))
+    if "modal_harian" in cols:
+        modals = frame[cols["modal_harian"]]
+    else:
+        modals = pd.Series([float("nan")] * len(frame))
     ads: dict[str, dict] = {}
-    for code, nama, cost, sales in zip(codes, names, biaya, omzet):
+    for code, nama, cost, sales, modal in zip(codes, names, biaya, omzet, modals):
         key = _unit_key(code, nama)
         if not key:
             continue
-        slot = ads.setdefault(key, {"key": key, "nama": "", "biaya": 0.0, "omzet": 0.0})
+        slot = ads.setdefault(key, {"key": key, "nama": "", "biaya": 0.0, "omzet": 0.0, "modal_harian": float("nan")})
         slot["biaya"] += float(cost or 0)
         slot["omzet"] += float(sales or 0)
+        mh = parse_modal_harian(modal)
+        if mh == mh:
+            slot["modal_harian"] = mh
         label = str(nama or "").strip()
         if not slot["nama"] and label and label.lower() not in {"nan", "none", "-"}:
             slot["nama"] = label
