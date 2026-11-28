@@ -4,11 +4,8 @@ import numpy as np
 import pandas as pd
 
 from src.aggregate import period_start
-from src.core.cancel_reasons import short_reason
 from src.ingest import (
-    cancel_only_mask,
     cancelled_status_mask,
-    open_unpaid_mask,
     clean_sku_series,
     clean_text_series,
     item_key_series,
@@ -126,12 +123,10 @@ def ledger_from_raw(raw: pd.DataFrame) -> pd.DataFrame:
         frame["return_reason"] = clean_text_series(table[mapping["return_reason"]])
     else:
         frame["return_reason"] = ""
-    frame["buyer"] = clean_text_series(table[mapping["buyer"]]) if "buyer" in mapping else ""
     frame["sales"] = frame["line_value"]
     frame = frame.dropna(subset=["order_time"])
     frame = frame[frame["product_name"].ne("") | frame["sku"].ne("")]
-    frame["is_cancel"] = cancel_only_mask(frame["status"])
-    frame["is_open"] = open_unpaid_mask(frame["status"])
+    frame["is_cancel"] = cancelled_status_mask(frame["status"])
     frame["is_success"] = success_status_mask(frame["status"])
     frame["item_key"] = item_key_series(frame)
     frame = frame.drop_duplicates(
@@ -205,7 +200,7 @@ def scope_ledger(
         return ledger
     work = ledger
     if not include_cancel and "is_cancel" in work.columns:
-        work = work.loc[~work["is_cancel"] & ~work.get("is_open", False)]
+        work = work.loc[~work["is_cancel"]]
     if not include_return and "returned_qty" in work.columns:
         work = work.copy()
         work["qty"] = (work["qty"] - work["returned_qty"]).clip(lower=0)
@@ -220,13 +215,13 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
     empty_status = pd.DataFrame(columns=["Status pesanan", "No. Pesanan", "Kontribusi"])
     empty_sku = pd.DataFrame(
         columns=[
-            "Rank",
-            "SKU",
+            "Peringkat",
+            "Referensi SKU",
+            "Variasi",
             "Produk",
-            "Varian",
             "Qty retur",
             "Nominal retur",
-            "Status retur",
+            "Alasan retur",
             "Qty batal",
             "Invoice batal",
             "Nominal batal",
@@ -248,7 +243,7 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
         return summary, empty_status, empty_sku
 
     cancel = ledger.loc[ledger["is_cancel"]]
-    active = ledger.loc[~ledger["is_cancel"] & ~ledger.get("is_open", False)]
+    active = ledger.loc[~ledger["is_cancel"]]
     sold = active.loc[active["qty"] > 0]
     summary = {
         "orders": _unique_orders(ledger),
@@ -277,7 +272,7 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
     work["cancel_order"] = np.where(work["is_cancel"] & work["order_id"].ne(""), work["order_id"], np.nan)
     work["alasan_batal"] = np.where(
         work["is_cancel"],
-        work["cancel_reason"].map(short_reason),
+        work["cancel_reason"].where(work["cancel_reason"].ne(""), "Tanpa alasan"),
         "",
     )
     work["alasan_retur"] = np.where(
@@ -306,13 +301,13 @@ def activity_report(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.DataFram
         return summary, status_table.reset_index(drop=True), empty_sku
     sheet = pd.DataFrame(
         {
-            "Rank": np.arange(1, len(grouped) + 1),
-            "SKU": grouped["sku"].where(grouped["sku"].ne(""), "Tanpa SKU"),
-            "Produk": grouped["product_name"].where(grouped["product_name"].ne(""), "Tanpa nama"),
-            "Varian": grouped["variation"].where(grouped["variation"].ne(""), "Tanpa variasi"),
+            "Peringkat": np.arange(1, len(grouped) + 1),
+            "Referensi SKU": grouped["sku"].where(grouped["sku"].ne(""), "Tanpa SKU"),
+            "Variasi": grouped["variation"].where(grouped["variation"].ne(""), "Tanpa variasi"),
+            "Produk": grouped["product_name"].where(grouped["product_name"].ne(""), "Produk"),
             "Qty retur": grouped["qty_retur"].round().astype(int),
             "Nominal retur": grouped["nominal_retur"].round().astype(int),
-            "Status retur": grouped["alasan_retur"],
+            "Alasan retur": grouped["alasan_retur"],
             "Qty batal": grouped["qty_batal"].round().astype(int),
             "Invoice batal": grouped["invoice_batal"].astype(int),
             "Nominal batal": grouped["nominal_batal"].round().astype(int),
@@ -330,7 +325,7 @@ def focus_summary(
     return_only: bool,
     cancel_only: bool,
 ) -> dict[str, float]:
-    """Nominal retur hanya saat filter Retur. Nominal batal hanya saat filter batal."""
+    """Nominal retur hanya saat filter Return. Nominal batal hanya saat filter batal."""
     result = dict(summary)
     if return_only:
         result["sales_volume"] = float(result["nominal_return"])
@@ -396,7 +391,7 @@ def cancel_contribution(ledger: pd.DataFrame) -> tuple[dict[str, float], pd.Data
     base["nominal_cancel"] = _order_money(cancel)
     if cancel.empty:
         return base, pd.DataFrame(columns=columns)
-    cancel["alasan"] = cancel["cancel_reason"].map(short_reason)
+    cancel["alasan"] = cancel["cancel_reason"].where(cancel["cancel_reason"].ne(""), "Tanpa alasan")
     cancel["status_batal"] = cancel["status"].where(cancel["status"].ne(""), "Batal")
     rows = []
     for (status, reason), group in cancel.groupby(["status_batal", "alasan"], sort=False):
@@ -440,10 +435,9 @@ def unpaid_buyer_table(
         "Tanggal pembelian",
         "No. Pesanan",
         "SKU",
-        "Produk",
-        "Varian",
+        "Nama produk",
         "QTY",
-        "Sales value",
+        "Sales volume",
     ]
     empty = pd.DataFrame(columns=columns)
     if source is None or source.empty:
@@ -488,7 +482,7 @@ def unpaid_buyer_table(
     if not bool(in_period.any()):
         return empty
     reason = frame["cancel_reason"].str.lower()
-    unpaid = cancel_only_mask(frame["status"]) & (
+    unpaid = cancelled_status_mask(frame["status"]) & (
         reason.str.contains("belum dibayar", regex=False) | reason.str.contains("belum bayar", regex=False)
     )
     frame["unpaid"] = unpaid
@@ -496,15 +490,17 @@ def unpaid_buyer_table(
     frame["buyer_key"] = frame["buyer"].str.casefold()
     blank_buyer = frame["buyer_key"].eq("")
     frame.loc[blank_buyer, "buyer_key"] = "order:" + frame.loc[blank_buyer, "order_id"]
-    keys = [frame["buyer_key"], frame["item_key"]]
-    paid_any = (~cancelled_status_mask(frame["status"]) & in_period).groupby(keys).transform("any")
-    unpaid_any = frame["unpaid"].groupby(keys).transform("any")
-    frame["_group"] = frame.groupby(keys, sort=False).ngroup()
-    candidates = frame.loc[unpaid_any & ~paid_any & frame["unpaid"] & in_period]
     rows = []
-    if not candidates.empty:
+    for (_buyer_key, _item_key), group in frame.groupby(["buyer_key", "item_key"], sort=False):
+        if not bool(group["unpaid"].any()):
+            continue
+        if bool((~group["unpaid"]).any()):
+            continue
+        missed = group.loc[group["unpaid"] & in_period.reindex(group.index).fillna(False)]
+        if missed.empty:
+            continue
         orders = (
-            candidates.groupby(["_group", "buyer_key", "item_key", "order_id"], as_index=False, sort=True)
+            missed.groupby("order_id", as_index=False)
             .agg(
                 order_time=("order_time", "max"),
                 sku=("sku", "last"),
@@ -514,23 +510,24 @@ def unpaid_buyer_table(
                 line_sales=("line_sales", "sum"),
                 buyer=("buyer", "last"),
             )
-            .sort_values(["_group", "order_time"], kind="mergesort")
+            .sort_values("order_time", kind="mergesort")
         )
         for record in orders.itertuples(index=False):
-            product = str(record.product_name).strip() or "Tanpa nama"
-            variation = str(record.variation).strip() or "Tanpa variasi"
+            product = str(record.product_name).strip() or "Produk"
+            variation = str(record.variation).strip()
+            if variation and variation.lower() not in product.lower():
+                product = f"{product} — {variation}"
             rows.append(
                 {
-                    "_buyer": str(record.buyer_key),
+                    "_buyer": str(_buyer_key),
                     "_name": str(record.buyer).strip() or "Tanpa akun",
                     "_time": pd.Timestamp(record.order_time),
-                    "Tanggal pembelian": pd.Timestamp(record.order_time).strftime("%d/%m/%Y"),
+                    "Tanggal pembelian": pd.Timestamp(record.order_time).strftime("%d-%m-%Y"),
                     "No. Pesanan": str(record.order_id),
-                    "SKU": str(record.sku).strip() or "Tanpa SKU",
-                    "Produk": product,
-                    "Varian": variation,
+                    "SKU": str(record.sku) or "Tanpa SKU",
+                    "Nama produk": product,
                     "QTY": int(round(float(record.qty))),
-                    "Sales value": int(round(float(record.line_sales))),
+                    "Sales volume": int(round(float(record.line_sales))),
                 }
             )
     if not rows:
@@ -547,13 +544,12 @@ def unpaid_buyer_table(
     names: list[str] = []
     seen: set[str] = set()
     number = 0
-    order_counts = result.groupby("_buyer")["No. Pesanan"].nunique()
     for buyer, name in zip(result["_buyer"], result["_name"]):
         if buyer not in seen:
             number += 1
             seen.add(buyer)
             numbers.append(str(number))
-            names.append(f"{name} ({int(order_counts[buyer])} pesanan)")
+            names.append(name)
         else:
             numbers.append("")
             names.append("")
@@ -562,127 +558,171 @@ def unpaid_buyer_table(
     return result.drop(columns=["_buyer", "_name", "_time", "_latest"]).reset_index(drop=True)
 
 
-def region_lines(source: pd.DataFrame) -> pd.DataFrame:
-    """Baris pesanan dengan provinsi dan kota/kabupaten pembeli (dari kolom Provinsi & Kota/Kabupaten Shopee)."""
-    columns = ["order_id", "order_time", "month", "province", "city", "cancelled", "menunggu", "qty", "returned_qty", "unit_price", "order_amount"]
-    if source is None or source.empty:
-        return pd.DataFrame(columns=columns)
-    table = source.drop(columns=["Nama file"], errors="ignore")
-    table.columns = [str(column).strip() for column in table.columns]
-    try:
-        mapping = map_columns(table)
-    except ValueError:
-        return pd.DataFrame(columns=columns)
-    if not {"order_id", "order_time", "qty"} <= set(mapping) or not ({"province", "city"} & set(mapping)):
-        return pd.DataFrame(columns=columns)
-    frame = pd.DataFrame()
-    frame["order_time"] = _parse_datetime(table[mapping["order_time"]])
-    frame["order_id"] = clean_text_series(table[mapping["order_id"]])
-    frame["province"] = clean_text_series(table[mapping["province"]]).str.upper() if "province" in mapping else ""
-    frame["city"] = clean_text_series(table[mapping["city"]]).str.upper() if "city" in mapping else ""
-    status = normalize_status_series(table[mapping["status"]]) if "status" in mapping else pd.Series("", index=table.index)
-    frame["cancelled"] = cancel_only_mask(status)
-    frame["menunggu"] = open_unpaid_mask(status)
-    frame["qty"] = _parse_number(table[mapping["qty"]]).fillna(0).clip(lower=0)
-    # Kolom retur hanya dipakai bila benar-benar kolom tersendiri (bukan kolom Jumlah yang sama).
-    if "returned_qty" in mapping and mapping["returned_qty"] != mapping["qty"]:
-        frame["returned_qty"] = _parse_number(table[mapping["returned_qty"]]).fillna(0).clip(lower=0)
+def pareto_share(orders: pd.DataFrame, value_col: str = "qty", top_n: int = 50) -> dict[str, float]:
+    """Kontribusi Top-N terhadap total qty/omzet (pareto sederhana)."""
+    empty = {"top_n": float(top_n), "top_value": 0.0, "total_value": 0.0, "share_pct": 0.0, "sku_count": 0}
+    if orders is None or orders.empty or value_col not in orders.columns or "item_key" not in orders.columns:
+        return empty
+    by_sku = orders.groupby("item_key", as_index=False)[value_col].sum().sort_values(value_col, ascending=False)
+    total = float(by_sku[value_col].sum())
+    top = by_sku.head(int(top_n))
+    top_value = float(top[value_col].sum())
+    return {
+        "top_n": float(min(int(top_n), len(by_sku))),
+        "top_value": top_value,
+        "total_value": total,
+        "share_pct": (top_value / total * 100.0) if total > 0 else 0.0,
+        "sku_count": float(len(by_sku)),
+    }
+
+
+def cancel_return_insight(ledger: pd.DataFrame) -> dict[str, float | int]:
+    """Kontribusi batal/retur terhadap omzet dan qty kotor."""
+    base = {
+        "gross_sales": 0.0,
+        "cancel_sales": 0.0,
+        "return_sales": 0.0,
+        "cancel_share_pct": 0.0,
+        "return_share_pct": 0.0,
+        "cancel_orders": 0,
+        "return_qty": 0.0,
+    }
+    if ledger is None or ledger.empty:
+        return base
+    if "line_value" in ledger.columns:
+        gross = float(ledger["line_value"].sum())
+    elif "sales" in ledger.columns:
+        gross = float(ledger["sales"].sum())
     else:
-        frame["returned_qty"] = 0.0
-    frame["unit_price"] = _parse_number(table[mapping["unit_price"]]).fillna(0).clip(lower=0) if "unit_price" in mapping else 0.0
-    # Total Pembayaran per pesanan (dasar Sales bersih di kartu Data & target); kosong → nilai baris dipakai.
-    frame["order_amount"] = _parse_number(table[mapping["order_amount"]]) if "order_amount" in mapping else np.nan
-    frame = frame.dropna(subset=["order_time"])
-    frame = frame.loc[frame["order_id"].ne("")].copy()
-    frame["province"] = frame["province"].replace("", "TIDAK DIKETAHUI")
-    frame["city"] = frame["city"].replace("", "TIDAK DIKETAHUI")
-    frame["month"] = frame["order_time"].dt.to_period("M").astype(str)
-    return frame[columns]
-
-
-def _region_title(name: str) -> str:
-    """JAWA BARAT → Jawa Barat; singkatan DKI/DI/NTB/NTT tetap rapi."""
-    words = str(name).title().split()
-    fixed = {"Dki": "DKI", "Di": "DI", "Ntb": "NTB", "Ntt": "NTT"}
-    return " ".join(fixed.get(word, word) for word in words)
-
-
-REGION_COLUMNS = [
-    "Invoice bersih", "Invoice batal", "Invoice retur penuh", "Invoice Belum Bayar", "Invoice total", "% batal", "% retur penuh",
-    "QTY bersih", "Sales bersih", "Kontribusi invoice bersih", "Kontribusi sales bersih",
-]
-
-
-def region_summary(lines: pd.DataFrame, level: str) -> pd.DataFrame:
-    """Ringkasan per provinsi (level="province") atau per kota/kabupaten (level="city").
-
-    Definisi sama dengan kartu di halaman Data (`src.core.metrics.order_metrics`), sehingga baris Total = kartu:
-    - Invoice bersih = semua − batal − Belum Bayar − retur penuh (pesanan retur sebagian tetap bersih).
-    - Sales bersih = Total Pembayaran (sekali per pesanan, sudah dipotong voucher) pesanan selain batal & Belum Bayar − nilai unit retur.
-    - QTY bersih = QTY pesanan selain batal & Belum Bayar − unit retur."""
-    keys = ["province"] if level == "province" else ["province", "city"]
-    names = {"province": "Provinsi", "city": "Kota/Kabupaten"}
-    out_cols = ["Rank"] + [names[k] for k in keys] + REGION_COLUMNS
-    if lines is None or lines.empty:
-        return pd.DataFrame(columns=out_cols)
-    work = lines.copy()
-    if "menunggu" not in work.columns:
-        work["menunggu"] = False
-    if "order_amount" not in work.columns:
-        work["order_amount"] = np.nan
-    work["menunggu"] = work["menunggu"].astype(bool)
-    work["cancelled"] = work["cancelled"].astype(bool) & ~work["menunggu"]
-    returned = np.minimum(work["returned_qty"], work["qty"]).clip(lower=0)
-    work["line_value"] = work["qty"] * work["unit_price"]
-    work["return_value"] = returned * work["unit_price"]
-    work["net_qty"] = (work["qty"] - returned).clip(lower=0)
-    work["full_return"] = work["qty"].gt(0) & returned.ge(work["qty"])
-    orders = work.groupby(["order_id"] + keys, as_index=False).agg(
-        cancelled=("cancelled", "all"), menunggu=("menunggu", "all"), full=("full_return", "all"), returned=("returned_qty", "sum"),
-        amount=("order_amount", "first"), line=("line_value", "sum"), return_value=("return_value", "sum"), net_qty=("net_qty", "sum"),
+        gross = 0.0
+    cancel = ledger.loc[ledger["is_cancel"]] if "is_cancel" in ledger.columns else ledger.iloc[0:0]
+    cancel_sales = float(cancel["line_value"].sum()) if not cancel.empty and "line_value" in cancel.columns else 0.0
+    return_sales = float(ledger["return_value"].sum()) if "return_value" in ledger.columns else 0.0
+    return_qty = float(ledger["returned_qty"].sum()) if "returned_qty" in ledger.columns else 0.0
+    base.update(
+        {
+            "gross_sales": gross,
+            "cancel_sales": cancel_sales,
+            "return_sales": return_sales,
+            "cancel_share_pct": (cancel_sales / gross * 100.0) if gross > 0 else 0.0,
+            "return_share_pct": (return_sales / gross * 100.0) if gross > 0 else 0.0,
+            "cancel_orders": int(_unique_orders(cancel)) if not cancel.empty else 0,
+            "return_qty": return_qty,
+        }
     )
-    amount = orders["amount"].where(orders["amount"].fillna(0) > 0, orders["line"]).fillna(0.0)
-    active = ~orders["cancelled"] & ~orders["menunggu"]
-    orders["belum_bayar"] = orders["menunggu"]
-    orders["batal"] = orders["cancelled"]
-    orders["retur"] = active & orders["full"] & orders["returned"].gt(0)
-    orders["bersih"] = active & ~orders["retur"]
-    orders["sales"] = (amount - orders["return_value"]).where(active, 0.0)  # tanpa batas 0, sama dengan kartu Sales bersih
-    orders["qty"] = orders["net_qty"].where(active, 0.0)
-    result = orders.groupby(keys).agg(
-        total=("order_id", "nunique"), batal=("batal", "sum"), retur=("retur", "sum"), bersih=("bersih", "sum"),
-        belum_bayar=("belum_bayar", "sum"), qty=("qty", "sum"), sales=("sales", "sum"),
-    ).reset_index()
-    total_clean = float(result["bersih"].sum()) or 1.0
-    total_sales = float(result["sales"].sum()) or 1.0
-    result = result.sort_values(["bersih", "sales"], ascending=False).reset_index(drop=True)
-    out = pd.DataFrame({"Rank": range(1, len(result) + 1)})
-    for key in keys:
-        out[names[key]] = result[key].map(_region_title).to_numpy()
-    out["Invoice bersih"] = result["bersih"].astype(int).to_numpy()
-    out["Invoice batal"] = result["batal"].astype(int).to_numpy()
-    out["Invoice retur penuh"] = result["retur"].astype(int).to_numpy()
-    out["Invoice Belum Bayar"] = result["belum_bayar"].astype(int).to_numpy()
-    out["Invoice total"] = result["total"].astype(int).to_numpy()
-    out["% batal"] = (result["batal"] / result["total"].replace(0, np.nan) * 100).fillna(0).to_numpy()
-    out["% retur penuh"] = (result["retur"] / result["total"].replace(0, np.nan) * 100).fillna(0).to_numpy()
-    out["QTY bersih"] = result["qty"].to_numpy()
-    out["Sales bersih"] = result["sales"].to_numpy()
-    out["Kontribusi invoice bersih"] = (result["bersih"] / total_clean * 100).to_numpy()
-    out["Kontribusi sales bersih"] = (result["sales"] / total_sales * 100).to_numpy()
-    return out[out_cols]
+    return base
 
 
-def region_total_row(table: pd.DataFrame, label_col: str) -> pd.DataFrame:
-    """Satu baris Total (ditaruh di atas tabel)."""
-    row = {column: "" for column in table.columns}
-    row[label_col] = "Total"
-    row["Rank"] = ""
-    for column in ("Invoice bersih", "Invoice batal", "Invoice retur penuh", "Invoice Belum Bayar", "Invoice total", "QTY bersih", "Sales bersih"):
-        row[column] = float(table[column].sum()) if not table.empty else 0.0
-    total = row["Invoice total"] or 1.0
-    row["% batal"] = row["Invoice batal"] / total * 100 if row["Invoice total"] else 0.0
-    row["% retur penuh"] = row["Invoice retur penuh"] / total * 100 if row["Invoice total"] else 0.0
-    row["Kontribusi invoice bersih"] = 100.0 if row["Invoice bersih"] else 0.0
-    row["Kontribusi sales bersih"] = 100.0 if row["Sales bersih"] else 0.0
-    return pd.DataFrame([row], columns=table.columns)
+def top_reason_table(ledger: pd.DataFrame, kind: str = "cancel", limit: int = 5) -> pd.DataFrame:
+    """Alasan batal atau retur teratas."""
+    columns = ["Alasan", "Jumlah", "Nominal"]
+    if ledger is None or ledger.empty:
+        return pd.DataFrame(columns=columns)
+    work = ledger.copy()
+    if kind == "return":
+        if "returned_qty" not in work.columns:
+            return pd.DataFrame(columns=columns)
+        work = work.loc[work["returned_qty"] > 0].copy()
+        if work.empty:
+            return pd.DataFrame(columns=columns)
+        if "return_reason" in work.columns:
+            reason = work["return_reason"].where(work["return_reason"].ne(""), "Tanpa alasan")
+        else:
+            reason = pd.Series(["Tanpa alasan"] * len(work), index=work.index)
+        money = work["return_value"] if "return_value" in work.columns else 0.0
+        work = work.assign(_reason=reason, _count=work["returned_qty"], _money=money)
+    else:
+        if "is_cancel" not in work.columns:
+            return pd.DataFrame(columns=columns)
+        work = work.loc[work["is_cancel"]].copy()
+        if work.empty:
+            return pd.DataFrame(columns=columns)
+        if "cancel_reason" in work.columns:
+            reason = work["cancel_reason"].where(work["cancel_reason"].ne(""), "Tanpa alasan")
+        else:
+            reason = pd.Series(["Tanpa alasan"] * len(work), index=work.index)
+        money = work["line_value"] if "line_value" in work.columns else 0.0
+        work = work.assign(_reason=reason, _count=1.0, _money=money)
+    grouped = (
+        work.groupby("_reason", as_index=False)
+        .agg(Jumlah=("_count", "sum"), Nominal=("_money", "sum"))
+        .rename(columns={"_reason": "Alasan"})
+        .sort_values(["Jumlah", "Nominal"], ascending=[False, False])
+        .head(int(limit))
+        .reset_index(drop=True)
+    )
+    grouped["Jumlah"] = grouped["Jumlah"].round().astype(int)
+    grouped["Nominal"] = grouped["Nominal"].round().astype(int)
+    return grouped
+
+
+def unpaid_concentration(source: pd.DataFrame, limit: int = 5) -> dict[str, object]:
+    """Konsentrasi pembeli unpaid (batal belum bayar)."""
+    table = unpaid_buyer_table(source)
+    if table.empty:
+        return {"buyers": 0, "orders": 0, "sales": 0, "top": pd.DataFrame()}
+    buyers = table.loc[table["No"].astype(str).str.len() > 0]
+    money = (
+        table.assign(_buyer_fill=table["Nama akun pembeli"].replace("", np.nan).ffill())
+        .groupby("_buyer_fill", as_index=False)
+        .agg(Pesanan=("No. Pesanan", "nunique"), Sales=("Sales volume", "sum"), QTY=("QTY", "sum"))
+        .sort_values(["Sales", "Pesanan"], ascending=[False, False])
+        .head(int(limit))
+        .rename(columns={"_buyer_fill": "Pembeli"})
+    )
+    return {
+        "buyers": int(len(buyers)),
+        "orders": int(table["No. Pesanan"].nunique()),
+        "sales": int(table["Sales volume"].sum()),
+        "top": money.reset_index(drop=True),
+    }
+
+
+def unit_price_trend(orders: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+    """Tren harga unit (omzet/qty) per SKU: awal vs akhir jendela laporan."""
+    columns = ["Referensi SKU", "Produk", "Harga awal", "Harga akhir", "Perubahan (%)"]
+    if orders is None or orders.empty:
+        return pd.DataFrame(columns=columns)
+    need = {"item_key", "order_time", "qty", "sales"}
+    if not need <= set(orders.columns):
+        return pd.DataFrame(columns=columns)
+    work = orders.loc[pd.to_numeric(orders["qty"], errors="coerce").fillna(0) > 0].copy()
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+    qty = pd.to_numeric(work["qty"], errors="coerce").replace(0, np.nan)
+    sales = pd.to_numeric(work["sales"], errors="coerce")
+    work["unit_price"] = sales / qty
+    work = work.loc[work["unit_price"].notna() & np.isfinite(work["unit_price"])].copy()
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+    work = work.sort_values("order_time", kind="mergesort")
+    if "product_name" not in work.columns:
+        work["product_name"] = ""
+    if "sku" not in work.columns:
+        work["sku"] = ""
+    rows = []
+    ranked = work.groupby("item_key", as_index=False).agg(
+        qty=("qty", "sum"),
+        product=("product_name", "last"),
+        sku=("sku", "last"),
+    )
+    ranked = ranked.sort_values("qty", ascending=False).head(int(top_n))
+    for item_key, product, sku in zip(ranked["item_key"], ranked["product"], ranked["sku"]):
+        series = work.loc[work["item_key"] == item_key, "unit_price"]
+        if series.empty:
+            continue
+        first = float(series.iloc[0])
+        last = float(series.iloc[-1])
+        if not np.isfinite(first) or not np.isfinite(last):
+            continue
+        change = ((last - first) / first * 100.0) if first > 0 else 0.0
+        rows.append(
+            {
+                "Referensi SKU": sku or "Tanpa SKU",
+                "Produk": product or "Produk",
+                "Harga awal": int(round(first)),
+                "Harga akhir": int(round(last)),
+                "Perubahan (%)": round(change, 1),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)

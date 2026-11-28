@@ -4,7 +4,71 @@ import numpy as np
 import pandas as pd
 
 from src.aggregate import dense_item_series
-from src.core.inventory import inventory_decision
+
+
+def stock_priority(suggested: float, reorder: float, actual: float | None) -> str:
+    """Prioritas restock: tinggi / sedang / pantau."""
+    try:
+        suggested = float(suggested)
+    except (TypeError, ValueError):
+        suggested = 0.0
+    if not np.isfinite(suggested):
+        suggested = 0.0
+    try:
+        reorder = float(max(reorder, 0.0))
+    except (TypeError, ValueError):
+        reorder = 0.0
+    if not np.isfinite(reorder):
+        reorder = 0.0
+    if actual is None:
+        usable_actual = None
+    else:
+        try:
+            usable_actual = float(actual)
+        except (TypeError, ValueError):
+            usable_actual = None
+        if usable_actual is not None and not np.isfinite(usable_actual):
+            usable_actual = None
+    if usable_actual is None:
+        if suggested <= 0:
+            return "pantau"
+        if suggested >= 20:
+            return "tinggi"
+        if suggested >= 5:
+            return "sedang"
+        return "pantau"
+    actual_val = float(max(usable_actual, 0.0))
+    if suggested <= 0:
+        return "pantau"
+    coverage = actual_val / suggested
+    if reorder <= 0 or coverage >= 1.0:
+        return "pantau"
+    if coverage < 0.35 or reorder >= suggested * 0.5:
+        return "tinggi"
+    if coverage < 0.7 or reorder >= suggested * 0.2:
+        return "sedang"
+    return "pantau"
+
+
+def _parse_actual_map(actual_stock: dict[str, float] | pd.Series | None) -> dict[str, float]:
+    actual_map: dict[str, float] = {}
+    if isinstance(actual_stock, pd.Series):
+        items = actual_stock.items()
+    elif isinstance(actual_stock, dict):
+        items = actual_stock.items()
+    else:
+        return actual_map
+    for key, value in items:
+        if value is None or (isinstance(value, float) and not np.isfinite(value)):
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(parsed):
+            continue
+        actual_map[str(key)] = parsed
+    return actual_map
 
 
 def recommend_stock(
@@ -13,84 +77,98 @@ def recommend_stock(
     period: str,
     service_level_z: float = 1.65,
     horizon_steps: int = 1,
-    lead_time_days: float = 7.0,
-    service_level_pct: float | None = None,
-    lead_time_sigma: float = 0.0,
-    source_type: str = "local",
-    lead_time_max: float | None = None,
-    review_days: float = 0.0,
-    sigma_scale: float = 1.0,
-    item_service_pct: dict[str, float] | None = None,
-    item_sigma_scale: dict[str, float] | None = None,
+    actual_stock: dict[str, float] | pd.Series | None = None,
 ) -> pd.DataFrame:
-    """Stok = prediksi permintaan + safety stock berbasis lead time.
+    """Stok = prediksi tren + safety stock.
 
-    SS = Z x sigma_D x sqrt(L + R), R = periode tinjau stok (lihat src.core.inventory).
-    sigma_D = r x simpangan harian; r (kalibrasi walk-forward) membuat sigma_D x sqrt(L + R) = simpangan galat prediksi L + R hari.
-    item_service_pct: target tingkat layanan per item_key (per kelas ABC); item lain memakai service_level_pct.
-    item_sigma_scale: pengali σ per item_key (metode SS empiris: q kelas ÷ Z kelas, sehingga SS = q × σ × √(L + R)); menggantikan sigma_scale.
+    Safety stock menutup selisih penjualan harian terhadap tren, lalu diskalakan
+    sepanjang periode yang dipilih. Persentase dari user mengatur besar cadangan itu.
+    Bila stok aktual diisi: reorder = max(0, disarankan − aktual).
     """
-    per_scale = item_sigma_scale or {}
-    per_item = item_service_pct or {}
-    scale = float(sigma_scale) if sigma_scale and np.isfinite(sigma_scale) and sigma_scale > 0 else 1.0
+    columns = [
+        "item_key",
+        "item_label",
+        "pred_qty",
+        "pred_sales",
+        "sigma_qty",
+        "safety_stock",
+        "stok_disarankan",
+        "stok_aktual",
+        "reorder",
+        "prioritas",
+        "model_qty",
+        "rank_qty",
+        "rank_sales",
+        "rank_komposit",
+    ]
+    if combined is None or combined.empty:
+        return pd.DataFrame(columns=columns)
     rows = []
     if history is None or history.empty or "item_key" not in history.columns:
         hist_map = {}
     else:
         hist_map = {key: grp for key, grp in history.groupby("item_key")}
+    actual_map = _parse_actual_map(actual_stock)
+
     for _, item in combined.iterrows():
         sigma = float(item["error_sigma"]) if "error_sigma" in item and pd.notna(item["error_sigma"]) else 0.0
+        if not np.isfinite(sigma):
+            sigma = 0.0
         if sigma <= 0:
             hist = hist_map.get(item["item_key"])
             if hist is not None and not hist.empty:
                 dense = dense_item_series(hist, period)
-                sigma = float(np.std(dense["qty"].to_numpy(dtype=float), ddof=1)) if len(dense) > 1 else 0.0
-        sigma *= float(per_scale.get(str(item["item_key"]), scale))
-        forecast_qty = float(item["pred_qty"])
+                if len(dense) > 1 and "qty" in dense.columns:
+                    sigma = float(np.std(dense["qty"].to_numpy(dtype=float), ddof=1))
+                    if not np.isfinite(sigma):
+                        sigma = 0.0
+        try:
+            forecast_qty = float(item.get("pred_qty", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            forecast_qty = 0.0
+        if not np.isfinite(forecast_qty):
+            forecast_qty = 0.0
+        try:
+            pred_sales = float(item.get("pred_sales", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pred_sales = 0.0
+        if not np.isfinite(pred_sales):
+            pred_sales = 0.0
         steps = max(int(horizon_steps), 1)
-        pct = float(service_level_pct) if service_level_pct is not None else _z_to_service_level(float(service_level_z))
-        pct = float(per_item.get(str(item["item_key"]), pct))
-        decision = inventory_decision(
-            forecast_qty=forecast_qty,
-            current_stock=0.0,
-            sigma_d=sigma,
-            service_level_pct=pct,
-            horizon_days=steps,
-            lead_time_days=lead_time_days,
-            sigma_l=lead_time_sigma,
-            source_type=source_type,
-            l_max=lead_time_max,
-            review_days=review_days,
-        )
-        safety = decision.safety_stock
-        suggested = max(np.ceil(decision.kebutuhan), 0)
+        try:
+            z = float(service_level_z)
+        except (TypeError, ValueError):
+            z = 0.0
+        if not np.isfinite(z):
+            z = 0.0
+        safety = z * sigma * np.sqrt(steps)
+        if not np.isfinite(safety):
+            safety = 0.0
+        suggested = int(max(np.ceil(forecast_qty + safety), 0))
+        key = str(item["item_key"])
+        has_actual = key in actual_map
+        actual = float(max(actual_map[key], 0.0)) if has_actual else None
+        reorder = int(max(0, suggested - int(actual))) if has_actual else None
         rows.append(
             {
                 "item_key": item["item_key"],
-                "item_label": item["item_label"],
+                "item_label": item.get("item_label", ""),
                 "pred_qty": forecast_qty,
-                "pred_sales": float(item["pred_sales"]),
+                "pred_sales": pred_sales,
                 "sigma_qty": sigma,
-                "target_layanan_pct": pct,
                 "safety_stock": safety,
-                "kebutuhan": decision.kebutuhan,
-                "rop": decision.rop,
-                "hari_cukup": decision.hari_cukup,
-                "status_stok": decision.status_stok,
-                "stok_disarankan": int(suggested),
+                "stok_disarankan": suggested,
+                "stok_aktual": actual if has_actual else np.nan,
+                "reorder": reorder if has_actual else np.nan,
+                "prioritas": stock_priority(suggested, float(reorder or 0), actual),
                 "model_qty": item.get("model_qty", ""),
-                "rank_qty": item["rank_qty"],
-                "rank_sales": item["rank_sales"],
-                "rank_komposit": item["rank_komposit"],
+                "rank_qty": item.get("rank_qty", np.nan),
+                "rank_sales": item.get("rank_sales", np.nan),
+                "rank_komposit": item.get("rank_komposit", np.nan),
             }
         )
-    return pd.DataFrame(rows).sort_values(["rank_komposit", "rank_qty"])
-
-
-def _z_to_service_level(z: float) -> float:
-    try:
-        from statistics import NormalDist
-
-        return float(NormalDist().cdf(float(z)) * 100)
-    except Exception:
-        return 95.0
+    result = pd.DataFrame(rows)
+    sort_cols = [c for c in ("rank_komposit", "rank_qty") if c in result.columns]
+    if sort_cols:
+        return result.sort_values(sort_cols)
+    return result

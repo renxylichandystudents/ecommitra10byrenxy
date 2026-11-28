@@ -7,7 +7,17 @@ from src.aggregate import period_label
 
 
 def unique_rank(frame: pd.DataFrame, primary: str, tie_breaks: list[str]) -> pd.DataFrame:
-    """Rank 1..n tanpa angka kembar. Seri dipecah dari kolom cadangan, lalu item_key."""
+    """Peringkat 1..n tanpa angka kembar. Seri dipecah dari kolom cadangan, lalu item_key."""
+    if frame is None or frame.empty:
+        out = frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        if "peringkat" not in out.columns:
+            out["peringkat"] = pd.Series(dtype=int)
+        return out
+    missing = [col for col in [primary, *tie_breaks, "item_key"] if col not in frame.columns]
+    if missing:
+        out = frame.copy()
+        out["peringkat"] = np.arange(1, len(out) + 1)
+        return out
     ordered = frame.sort_values(
         [primary, *tie_breaks, "item_key"],
         ascending=[False, *([False] * len(tie_breaks)), True],
@@ -18,7 +28,7 @@ def unique_rank(frame: pd.DataFrame, primary: str, tie_breaks: list[str]) -> pd.
 
 
 def rank_from_orders(orders: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """Rank terlaris dari seluruh baris laporan, bukan hanya periode terakhir.
+    """Peringkat terlaris dari seluruh baris laporan, bukan hanya periode terakhir.
 
     Urutan utama adalah qty atau omzet tertinggi. Jika nilainya sama, pemecah seri
     memakai metrik satunya, jumlah pesanan, lalu waktu pesanan terbaru.
@@ -40,34 +50,15 @@ def rank_from_orders(orders: pd.DataFrame, metric: str) -> pd.DataFrame:
     return unique_rank(stats, primary, [secondary, "n_orders", "last_order"])
 
 
-def rank_for_period(orders: pd.DataFrame, period_orders: pd.DataFrame | None, metric: str) -> pd.DataFrame:
-    """Semua SKU data latih (semua yang diprediksi), diurutkan menurut penjualan periode terpilih.
-
-    qty_total/sales_total/n_orders = aktual periode terpilih (0 bila tidak laku). SKU yang tidak laku
-    di periode itu tetap ikut di belakang, urut menurut seluruh data latih.
-    """
-    full = rank_from_orders(orders, metric)
-    if full.empty:
-        return full
-    full = full.rename(columns={"qty_total": "_qty_all", "sales_total": "_sales_all", "n_orders": "_orders_all", "peringkat": "_rank_all"})
-    if period_orders is not None and not period_orders.empty:
-        part = period_orders.groupby("item_key", as_index=False).agg(qty_total=("qty", "sum"), sales_total=("sales", "sum"), n_orders=("order_id", "nunique"))
-        full = full.merge(part, on="item_key", how="left")
-    for column in ("qty_total", "sales_total", "n_orders"):
-        if column not in full.columns:
-            full[column] = 0
-        full[column] = full[column].fillna(0)
-    primary = "qty_total" if metric == "qty" else "sales_total"
-    secondary = "sales_total" if metric == "qty" else "qty_total"
-    ordered = full.sort_values([primary, secondary, "_rank_all"], ascending=[False, False, True], kind="mergesort").copy()
-    ordered["peringkat"] = np.arange(1, len(ordered) + 1)
-    return ordered.drop(columns=["_qty_all", "_sales_all", "_orders_all", "_rank_all"]).reset_index(drop=True)
-
-
 def historical_bestsellers(history: pd.DataFrame, period: str, period_start, top_n: int = 10) -> pd.DataFrame:
+    empty = pd.DataFrame(
+        columns=["item_key", "item_label", "qty", "sales", "peringkat", "rank_qty", "rank_sales", "period_label"]
+    )
+    if history is None or history.empty or "period_start" not in history.columns:
+        return empty
     subset = history[history["period_start"] == period_start].copy()
     if subset.empty:
-        return subset
+        return empty
     by_qty = unique_rank(subset, "qty", ["sales"])
     by_sales = unique_rank(subset, "sales", ["qty"])[["item_key", "peringkat"]].rename(
         columns={"peringkat": "rank_sales"}
@@ -79,7 +70,35 @@ def historical_bestsellers(history: pd.DataFrame, period: str, period_start, top
 
 
 def combine_forecasts(qty_fc: pd.DataFrame, sales_fc: pd.DataFrame) -> pd.DataFrame:
-    qty = qty_fc.rename(
+    empty = pd.DataFrame(
+        columns=[
+            "item_key",
+            "item_label",
+            "pred_qty",
+            "pred_sales",
+            "model_qty",
+            "model_sales",
+            "mape_qty",
+            "mape_sales",
+            "mae_qty",
+            "mae_sales",
+            "rmse_qty",
+            "rmse_sales",
+            "rank_qty",
+            "rank_sales",
+            "rank_komposit",
+            "skor_komposit",
+            "next_period",
+            "error_sigma",
+            "history_points",
+            "horizon_steps",
+        ]
+    )
+    qty_empty = qty_fc is None or qty_fc.empty
+    sales_empty = sales_fc is None or sales_fc.empty
+    if qty_empty and sales_empty:
+        return empty
+    qty = (qty_fc if not qty_empty else pd.DataFrame()).rename(
         columns={
             "forecast": "pred_qty",
             "best_model": "model_qty",
@@ -88,7 +107,7 @@ def combine_forecasts(qty_fc: pd.DataFrame, sales_fc: pd.DataFrame) -> pd.DataFr
             "rmse": "rmse_qty",
         }
     )
-    sales = sales_fc.rename(
+    sales = (sales_fc if not sales_empty else pd.DataFrame()).rename(
         columns={
             "forecast": "pred_sales",
             "best_model": "model_sales",
@@ -97,13 +116,23 @@ def combine_forecasts(qty_fc: pd.DataFrame, sales_fc: pd.DataFrame) -> pd.DataFr
             "rmse": "rmse_sales",
         }
     )
-    merged = qty.merge(
-        sales[["item_key", "pred_sales", "model_sales", "mape_sales", "mae_sales", "rmse_sales"]],
-        on="item_key",
-        how="outer",
-    )
-    merged["pred_qty"] = merged["pred_qty"].fillna(0.0)
-    merged["pred_sales"] = merged["pred_sales"].fillna(0.0)
+    sales_cols = [c for c in ("item_key", "pred_sales", "model_sales", "mape_sales", "mae_sales", "rmse_sales") if c in sales.columns]
+    if qty.empty:
+        merged = sales.copy()
+        if "pred_qty" not in merged.columns:
+            merged["pred_qty"] = 0.0
+    elif not sales_cols or "item_key" not in sales_cols:
+        merged = qty.copy()
+        if "pred_sales" not in merged.columns:
+            merged["pred_sales"] = 0.0
+    else:
+        merged = qty.merge(sales[sales_cols], on="item_key", how="outer")
+    if merged.empty:
+        return empty
+    merged["pred_qty"] = merged["pred_qty"].fillna(0.0) if "pred_qty" in merged.columns else 0.0
+    merged["pred_sales"] = merged["pred_sales"].fillna(0.0) if "pred_sales" in merged.columns else 0.0
+    if "item_key" not in merged.columns:
+        return empty
     by_qty = unique_rank(merged, "pred_qty", ["pred_sales"])[["item_key", "peringkat"]].rename(
         columns={"peringkat": "rank_qty"}
     )
@@ -119,17 +148,31 @@ def combine_forecasts(qty_fc: pd.DataFrame, sales_fc: pd.DataFrame) -> pd.DataFr
         columns={"peringkat": "rank_komposit"}
     )
     merged = merged.drop(columns=["peringkat"], errors="ignore").merge(by_score, on="item_key", how="left")
-    merged["next_period"] = merged["next_period"].fillna(sales_fc["next_period"].iloc[0] if not sales_fc.empty else "")
+    fallback_period = ""
+    if not sales_empty and "next_period" in sales_fc.columns and not sales_fc.empty:
+        fallback_period = sales_fc["next_period"].iloc[0]
+    elif "next_period" in merged.columns and merged["next_period"].notna().any():
+        fallback_period = merged["next_period"].dropna().iloc[0]
+    if "next_period" in merged.columns:
+        merged["next_period"] = merged["next_period"].fillna(fallback_period)
+    else:
+        merged["next_period"] = fallback_period
     return merged.sort_values(["rank_komposit", "rank_sales", "rank_qty"])
 
 
 def model_leaderboard(qty_fc: pd.DataFrame, sales_fc: pd.DataFrame) -> pd.DataFrame:
+    """Ringkas MAPE/RMSE per model. Kosongkan jika metrik masih nol palsu (tanpa holdout)."""
     frames = []
     for metric, frame, col in (
         ("qty", qty_fc, "best_model"),
         ("sales", sales_fc, "best_model"),
     ):
-        if frame.empty:
+        if frame is None or frame.empty or "mape" not in frame.columns:
+            continue
+        # Omzet = qty × harga; jangan tampilkan leaderboard sales dengan MAPE 0 palsu.
+        if metric == "sales" and float(frame["mape"].fillna(0).sum()) <= 0:
+            continue
+        if metric == "qty" and float(frame["mape"].fillna(0).abs().sum()) <= 0 and float(frame["rmse"].fillna(0).sum()) <= 0:
             continue
         summary = (
             frame.groupby(col, as_index=False)
@@ -145,7 +188,9 @@ def model_leaderboard(qty_fc: pd.DataFrame, sales_fc: pd.DataFrame) -> pd.DataFr
 
 
 def _minmax(series: pd.Series) -> pd.Series:
+    if series is None or len(series) == 0:
+        return pd.Series(dtype=float)
     lo, hi = series.min(), series.max()
-    if hi == lo:
+    if pd.isna(lo) or pd.isna(hi) or hi == lo:
         return pd.Series([1.0] * len(series), index=series.index)
     return (series - lo) / (hi - lo)

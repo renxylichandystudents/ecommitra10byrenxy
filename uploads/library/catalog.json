@@ -1,0 +1,276 @@
+{
+  "months": {
+    "2024-01": {
+      "label": "Januari 2024",
+      "rows": 198,
+      "orders": 198,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-02": {
+      "label": "Februari 2024",
+      "rows": 199,
+      "orders": 199,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-03": {
+      "label": "Maret 2024",
+      "rows": 207,
+      "orders": 207,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-04": {
+      "label": "April 2024",
+      "rows": 209,
+      "orders": 209,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-05": {
+      "label": "Mei 2024",
+      "rows": 202,
+      "orders": 202,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-06": {
+      "label": "Juni 2024",
+      "rows": 210,
+      "orders": 210,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-07": {
+      "label": "Juli 2024",
+      "rows": 222,
+      "orders": 222,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-08": {
+      "label": "Agustus 2024",
+      "rows": 223,
+      "orders": 223,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-09": {
+      "label": "September 2024",
+      "rows": 185,
+      "orders": 185,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-10": {
+      "label": "Oktober 2024",
+      "rows": 210,
+      "orders": 210,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-11": {
+      "label": "November 2024",
+      "rows": 214,
+      "orders": 214,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2024-12": {
+      "label": "Desember 2024",
+      "rows": 250,
+      "orders": 250,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2025-01": {
+      "label": "Januari 2025",
+      "rows": 215,
+      "orders": 215,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2025-02": {
+      "label": "Februari 2025",
+      "rows": 193,
+      "orders": 193,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2025-03": {
+      "label": "Maret 2025",
+      "rows": 245,
+      "orders": 245,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2025-04": {
+      "label": "April 2025",
+      "rows": 217,
+      "orders": 217,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2025-05": {
+      "label": "Mei 2025",
+      "rows": 191,
+      "orders": 191,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    },
+    "2025-06": {
+      "label": "Juni 2025",
+      "rows": 213,
+      "orders": 213,
+      "files": [
+        "sample_shopee_orders.csv"
+      ],
+      "updated_at": "28-11-2026 03:13"
+    }
+  },
+  "history": [
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Juni 2025",
+      "files": "sample_shopee_orders.csv",
+      "change": "Juni 2025 ditambahkan. 213 baris, 213 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Mei 2025",
+      "files": "sample_shopee_orders.csv",
+      "change": "Mei 2025 ditambahkan. 191 baris, 191 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "April 2025",
+      "files": "sample_shopee_orders.csv",
+      "change": "April 2025 ditambahkan. 217 baris, 217 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Maret 2025",
+      "files": "sample_shopee_orders.csv",
+      "change": "Maret 2025 ditambahkan. 245 baris, 245 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Februari 2025",
+      "files": "sample_shopee_orders.csv",
+      "change": "Februari 2025 ditambahkan. 193 baris, 193 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Januari 2025",
+      "files": "sample_shopee_orders.csv",
+      "change": "Januari 2025 ditambahkan. 215 baris, 215 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Desember 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Desember 2024 ditambahkan. 250 baris, 250 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "November 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "November 2024 ditambahkan. 214 baris, 214 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Oktober 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Oktober 2024 ditambahkan. 210 baris, 210 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "September 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "September 2024 ditambahkan. 185 baris, 185 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Agustus 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Agustus 2024 ditambahkan. 223 baris, 223 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Juli 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Juli 2024 ditambahkan. 222 baris, 222 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Juni 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Juni 2024 ditambahkan. 210 baris, 210 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Mei 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Mei 2024 ditambahkan. 202 baris, 202 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "April 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "April 2024 ditambahkan. 209 baris, 209 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Maret 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Maret 2024 ditambahkan. 207 baris, 207 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Februari 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Februari 2024 ditambahkan. 199 baris, 199 No. Pesanan."
+    },
+    {
+      "at": "28-11-2026 03:13",
+      "data": "Januari 2024",
+      "files": "sample_shopee_orders.csv",
+      "change": "Januari 2024 ditambahkan. 198 baris, 198 No. Pesanan."
+    }
+  ]
+}

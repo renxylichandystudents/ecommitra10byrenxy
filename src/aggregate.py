@@ -66,6 +66,8 @@ def period_start(series: pd.Series, period: str) -> pd.Series:
 
 def period_label(ts: pd.Timestamp, period: str) -> str:
     stamp = pd.Timestamp(ts)
+    if pd.isna(stamp):
+        return ""
     if period == "hari":
         return stamp.strftime("%Y-%m-%d")
     if period == "bulan":
@@ -82,6 +84,8 @@ def period_label(ts: pd.Timestamp, period: str) -> str:
 
 def next_period_start(last_start: pd.Timestamp, period: str) -> pd.Timestamp:
     stamp = pd.Timestamp(last_start)
+    if pd.isna(stamp):
+        return pd.NaT
     if period == "hari":
         return stamp + pd.Timedelta(days=1)
     if period == "bulan":
@@ -96,8 +100,22 @@ def next_period_start(last_start: pd.Timestamp, period: str) -> pd.Timestamp:
 
 
 def aggregate_item_periods(df: pd.DataFrame, period: str) -> pd.DataFrame:
+    empty_cols = ["item_key", "period_start", "item_label", "qty", "sales", "orders", "period_label"]
+    if df is None or df.empty or "order_time" not in df.columns or "item_key" not in df.columns:
+        return pd.DataFrame(columns=empty_cols)
     work = df.copy()
     work["period_start"] = period_start(work["order_time"], period)
+    work = work.loc[pd.to_datetime(work["period_start"], errors="coerce").notna()].copy()
+    if work.empty:
+        return pd.DataFrame(columns=empty_cols)
+    if "item_label" not in work.columns:
+        work["item_label"] = work["item_key"].astype(str)
+    if "qty" not in work.columns:
+        work["qty"] = 0.0
+    if "sales" not in work.columns:
+        work["sales"] = 0.0
+    if "order_id" not in work.columns:
+        work["order_id"] = ""
     grouped = (
         work.groupby(["item_key", "period_start"], as_index=False)
         .agg(

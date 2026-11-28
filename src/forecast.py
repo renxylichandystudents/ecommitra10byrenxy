@@ -5,11 +5,16 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 from src.aggregate import PERIOD_SPECS, dense_item_series, next_period_start, period_label
 
-_XGB = None
-_XGB_TRIED = False
+try:
+    from xgboost import XGBRegressor
+except Exception:  # pragma: no cover - optional at runtime
+    XGBRegressor = None
 
 
 @dataclass
@@ -38,16 +43,71 @@ class ItemForecast:
     candidates: list[ModelResult]
 
 
+def _finite(value: float, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not np.isfinite(number):
+        return default
+    return number
+
+
 def _whole_units(forecast: float, values: np.ndarray, steps: int, metric: str) -> float:
-    """Prediksi qty dan omzet dibulatkan. Qty yang pernah terjual tidak boleh 0."""
-    total = float(np.sum(values)) if len(values) else 0.0
-    value = float(forecast)
-    if total > 0 and value <= 0:
-        value = total / max(len(values), 1) * max(int(steps), 1)
+    """Prediksi qty/omzet dibulatkan ke bilangan bulat ≥ 0. Tidak memaksa qty ≥ 1."""
+    del values, steps, metric
+    value = _finite(forecast, 0.0)
     rounded = int(np.floor(value + 0.5))
-    if metric == "qty" and total > 0 and rounded < 1:
-        rounded = 1
     return float(max(rounded, 0))
+
+
+FORECAST_CANDIDATE_LIMIT = 100
+
+
+def select_top_item_keys(
+    history: pd.DataFrame,
+    metric: str = "qty",
+    limit: int = FORECAST_CANDIDATE_LIMIT,
+) -> list[str]:
+    """Ambil kandidat SKU teratas dari histori agregat, bukan seluruh katalog."""
+    if history is None or history.empty or "item_key" not in history.columns:
+        return []
+    col = metric if metric in history.columns else "qty"
+    if col not in history.columns:
+        return []
+    totals = (
+        history.groupby("item_key", sort=False)[col]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    return [str(key) for key in totals.head(max(int(limit), 1)).index.tolist()]
+
+
+def _holdout_days(n: int) -> int:
+    if n < 8:
+        return 0
+    if n >= 21:
+        return 7
+    return max(2, n // 5)
+
+
+def _robust_holdout_metrics(
+    daily: np.ndarray,
+    start: pd.Timestamp,
+    weekday: np.ndarray,
+) -> tuple[float, float, float]:
+    """MAPE/MAE/RMSE holdout nyata untuk Level terkini (bukan angka nol palsu)."""
+    series = np.asarray(daily, dtype=float)
+    hold = _holdout_days(len(series))
+    if hold <= 0 or len(series) <= hold:
+        return 0.0, 0.0, 0.0
+    train = series[:-hold]
+    actual = series[-hold:]
+    train_start = pd.Timestamp(start).normalize()
+    forecast_start = train_start + pd.Timedelta(days=len(train))
+    dates = pd.date_range(forecast_start, periods=hold, freq="D")
+    pred = _project_path(train, train_start, dates, weekday, hold)
+    return _metrics(actual, pred)
 
 
 def _safe_mape(actual: np.ndarray, pred: np.ndarray) -> float:
@@ -60,12 +120,14 @@ def _safe_mape(actual: np.ndarray, pred: np.ndarray) -> float:
 
 
 def _metrics(actual: np.ndarray, pred: np.ndarray) -> tuple[float, float, float]:
-    from sklearn.metrics import mean_absolute_error, mean_squared_error
-
+    actual = np.nan_to_num(np.asarray(actual, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+    pred = np.nan_to_num(np.asarray(pred, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+    if len(actual) == 0:
+        return 0.0, 0.0, 0.0
     mae = float(mean_absolute_error(actual, pred))
     rmse = float(np.sqrt(mean_squared_error(actual, pred)))
     mape = _safe_mape(actual, pred)
-    return mae, rmse, mape
+    return _finite(mae), _finite(rmse), _finite(mape)
 
 
 def _holdout_size(n: int) -> int:
@@ -133,8 +195,6 @@ def _moving_average(values: np.ndarray, steps: int = 1, window: int = 3) -> Mode
 
 
 def _holt_winters(values: np.ndarray, season: int, steps: int = 1) -> ModelResult | None:
-    from statsmodels.tsa.holtwinters import ExponentialSmoothing
-
     n = len(values)
     if n < 6:
         return None
@@ -173,17 +233,15 @@ def _holt_winters(values: np.ndarray, season: int, steps: int = 1) -> ModelResul
 
 
 def _sarima(values: np.ndarray, season: int, steps: int = 1) -> ModelResult | None:
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-
+    """Grid SARIMA diperketat: 2 ordo non-musiman + paling banyak 1 musiman, fit sekali."""
     n = len(values)
     if n < 8:
         return None
     hold = _holdout_size(n)
     train = values[:-hold]
-    orders = [(1, 1, 1), (0, 1, 1), (1, 0, 1)]
+    orders = [(0, 1, 1), (1, 1, 0)]
     seasonal_orders = [(0, 0, 0, 0)]
     if season > 1 and n >= (season * 2 + 4):
-        seasonal_orders.append((1, 1, 0, season))
         seasonal_orders.append((0, 1, 1, season))
     best: ModelResult | None = None
     for order in orders:
@@ -202,6 +260,11 @@ def _sarima(values: np.ndarray, season: int, steps: int = 1) -> ModelResult | No
                     pred = np.asarray(fit.forecast(hold))
                     pred = np.nan_to_num(pred, nan=0.0)
                     mae, rmse, mape = _metrics(values[-hold:], pred)
+                name = "SARIMA" if seasonal_order[-1] else "ARIMA"
+                if best is not None and not (mape < best.mape):
+                    continue
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
                     full = SARIMAX(
                         values,
                         order=order,
@@ -209,16 +272,12 @@ def _sarima(values: np.ndarray, season: int, steps: int = 1) -> ModelResult | No
                         enforce_stationarity=False,
                         enforce_invertibility=False,
                     ).fit(disp=False)
-                    path = np.clip(
+                    path_full = np.clip(
                         np.nan_to_num(np.asarray(full.forecast(max(int(steps), 1))), nan=0.0),
                         0,
                         None,
                     )
-                    forecast = float(path.sum())
-                name = "SARIMA" if seasonal_order[-1] else "ARIMA"
-                candidate = ModelResult(name, max(forecast, 0.0), mae, rmse, mape, True)
-                if best is None or candidate.mape < best.mape:
-                    best = candidate
+                best = ModelResult(name, max(float(path_full.sum()), 0.0), mae, rmse, mape, True)
             except Exception:
                 continue
     return best
@@ -235,23 +294,7 @@ def _make_lag_frame(values: np.ndarray, lags: int) -> tuple[np.ndarray, np.ndarr
     return np.asarray(rows), np.asarray(targets)
 
 
-def _xgboost_class():
-    """Muat XGBoost sekali. Di Mac tanpa libomp impornya gagal; jangan diulang tiap SKU."""
-    global _XGB, _XGB_TRIED
-    if _XGB_TRIED:
-        return _XGB
-    _XGB_TRIED = True
-    try:
-        from xgboost import XGBRegressor
-    except Exception:
-        _XGB = None
-    else:
-        _XGB = XGBRegressor
-    return _XGB
-
-
 def _xgboost_forecast(values: np.ndarray, steps: int = 1) -> ModelResult | None:
-    XGBRegressor = _xgboost_class()
     if XGBRegressor is None or len(values) < 10:
         return None
     lags = min(6, max(3, len(values) // 4))
@@ -273,7 +316,6 @@ def _xgboost_forecast(values: np.ndarray, steps: int = 1) -> ModelResult | None:
             colsample_bytree=0.9,
             objective="reg:squarederror",
             n_jobs=1,
-            random_state=42,
             verbosity=0,
         )
         model.fit(x_train, y_train)
@@ -287,7 +329,6 @@ def _xgboost_forecast(values: np.ndarray, steps: int = 1) -> ModelResult | None:
             colsample_bytree=0.9,
             objective="reg:squarederror",
             n_jobs=1,
-            random_state=42,
             verbosity=0,
         )
         full.fit(x, y)
@@ -373,68 +414,68 @@ def forecast_revenue(
     next_label: str | None = None,
 ) -> pd.DataFrame:
     """Omzet periode depan = prediksi qty × harga jual rata-rata SKU itu."""
+    empty = pd.DataFrame(
+        columns=[
+            "item_key",
+            "item_label",
+            "metric",
+            "best_model",
+            "forecast",
+            "mae",
+            "rmse",
+            "mape",
+            "history_points",
+            "next_period",
+            "horizon_steps",
+        ]
+    )
+    if qty_fc is None or qty_fc.empty:
+        return empty
+    if history is None or history.empty or "item_key" not in history.columns:
+        hist_map = {}
+    else:
+        hist_map = {key: grp for key, grp in history.groupby("item_key")}
     horizon = max(int(steps), 1)
-    label = next_label or (qty_fc["next_period"].iloc[0] if not qty_fc.empty else "")
-    daily_prices = _daily_unit_prices(history) if period == "hari" else None
-    hist_map = None if daily_prices is not None else {key: grp for key, grp in history.groupby("item_key")}
-    points = qty_fc["history_points"] if "history_points" in qty_fc.columns else pd.Series(0, index=qty_fc.index)
+    label = next_label or (qty_fc["next_period"].iloc[0] if "next_period" in qty_fc.columns else "")
     records = []
-    for key, item_label, forecast, history_points in zip(qty_fc["item_key"], qty_fc["item_label"], qty_fc["forecast"], points):
-        if daily_prices is not None:
-            price = daily_prices.get(key, 0.0)
-            method = "Harga rata-rata" if price > 0 else "Tanpa harga"
-        else:
-            price, method = _expected_unit_price(hist_map.get(key), period, horizon)
-        pred_qty = float(forecast)
+    for _, item in qty_fc.iterrows():
+        price, method = _expected_unit_price(hist_map.get(item["item_key"]), period, horizon)
+        try:
+            pred_qty = float(item["forecast"])
+        except (TypeError, ValueError):
+            pred_qty = 0.0
+        if not np.isfinite(pred_qty):
+            pred_qty = 0.0
+        if not np.isfinite(price):
+            price = 0.0
         pred_sales = float(max(int(np.floor(pred_qty * price + 0.5)), 0))
         records.append(
             {
-                "item_key": key,
-                "item_label": item_label,
+                "item_key": item["item_key"],
+                "item_label": item.get("item_label", ""),
                 "metric": "sales",
                 "best_model": method,
                 "forecast": pred_sales,
                 "mae": 0.0,
                 "rmse": 0.0,
                 "mape": 0.0,
-                "history_points": int(history_points or 0),
+                "history_points": int(item.get("history_points", 0) or 0),
                 "next_period": label,
                 "horizon_steps": horizon,
             }
         )
-    return pd.DataFrame.from_records(records)
-
-
-def _daily_unit_prices(history: pd.DataFrame) -> dict:
-    """Sama dengan _expected_unit_price untuk periode hari, dihitung sekaligus untuk semua SKU."""
-    if history is None or history.empty:
-        return {}
-    stamps = pd.to_datetime(history["period_start"], errors="coerce")
-    if getattr(stamps.dt, "tz", None) is not None:
-        stamps = stamps.dt.tz_localize(None)
-    work = pd.DataFrame(
-        {
-            "item_key": history["item_key"],
-            "day": stamps.dt.normalize(),
-            "qty": pd.to_numeric(history["qty"], errors="coerce").fillna(0.0).astype(float),
-            "sales": pd.to_numeric(history["sales"], errors="coerce").fillna(0.0).astype(float),
-        }
-    ).dropna(subset=["day"])
-    days = work.groupby(["item_key", "day"], sort=True)[["qty", "sales"]].sum().reset_index()
-    sold = days.loc[days["qty"] > 0]
-    if sold.empty:
-        return {}
-    recent = sold.groupby("item_key", sort=False).tail(7).groupby("item_key")[["qty", "sales"]].sum()
-    last = sold.groupby("item_key", sort=False).tail(1).set_index("item_key")
-    recent_price = recent["sales"] / recent["qty"]
-    latest_price = (last["sales"] / last["qty"]).reindex(recent_price.index)
-    price = recent_price.where(recent_price > 0, latest_price)
-    return {key: float(value) for key, value in price.items()}
+    return pd.DataFrame.from_records(records) if records else empty
 
 
 def _report_window_days(history: pd.DataFrame) -> int:
-    start = pd.Timestamp(history["period_start"].min()).normalize()
-    end = pd.Timestamp(history["period_start"].max()).normalize()
+    if history is None or history.empty or "period_start" not in history.columns:
+        return 1
+    start = pd.Timestamp(history["period_start"].min())
+    end = pd.Timestamp(history["period_start"].max())
+    if pd.isna(start) or pd.isna(end):
+        return 1
+    start = start.normalize()
+    end = end.normalize()
     return max(int((end - start).days) + 1, 1)
 
 
@@ -572,8 +613,11 @@ def _weekday_profile(history: pd.DataFrame) -> np.ndarray:
     for dow, value in means.items():
         profile[int(dow)] = float(value)
     average = float(profile.mean())
-    if average > 0:
+    if np.isfinite(average) and average > 0:
         profile = profile / average
+        profile = np.where(np.isfinite(profile), profile, 1.0)
+    else:
+        profile = np.ones(7, dtype=float)
     return profile
 
 
@@ -593,22 +637,6 @@ def _trend_state(series: np.ndarray) -> tuple[float, float]:
         earlier = float(capped[:-7].mean()) if length > 7 else level
         slope = (float(capped[-7:].mean()) - earlier) / 7.0
     return level, slope
-
-
-SIGMA_DAYS = 180  # jendela simpangan harian SS; sama dengan simulasi tingkat layanan (src.models.evaluate.SIGMA_DAYS)
-
-
-def demand_sigma(daily_qty: np.ndarray, days: int = SIGMA_DAYS) -> float:
-    """Simpangan permintaan harian SIGMA_DAYS hari terakhir (hari tanpa transaksi = 0), dasar safety stock.
-
-    Jendela panjang menangkap pesanan proyek/lonjakan yang jarang tetapi berulang; jendela 28 hari meremehkan sebaran SKU
-    yang lumpy (uji walk-forward: tingkat layanan naik dengan stok per permintaan yang lebih efisien). Sama dengan simulasi."""
-    series = np.asarray(daily_qty, dtype=float)
-    if len(series) < 2 or float(series.sum()) <= 0:
-        return 0.0
-    used = series[:-1] if _dense_incomplete_tail(series) else series
-    recent = used[-int(days):]
-    return float(np.std(recent)) if len(recent) >= 2 else 0.0
 
 
 def residual_sigma(
@@ -727,14 +755,24 @@ def forecast_calendar(
 
 def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
     """Bandingkan algoritma pada total penjualan harian. Tren harian yang dipakai di prediksi."""
-    if history.empty or "period_start" not in history.columns or "qty" not in history.columns:
+    if history is None or history.empty or "period_start" not in history.columns or "qty" not in history.columns:
         return pd.DataFrame()
-    dates = pd.to_datetime(history["period_start"]).dt.normalize()
-    daily = history.assign(_day=dates).groupby("_day", as_index=True)["qty"].sum().sort_index()
-    if daily.empty:
+    dates = pd.to_datetime(history["period_start"], errors="coerce").dt.normalize()
+    work = history.loc[dates.notna()].copy()
+    if work.empty:
+        return pd.DataFrame()
+    work["_day"] = dates.loc[dates.notna()]
+    work["qty"] = pd.to_numeric(work["qty"], errors="coerce").fillna(0.0)
+    daily = work.groupby("_day", as_index=True)["qty"].sum().sort_index()
+    if daily.empty or pd.isna(daily.index.min()) or pd.isna(daily.index.max()):
         return pd.DataFrame()
     calendar = pd.date_range(daily.index.min(), daily.index.max(), freq="D")
-    series = daily.reindex(calendar, fill_value=0.0).to_numpy(dtype=float)
+    series = np.nan_to_num(
+        daily.reindex(calendar, fill_value=0.0).to_numpy(dtype=float),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
     length = len(series)
     if length < 8:
         return pd.DataFrame()
@@ -757,7 +795,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": MODEL_NAME,
             "Perkiraan ujian": round(robust_total, 1),
-            "Aktual ujian": round(actual_total, 1),
+            "Actual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(robust_total), 1),
             "Peran": "Dipakai",
         }
@@ -767,7 +805,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": "Tren harian",
             "Perkiraan ujian": round(trend_total, 1),
-            "Aktual ujian": round(actual_total, 1),
+            "Actual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(trend_total), 1),
             "Peran": "Pembanding",
         }
@@ -777,7 +815,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": "Naive",
             "Perkiraan ujian": round(naive, 1),
-            "Aktual ujian": round(actual_total, 1),
+            "Actual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(naive), 1),
             "Peran": "Pembanding",
         }
@@ -788,7 +826,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
         {
             "Algoritma": "Moving Average",
             "Perkiraan ujian": round(moving, 1),
-            "Aktual ujian": round(actual_total, 1),
+            "Actual ujian": round(actual_total, 1),
             "Selisih (%)": round(gap(moving), 1),
             "Peran": "Pembanding",
         }
@@ -807,7 +845,7 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
             {
                 "Algoritma": result.name,
                 "Perkiraan ujian": round(float(result.forecast), 1),
-                "Aktual ujian": round(actual_total, 1),
+                "Actual ujian": round(actual_total, 1),
                 "Selisih (%)": round(gap(float(result.forecast)), 1),
                 "Peran": "Pembanding",
             }
@@ -825,17 +863,47 @@ def forecast_items(
     steps: int = 1,
     next_label: str | None = None,
     forecast_start: pd.Timestamp | None = None,
+    max_items: int | None = FORECAST_CANDIDATE_LIMIT,
 ) -> pd.DataFrame:
+    empty = pd.DataFrame(
+        columns=[
+            "item_key",
+            "item_label",
+            "metric",
+            "best_model",
+            "forecast",
+            "mae",
+            "rmse",
+            "mape",
+            "history_points",
+            "next_period",
+            "horizon_steps",
+            "error_sigma",
+        ]
+    )
+    if history is None or history.empty or "item_key" not in history.columns:
+        empty.attrs["details"] = {}
+        return empty
     spec = PERIOD_SPECS[period]
     threshold = min_points if min_points is not None else spec.min_points
     horizon = max(int(steps), 1)
     if next_label is None:
-        last_start = history["period_start"].max()
-        nxt = next_period_start(last_start, period)
-        next_label = period_label(nxt, period)
+        last_start = history["period_start"].max() if "period_start" in history.columns else pd.NaT
+        if pd.isna(last_start):
+            next_label = ""
+        else:
+            nxt = next_period_start(last_start, period)
+            next_label = period_label(nxt, period) if not pd.isna(nxt) else ""
     rows: list[ItemForecast] = []
     error_sigma: dict[str, float] = {}
-    groups = list(history.groupby("item_key", sort=False))
+    allowed: set[str] | None = None
+    if max_items is not None and int(max_items) > 0:
+        allowed = set(select_top_item_keys(history, metric="qty", limit=int(max_items)))
+    groups = [
+        (key, grp)
+        for key, grp in history.groupby("item_key", sort=False)
+        if allowed is None or str(key) in allowed
+    ]
     total = max(len(groups), 1)
     short_window = period == "hari" and not history.empty
     window_days = _report_window_days(history) if short_window else 1
@@ -849,35 +917,47 @@ def forecast_items(
         else pd.DatetimeIndex([])
     )
     weekday = _weekday_profile(history) if short_window else np.ones(7)
+    progress_step = max(1, total // 20)
     for idx, (item_key, item_hist) in enumerate(groups):
-        if progress_callback:
+        if progress_callback and (idx % progress_step == 0 or idx + 1 == total):
             progress_callback((idx + 1) / total)
         if short_window:
-            sold = float(item_hist["qty"].sum())
-            by_day = item_hist.groupby(pd.to_datetime(item_hist["period_start"]).dt.normalize())["qty"].sum()
+            qty_col = "qty" if "qty" in item_hist.columns else metric
+            by_day = item_hist.groupby(pd.to_datetime(item_hist["period_start"]).dt.normalize())[qty_col].sum()
             daily = by_day.reindex(calendar, fill_value=0.0).to_numpy(dtype=float)
-            raw = _robust_forecast(daily, calendar[0], horizon, weekday, forecast_start=forecast_start)
-            error_sigma[item_key] = demand_sigma(daily)
-            forecast_value = float(max(int(np.floor(raw + 0.5)), 1 if sold > 0 else 0))
+            daily = np.nan_to_num(daily, nan=0.0, posinf=0.0, neginf=0.0)
+            raw = _finite(_robust_forecast(daily, calendar[0], horizon, weekday, forecast_start=forecast_start), 0.0)
+            error_sigma[item_key] = _finite(
+                residual_sigma(daily, calendar[0], weekday, horizon=horizon),
+                0.0,
+            )
+            forecast_value = float(max(int(np.floor(raw + 0.5)), 0))
+            mae, rmse, mape = _robust_holdout_metrics(daily, calendar[0], weekday)
+            mae, rmse, mape = _finite(mae), _finite(rmse), _finite(mape)
+            label = (
+                str(item_hist["item_label"].iloc[0])
+                if "item_label" in item_hist.columns and len(item_hist)
+                else str(item_key)
+            )
             rows.append(
                 ItemForecast(
                     item_key=item_key,
-                    item_label=str(item_hist["item_label"].iloc[0]),
+                    item_label=label,
                     metric=metric,
                     best_model=MODEL_NAME,
                     forecast=forecast_value,
-                    mae=0.0,
-                    rmse=0.0,
-                    mape=0.0,
+                    mae=mae,
+                    rmse=rmse,
+                    mape=mape,
                     history_points=window_days,
                     next_period=next_label,
                     candidates=[
                         ModelResult(
                             MODEL_NAME,
                             forecast_value,
-                            0.0,
-                            0.0,
-                            0.0,
+                            mae,
+                            rmse,
+                            mape,
                             True,
                             "level 28 hari terakhir, kemiringan ditahan 15%",
                         )
@@ -886,7 +966,10 @@ def forecast_items(
             )
             continue
         dense = dense_item_series(item_hist, period)
-        values = dense[metric].to_numpy(dtype=float)
+        if metric not in dense.columns:
+            values = np.zeros(len(dense), dtype=float)
+        else:
+            values = np.nan_to_num(dense[metric].to_numpy(dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
         if len(values) < 2:
             level = float(values[-1]) if len(values) else 0.0
             best = ModelResult("Baseline periode", level * horizon, 0.0, 0.0, 0.0, True, "histori pendek")
@@ -900,26 +983,21 @@ def forecast_items(
         else:
             best, candidates = forecast_series(values, period, horizon)
         forecast_value = _whole_units(best.forecast, values, horizon, metric)
-        if forecast_value != best.forecast and float(np.sum(values)) > 0 and best.forecast <= 0:
-            best = ModelResult(
-                "Rata-rata periode",
-                forecast_value,
-                best.mae,
-                best.rmse,
-                best.mape,
-                True,
-                "model terpilih jatuh di hari kosong",
-            )
+        label = (
+            str(item_hist["item_label"].iloc[0])
+            if "item_label" in item_hist.columns and len(item_hist)
+            else str(item_key)
+        )
         rows.append(
             ItemForecast(
                 item_key=item_key,
-                item_label=str(item_hist["item_label"].iloc[0]),
+                item_label=label,
                 metric=metric,
                 best_model=best.name,
                 forecast=forecast_value,
-                mae=best.mae,
-                rmse=best.rmse,
-                mape=best.mape,
+                mae=_finite(best.mae),
+                rmse=_finite(best.rmse),
+                mape=_finite(best.mape),
                 history_points=int(len(values)),
                 next_period=next_label,
                 candidates=candidates,
@@ -943,4 +1021,6 @@ def forecast_items(
                 "error_sigma": float(error_sigma.get(row.item_key, 0.0)),
             }
         )
-    return pd.DataFrame.from_records(records)
+    result = pd.DataFrame.from_records(records) if records else empty.copy()
+    result.attrs["details"] = {row.item_key: row for row in rows}
+    return result

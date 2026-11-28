@@ -5,7 +5,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
 
-import numpy as np
 import pandas as pd
 
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -59,16 +58,6 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "qty",
         "jumlah produk di pesan",
         "jumlah produk dipesan",
-    ),
-    "province": (
-        "provinsi",
-        "province",
-    ),
-    "city": (
-        "kota/kabupaten",
-        "kota",
-        "kabupaten/kota",
-        "city",
     ),
     "returned_qty": (
         "returned quantity",
@@ -131,10 +120,14 @@ VALID_STATUS_HINTS = (
     "dibayar",
 )
 
-CANCEL_ONLY_HINTS = ("batal", "cancel")
-OPEN_UNPAID_HINTS = ("unpaid", "belum bayar")
-# Tidak dihitung terjual: batal + pesanan yang masih menunggu pembayaran.
-CANCEL_HINTS = (*CANCEL_ONLY_HINTS, "cancelled", "canceled", *OPEN_UNPAID_HINTS)
+CANCEL_HINTS = (
+    "batal",
+    "cancel",
+    "cancelled",
+    "canceled",
+    "unpaid",
+    "belum bayar",
+)
 
 SUCCESS_STATUSES = (
     "pesanan diterima",
@@ -221,23 +214,6 @@ def _parse_number(series: pd.Series) -> pd.Series:
     return series.map(_parse_number_token)
 
 
-def _money_value(value) -> float:
-    """Nominal Rupiah. Angka (bukan teks) 0 < x < 1000 berasal dari teks "171.720" yang dibaca Excel/CSV
-    sebagai desimal 171,72 — titik di laporan Shopee adalah pemisah ribuan, jadi dikalikan 1000.
-    Teks tetap dibaca lewat `_parse_number_token` ("171.720" → 171720, "1.226.842" → 1226842)."""
-    if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
-        number = float(value)
-        if np.isfinite(number) and 0 < abs(number) < 1000:
-            return round(number * 1000)
-        return number
-    return _parse_number_token(value)
-
-
-def _parse_money(series: pd.Series) -> pd.Series:
-    """Kolom nominal (voucher, diskon, ongkir). Lihat `_money_value`."""
-    return series.map(_money_value).astype(float)
-
-
 def _normalize_status(value: str) -> str:
     text = str(value).strip()
     if text.lower() in {"", "nan", "none"}:
@@ -259,16 +235,27 @@ def _normalize_header(value: str) -> str:
     return " ".join(str(value).strip().lower().replace("_", " ").split())
 
 
-def _detect_column(columns: list[str], aliases: tuple[str, ...]) -> str | None:
+def _detect_column(
+    columns: list[str],
+    aliases: tuple[str, ...],
+    *,
+    used: set[str] | None = None,
+) -> str | None:
+    """Cocokkan alias ke header. Jangan biarkan 'jumlah' mencuri 'jumlah dikembalikan'."""
     normalized = {_normalize_header(col): col for col in columns}
+    blocked = used or set()
     for alias in aliases:
-        if alias in normalized:
+        if alias in normalized and normalized[alias] not in blocked:
             return normalized[alias]
     for alias in aliases:
         if len(alias) < 8:
             continue
         for norm, original in normalized.items():
-            if alias in norm or norm in alias:
+            if original in blocked:
+                continue
+            # Hanya alias yang terkandung di nama kolom (bukan sebaliknya),
+            # supaya kolom pendek "jumlah" tidak map ke returned_qty.
+            if alias in norm:
                 return original
     return None
 
@@ -276,10 +263,15 @@ def _detect_column(columns: list[str], aliases: tuple[str, ...]) -> str | None:
 def map_columns(df: pd.DataFrame) -> dict[str, str]:
     columns = [str(c) for c in df.columns]
     mapping: dict[str, str] = {}
-    for canonical, aliases in COLUMN_ALIASES.items():
-        found = _detect_column(columns, aliases)
+    used: set[str] = set()
+    # qty dulu supaya "Jumlah" tidak diambil returned_qty.
+    priority = ["qty", "returned_qty", *[k for k in COLUMN_ALIASES if k not in {"qty", "returned_qty"}]]
+    for canonical in priority:
+        aliases = COLUMN_ALIASES[canonical]
+        found = _detect_column(columns, aliases, used=used)
         if found:
             mapping[canonical] = found
+            used.add(found)
     required = {"order_time", "product_name", "qty"}
     missing = required - set(mapping)
     if missing:
@@ -288,79 +280,6 @@ def map_columns(df: pd.DataFrame) -> dict[str, str]:
             f"nama produk, dan jumlah. Yang belum terdeteksi: {', '.join(sorted(missing))}."
         )
     return mapping
-
-
-LINE_PROMO_COLUMNS: dict[str, tuple[str, ...]] = {
-    "list_price": ("harga awal",),
-    "net_price": ("harga setelah diskon",),
-    "seller_discount": ("diskon dari penjual",),
-    "shopee_discount": ("diskon dari shopee",),
-}
-
-ORDER_PROMO_COLUMNS: dict[str, tuple[str, ...]] = {
-    "seller_voucher": ("voucher ditanggung penjual",),
-    "coin_cashback": ("cashback koin",),
-    "shopee_voucher": ("voucher ditanggung shopee",),
-    "coin_deduction": ("potongan koin shopee",),
-    "card_discount": ("diskon kartu kredit",),
-    "buyer_shipping": ("ongkos kirim dibayar oleh pembeli", "ongkos kirim dibayar pembeli"),
-    "shipping_rebate": ("estimasi potongan biaya pengiriman",),
-    "estimated_shipping": ("perkiraan ongkos kirim",),
-}
-
-ORDER_TEXT_COLUMNS: dict[str, tuple[str, ...]] = {
-    "shipping_option": ("opsi pengiriman",),
-    "payment_method": ("metode pembayaran",),
-    "province": ("provinsi",),
-    "city": ("kota/kabupaten", "kota", "kabupaten/kota"),
-}
-
-
-def _exact_column(table: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
-    """Hanya nama kolom yang persis sama, supaya tidak tertukar dengan kolom harga atau qty."""
-    normalized = {_normalize_header(col): col for col in table.columns}
-    for alias in aliases:
-        if alias in normalized:
-            return normalized[alias]
-    return None
-
-
-def _attach_promo_columns(frame: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
-    """Harga, diskon, voucher, koin, ongkir, opsi kirim, dan metode bayar.
-
-    Kolom baris dibaca apa adanya. Kolom pesanan (voucher, koin, kartu kredit, ongkir)
-    diulang Shopee di setiap baris pesanan, jadi dibagi ke baris menurut porsi subtotal.
-    QTY dan sales tidak disentuh.
-    """
-    for name, aliases in LINE_PROMO_COLUMNS.items():
-        column = _exact_column(table, aliases)
-        frame[name] = (
-            _parse_money(table.loc[frame.index, column]).fillna(0).clip(lower=0) if column else float("nan")
-        )
-    for name, aliases in ORDER_TEXT_COLUMNS.items():
-        column = _exact_column(table, aliases)
-        frame[name] = clean_text_series(table.loc[frame.index, column]) if column else ""
-    base = frame["net_price"].where(frame["net_price"] > 0, frame["list_price"]).fillna(0) * frame["gross_qty"]
-    if "order_id" in frame.columns and frame["order_id"].astype(str).str.strip().ne("").any():
-        order_total = base.groupby(frame["order_id"]).transform("sum")
-        lines = frame.groupby("order_id")["order_id"].transform("size").astype(float)
-        share = (base / order_total.where(order_total > 0)).fillna(1.0 / lines)
-    else:
-        share = pd.Series(1.0, index=frame.index)
-    order_base = base.groupby(frame["order_id"]).transform("sum") if "order_id" in frame.columns else base
-    for name, aliases in ORDER_PROMO_COLUMNS.items():
-        column = _exact_column(table, aliases)
-        if column:
-            raw_values = table.loc[frame.index, column]
-            money = _parse_money(raw_values).fillna(0).clip(lower=0)
-            # Koreksi ×1000 tidak masuk akal bila potongan jadi lebih besar dari nilai pesanan (mis. Rp632 asli) → pakai nilai asli.
-            if name not in {"buyer_shipping", "shipping_rebate", "estimated_shipping"}:
-                plain = _parse_number(raw_values).fillna(0).clip(lower=0)
-                money = money.where(~((money > order_base) & (order_base > 0)), plain)
-            frame[name] = money * share
-        else:
-            frame[name] = float("nan")
-    return frame
 
 
 def _read_csv_bytes(data: bytes) -> pd.DataFrame:
@@ -392,10 +311,7 @@ def load_shopee_report(
 
     if _looks_like_excel(data, name):
         try:
-            try:
-                raw = pd.read_excel(BytesIO(data), engine="calamine")
-            except Exception:  # calamine belum terpasang / file tidak cocok: pakai openpyxl
-                raw = pd.read_excel(BytesIO(data))
+            raw = pd.read_excel(BytesIO(data))
         except Exception as exc:  # noqa: BLE001 - surface a readable upload error
             raise ValueError(f"File Excel tidak bisa dibaca. Error terakhir: {exc}") from exc
     else:
@@ -409,6 +325,8 @@ def load_shopee_report(
 
 def clean_order_frame(raw: pd.DataFrame) -> pd.DataFrame:
     """Satu baris pesanan. Qty bersih dikurangi retur; qty kotor tetap disimpan."""
+    if raw is None or raw.empty:
+        return pd.DataFrame()
     table = raw.drop(columns=["Nama file"], errors="ignore").copy()
     table.columns = [str(column).strip() for column in table.columns]
     mapping = map_columns(table)
@@ -461,10 +379,6 @@ def clean_order_frame(raw: pd.DataFrame) -> pd.DataFrame:
     else:
         frame["order_amount"] = frame["sales"]
 
-    for extra in ("cancel_reason", "buyer"):
-        frame[extra] = clean_text_series(table[mapping[extra]]) if extra in mapping else ""
-
-    frame = _attach_promo_columns(frame, table)
     frame = frame.dropna(subset=["order_time", "product_name", "qty", "sales"])
     frame = frame[(frame["qty"] > 0) | (frame["gross_qty"] > 0)]
     frame = frame[frame["gross_sales"].fillna(frame["sales"]).fillna(0) >= 0]
@@ -602,26 +516,9 @@ def clean_sku_columns(frame: pd.DataFrame) -> pd.DataFrame:
 _EMPTY_TOKENS = {"", "nan", "none", "-", "—", "tidak ada"}
 
 
-def via_unique(series: pd.Series, transform) -> pd.Series:
-    """Jalankan `transform` pada nilai unik saja lalu petakan balik ke semua baris.
-
-    Kolom teks laporan Shopee (status, alasan, nama produk) punya puluhan–ratusan nilai unik
-    tetapi ratusan ribu baris; hasilnya identik dengan memproses setiap baris, jauh lebih cepat.
-    """
-    if len(series) < 2000:
-        return transform(series)
-    codes, uniques = pd.factorize(series, use_na_sentinel=False)
-    values = np.asarray(transform(pd.Series(uniques, dtype=object)))
-    return pd.Series(values[codes], index=series.index)
-
-
-def _clean_text_values(series: pd.Series) -> pd.Series:
-    text = series.where(series.notna(), "").astype(str).str.strip()
-    return text.mask(text.str.lower().isin(_EMPTY_TOKENS), "")
-
-
 def clean_text_series(series: pd.Series) -> pd.Series:
-    return via_unique(series, _clean_text_values)
+    text = series.fillna("").astype(str).str.strip()
+    return text.mask(text.str.lower().isin(_EMPTY_TOKENS), "")
 
 
 def clean_sku_series(series: pd.Series) -> pd.Series:
@@ -663,50 +560,23 @@ def item_label_series(frame: pd.DataFrame) -> pd.Series:
 
 
 def normalize_status_series(series: pd.Series) -> pd.Series:
-    return via_unique(series, _normalize_status_values)
-
-
-def _normalize_status_values(series: pd.Series) -> pd.Series:
-    text = series.where(series.notna(), "").astype(str).str.strip()
+    text = series.fillna("").astype(str).str.strip()
     text = text.mask(text.str.lower().isin({"", "nan", "none"}), "")
     text = text.str.replace(_RETURN_WINDOW, "", regex=True).str.strip(" .")
     lower = text.str.lower()
     return text.mask(lower.isin({"pesanan diterima", "diterima"}), "Pesanan Diterima")
 
 
-def _cancelled_values(series: pd.Series) -> pd.Series:
-    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
+def cancelled_status_mask(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.strip().str.lower()
     mask = pd.Series(False, index=series.index)
     for hint in CANCEL_HINTS:
         mask = mask | text.str.contains(hint, regex=False)
     return mask
 
 
-def cancelled_status_mask(series: pd.Series) -> pd.Series:
-    """Tidak dihitung terjual: status batal atau masih Belum Bayar."""
-    return via_unique(series, _cancelled_values).astype(bool)
-
-
-def _hint_values(series: pd.Series, hints: tuple[str, ...]) -> pd.Series:
-    text = series.where(series.notna(), "").astype(str).str.strip().str.lower()
-    mask = pd.Series(False, index=series.index)
-    for hint in hints:
-        mask = mask | text.str.contains(hint, regex=False)
-    return mask
-
-
-def cancel_only_mask(series: pd.Series) -> pd.Series:
-    """Benar-benar dibatalkan (untuk jumlah & tingkat batal). Belum Bayar yang masih terbuka tidak termasuk."""
-    return via_unique(series, lambda part: _hint_values(part, CANCEL_ONLY_HINTS)).astype(bool)
-
-
-def open_unpaid_mask(series: pd.Series) -> pd.Series:
-    """Pesanan masih menunggu pembayaran (status Belum Bayar): bukan batal, belum terjual."""
-    return via_unique(series, lambda part: _hint_values(part, OPEN_UNPAID_HINTS) & ~_hint_values(part, CANCEL_ONLY_HINTS)).astype(bool)
-
-
 def success_status_mask(series: pd.Series) -> pd.Series:
-    return via_unique(series, lambda part: part.fillna("").astype(str).str.strip().str.lower().isin(SUCCESS_STATUSES)).astype(bool)
+    return series.fillna("").astype(str).str.strip().str.lower().isin(SUCCESS_STATUSES)
 
 
 def _item_key(row: pd.Series) -> str:

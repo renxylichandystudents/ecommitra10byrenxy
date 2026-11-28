@@ -1,26 +1,16 @@
 from __future__ import annotations
 
 import json
-import zlib
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
-from src.activity import ledger_from_raw
-from src.core.metrics import order_metrics
+from src.activity import ledger_from_raw, scope_ledger
 from src.ingest import _clean_token, _parse_datetime, map_columns, order_revenue
-from src.utils.format import tanggal
 
 LIBRARY_DIR = Path(__file__).resolve().parents[1] / "uploads" / "library"
 CATALOG_PATH = LIBRARY_DIR / "catalog.json"
-
-
-def configure_root(root: Path) -> None:
-    """Arahkan penyimpanan bulanan ke folder pengguna (dipakai saat deploy publik)."""
-    global LIBRARY_DIR, CATALOG_PATH
-    LIBRARY_DIR = Path(root) / "library"
-    CATALOG_PATH = LIBRARY_DIR / "catalog.json"
 
 ID_MONTHS = (
     "Januari",
@@ -39,13 +29,16 @@ ID_MONTHS = (
 
 
 def month_label(key: str) -> str:
-    if key == "tanpa-bulan":
+    text = str(key or "").strip()
+    if text in {"", "tanpa-bulan"}:
         return "Tanpa bulan"
-    year, month = key.split("-", 1)
+    if "-" not in text:
+        return text
+    year, month = text.split("-", 1)
     try:
         name = ID_MONTHS[int(month) - 1]
     except (ValueError, IndexError):
-        return key
+        return text
     return f"{name} {year}"
 
 
@@ -83,8 +76,6 @@ def bundle_stamp(keys: list[str]) -> tuple[float, ...]:
         stamps.append(CATALOG_PATH.stat().st_mtime)
     except OSError:
         stamps.append(0.0)
-    # Cache Streamlit dipakai bersama semua pengunjung; folder pengguna ikut jadi kunci.
-    stamps.append(float(zlib.crc32(str(LIBRARY_DIR).encode("utf-8"))))
     return tuple(stamps)
 
 
@@ -134,17 +125,17 @@ def month_status_counts(source: pd.DataFrame | None) -> dict[str, float]:
     if ledger.empty:
         return empty
     cancel = ledger.loc[ledger["is_cancel"]]
-    facts = order_metrics(ledger)
+    kept = scope_ledger(ledger, include_cancel=False, include_return=False)
     return {
-        "return_orders": facts["pesanan_retur"],
-        "cancel_orders": facts["pesanan_batal"],
+        "return_orders": _unique_order_count(ledger, ledger["returned_qty"] > 0),
+        "cancel_orders": _unique_order_count(ledger, ledger["is_cancel"]),
         "success_orders": _unique_order_count(ledger, ledger["is_success"]),
-        "qty_net": facts["qty_bersih"],
-        "sales_net": facts["sales_bersih"],
-        "qty_return": facts["retur_unit"],
-        "sales_return": facts["nominal_retur"],
+        "qty_net": float(kept["qty"].sum()) if not kept.empty else 0.0,
+        "sales_net": float(order_revenue(kept)) if not kept.empty else 0.0,
+        "qty_return": float(ledger["returned_qty"].sum()),
+        "sales_return": float(ledger["return_value"].sum()),
         "qty_batal": float(cancel["qty"].sum()) if not cancel.empty else 0.0,
-        "sales_batal": facts["nominal_batal"],
+        "sales_batal": float(order_revenue(cancel)) if not cancel.empty else 0.0,
     }
 
 
@@ -155,14 +146,14 @@ def folder_frame() -> pd.DataFrame:
         "Baris",
         "No. Pesanan",
         "Berhasil",
-        "QTY bersih",
-        "Sales bersih",
-        "Unit retur",
-        "Sales retur",
+        "QTY terjual",
+        "Sales",
+        "QTY return",
+        "Sales return",
         "QTY batal",
         "Sales batal",
-        "Pesanan retur",
-        "Pesanan batal",
+        "Return",
+        "Batal",
         "File terakhir",
         "Diperbarui",
     ]
@@ -180,16 +171,16 @@ def folder_frame() -> pd.DataFrame:
                 "Baris": item["rows"],
                 "No. Pesanan": item["orders"],
                 "Berhasil": counts["success_orders"],
-                "QTY bersih": int(round(counts["qty_net"])),
-                "Sales bersih": int(round(counts["sales_net"])),
-                "Unit retur": int(round(counts["qty_return"])),
-                "Sales retur": int(round(counts["sales_return"])),
+                "QTY terjual": int(round(counts["qty_net"])),
+                "Sales": int(round(counts["sales_net"])),
+                "QTY return": int(round(counts["qty_return"])),
+                "Sales return": int(round(counts["sales_return"])),
                 "QTY batal": int(round(counts["qty_batal"])),
                 "Sales batal": int(round(counts["sales_batal"])),
-                "Pesanan retur": counts["return_orders"],
-                "Pesanan batal": counts["cancel_orders"],
+                "Return": counts["return_orders"],
+                "Batal": counts["cancel_orders"],
                 "File terakhir": ", ".join(item["files"]),
-                "Diperbarui": tanggal(item["updated_at"], jam=True),
+                "Diperbarui": item["updated_at"],
             }
         )
     return pd.DataFrame(rows)
@@ -204,7 +195,7 @@ def history_frame() -> pd.DataFrame:
     for item in history:
         rows.append(
             {
-                "Tanggal perubahan": tanggal(item.get("at"), jam=True),
+                "Tanggal perubahan": item.get("at") or "",
                 "Data": item.get("data") or "",
                 "File": item.get("files") or "",
                 "Perubahan": item.get("change") or "",

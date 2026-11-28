@@ -5,13 +5,8 @@ __pycache__/
 .pytest_cache/
 .streamlit/*
 !.streamlit/config.toml
-!.streamlit/secrets.toml.example
-data/app.db
-data/runs/
 .DS_Store
-uploads/
+# Keep seed library committed for Streamlit Cloud cold starts;
+# user uploads still land under uploads/library and persist only on disk.
 *.xlsx
-!data/Area_Provinsi_Pengiriman_Shopee.xlsx
 !data/sample_shopee_orders.csv
-.pycache/
-.smoke/
