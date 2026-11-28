@@ -30,3 +30,60 @@ def test_parse_fit_allocate():
     hyg = A.group_hygiene(members, units, {"111": 0.2, "222": 0.1})
     assert (hyg["Kode produk"] == "222").any()
     assert not A.actions(units, kejar).empty
+
+
+def test_push_score_components_transparent_and_no_invented_ctr():
+    base = A.push_score_components(
+        pred_omzet=2_000_000, stok_room=1_500_000, stok=120, qty_harian=2.0,
+        roas=9.0, contrib=0.20, occupied=False, gap_daily=5_000_000,
+    )
+    assert 0 <= base["score"] <= 100
+    assert base["gap"] > 0 and base["roas_bep"] > 0 and base["margin"] > 0
+    assert base["free"] == 10.0
+    assert base["ctr_pen"] == 0.0  # tanpa kolom CTR: jangan invent
+
+    weak = A.push_score_components(
+        pred_omzet=2_000_000, stok_room=1_500_000, stok=120, qty_harian=2.0,
+        roas=9.0, contrib=0.20, occupied=False, gap_daily=5_000_000,
+        ctr=0.005, has_ctr=True,
+    )
+    assert weak["ctr_pen"] < 0
+    assert weak["score"] < base["score"]
+
+    loss = A.push_score_components(
+        pred_omzet=500_000, stok_room=100_000, stok=5, qty_harian=2.0,
+        roas=2.0, contrib=-0.10, occupied=True, gap_daily=5_000_000,
+    )
+    assert loss["margin"] < 5
+    assert loss["free"] == 0.0
+    assert abs(A.safe_bep_roas(0.20) - (1.0 / 0.20 * A.SAFE_BEP_BUFFER)) < 1e-9
+
+
+def test_enrich_push_scores_routes_and_top_tables():
+    products = pd.DataFrame([
+        {"product_code": "9", "nama": "Laris", "omzet_harian": 2_000_000, "qty_harian": 4, "stok_room": 1e6, "stok": 80},
+        {"product_code": "2", "nama": "Lemah", "omzet_harian": 50_000, "qty_harian": 0.2, "stok_room": 1e5, "stok": 3},
+    ])
+    selection = pd.DataFrame([
+        {"Saran": "Buat iklan tunggal", "Produk": "Laris", "Kode produk": "9", "Iklan sekarang": "Belum diiklankan",
+         "Biaya iklan/hari": 0.0, "Omzet iklan/hari": 0.0, "ROAS 2 bulan": float("nan"), "Porsi omzet grup": float("nan"),
+         "Prediksi omzet/hari": 2_000_000, "Prediksi qty/hari": 4.0, "Stok": 80, "Alasan": "kandidat", "_unit": ""},
+        {"Saran": "Tambahkan ke grup", "Produk": "Lemah", "Kode produk": "2", "Iklan sekarang": "Belum diiklankan",
+         "Biaya iklan/hari": 0.0, "Omzet iklan/hari": 0.0, "ROAS 2 bulan": 3.0, "Porsi omzet grup": float("nan"),
+         "Prediksi omzet/hari": 50_000, "Prediksi qty/hari": 0.2, "Stok": 3, "Alasan": "mid", "_unit": ""},
+        {"Saran": "Sudah di iklan lain", "Produk": "Busy", "Kode produk": "7", "Iklan sekarang": "Iklan aktif lain",
+         "Biaya iklan/hari": 0.0, "Omzet iklan/hari": 0.0, "ROAS 2 bulan": float("nan"), "Porsi omzet grup": float("nan"),
+         "Prediksi omzet/hari": 100_000, "Prediksi qty/hari": 1.0, "Stok": 10, "Alasan": "occupied", "_unit": ""},
+    ])
+    out = A.enrich_push_scores(selection, products, {"9": 0.25, "2": 0.05, "7": 0.2}, gap_daily=4_000_000, occupied={"7"})
+    assert "Push skor" in out.columns and "Aksi push" in out.columns and "Alasan chip" in out.columns
+    assert set(out["Aksi push"]).issubset(set(A.PUSH_ACTIONS))
+    row9 = out.set_index("Kode produk").loc["9"]
+    assert row9["Rute"] == A.ROUTE_SINGLE
+    assert row9["Aksi push"] in (A.PUSH_PRIORITIZE, A.PUSH_HOLD, A.PUSH_SCALE)
+    assert 0 <= float(row9["% gap tertutup"]) <= 100
+    busy = out.set_index("Kode produk").loc["7"]
+    assert busy["Aksi push"] == A.PUSH_PAUSE
+    single, group = A.push_top_tables(out, top_n=5)
+    assert not single.empty
+    assert "Push skor" in single.columns

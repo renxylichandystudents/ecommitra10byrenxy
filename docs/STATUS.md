@@ -1,5 +1,12 @@
 # Status terbaru aplikasi
 
+Diperbarui: 28 November 2026 (Rekomendasi iklan: Push skor + Top N tunggal/grup).
+
+- Rekomendasi › Iklan (Fitur khusus & Rekomendasi sistem): tiap produk punya **Push skor 0–100** (gap GMV, ROAS vs BEP aman, margin, stok cover, bonus belum occupied; penalti CTR hanya jika kolom CTR ada — tidak diinvent).
+- Tabel **Top push tunggal** dan **Top masuk/pertahankan grup** dengan aksi Prioritize / Scale / Hold / Pause, chip alasan 1 kalimat, dan **% gap tertutup (derived)**.
+- Degradasi **Buat tunggal → Tambah ke grup karena budget 0** ditampilkan sebagai peringatan eksplisit (bukan diam-diam). Unduhan Seller Center tetap jalur eksekusi utama.
+- Skill Project: `.cursor/skills/ads-product-push/SKILL.md`.
+
 Diperbarui: 21 November 2026 (Kalkulator ongkir: tampilan pecah dasar / markup / harga set).
 
 - Tab Saran ongkir area menampilkan tiga kolom jelas: **Dasar ongkir** (berat dikenakan), **Markup +15% (profit+PPN)**, **Harga set** (bulat). Rumus tetap `round(dasar × 1,15)`.

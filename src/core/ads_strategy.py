@@ -921,6 +921,296 @@ MOVE_OUT = ("Keluarkan dari grup", "Jadikan iklan tunggal", "Jeda sampai restock
 SALES_PARETO = 0.95  # produk "sales besar" = produk teratas yang bersama-sama membentuk 95% prediksi sales toko
 MIN_QTY_DAY = 1.0    # produk "qty laku banyak" = prediksi ≥ 1 unit/hari (atau persentil 90 bila lebih tinggi)
 
+# Push skor: aksi seller & rute tunggal/grup (lapisan di atas saran product_selection)
+PUSH_PRIORITIZE, PUSH_SCALE, PUSH_HOLD, PUSH_PAUSE = "Prioritize", "Scale", "Hold", "Pause"
+PUSH_ACTIONS = (PUSH_PRIORITIZE, PUSH_SCALE, PUSH_HOLD, PUSH_PAUSE)
+ROUTE_SINGLE, ROUTE_GROUP, ROUTE_PAUSE = "Tunggal", "Grup", "Pause"
+SINGLE_SARAN = frozenset({"Buat iklan tunggal", "Jadikan iklan tunggal", "Pertahankan iklan tunggal"})
+GROUP_SARAN = frozenset({"Tambahkan ke grup", "Pertahankan di grup", "Pindahkan ke grup"})
+PAUSE_SARAN = frozenset({
+    SMALL_SALES, MANUAL_OUT, "Jeda sampai restock", PAUSED_IDLE, "Sudah di iklan lain", "Keluarkan dari grup",
+})
+SAFE_BEP_BUFFER = 1.15  # ROAS aman ≈ BEP × 1,15 (ads GMV order-created vs sales bersih)
+BUDGET_DEGRADE_WARN = "Buat tunggal → Tambah ke grup karena budget 0"
+CTR_WEAK = 0.015  # ~1,5%: penalti hanya bila kolom CTR ada & di bawah ini
+CTR_OK = 0.025
+
+
+def safe_bep_roas(contrib: float | None) -> float:
+    """ROAS aman di atas BEP dari kontribusi sebelum iklan (CM1 − fee). Inf bila margin ≤ 0 / tidak ada."""
+    if contrib is None or not np.isfinite(contrib) or contrib <= 0:
+        return float("inf")
+    return (1.0 / float(contrib)) * SAFE_BEP_BUFFER
+
+
+def push_score_components(
+    *,
+    pred_omzet: float,
+    stok_room: float,
+    stok: float,
+    qty_harian: float,
+    roas: float,
+    contrib: float | None,
+    occupied: bool,
+    gap_daily: float,
+    ctr: float | None = None,
+    has_ctr: bool = False,
+) -> dict[str, float]:
+    """Komponen skor push transparan (bobot positif ≈ 100; CTR hanya mengurangi bila kolom ada)."""
+    gap = max(float(gap_daily or 0.0), 0.0)
+    pred = max(float(pred_omzet or 0.0), 0.0)
+    room = float(stok_room) if stok_room == stok_room and np.isfinite(stok_room) else pred
+    closable = min(pred, max(room, 0.0)) if room == room else pred
+    gap_part = 30.0 * min(closable / gap, 1.0) if gap > 0 else (18.0 if pred > 0 else 0.0)
+
+    bep = safe_bep_roas(contrib)
+    if roas == roas and np.isfinite(roas) and roas > 0 and np.isfinite(bep) and bep < float("inf"):
+        roas_part = 25.0 * min(max(roas / bep, 0.0), 1.25) / 1.25
+    elif roas == roas and np.isfinite(roas) and roas > 0 and (contrib is None or not np.isfinite(contrib)):
+        roas_part = 12.0  # ada histori ROAS, belum ada margin → skor tengah
+    elif contrib is not None and np.isfinite(contrib) and contrib > 0:
+        roas_part = 10.0  # kandidat baru bermargin: netral-positif
+    else:
+        roas_part = 4.0
+
+    if contrib is None or not np.isfinite(contrib):
+        margin_part = 10.0
+    elif contrib > 0:
+        # ads_deepens_loss hanya relevan bila marginal sales diketahui; di level SKU: margin + = aman
+        margin_part = 20.0 * min(contrib / 0.25, 1.0)
+    else:
+        margin_part = 2.0  # margin minus: hampir tidak dorong
+
+    cover_days = float("nan")
+    qty = float(qty_harian or 0.0)
+    if stok == stok and np.isfinite(stok) and qty > 0:
+        cover_days = float(stok) / qty
+    if cover_days == cover_days:
+        if cover_days >= 45:
+            stock_part = 15.0
+        elif cover_days >= 21:
+            stock_part = 10.0
+        elif cover_days > 0:
+            stock_part = 4.0
+        else:
+            stock_part = 0.0
+    elif stok == stok and stok > 0:
+        stock_part = 10.0
+    else:
+        stock_part = 3.0
+
+    free_part = 0.0 if occupied else 10.0
+
+    ctr_pen = 0.0
+    if has_ctr and ctr is not None and ctr == ctr and np.isfinite(ctr):
+        # Jangan invent CTR: penalti hanya dari nilai nyata. CTR sehat → 0; lemah → hingga −15.
+        if ctr < CTR_WEAK:
+            ctr_pen = -15.0
+        elif ctr < CTR_OK:
+            ctr_pen = -15.0 * (CTR_OK - ctr) / max(CTR_OK - CTR_WEAK, 1e-9)
+
+    total = max(0.0, min(100.0, gap_part + roas_part + margin_part + stock_part + free_part + ctr_pen))
+    return {
+        "gap": round(gap_part, 2),
+        "roas_bep": round(roas_part, 2),
+        "margin": round(margin_part, 2),
+        "stock": round(stock_part, 2),
+        "free": round(free_part, 2),
+        "ctr_pen": round(ctr_pen, 2),
+        "score": round(total, 1),
+        "closable": closable,
+        "safe_bep": bep if np.isfinite(bep) else float("nan"),
+        "cover_days": cover_days,
+    }
+
+
+def _gap_pct_closed(closable: float, gap_daily: float) -> float:
+    gap = max(float(gap_daily or 0.0), 0.0)
+    if gap <= 0:
+        return 0.0
+    return round(100.0 * min(max(closable, 0.0) / gap, 1.0), 1)
+
+
+def _push_route_action_reason(
+    saran: str,
+    parts: dict[str, float],
+    *,
+    roas: float,
+    contrib: float | None,
+    occupied: bool,
+) -> tuple[str, str, str]:
+    """(rute, aksi Prioritize/Scale/Hold/Pause, chip alasan 1 kalimat)."""
+    score = float(parts["score"])
+    bep = parts.get("safe_bep", float("nan"))
+    cover = parts.get("cover_days", float("nan"))
+    roas_ok = roas == roas and np.isfinite(roas) and bep == bep and np.isfinite(bep) and roas >= bep
+    loss = contrib is not None and np.isfinite(contrib) and contrib <= 0
+    thin = cover == cover and cover < 21
+    zero_stock = cover == cover and cover <= 0
+
+    if saran in PAUSE_SARAN or zero_stock or (loss and score < 40) or (occupied and saran in ("Buat iklan tunggal", "Tambahkan ke grup")):
+        route = ROUTE_PAUSE
+        action = PUSH_PAUSE
+        if saran == "Sudah di iklan lain" or occupied and saran.startswith(("Buat", "Tambahkan")):
+            reason = "sudah di iklan aktif lain: jangan push dobel"
+        elif saran == "Jeda sampai restock" or zero_stock:
+            reason = "stok habis / kritis: jeda sampai restock"
+        elif loss:
+            reason = "margin minus: iklan memperdalam rugi — pause atau perbaiki harga"
+        elif saran == SMALL_SALES:
+            reason = "potensi sales kecil: budget dipusatkan ke hero"
+        elif saran == PAUSED_IDLE:
+            reason = "iklan sudah dijeda: biarkan, jangan setel ulang"
+        else:
+            reason = "tidak layak di-push sekarang"
+        return route, action, reason
+
+    if saran in SINGLE_SARAN:
+        route = ROUTE_SINGLE
+        if score >= 70 and (roas_ok or saran.startswith("Buat") or saran.startswith("Jadikan")):
+            action = PUSH_PRIORITIZE
+            if roas_ok:
+                reason = f"ROAS {roas:.1f} ≥ BEP aman {bep:.1f} · kontribusi gap material".replace(".", ",")
+            else:
+                reason = "kandidat tunggal penutup gap · margin/stok siap"
+        elif score >= 55 and saran == "Pertahankan iklan tunggal" and roas_ok:
+            action = PUSH_SCALE
+            reason = "sudah tunggal · ROAS aman — Scale ~+20% bila stok siap"
+        elif thin:
+            action = PUSH_HOLD
+            reason = "stok cover tipis: tahan budget, jangan Scale"
+        else:
+            action = PUSH_HOLD
+            reason = "pertahankan tunggal · jangan thrash learning"
+        return route, action, reason
+
+    if saran in GROUP_SARAN:
+        route = ROUTE_GROUP
+        if loss:
+            action = PUSH_HOLD if score >= 45 else PUSH_PAUSE
+            reason = "margin tipis: masuk/pertahankan grup hemat, jangan tunggal"
+        elif score >= 65 and saran == "Tambahkan ke grup":
+            action = PUSH_PRIORITIZE
+            reason = "mid-tier penutup gap · uji di grup sejenis (band margin mirip)"
+        elif score >= 55 and saran == "Pertahankan di grup" and roas_ok:
+            action = PUSH_SCALE
+            reason = "grup sehat · Scale ~+20% budget bersama bila ROAS tahan"
+        else:
+            action = PUSH_HOLD
+            reason = "pertahankan di grup · band ROAS/margin mirip"
+        return route, action, reason
+
+    # fallback
+    route = ROUTE_GROUP if "grup" in saran.lower() else ROUTE_SINGLE
+    return route, PUSH_HOLD, "tinjau manual sebelum ubah budget"
+
+
+def enrich_push_scores(
+    selection: pd.DataFrame,
+    products: pd.DataFrame,
+    contribution_by_code: dict[str, float],
+    *,
+    gap_daily: float = 0.0,
+    occupied: frozenset | set = frozenset(),
+) -> pd.DataFrame:
+    """Tambah kolom Push skor, Aksi push, Rute, Alasan chip, % gap tertutup (derived) ke hasil product_selection."""
+    extra = ["Push skor", "Aksi push", "Rute", "Alasan chip", "% gap tertutup", "Peringatan degradasi",
+             "_gap", "_roas_bep", "_margin", "_stock", "_free", "_ctr_pen"]
+    if selection is None or selection.empty:
+        return selection
+    frame = selection.copy()
+    for col in extra:
+        if col not in frame.columns:
+            frame[col] = np.nan if col.startswith(("_", "%", "Push")) else ""
+
+    prod = products.set_index("product_code") if products is not None and not products.empty and "product_code" in products.columns else pd.DataFrame()
+    has_ctr_col = (not prod.empty) and ("ctr" in prod.columns) and prod["ctr"].notna().any()
+    occupied_set = {str(c) for c in occupied}
+
+    scores, actions, routes, chips, gaps = [], [], [], [], []
+    g_parts, r_parts, m_parts, s_parts, f_parts, c_parts = [], [], [], [], [], []
+    warn_col = frame["Peringatan degradasi"] if "Peringatan degradasi" in frame.columns else pd.Series([""] * len(frame))
+
+    for i, row in frame.iterrows():
+        code = str(row.get("Kode produk", "") or "")
+        saran = str(row.get("Saran", "") or "")
+        pred = pd.to_numeric(row.get("Prediksi omzet/hari", 0), errors="coerce")
+        pred = float(pred) if pred == pred else 0.0
+        roas = pd.to_numeric(row.get("ROAS 2 bulan", np.nan), errors="coerce")
+        roas = float(roas) if roas == roas else float("nan")
+        stok = pd.to_numeric(row.get("Stok", np.nan), errors="coerce")
+        stok = float(stok) if stok == stok else float("nan")
+        qty = pd.to_numeric(row.get("Prediksi qty/hari", np.nan), errors="coerce")
+        qty = float(qty) if qty == qty else float("nan")
+        room = float("nan")
+        ctr_val = None
+        if code in prod.index:
+            prow = prod.loc[code]
+            if isinstance(prow, pd.DataFrame):
+                prow = prow.iloc[0]
+            if "stok_room" in prod.columns:
+                room = pd.to_numeric(prow.get("stok_room", np.nan), errors="coerce")
+                room = float(room) if room == room else float("nan")
+            if qty != qty and "qty_harian" in prod.columns:
+                qty = pd.to_numeric(prow.get("qty_harian", np.nan), errors="coerce")
+                qty = float(qty) if qty == qty else float("nan")
+            if stok != stok and "stok" in prod.columns:
+                stok = pd.to_numeric(prow.get("stok", np.nan), errors="coerce")
+                stok = float(stok) if stok == stok else float("nan")
+            if has_ctr_col:
+                raw = pd.to_numeric(prow.get("ctr", np.nan), errors="coerce")
+                ctr_val = float(raw) if raw == raw else None
+        contrib = contribution_by_code.get(code)
+        is_occ = code in occupied_set
+        parts = push_score_components(
+            pred_omzet=pred, stok_room=room, stok=stok, qty_harian=qty if qty == qty else 0.0,
+            roas=roas, contrib=contrib, occupied=is_occ, gap_daily=gap_daily,
+            ctr=ctr_val, has_ctr=has_ctr_col and ctr_val is not None,
+        )
+        route, action, reason = _push_route_action_reason(saran, parts, roas=roas, contrib=contrib, occupied=is_occ)
+        warn = str(warn_col.loc[i] if i in warn_col.index else "") if len(warn_col) else ""
+        if warn and warn != "nan" and "budget 0" in warn.lower():
+            reason = BUDGET_DEGRADE_WARN + " · " + reason
+        scores.append(parts["score"])
+        actions.append(action)
+        routes.append(route)
+        chips.append(reason)
+        gaps.append(_gap_pct_closed(parts["closable"], gap_daily))
+        g_parts.append(parts["gap"])
+        r_parts.append(parts["roas_bep"])
+        m_parts.append(parts["margin"])
+        s_parts.append(parts["stock"])
+        f_parts.append(parts["free"])
+        c_parts.append(parts["ctr_pen"])
+
+    frame["Push skor"] = scores
+    frame["Aksi push"] = actions
+    frame["Rute"] = routes
+    frame["Alasan chip"] = chips
+    frame["% gap tertutup"] = gaps
+    if "Peringatan degradasi" not in frame.columns:
+        frame["Peringatan degradasi"] = ""
+    frame["_gap"] = g_parts
+    frame["_roas_bep"] = r_parts
+    frame["_margin"] = m_parts
+    frame["_stock"] = s_parts
+    frame["_free"] = f_parts
+    frame["_ctr_pen"] = c_parts
+    return frame
+
+
+def push_top_tables(selection: pd.DataFrame, *, top_n: int = 10) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Top N push tunggal & Top N masuk/pertahankan grup (urut skor menurun)."""
+    cols = ["Push skor", "Aksi push", "Produk", "Kode produk", "Saran", "Alasan chip", "% gap tertutup", "Rute",
+            "ROAS 2 bulan", "Prediksi omzet/hari", "Stok", "Peringatan degradasi"]
+    empty = pd.DataFrame(columns=cols)
+    if selection is None or selection.empty or "Push skor" not in selection.columns:
+        return empty, empty
+    show = [c for c in cols if c in selection.columns]
+    single = selection.loc[selection["Rute"] == ROUTE_SINGLE].sort_values("Push skor", ascending=False).head(top_n)
+    group = selection.loc[selection["Rute"] == ROUTE_GROUP].sort_values("Push skor", ascending=False).head(top_n)
+    return single[show].reset_index(drop=True), group[show].reset_index(drop=True)
+
 
 def potential_floors(products: pd.DataFrame, *, pareto: float = SALES_PARETO, min_qty: float = MIN_QTY_DAY) -> tuple[float, float]:
     """(batas sales Rp/hari, batas qty unit/hari) untuk layak diiklankan.
@@ -1243,7 +1533,10 @@ def product_selection(members: pd.DataFrame, units: list[Unit], products: pd.Dat
     later = promote.index[max_promote:]
     frame.loc[later, "Saran"] = "Pertahankan di grup"
     frame.loc[later, "Alasan"] = "kandidat iklan tunggal minggu berikutnya: " + frame.loc[later, "Alasan"].astype(str)
-    return _sort_selection(frame)
+    frame = _sort_selection(frame)
+    return enrich_push_scores(
+        frame, products, contribution_by_code, gap_daily=gap_daily, occupied=occupied,
+    )
 
 
 def _sort_selection(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1414,17 +1707,31 @@ def build_plan(units: list[Unit], members: pd.DataFrame, products: pd.DataFrame,
         back = codes.isin(idle) & (selection["Saran"] == "Jadikan iklan tunggal")
         group = codes.isin(idle) & (selection["Saran"] == "Buat iklan tunggal")
         selection = selection.copy()
+        if "Peringatan degradasi" not in selection.columns:
+            selection["Peringatan degradasi"] = ""
         selection.loc[back, "Saran"] = "Pertahankan di grup"
         selection.loc[back, "Alasan"] = "tetap di grup minggu ini: pada setelan ROAS/budget ini belum perlu budget sendiri"
         selection.loc[group, "Saran"] = "Tambahkan ke grup"
-        selection.loc[group, "Alasan"] = "belum dapat budget sendiri pada setelan ini: masukkan ke grup produk sejenis"
+        selection.loc[group, "Alasan"] = (
+            "belum dapat budget sendiri pada setelan ini: masukkan ke grup produk sejenis "
+            f"({BUDGET_DEGRADE_WARN})"
+        )
+        selection.loc[group, "Peringatan degradasi"] = BUDGET_DEGRADE_WARN
         selection = _sort_selection(selection)
+        selection = enrich_push_scores(
+            selection, products, contribution_by_code, gap_daily=gap_daily, occupied=occupied,
+        )
     if not selection.empty:
         by_key = {u.key: u for u in plan_units}
         keys = _unit_of(selection, plan_units)
         selection = selection.assign(
             **{"Iklan di rencana": [("Grup: " + by_key[k].nama if by_key[k].jenis == "Grup" else "Iklan tunggal") if k in by_key else "–" for k in keys],
                "Budget usulan iklan/hari": [plan.cost.get(k, np.nan) if k in by_key else np.nan for k in keys]})
+        # Pastikan skor/aksi ada meski tidak ada degradasi di loop
+        if "Push skor" not in selection.columns:
+            selection = enrich_push_scores(
+                selection, products, contribution_by_code, gap_daily=gap_daily, occupied=occupied,
+            )
     return plan_units, plan, selection
 
 

@@ -49,6 +49,72 @@ def _signed(value: float) -> str:
     return ("+" if value >= 0 else "−") + fmt_idr(abs(value))
 
 
+def _push_action_style(action: str) -> str:
+    colors = {
+        A.PUSH_PRIORITIZE: ("#166534", "#dcfce7"),
+        A.PUSH_SCALE: ("#075985", "#e0f2fe"),
+        A.PUSH_HOLD: ("#334155", "#f1f5f9"),
+        A.PUSH_PAUSE: ("#991b1b", "#fee2e2"),
+    }
+    fg, bg = colors.get(str(action), ("#334155", "#f1f5f9"))
+    return f"color:{fg};background:{bg}"
+
+
+def _show_push_top_n(selection: pd.DataFrame, *, top_n: int = 8) -> None:
+    """Tabel Top N Push tunggal & Masuk/pertahankan grup — skor, aksi, chip alasan, % gap (derived)."""
+    if selection is None or selection.empty or "Push skor" not in selection.columns:
+        return
+    single, group = A.push_top_tables(selection, top_n=top_n)
+    degraded = int((selection.get("Peringatan degradasi", pd.Series(dtype=str)).astype(str) == A.BUDGET_DEGRADE_WARN).sum()) if "Peringatan degradasi" in selection.columns else 0
+    if degraded:
+        _box(
+            "⚠️ Degradasi budget (eksplisit)",
+            f"<b>{fmt_num(degraded)} produk</b> diubah dari <b>Buat iklan tunggal</b> menjadi <b>Tambahkan ke grup</b> "
+            f"karena budget usulan 0 pada setelan ROAS/budget ini — bukan rekomendasi struktural diam-diam. "
+            f"Chip: <code>{html.escape(A.BUDGET_DEGRADE_WARN)}</code>.",
+            "#b45309",
+        )
+    st.caption("Push skor 0–100 (gap · ROAS vs BEP aman · margin · stok · bonus belum occupied · penalti CTR hanya jika kolom CTR ada). "
+               "% gap tertutup = estimasi derived dari prediksi/stok vs kekurangan harian. Jalur eksekusi utama tetap unduhan Seller Center.")
+    c1, c2 = st.columns(2)
+    kinds = {"Push skor": "dec", "% gap tertutup": "pct", "ROAS 2 bulan": "dec", "Prediksi omzet/hari": "money", "Stok": "count"}
+    col_cfg = {
+        "Produk": st.column_config.TextColumn(width="medium"),
+        "Alasan chip": st.column_config.TextColumn(width="large"),
+        "Aksi push": st.column_config.TextColumn(width="small"),
+        "% gap tertutup": st.column_config.Column(help="Estimasi derived: prediksi/stok vs gap harian — bukan jaminan GMV."),
+    }
+    with c1:
+        st.markdown("**Top push tunggal**")
+        if single.empty:
+            st.caption("Belum ada kandidat rute tunggal pada skor ini.")
+        else:
+            show_table(single.drop(columns=["Peringatan degradasi"], errors="ignore"), kinds=kinds, row_height=35, max_height=420,
+                       column_config=col_cfg)
+    with c2:
+        st.markdown("**Top masuk / pertahankan grup**")
+        if group.empty:
+            st.caption("Belum ada kandidat rute grup pada skor ini.")
+        else:
+            show_table(group.drop(columns=["Peringatan degradasi"], errors="ignore"), kinds=kinds, row_height=35, max_height=420,
+                       column_config=col_cfg)
+    # Chip ringkas aksi
+    if "Aksi push" in selection.columns:
+        chips = []
+        for act in A.PUSH_ACTIONS:
+            n = int((selection["Aksi push"] == act).sum())
+            if not n:
+                continue
+            style = _push_action_style(act)
+            chips.append(
+                f"<span style='border:1px solid #e2e8f0;border-radius:999px;padding:.2rem .65rem;font-size:var(--fs-sm);"
+                f"{style}'><b>{html.escape(act)}</b> {fmt_num(n)}</span>"
+            )
+        if chips:
+            st.markdown("<div style='display:flex;flex-wrap:wrap;gap:.4rem;margin:.35rem 0 .5rem'>" + "".join(chips) + "</div>",
+                        unsafe_allow_html=True)
+
+
 def _set_value(key: str, value: float, *, money: bool = True) -> None:
     st.session_state[key] = angka(round(value)) if money else float(value)
 
@@ -900,7 +966,7 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     if base_units:
         sel_key = (periode, select, round(gap_ads_daily), tuple(sorted(excluded)), tuple(sorted(occupied)), len(members), len(products),
                    round(sum(u.daily_cost for u in base_units)), round(sum(contribution.values()), 4) if contribution else 0,
-                   "gap-catalog-v1")
+                   "gap-catalog-v1", "push-score-v1")
         sel_box = st.session_state.setdefault("adt-sel-cache", {})
         if sel_key not in sel_box:
             if len(sel_box) > 4:
@@ -1030,12 +1096,18 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             if len(setup_view) > 40:
                 st.caption(f"Menampilkan 40 dari {fmt_num(len(setup_view))} baris — unduh Excel untuk semua langkah.")
 
-        # ---------------- 3. Pemilihan produk (lazy: expander)
-        _step(n0 + 1, "Pemilihan produk iklan", "· siapa masuk iklan tunggal, siapa di grup, siapa dikeluarkan")
+        # ---------------- 3. Pemilihan produk (lazy: expander) + Top N push skor
+        _step(n0 + 1, "Pemilihan produk iklan", "· Top N push skor · siapa tunggal vs grup · unduhan Seller Center tetap utama")
         _exclusion_editor(features, products, members, excluded, can_edit=can_edit, username=username)
         if selection.empty:
             st.info("Belum ada data produk iklan (laporan iklan grup / keseluruhan) untuk dianalisa.")
         else:
+            # Pastikan skor ada (cache lama / base_selection tanpa enrich)
+            if "Push skor" not in selection.columns:
+                selection = A.enrich_push_scores(
+                    selection, products, contribution, gap_daily=plan_gap_daily, occupied=occupied,
+                )
+            _show_push_top_n(selection, top_n=8)
             sel_groups = [
                 ("Buat iklan tunggal", "🆕", UP, "produk laris belum diiklankan"), ("Jadikan iklan tunggal", "⭐", UP, "andalan di grup"),
                 ("Pertahankan iklan tunggal", "✅", "#64748b", ""), ("Tambahkan ke grup", "➕", UP, "belum diiklankan"),
@@ -1057,7 +1129,8 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                 sel_drop = selection.drop(columns=["_unit"], errors="ignore")
                 sel_view = sel_drop.loc[sel_drop["Saran"].isin(picked)] if picked else sel_drop
                 sel_kinds = {"Biaya iklan/hari": "money", "Omzet iklan/hari": "money", "ROAS 2 bulan": "dec", "Porsi omzet grup": "pct",
-                             "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money"}
+                             "Prediksi omzet/hari": "money", "Prediksi qty/hari": "dec", "Stok": "count", "Budget usulan iklan/hari": "money",
+                             "Push skor": "dec", "% gap tertutup": "pct"}
                 batched_view(
                     len(sel_view), key="adt-sel", noun="produk",
                     render=lambda lo, hi: show_table(sel_view.iloc[lo:hi], kinds=sel_kinds, max_height=10_000, row_height=35,
