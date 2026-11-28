@@ -765,7 +765,10 @@ def show_evaluation(
     features=None,
 ) -> None:
     st.subheader("Evaluasi model")
-    st.caption("Bahan tesis: apakah algoritma & metode peramalan sudah sesuai, dibuktikan dengan uji walk-forward, uji maju, dan riwayat seluruh analisa.")
+    st.caption(
+        "Produksi = Ensemble (WAPE luar sampel). Level terkini / MA28 / Naive / Holt / SARIMA / XGBoost "
+        "adalah pembanding — bukan pemenang produksi otomatis. Uji walk-forward dan (opsional) hold-out total toko."
+    )
     records = _records(outcome)
     db_runs, run_folder = {}, None
     if repo is not None:
@@ -786,9 +789,29 @@ def show_evaluation(
             framework = _framework(outcome, enriched, params, today, records.get("bulan"))
             checks = _summary(outcome, records, summary, framework, params)
             tables.update({"Uji kesesuaian metode": checks, "Kerangka pengujian": framework})
-            if isinstance(comparison, pd.DataFrame) and not comparison.empty:
-                with st.expander("Uji total toko (hold-out 7 hari, metode lama)"):
-                    show_table(comparison)
+            with st.expander("Uji total toko (hold-out 7 hari, pembanding klasik)", expanded=False):
+                st.caption(
+                    "Lazy: Naive / MA / Holt / SARIMA / XGBoost dihitung on-demand di total toko — "
+                    "tidak ikut hot path Jalankan analisa."
+                )
+                frame = comparison if isinstance(comparison, pd.DataFrame) else pd.DataFrame()
+                cached = st.session_state.get("classic-comparison")
+                if isinstance(cached, pd.DataFrame) and not cached.empty:
+                    frame = cached
+                if st.button("Bandingkan algoritma klasik (total toko)", key="eval-classic-compare"):
+                    hist = base_history if isinstance(base_history, pd.DataFrame) else pd.DataFrame()
+                    try:
+                        from src.forecast import compare_daily_algorithms
+
+                        frame = compare_daily_algorithms(hist)
+                        st.session_state["classic-comparison"] = frame
+                    except Exception as exc:
+                        st.warning(f"Pembanding klasik gagal: {exc}")
+                        frame = pd.DataFrame()
+                if isinstance(frame, pd.DataFrame) and not frame.empty:
+                    show_table(frame)
+                else:
+                    st.info("Belum ada tabel pembanding. Klik tombol di atas setelah analisa berjalan.")
         elif choice == TABS[1]:
             _methodology(outcome, records, period, is_super)
         elif choice == TABS[2]:

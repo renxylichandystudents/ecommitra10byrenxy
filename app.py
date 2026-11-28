@@ -425,7 +425,46 @@ _APP_CSS = """
         --fs-xl: 1.35rem;
         --fs-2xl: 1.6rem;
         --fs-display: 2.4rem;
+        --ink: #0b1f1c;
+        --body: #243532;
+        --muted: #5b736e;
+        --soft: #eef5f3;
+        --panel: #ffffff;
+        --line: #d5e3df;
+        --accent: #0f766e;
+        --accent-deep: #0a5c56;
+        --accent-soft: #e6f5f2;
+        --target: #c2410c;
+        --target-soft: #fff4eb;
+        --font-display: "Fraunces", "Palatino Linotype", Georgia, serif;
+        --font-body: "Manrope", "Plus Jakarta Sans", "Segoe UI", sans-serif;
     }
+    .stApp {
+      background:
+        radial-gradient(1200px 520px at 8% -10%, rgba(15, 118, 110, 0.10), transparent 55%),
+        radial-gradient(900px 480px at 100% 0%, rgba(194, 65, 12, 0.05), transparent 50%),
+        linear-gradient(180deg, #f7faf9 0%, #eef4f2 48%, #f5f8f7 100%);
+    }
+    .target-rail {
+      display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.55rem 0 0.85rem;
+    }
+    .target-chip {
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em;
+      color: var(--accent-deep); background: var(--accent-soft);
+      border: 1px solid #b7ddd6; border-radius: 999px; padding: 0.2rem 0.58rem;
+    }
+    .target-chip.focus {
+      color: var(--target); background: var(--target-soft); border-color: #fdba74;
+    }
+    .cta-panel {
+      background: linear-gradient(135deg, rgba(15,118,110,0.08), rgba(255,255,255,0.9));
+      border: 1px solid #b7ddd6; border-radius: 12px; padding: 0.7rem 0.85rem; margin: 0.35rem 0 0.65rem;
+    }
+    .cta-panel .cta-title {
+      font-family: var(--font-display) !important; font-size: 1.02rem; font-weight: 700;
+      color: var(--ink); margin: 0 0 0.15rem;
+    }
+    .cta-panel .cta-body { font-size: 0.84rem; color: var(--muted); margin: 0; line-height: 1.35; }
     [data-testid="stMarkdownContainer"] p,
     [data-testid="stMarkdownContainer"] li,
     [data-testid="stAlertContainer"] p,
@@ -464,7 +503,7 @@ _APP_CSS = """
         border-radius: 16px;
         padding: 0.75rem 0.9rem 0.7rem;
         box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
-        border-top: 3px solid #ee4d2d;
+        border-top: 3px solid #0f766e;
         transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
     .stat-card:hover {
@@ -527,7 +566,7 @@ _APP_CSS = """
         font-weight: 700;
         letter-spacing: 0.12em;
         text-transform: uppercase;
-        color: #ee4d2d;
+        color: #0a5c56;
         margin: 0 0 0.3rem;
     }
     .report-title {
@@ -1046,15 +1085,15 @@ _APP_CSS = """
     .stButton > button[data-testid="stBaseButton-primary"],
     [data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"],
     button[data-testid="stBaseButton-primaryFormSubmit"] {
-        background: linear-gradient(135deg, #ff7348 0%, #ee4d2d 100%);
-        border: none;
-        color: #ffffff;
+        background: linear-gradient(180deg, #149388 0%, #0c6b64 100%) !important;
+        border: 1px solid #08534e !important;
+        color: #ffffff !important;
     }
     .stButton > button[kind="primary"]:hover,
     .stButton > button[data-testid="stBaseButton-primary"]:hover,
     button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
-        background: linear-gradient(135deg, #ff8158 0%, #e24122 100%);
-        color: #ffffff;
+        background: linear-gradient(180deg, #16a399 0%, #0d756d 100%) !important;
+        color: #ffffff !important;
     }
     .stat-card { width: 100%; box-sizing: border-box; }
     .qty-board-head { margin: 0.2rem 0 0.8rem; }
@@ -2427,6 +2466,12 @@ def show_homepage() -> None:
             </div>
             <div class="home-kicker">E-commerce intelligence</div>
             <div class="home-title">Keputusan e&#8209;commerce,<br>dalam satu ruang kerja.</div>
+            <div class="target-rail">
+                <span class="target-chip focus">Mencapai target</span>
+                <span class="target-chip">Top 50 prediksi</span>
+                <span class="target-chip">Ensemble produksi</span>
+                <span class="target-chip">Level terkini cadangan</span>
+            </div>
             <div class="home-lead">
                 Ruang kerja manajer e-commerce dan digital marketing, sekaligus artefak tesis
                 Magister Teknik Informatika · Renxy Lichandy untuk Mitra10 · 2026.
@@ -2620,7 +2665,7 @@ def show_daily_journey(status: dict, *, where: str) -> None:
         b1, b2, b3 = st.columns(3, gap="medium")
         if may_upload and where != "input" and b1.button("Upload data", key=f"jr-upload-{where}", type="primary" if action == journey.ACTION_UPLOAD else "secondary", use_container_width=True):
             _go(PAGE_INPUT)
-        if may_run and b2.button("Jalankan analisa", key=f"jr-run-{where}", type="primary" if action == journey.ACTION_RUN else "secondary", use_container_width=True, disabled=not status["keys"]):
+        if may_run and b2.button("Jalankan analisa → capai target", key=f"jr-run-{where}", type="primary" if action == journey.ACTION_RUN else "secondary", use_container_width=True, disabled=not status["keys"]):
             run_daily_analysis(status)
             st.rerun()
         if latest is not None and b3.button("Lihat hasil analisa", key=f"jr-view-{where}", type="primary" if action == journey.ACTION_VIEW else "secondary", use_container_width=True):
@@ -3523,7 +3568,7 @@ def show_prediction_inputs() -> None:
             + " Selesai dianalisa, hasilnya langsung dibuka dan menjadi analisa terakhir.</div>",
             unsafe_allow_html=True,
         )
-        if run_col.button("Jalankan analisa", type="primary", use_container_width=True):
+        if run_col.button("Jalankan analisa → capai target", type="primary", use_container_width=True):
             if not isinstance(orders_raw, pd.DataFrame) or orders_raw.empty:
                 st.session_state["input-error"] = "Pilih rentang data latih, atau unggah laporan, sebelum menjalankan analisa."
                 st.rerun()
@@ -3592,7 +3637,7 @@ def show_result_status(status: dict) -> None:
             f"<b style='color:#1d4ed8'>Ada data baru sejak analisa ini</b> · {line}. Jalankan analisa agar angka di bawah memakai unggahan terbaru.</div>",
             unsafe_allow_html=True,
         )
-        if can(AUTH_USER.role, "jalankan_analisa") and btn_col.button("Jalankan analisa", key="rs-run", type="primary", use_container_width=True):
+        if can(AUTH_USER.role, "jalankan_analisa") and btn_col.button("Jalankan analisa → capai target", key="rs-run", type="primary", use_container_width=True):
             run_daily_analysis(status)
             st.rerun()
         show_duplicate_offer("result")
@@ -7845,6 +7890,7 @@ def build_forecast(
     """Satu jalur prediksi: Level terkini → ensemble (bila ada bobot/evaluasi) → harga 4 minggu → safety stock."""
     horizon = horizon_day_count(period, as_of)
     _start, _end, text = forecast_window(period, as_of)
+    # Full SKU coverage kept for Mitra10 stock/rekomendasi; max_items available for lighter demos.
     qty_fc = forecast_items(
         base_history,
         "hari",
@@ -9104,10 +9150,10 @@ with PAGE_ROOT.container(key="page-root"):
         if combined.empty:
             st.warning("Tidak ada SKU yang bisa diprediksi dari data latih ini.")
             st.stop()
-        try:
-            comparison = compare_daily_algorithms(base_history)
-        except Exception:
-            comparison = pd.DataFrame()
+        # Classic bake-off (Naive/MA/Holt/SARIMA/…) is optional — Evaluasi tab only.
+        comparison = pd.DataFrame()
+        if isinstance(st.session_state.get("classic-comparison"), pd.DataFrame):
+            comparison = st.session_state["classic-comparison"]
         run_meta = _analysis_meta(
             period=period,
             period_text=period_text,

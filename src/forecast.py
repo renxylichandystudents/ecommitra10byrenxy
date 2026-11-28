@@ -816,6 +816,24 @@ def compare_daily_algorithms(history: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
+FORECAST_CANDIDATE_LIMIT = 100
+
+
+def select_top_item_keys(
+    history: pd.DataFrame,
+    metric: str = "qty",
+    limit: int = FORECAST_CANDIDATE_LIMIT,
+) -> list[str]:
+    """Ambil kandidat SKU teratas dari histori agregat (hot path Level terkini)."""
+    if history is None or history.empty or "item_key" not in history.columns:
+        return []
+    col = metric if metric in history.columns else "qty"
+    if col not in history.columns:
+        return []
+    totals = history.groupby("item_key", sort=False)[col].sum().sort_values(ascending=False)
+    return [str(key) for key in totals.head(max(int(limit), 1)).index.tolist()]
+
+
 def forecast_items(
     history: pd.DataFrame,
     period: str,
@@ -825,17 +843,38 @@ def forecast_items(
     steps: int = 1,
     next_label: str | None = None,
     forecast_start: pd.Timestamp | None = None,
+    max_items: int | None = None,
 ) -> pd.DataFrame:
+    if history is None or history.empty:
+        return pd.DataFrame(
+            columns=[
+                "item_key",
+                "item_label",
+                "metric",
+                "best_model",
+                "forecast",
+                "mae",
+                "rmse",
+                "mape",
+                "history_points",
+                "next_period",
+            ]
+        )
     spec = PERIOD_SPECS[period]
     threshold = min_points if min_points is not None else spec.min_points
     horizon = max(int(steps), 1)
     if next_label is None:
         last_start = history["period_start"].max()
+        if pd.isna(last_start):
+            return pd.DataFrame()
         nxt = next_period_start(last_start, period)
         next_label = period_label(nxt, period)
     rows: list[ItemForecast] = []
     error_sigma: dict[str, float] = {}
     groups = list(history.groupby("item_key", sort=False))
+    if max_items is not None and int(max_items) > 0:
+        keep = set(select_top_item_keys(history, metric=metric, limit=int(max_items)))
+        groups = [(key, frame) for key, frame in groups if str(key) in keep]
     total = max(len(groups), 1)
     short_window = period == "hari" and not history.empty
     window_days = _report_window_days(history) if short_window else 1
@@ -853,12 +892,12 @@ def forecast_items(
         if progress_callback:
             progress_callback((idx + 1) / total)
         if short_window:
-            sold = float(item_hist["qty"].sum())
+            sold = float(np.nan_to_num(item_hist["qty"].to_numpy(dtype=float), nan=0.0).sum())
             by_day = item_hist.groupby(pd.to_datetime(item_hist["period_start"]).dt.normalize())["qty"].sum()
-            daily = by_day.reindex(calendar, fill_value=0.0).to_numpy(dtype=float)
+            daily = np.nan_to_num(by_day.reindex(calendar, fill_value=0.0).to_numpy(dtype=float), nan=0.0)
             raw = _robust_forecast(daily, calendar[0], horizon, weekday, forecast_start=forecast_start)
             error_sigma[item_key] = demand_sigma(daily)
-            forecast_value = float(max(int(np.floor(raw + 0.5)), 1 if sold > 0 else 0))
+            forecast_value = float(max(int(np.floor(float(np.nan_to_num(raw, nan=0.0)) + 0.5)), 1 if sold > 0 else 0))
             rows.append(
                 ItemForecast(
                     item_key=item_key,
