@@ -670,3 +670,26 @@ class PushScoreSelectionTest(unittest.TestCase):
         self.assertTrue((sel["Saran"] == "Tambahkan ke grup").any())
         self.assertGreaterEqual(len(degraded), 1)
         self.assertTrue(degraded["Alasan"].astype(str).str.contains("budget 0", case=False).any())
+
+
+class AdsOsPlanHelpersTest(unittest.TestCase):
+    def test_overlap_will_pause_from_acts_and_selection(self):
+        import pandas as pd
+        from src.ui.ads_target import _overlap_will_pause
+
+        acts = pd.DataFrame([
+            {"Tindakan": "Jeda", "Iklan": "X", "Jenis": "Produk tunggal", "Kode produk": "1", "Budget harian usulan": 0},
+            {"Tindakan": "Turunkan budget", "Iklan": "Y", "Jenis": "Grup", "Kode produk": "2", "Budget harian usulan": 50_000},
+            {"Tindakan": "Turunkan budget", "Iklan": "Z", "Jenis": "Grup", "Kode produk": "3", "Budget harian usulan": 0},
+        ])
+        sel = pd.DataFrame([
+            {"Saran": "Jeda sampai restock", "Produk": "P", "Iklan": "P", "Jenis": "Produk tunggal", "Kode produk": "9"},
+            {"Saran": "Buat iklan tunggal", "Produk": "Q", "Iklan": "Q", "Jenis": "Produk tunggal", "Kode produk": "8"},
+        ])
+        out = _overlap_will_pause(acts, sel)
+        codes = set(out["Kode produk"].astype(str))
+        self.assertIn("1", codes)
+        self.assertIn("3", codes)
+        self.assertIn("9", codes)
+        self.assertNotIn("2", codes)
+        self.assertNotIn("8", codes)

@@ -1,5 +1,12 @@
 # Status terbaru aplikasi
 
+Diperbarui: 28 November 2026 (Ads OS P0: lifecycle + wizard + monitor auto-end).
+
+- Rekomendasi › Iklan = **Ads OS**: hub status (A0), default **Rekomendasi sistem** bila belum ada campaign (Fitur khusus = manual).
+- Lifecycle campaign: `draft → exported → learning_locked (~7h) → stable → scaling|holding|ending_proposed → ended`; auto-end **usulan** (konfirmasi) bila ROAS&lt;BEP ≥7h / stok kritis / deepen loss; SKU dibebaskan untuk Pick berikutnya.
+- Urutan rencana: **Pick SKU (Push skor Top N) → konfirmasi overlap will-pause + ROAS≤30 + lantai 25rb/100rb → unduh Setelan SC**.
+- Pantau: aksi harian Prioritize/Scale/Hold/Pause, learning lock, usulan end, override Keep/Pause/Edit/Lewati auto-end, CTA campaign berikutnya.
+
 Diperbarui: 28 November 2026 (Rekomendasi iklan: Push skor + Top N tunggal/grup).
 
 - Rekomendasi › Iklan (Fitur khusus & Rekomendasi sistem): tiap produk punya **Push skor 0–100** (gap GMV, ROAS vs BEP aman, margin, stok cover, bonus belum occupied; penalti CTR hanya jika kolom CTR ada — tidak diinvent).
