@@ -133,9 +133,6 @@ from src.ui.common import fmt_pct as format_pct_id
 from src.core.metrics import EMPTY_ORDER_METRICS, ads_metrics, period_bounds
 from src.core.periods import format_period_label, month_year, prediction_window, same_target, window_days
 from src.ui.confirm import confirm_action
-from src.ui.evaluasi import show_evaluation
-from src.ui.laporan import show_report
-from src.ui.rekomendasi import show_recommendations
 from src.ui.decision_view import (
     SS_DEFINITION_TOP,
     decision_table_guide,
@@ -146,9 +143,6 @@ from src.ui.decision_view import (
     sku_charts,
     top50_matrix,
 )
-from src.ui.region import show_region_analysis
-from src.ui.instant import show_instant_analysis
-from src.ui.order_ops import show_ops_analysis
 from src.ui.targets_view import achievement_line, monthly_targets, show_target_uploader
 from src.core.schemas import SOURCE_SPECS, canonicalize_frame, find_columns, source_menu, validation_report
 from src.utils.format import angka as fmt_angka
@@ -168,10 +162,8 @@ from src.ui.routing import FEATURE_ID, PAGE_HOME, PAGE_INPUT, PAGE_PASSWORD, PAG
 from src.core.promo import drop_excluded
 from src.core.periods import last_full_month
 from src.core.warehouse import lead_time_stats
-from src.ui.dashboard import show_priority_dashboard
 from src.ui.feature_data import cached_feature_data, excluded_skus
-from src.ui.prediksi_top import save_run_snapshot, show_pred_vs_actual
-from src.ui.setting_page import show_setting
+from src.ui.prediksi_top import save_run_snapshot
 from src.core.access import allowed as allowed_access, setting_tabs
 from src.core.fmt import fmt_date_short
 from src.core.runs import DEFAULT_RUNS_ROOT, RunRepository, data_hash as training_data_hash
@@ -179,14 +171,6 @@ from src.core import journey
 import src.library as library_store
 from src.library import configure_root as configure_library_root
 from src.movement import configure_root as configure_movement_root
-from src.forecast import (
-    _robust_state,
-    _weekday_profile,
-    compare_daily_algorithms,
-    forecast_calendar,
-    forecast_items,
-    forecast_revenue,
-)
 from src.library import (
     bundle_stamp,
     folder_frame,
@@ -1702,8 +1686,11 @@ if str(st.query_params.get("debug", "")) == "waktu":
 _tick("login")
 # CSS dan sinkron file baru dikirim setelah login, supaya putaran "memeriksa sesi" tidak mengulang kerja ini.
 st.markdown(_APP_CSS, unsafe_allow_html=True)
+_tick("css")
 sync_file_vault()
+_tick("vault")
 get_features()
+_tick("features")
 
 TOP_N = 50
 METRIC_LABELS = {
@@ -2514,6 +2501,23 @@ def daily_run_keys(latest=None) -> tuple[str, ...]:
     return journey.next_run_keys(previous, saved)
 
 
+@st.cache_data(show_spinner=False)
+def _newest_order_day_cached(library_dir: str, key: str, file_stamp: float) -> date | None:
+    """Tanggal pesanan terakhir per file bulan — cache proses agar Beranda tidak unpack pickle tiap sesi baru."""
+    del file_stamp
+    path = Path(library_dir) / f"{key}.pkl"
+    if not path.exists():
+        return None
+    try:
+        orders = _orders_from_library([key])[0]
+    except Exception:
+        return None
+    if orders.empty or "order_time" not in orders.columns:
+        return None
+    stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
+    return None if pd.isna(stamp) else stamp.date()
+
+
 def newest_order_day() -> date | None:
     """Tanggal pesanan terakhir di data transaksi tersimpan. Diingat per file bulan, jadi beranda tidak membaca ulang tiap klik."""
     dated = sorted(item["key"] for item in list_months() if str(item["key"])[:4].isdigit())
@@ -2525,12 +2529,7 @@ def newest_order_day() -> date | None:
     cached = st.session_state.get("_newest-order-day")
     if isinstance(cached, tuple) and cached[0] == (key, file_stamp):
         return cached[1]
-    orders = _orders_from_library([key])[0]
-    if orders.empty or "order_time" not in orders.columns:
-        found = None
-    else:
-        stamp = pd.to_datetime(orders["order_time"], errors="coerce").max()
-        found = None if pd.isna(stamp) else stamp.date()
+    found = _newest_order_day_cached(str(library_store.LIBRARY_DIR), key, file_stamp)
     st.session_state["_newest-order-day"] = ((key, file_stamp), found)
     return found
 
@@ -2708,12 +2707,13 @@ def show_data_status(status: dict) -> None:
 
 
 @st.cache_resource(show_spinner=False)
-@st.cache_resource(show_spinner=False)
 def _run_repository(runs_root: str, url_key: str) -> RunRepository:
     """Satu repository per proses server: pembuatan tabel & cache daftar riwayat tidak diulang di setiap klik."""
     del url_key
     repo = RunRepository(get_engine(), runs_root=Path(runs_root))
-    repo.last_guard = 0.0
+    # Jangan jalankan cleanup/kuota pada kunjungan pertama setelah cold start (memperlambat Beranda).
+    # save_analysis_run() sudah memanggil cleanup + guard_storage; periodik menyusul setelah GUARD_INTERVAL.
+    repo.last_guard = time.time()
     return repo
 
 
@@ -2723,7 +2723,7 @@ GUARD_INTERVAL = 600  # detik; pembersihan riwayat lama & cek kuota database cuk
 def run_repository(*, guard: bool = False) -> RunRepository:
     repo = _run_repository(str(RUNS_ROOT), str(getattr(get_engine(), "url", "")))
     # Pembersihan (riwayat > 90 hari, kuota database) memakai beberapa query ke database jauh: jalankan saat
-    # diminta (sesudah analisa disimpan) atau paling sering sekali per GUARD_INTERVAL, bukan di setiap klik.
+    # diminta (sesudah analisa disimpan) atau paling sering sekali per GUARD_INTERVAL, bukan di setiap klik / login.
     if guard or time.time() - float(getattr(repo, "last_guard", 0.0)) > GUARD_INTERVAL:
         repo.last_guard = time.time()
         try:
@@ -4203,6 +4203,8 @@ def explain_qty_gap(
     stock_qty = int(round(float(row["stok_disarankan"]))) if "stok_disarankan" in row and pd.notna(row["stok_disarankan"]) else predicted + safety
 
     qty, sales = _daily_qty_sales(history, key)
+    from src.forecast import _robust_state
+
     level, slope = _robust_state(qty, horizon) if len(qty) else (0.0, 0.0)
     recent = qty[-28:] if len(qty) else qty
     prior = qty[-56:-28] if len(qty) >= 56 else np.zeros(0, dtype=float)
@@ -5493,6 +5495,10 @@ def show_data_menu(source_raw: pd.DataFrame) -> None:
             },
         )
     show_sku_issue_section(sku_sheet, selected_label)
+    from src.ui.instant import show_instant_analysis
+    from src.ui.order_ops import show_ops_analysis
+    from src.ui.region import show_region_analysis
+
     show_region_analysis(source_raw, *_data_range)
     show_instant_analysis(source_raw, *_data_range)
     show_ops_analysis(source_raw, *_data_range)
@@ -6981,6 +6987,8 @@ def prediction_frame(
     end: date,
 ) -> pd.DataFrame:
     """Prediksi QTY dan sales pada tiap tanggal kalender. Jumlahnya sama dengan prediksi SKU."""
+    from src.forecast import forecast_calendar
+
     dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="D")
     daily, series_start = sku_daily_qty(item_orders)
     target_qty = float(chosen["pred_qty"])
@@ -7888,6 +7896,8 @@ def build_forecast(
     progress=None,
 ):
     """Satu jalur prediksi: Level terkini → ensemble (bila ada bobot/evaluasi) → harga 4 minggu → safety stock."""
+    from src.forecast import forecast_items, forecast_revenue
+
     horizon = horizon_day_count(period, as_of)
     _start, _end, text = forecast_window(period, as_of)
     # Full SKU coverage kept for Mitra10 stock/rekomendasi; max_items available for lighter demos.
@@ -8999,6 +9009,8 @@ with PAGE_ROOT.container(key="page-root"):
         st.session_state["_sku_product_code"] = _sku_product_codes()
         st.session_state["_active_skus"] = _active_skus()
         setting_data = cached_feature_data(st.session_state, get_features(), setting_table, date.today(), periode="", stamp="setting")
+        from src.ui.setting_page import show_setting
+
         shown_tab = show_setting(
             str(st.session_state.get("setting-slug", "") or ""),
             role=AUTH_USER.role,
@@ -9390,6 +9402,8 @@ with PAGE_ROOT.container(key="page-root"):
         st.subheader(product_identity(chosen["peringkat"], chosen["sku"], chosen["product_name"], chosen["variasi_tampil"]))
         item_orders = orders.loc[orders["item_key"].astype(str) == picked]
         base_hist = stored.get("base_history")
+        from src.forecast import _weekday_profile
+
         weekday = _weekday_profile(base_hist) if isinstance(base_hist, pd.DataFrame) and not base_hist.empty else np.ones(7)
         try:
             past = past_predictions(FEATURES, str(chosen["sku"]), str(chosen.get("variasi_tampil") or ""), date(today.year, today.month, 1), today - timedelta(days=1))
@@ -9415,6 +9429,8 @@ with PAGE_ROOT.container(key="page-root"):
 
     _tick("persiapan menu")
     if sheet == "Ringkasan":
+        from src.ui.dashboard import show_priority_dashboard
+
         with dashboard_slot:
             basis_guide(
                 (TABLE_META or {}).get("basis") or ("bersih" if exclude_return_cancel else "masuk"),
@@ -9519,6 +9535,8 @@ with PAGE_ROOT.container(key="page-root"):
 
     elif sheet == "Prediksi":
         # Ringkasan penjualan periode & status Kecualikan batal & retur langsung di atas (tidak dilipat).
+        from src.ui.prediksi_top import show_pred_vs_actual
+
         show_exclude_and_cards()
         show_pred_vs_actual(FEATURES, orders=orders, table=enriched, orders_all=orders_all)
         try:
@@ -9620,6 +9638,8 @@ with PAGE_ROOT.container(key="page-root"):
         show_folder_menu()
 
     elif sheet == "Rekomendasi":
+        from src.ui.rekomendasi import show_recommendations
+
         show_recommendations(
             enriched,
             orders=orders,
@@ -9636,6 +9656,8 @@ with PAGE_ROOT.container(key="page-root"):
         )
 
     elif sheet == "Laporan":
+        from src.ui.laporan import show_report
+
         show_report(
             enriched,
             orders=orders,
@@ -9660,6 +9682,8 @@ with PAGE_ROOT.container(key="page-root"):
         )
 
     elif sheet == "Evaluasi model":
+        from src.ui.evaluasi import show_evaluation
+
         show_evaluation(
             outcome,
             comparison=comparison,

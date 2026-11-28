@@ -1016,10 +1016,16 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     select = F.selection_roas(base_units) if base_units else None
     # Kekurangan sales → omzet iklan harian yang perlu ditutup (sama dasar gap di build_plan / Fitur khusus).
     gap_ads_daily = max(float(goals.target_sales) - projection, 0.0) / max(factor, 1e-9) / max(days_left, 1)
-    # Pemilihan produk dihitung sekali (ROAS acuan tetap + gap bulan) lalu dipakai ulang saat scan opsi — hemat besar.
-    # Satu jalur untuk Fitur khusus & Rekomendasi sistem: audit katalog prediksi saat gap besar, bukan hanya rapikan iklan jalan.
-    base_selection = None
-    if base_units:
+    # Pemilihan produk: malas — baru dihitung saat Rekomendasi sistem / Fitur khusus (atau project_fn Pantau tanpa kurva).
+    _sel_cache: dict = {"value": None, "ready": False}
+
+    def _base_selection():
+        if _sel_cache["ready"]:
+            return _sel_cache["value"]
+        if not base_units:
+            _sel_cache["value"] = None
+            _sel_cache["ready"] = True
+            return None
         sel_key = (periode, select, round(gap_ads_daily), tuple(sorted(excluded)), tuple(sorted(occupied)), len(members), len(products),
                    round(sum(u.daily_cost for u in base_units)), round(sum(contribution.values()), 4) if contribution else 0,
                    "gap-catalog-v1", "push-score-v1")
@@ -1027,14 +1033,17 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         if sel_key not in sel_box:
             if len(sel_box) > 4:
                 sel_box.clear()
-            sel_box[sel_key] = A.product_selection(members, base_units, products, contribution, target_roas=select or 8.0,
-                                                   exclude=excluded, occupied=occupied, gap_daily=gap_ads_daily)
-        base_selection = sel_box[sel_key]
+            with st.spinner("Memilih produk iklan (Push skor)…"):
+                sel_box[sel_key] = A.product_selection(members, base_units, products, contribution, target_roas=select or 8.0,
+                                                       exclude=excluded, occupied=occupied, gap_daily=gap_ads_daily)
+        _sel_cache["value"] = sel_box[sel_key]
+        _sel_cache["ready"] = True
+        return _sel_cache["value"]
 
     def option(r: float, daily: float, gap_now: float, mm: float = A.MIN_MARGINAL) -> dict:
         return _option_plan(base_units, members, products, contribution, weeks=weeks, gap_ads=max(gap_now / factor, 0.0), roas=r, budget_daily=daily, lift=lift,
                             key=(periode, start, end), stock=True, select_roas=select, exclude=excluded, min_marginal=mm,
-                            occupied=occupied, base_selection=base_selection)
+                            occupied=occupied, base_selection=_base_selection())
 
     def best_roas(daily: float, gap_now: float, mm: float = A.MIN_MARGINAL, *, fine: bool = False) -> float:
         """Pilih Target ROAS ≤ 30. `fine=False` (daftar opsi) memakai grid kasar agar halaman cepat terbuka."""
@@ -1101,6 +1110,9 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             orders=orders, performance=perf_frame,
         )
         return
+
+    # Eager selection untuk tab rencana (scan opsi butuh base_selection siap).
+    base_selection = _base_selection()
 
     if _run_days(start, end, first_open, month_end) == 0:
         st.warning(f"Periode campaign {week_text} tidak jatuh di sisa hari {month_name} setelah data terakhir ({fmt_date(last)}). "

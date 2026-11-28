@@ -106,29 +106,50 @@ class FileVault:
             return
         self.__dict__.setdefault("_digests", {})[str(path)] = ((info.st_size, info.st_mtime_ns), digest)
 
+    def _mark_seen(self, key: str, path: Path) -> None:
+        """Catat ukuran/mtime lokal agar push() setelah restore tidak membaca ulang seluruh file."""
+        try:
+            info = path.stat()
+        except OSError:
+            return
+        self._seen[key] = (info.st_size, info.st_mtime_ns)
+
     def restore(self, *, refresh: bool = False) -> int:
         """Tulis ulang file yang ada di database tetapi tidak ada di disk. Hasil: jumlah file dipulihkan.
 
-        refresh=True: file di disk yang isinya berbeda dari database juga ditimpa (salinan baca-saja)."""
+        refresh=True: file di disk yang isinya berbeda dari database juga ditimpa (salinan baca-saja).
+        File diambil per batch (bukan 1 query/file) agar cold start Cloud tidak menunggu N+1 round-trip Postgres.
+        Setelah restore, `_seen` diisi dari disk supaya push pertama tidak meng-hash ulang semua file."""
         restored = 0
+        chunk_size = 25
         with self._lock, self.engine.connect() as conn:
             rows = conn.execute(select(VAULT.c.path, VAULT.c.sha1)).all()
+            need: list[str] = []
             for key, digest in rows:
                 target = self._path_for(key)
                 if target is None:
                     continue
                 self._hashes[key] = digest
                 if target.exists() and (not refresh or self._local_digest(target) == digest):
+                    self._mark_seen(key, target)
                     continue
-                data = conn.execute(select(VAULT.c.data).where(VAULT.c.path == key)).scalar()
-                if data is None:
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                partial = target.with_name(target.name + ".tmp")
-                partial.write_bytes(unpack(bytes(data)))
-                partial.replace(target)
-                self._remember_digest(target, digest)
-                restored += 1
+                need.append(key)
+            for start in range(0, len(need), chunk_size):
+                chunk = need[start : start + chunk_size]
+                data_rows = conn.execute(select(VAULT.c.path, VAULT.c.data).where(VAULT.c.path.in_(chunk))).all()
+                by_path = {str(path): blob for path, blob in data_rows}
+                for key in chunk:
+                    target = self._path_for(key)
+                    data = by_path.get(key)
+                    if target is None or data is None:
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    partial = target.with_name(target.name + ".tmp")
+                    partial.write_bytes(unpack(bytes(data)))
+                    partial.replace(target)
+                    self._remember_digest(target, self._hashes[key])
+                    self._mark_seen(key, target)
+                    restored += 1
         return restored
 
     def push(self) -> int:

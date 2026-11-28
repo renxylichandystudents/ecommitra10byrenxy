@@ -34,7 +34,16 @@ class FileVaultTest(unittest.TestCase):
         self.assertEqual(fresh.restore(), 3)
         self.assertEqual((self.team / "library" / "2026-10.pkl").read_bytes(), b"oktober" * 1000)
         self.assertTrue((self.runs / "7" / "manifest.json").exists())
+        # Setelah restore, _seen terisi → push hot path tidak baca ulang isi file ke database.
+        self.assertEqual(len(fresh._seen), 3)
         self.assertEqual(fresh.push(), 0)
+
+    def test_restore_seeds_seen_for_existing_files(self):
+        self._vault().push()
+        again = self._vault()
+        self.assertEqual(again.restore(), 0)
+        self.assertEqual(len(again._seen), 3)
+        self.assertEqual(again.push(), 0)
 
     def test_changes_and_deletes_follow_disk(self):
         vault = self._vault()
