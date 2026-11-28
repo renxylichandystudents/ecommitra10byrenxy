@@ -622,3 +622,51 @@ class RecOptionsUnderwaterTest(unittest.TestCase):
         self.assertLessEqual(utama["efektif"], boros["efektif"])
         self.assertTrue(any("Kembalikan ke rata-rata" in o["nama"] for o in opts))
         self.assertFalse(any("100% target" in o["nama"] for o in opts))
+
+
+class PushScoreSelectionTest(unittest.TestCase):
+    def test_product_selection_includes_push_score_and_actions(self):
+        import pandas as pd
+
+        group = A.Unit(key="grup:Semen", nama="Semen", jenis="Grup", status="Berjalan", mode="GMV Max", daily_cost=60_000, daily_sales=900_000,
+                       a=1, b=1, spread=0.2, members=["1", "2", "3", "4"])
+        members = pd.DataFrame([
+            {"unit": "grup:Semen", "periode": "2026-10", "product_code": "1", "nama": "Bintang", "biaya": 20_000, "omzet": 600_000, "terjual": 5},
+            {"unit": "grup:Semen", "periode": "2026-10", "product_code": "2", "nama": "Kosong", "biaya": 15_000, "omzet": 0, "terjual": 0},
+            {"unit": "grup:Semen", "periode": "2026-10", "product_code": "3", "nama": "Lemah", "biaya": 20_000, "omzet": 60_000, "terjual": 1},
+            {"unit": "grup:Semen", "periode": "2026-10", "product_code": "4", "nama": "Biasa", "biaya": 5_000, "omzet": 240_000, "terjual": 2},
+        ])
+        products = pd.DataFrame([
+            {"product_code": "1", "nama": "Bintang", "omzet_harian": 900_000, "qty_harian": 3, "stok_room": 1e6, "stok": 50},
+            {"product_code": "9", "nama": "Laris belum iklan", "omzet_harian": 2_000_000, "qty_harian": 5, "stok_room": 1e6, "stok": 40},
+        ])
+        contrib = {"1": 0.22, "2": 0.05, "3": 0.08, "4": 0.12, "9": 0.20}
+        sel = A.product_selection(members, [group], products, contrib, target_roas=15, focus=False, gap_daily=3_000_000)
+        for col in ("Push skor", "Aksi push", "Rute", "Alasan chip", "% gap tertutup"):
+            self.assertIn(col, sel.columns)
+        self.assertTrue(sel["Aksi push"].isin(list(A.PUSH_ACTIONS)).all())
+        single, group_tbl = A.push_top_tables(sel, top_n=5)
+        self.assertTrue(len(single) + len(group_tbl) >= 1)
+        # CTR kosong: penalti komponen harus 0 (tidak diinvent)
+        self.assertTrue((sel["_ctr_pen"].fillna(0) == 0).all())
+
+    def test_budget_zero_degrade_sets_explicit_warning(self):
+        import pandas as pd
+
+        # Banyak kandidat tunggal baru + budget harian 0 → degradasi ke grup dengan peringatan eksplisit
+        products = pd.DataFrame([
+            {"product_code": f"n{i}", "nama": f"N{i}", "omzet_harian": 1_500_000 + i * 10_000, "qty_harian": 3,
+             "stok_room": 1e6, "stok": 40}
+            for i in range(6)
+        ])
+        contrib = {f"n{i}": 0.18 for i in range(6)}
+        _units, _plan, sel = A.build_plan(
+            [], pd.DataFrame(), products, contrib,
+            gap_daily=2_000_000, target_roas=8, budget_daily=0.0,
+        )
+        degraded = sel.loc[sel.get("Peringatan degradasi", pd.Series(dtype=str)).astype(str) == A.BUDGET_DEGRADE_WARN]
+        # Tanpa budget, usulan "Buat iklan tunggal" harus terdegradasi ke grup + flag
+        self.assertFalse((sel["Saran"] == "Buat iklan tunggal").any())
+        self.assertTrue((sel["Saran"] == "Tambahkan ke grup").any())
+        self.assertGreaterEqual(len(degraded), 1)
+        self.assertTrue(degraded["Alasan"].astype(str).str.contains("budget 0", case=False).any())
