@@ -449,8 +449,14 @@ def rollup(classified: pd.DataFrame, summary: dict, *, track: dict | None, targe
     total = int(summary.get("iklan_aktif_rencana") or summary.get("iklan") or 0)
     done = int(summary.get("dijalankan") or 0)
     floor_hits = int(summary.get("batas_shopee") or 0)
-    roas = float(store_roas) if store_roas == store_roas and store_roas is not None else (
-        float(summary.get("roas")) if summary.get("roas") == summary.get("roas") else float("nan"))
+    # summary["roas"] boleh None — jangan float(None)
+    raw_roas = summary.get("roas")
+    if store_roas is not None and store_roas == store_roas:
+        roas = float(store_roas)
+    elif raw_roas is not None and raw_roas == raw_roas:
+        roas = float(raw_roas)
+    else:
+        roas = float("nan")
     on_sales = track is None or track.get("status") in (None, "On track", "Menunggu data")
     actions = priority_actions(classified, limit=50)
     need = len(actions)
