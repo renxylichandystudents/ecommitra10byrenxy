@@ -164,6 +164,58 @@ def _step(number: int, title: str, note: str = "") -> None:
     )
 
 
+def _ads_os_hub(cur: dict | None, today: date) -> dict:
+    """A0: status Ads OS (running / learning / siap end / antrian kosong)."""
+    hub = C.hub_status(cur, today)
+    color = {
+        "empty": "#64748b",
+        C.LEARNING_LOCKED: "#b45309",
+        C.ENDING_PROPOSED: "#dc2626",
+        C.STABLE: "#1d4ed8",
+        C.SCALING: "#059669",
+        C.HOLDING: "#475569",
+        C.ENDED: "#64748b",
+        C.EXPORTED: "#1d4ed8",
+    }.get(hub.get("state") or "empty", "#1d4ed8")
+    st.markdown(
+        f"<div style='border:1px solid #e2e8f0;border-left:5px solid {color};border-radius:14px;background:#fff;"
+        f"padding:.85rem 1.05rem;margin:.35rem 0 .75rem'>"
+        f"<div style='font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.06em;color:#64748b;font-weight:700'>Ads OS</div>"
+        f"<div style='font-weight:800;font-size:var(--fs-lg);color:{color};margin:.15rem 0'>{html.escape(hub['label'])}</div>"
+        f"<div style='color:#334155;line-height:1.55'>{html.escape(hub['blurb'])}</div></div>",
+        unsafe_allow_html=True,
+    )
+    return hub
+
+
+def _overlap_will_pause(acts: pd.DataFrame, selection: pd.DataFrame) -> pd.DataFrame:
+    """D0: daftar iklan/produk yang akan dijeda di SC saat apply rencana (overlap / jeda usulan)."""
+    rows: list[dict] = []
+    if isinstance(acts, pd.DataFrame) and not acts.empty and "Tindakan" in acts.columns:
+        for _, r in acts.loc[acts["Tindakan"].astype(str).isin(["Jeda", "Turunkan budget"])].iterrows():
+            if str(r.get("Tindakan")) == "Turunkan budget" and float(r.get("Budget harian usulan") or 0) > 0:
+                continue
+            rows.append({
+                "Iklan": str(r.get("Iklan") or ""),
+                "Jenis": str(r.get("Jenis") or ""),
+                "Kode produk": str(r.get("Kode produk") or ""),
+                "Alasan": "Jeda / budget 0 di rencana — pause di Seller Center",
+            })
+    if isinstance(selection, pd.DataFrame) and not selection.empty and "Saran" in selection.columns:
+        pause_sel = selection.loc[selection["Saran"].astype(str).isin(["Jeda sampai restock", "Keluarkan dari grup"])]
+        for _, r in pause_sel.iterrows():
+            rows.append({
+                "Iklan": str(r.get("Iklan") or r.get("Produk") or ""),
+                "Jenis": str(r.get("Jenis") or ""),
+                "Kode produk": str(r.get("Kode produk") or ""),
+                "Alasan": str(r.get("Saran") or ""),
+            })
+    if not rows:
+        return pd.DataFrame(columns=["Iklan", "Jenis", "Kode produk", "Alasan"])
+    out = pd.DataFrame(rows).drop_duplicates(subset=["Iklan", "Kode produk", "Alasan"], keep="first")
+    return out.reset_index(drop=True)
+
+
 ACT_COLS = ["Tindakan", "Iklan", "Jenis", "Anggota", "Kode produk", "Budget harian sekarang", "Budget harian usulan", "Perubahan/hari",
             "Target ROAS Shopee", "ROAS bulan terakhir", "Prediksi omzet produk/hari", "Omzet iklan usulan/hari", "Tambahan omzet/hari", "Catatan"]
 ACT_KINDS = {"Budget harian sekarang": "money", "Budget harian usulan": "money", "Perubahan/hari": "money", "Tambahan omzet/hari": "money",
@@ -859,7 +911,7 @@ def _exclusion_editor(features, products: pd.DataFrame, members: pd.DataFrame, e
 
 def show_target_strategy(table: pd.DataFrame, *, features, params: dict, username: str, can_edit: bool, frames=None,
                          orders: pd.DataFrame | None = None, inputs=None) -> None:
-    st.markdown("<div class='section-title'>Strategi iklan kejar target</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Ads OS · strategi iklan kejar target</div>", unsafe_allow_html=True)
     if table is None or table.empty:
         st.write("Jalankan analisa terlebih dahulu.")
         return
@@ -879,6 +931,9 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
 
     cmp.flash_message("iklan")
     _mode, cur = cmp.panel("iklan", features=features, today=today, can_edit=can_edit, username=username, describe=_describe, toggle=False)
+    hub = _ads_os_hub(cur, today)
+    if hub.get("next_cta") and cur is None:
+        st.caption("Jalur default: **Rekomendasi sistem** → Pick SKU (Push skor) → konfirmasi → unduh Setelan SC.")
 
     has_ads = frames is not None and any(isinstance(f, pd.DataFrame) and not f.empty for f in (getattr(frames, "ads", []) or []))
     units, members, contribution, products, occupied = [], pd.DataFrame(), {}, pd.DataFrame(), frozenset()
@@ -927,16 +982,17 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
     period_days = (end - start).days + 1
     week_text = f"{fmt_date(start)} – {fmt_date(end)}"
 
-    # ---------------- Pilihan tampilan: tiga fitur berdiri sendiri
-    views = [(VIEW_CUSTOM, "🎛️ Fitur khusus · setelan Anda"), (VIEW_REC, "💡 Rekomendasi sistem")]
+    # ---------------- Pilihan tampilan: Rekomendasi sistem = happy path; Fitur khusus = manual
+    views = [(VIEW_REC, "💡 Rekomendasi sistem"), (VIEW_CUSTOM, "🎛️ Fitur khusus · manual")]
     if cur is not None:
         views.append((VIEW_TRACK, "📌 Pantau rencana tersimpan"))
     slugs = [v for v, _l in views]
     nxt = st.session_state.pop("adt-view-next", None)
     if nxt in slugs:
         st.session_state["adt-view"] = nxt
+    # Default: Pantau bila ada campaign; else Rekomendasi sistem (bukan Fitur khusus)
     if st.session_state.get("adt-view") not in slugs:
-        st.session_state["adt-view"] = VIEW_TRACK if cur is not None else VIEW_CUSTOM
+        st.session_state["adt-view"] = VIEW_TRACK if cur is not None else VIEW_REC
     view = st.session_state["adt-view"]
     clicked = button_tabs(views, view, key="adt-view-btn")
     if clicked and clicked != view:
@@ -1077,32 +1133,18 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
         acts = A.target_actions(units, plan, target_roas=roas)
         setup_sheets = A.seller_center_setup(acts, selection, campaign=source, target_roas=roas, period=week_text)
 
-        # ---------------- Unduh setelan Seller Center (utama)
-        _step(n0, "Unduh setelan Seller Center", "· hanya instruksi yang diisi di Shopee untuk strategi ini")
-        st.caption("File berisi 2 sheet: Ringkas + Setelan Seller Center. Bukan dump analisa. Budget sudah menyesuaikan minimum "
-                   f"Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)}/hari (tunggal) dan Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)}/hari (grup); Target ROAS ≤ 30. "
-                   "Iklan yang sudah jalan: pertahankan / ubah budget / jeda — jangan buat iklan baru untuk produk yang sama.")
-        download_excel(setup_sheets, f"setelan_seller_center_{periode}.xlsx", key=f"xl-adt-setup-{key}",
-                       label="Unduh setelan Seller Center")
-        if not acts.empty:
-            preview_cols = ["Urutan", "Langkah di Seller Center", "Iklan", "Jenis", "Kode produk", "Budget harian isi (Rp)",
-                            "Target ROAS isi", "Pertahankan / ubah iklan yang sudah jalan"]
-            setup_view = setup_sheets["Setelan Seller Center"]
-            show_table(setup_view[preview_cols].head(40) if len(setup_view) > 40 else setup_view[preview_cols],
-                       kinds={"Budget harian isi (Rp)": "money", "Target ROAS isi": "dec", "Urutan": "count"},
-                       row_height=35, max_height=520,
-                       column_config={"Langkah di Seller Center": st.column_config.TextColumn(width="large"),
-                                      "Iklan": st.column_config.TextColumn(width="medium")})
-            if len(setup_view) > 40:
-                st.caption(f"Menampilkan 40 dari {fmt_num(len(setup_view))} baris — unduh Excel untuk semua langkah.")
-
-        # ---------------- 3. Pemilihan produk (lazy: expander) + Top N push skor
-        _step(n0 + 1, "Pemilihan produk iklan", "· Top N push skor · siapa tunggal vs grup · unduhan Seller Center tetap utama")
+        # ---------------- B0/C0: Pick SKU (produk) dulu — bukan unduh SC
+        _step(n0, "Pick SKU · pemilihan produk", "· Top N Push skor · tunggal vs grup · occupied/stok/BEP")
+        learning_exit = start + timedelta(days=C.LEARNING_DAYS - 1)
+        st.caption(
+            f"Learning terkunci ~{C.LEARNING_DAYS} hari sejak {fmt_date(start)} (keluar learning {fmt_date(learning_exit)}). "
+            f"Target ROAS rencana ≤ {fmt_num(A.MAX_SHOPEE_ROAS, 0)}; lantai budget "
+            f"Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)} tunggal / Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)} grup."
+        )
         _exclusion_editor(features, products, members, excluded, can_edit=can_edit, username=username)
         if selection.empty:
             st.info("Belum ada data produk iklan (laporan iklan grup / keseluruhan) untuk dianalisa.")
         else:
-            # Pastikan skor ada (cache lama / base_selection tanpa enrich)
             if "Push skor" not in selection.columns:
                 selection = A.enrich_push_scores(
                     selection, products, contribution, gap_daily=plan_gap_daily, occupied=occupied,
@@ -1156,8 +1198,27 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                        "Rapikan iklan jalan bila berguna; produk laris belum diiklan aktif ikut diusulkan. "
                        "Hanya iklan yang sedang berjalan yang diubah/dijeda di Seller Center.")
 
-        # ---------------- 4. Rencana per iklan (lazy)
-        _step(n0 + 2, "Budget per iklan", f"· ubah di Shopee mulai {fmt_date(start)}, berlaku s.d. {fmt_date(end)}")
+        # ---------------- D0: Konfirmasi (overlap will-pause, ROAS≤30, lantai budget) lalu unduh SC
+        _step(n0 + 1, "Konfirmasi sebelum unduh SC", "· overlap will-pause · ROAS ≤ 30 · lantai 25rb/100rb")
+        will_pause = _overlap_will_pause(acts, selection if isinstance(selection, pd.DataFrame) else pd.DataFrame())
+        if will_pause.empty:
+            st.caption("Tidak ada iklan yang diusulkan jeda/pause overlap pada rencana ini.")
+        else:
+            _box(
+                "⚠️ Overlap → will-pause di Seller Center",
+                f"<b>{fmt_num(len(will_pause))} baris</b> akan dijeda atau dibersihkan di SC saat Anda apply unduhan. "
+                "Shopee juga menjeda GMV Max lama bila Anda buat baru untuk SKU yang sama — konfirmasi di SC sebelum publish.",
+                "#b45309",
+            )
+            show_table(will_pause, column_config={"Alasan": st.column_config.TextColumn(width="large"),
+                                                   "Iklan": st.column_config.TextColumn(width="medium")})
+        guard_bits = [
+            f"Target ROAS rencana <b>{fmt_num(min(float(roas), A.MAX_SHOPEE_ROAS), 1)}</b> (cap Shopee ≤ {fmt_num(A.MAX_SHOPEE_ROAS, 0)})",
+            f"Lantai budget: tunggal ≥ <b>Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)}</b> · grup ≥ <b>Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)}</b>",
+            f"Periode {fmt_date(start)} – {fmt_date(end)} · learning s.d. {fmt_date(learning_exit)}",
+        ]
+        _box("Guardrails ekspor", "<br>".join(guard_bits), UP)
+
         if acts.empty:
             st.info("Tidak ada perubahan iklan yang disarankan (iklan dijeda/nonaktif tidak diisi ulang).")
         else:
@@ -1209,13 +1270,31 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
                              "Tetap dijalankan karena prioritas target sales; tinjau harga setelah target aman.")
             _box("Catatan stok & margin (tidak menghentikan rencana)", "<br>".join(notes), "#b45309")
 
+        _step(n0 + 2, "Unduh setelan Seller Center", "· setelah konfirmasi overlap & guardrails")
+        st.caption("File berisi 2 sheet: Ringkas + Setelan Seller Center. Bukan dump analisa. Budget sudah menyesuaikan minimum "
+                   f"Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)}/hari (tunggal) dan Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)}/hari (grup); Target ROAS ≤ 30. "
+                   "Iklan yang sudah jalan: pertahankan / ubah budget / jeda — jangan buat iklan baru untuk produk yang sama.")
+        download_excel(setup_sheets, f"setelan_seller_center_{periode}.xlsx", key=f"xl-adt-setup-{key}",
+                       label="Unduh setelan Seller Center")
+        if not acts.empty:
+            preview_cols = ["Urutan", "Langkah di Seller Center", "Iklan", "Jenis", "Kode produk", "Budget harian isi (Rp)",
+                            "Target ROAS isi", "Pertahankan / ubah iklan yang sudah jalan"]
+            setup_view = setup_sheets["Setelan Seller Center"]
+            show_table(setup_view[preview_cols].head(40) if len(setup_view) > 40 else setup_view[preview_cols],
+                       kinds={"Budget harian isi (Rp)": "money", "Target ROAS isi": "dec", "Urutan": "count"},
+                       row_height=35, max_height=520,
+                       column_config={"Langkah di Seller Center": st.column_config.TextColumn(width="large"),
+                                      "Iklan": st.column_config.TextColumn(width="medium")})
+            if len(setup_view) > 40:
+                st.caption(f"Menampilkan 40 dari {fmt_num(len(setup_view))} baris — unduh Excel untuk semua langkah.")
+
         todo = [
+            f"<b>Pick SKU & konfirmasi</b> — cek Top N Push, overlap will-pause, ROAS ≤ 30, lantai budget.",
             f"<b>Unduh setelan Seller Center</b> — isi Modal Harian & Target ROAS (≤ 30) persis angka di file; hanya iklan yang SEDANG BERJALAN yang diubah/dijeda. "
             "Iklan dijeda/nonaktif tidak perlu diaktifkan atau diisi ulang.",
-            f"<b>{fmt_date(start)}</b> — kerjakan langkah berurutan: keluarkan produk yang diminta dari iklan aktif, baru ubah budget / buat iklan tunggal untuk kode yang belum di iklan aktif. "
+            f"<b>{fmt_date(start)}</b> — kerjakan langkah berurutan di SC. Learning ~{C.LEARNING_DAYS} hari s.d. {fmt_date(learning_exit)}: jangan ubah ROAS/budget.",
             f"Budget min. Rp {fmt_num(A.SHOPEE_MIN_SINGLE, 0)} (tunggal) / Rp {fmt_num(A.SHOPEE_MIN_GROUP, 0)} (grup); naik maks. 2× per evaluasi.",
-            "<b>Selasa–Minggu</b> — jangan ubah budget; biarkan algoritma Shopee belajar.",
-            "<b>Tiap Senin</b> — unggah laporan iklan & buka Pantau; buat campaign baru dari saran bila perlu ditinjau.",
+            "<b>Tiap Senin setelah learning</b> — unggah laporan & buka Pantau; sistem bisa mengusulkan end (konfirmasi, bukan silent).",
             "<b>Akhir bulan</b> — evaluasi di Laporan › Iklan; unggah target bulan berikutnya di Upload data › Target.",
         ]
         _box("Tindak lanjut", "<ol style='margin:0 0 0 1.1rem;padding:0'>" + "".join(f"<li>{t}</li>" for t in todo) + "</ol>", "#ee4d2d")
@@ -1272,7 +1351,10 @@ def show_target_strategy(table: pd.DataFrame, *, features, params: dict, usernam
             cmp.save_controls(
                 "iklan", features=features, today=today, start=start, end=end, cur=cur, can_edit=can_edit, username=username, after_save=_to_target,
                 default_name=f"Iklan {month_name} · {source.split(' · ')[-1]} · ROAS {fmt_num(roas, 1)} · {fmt_date(start)} – {fmt_date(end)}",
-                payload={"setelan": {"periode_target": periode, "target": target, "roas": roas, "budget": budget, "budget_bulan": month_budget, "terpakai": spent, "budget_harian": budget_daily, "biaya_harian_rencana": eff["biaya_total"] / max(run_days, 1),
+                payload={"lifecycle": C.EXPORTED,
+                         "learning_days": C.LEARNING_DAYS,
+                         "learning_exit": learning_exit.isoformat(),
+                         "setelan": {"periode_target": periode, "target": target, "roas": roas, "budget": budget, "budget_bulan": month_budget, "terpakai": spent, "budget_harian": budget_daily, "biaya_harian_rencana": eff["biaya_total"] / max(run_days, 1),
                                      "budget_rencana_harian": used_daily, "proyeksi": final, "capaian": reach, "hari_hitung": run_days, "daya_dorong": lift,
                                      "strategi_budget_tetap": fixed_used, "sumber": source, "mtd": mtd, "mtd_produk": mtd_produk,
                                      "data_sampai": last.isoformat(), "hari_sisa": days_left,

@@ -59,6 +59,181 @@ def _hero(verdict: dict) -> None:
     )
 
 
+def _lifecycle_banner(cur: dict, today: date, *, life: str, hub: dict) -> None:
+    """E0: learning lock vs stable badge."""
+    color = WARN if life == C.LEARNING_LOCKED else (DOWN if life == C.ENDING_PROPOSED else UP)
+    exit_d = hub.get("learning_exit") or C.learning_exit_date(cur).isoformat()
+    ov = cur.get("override") or {}
+    ov_txt = f" · override {ov.get('kind')} oleh {ov.get('oleh')}" if ov.get("kind") else ""
+    st.markdown(
+        f"<div style='border:1px solid #e2e8f0;border-left:5px solid {color};border-radius:12px;padding:.7rem 1rem;margin:.4rem 0 .7rem;background:#fff'>"
+        f"<b style='color:{color}'>Lifecycle · {html.escape(C.LIFECYCLE_LABEL.get(life, life))}</b>"
+        f"<span style='color:#64748b'>{html.escape(ov_txt)}</span>"
+        f"<div style='margin-top:.25rem;color:#334155;line-height:1.5'>{html.escape(hub.get('blurb') or '')}"
+        + (f" · keluar learning {html.escape(str(exit_d))}" if life == C.LEARNING_LOCKED else "")
+        + "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _daily_actions_block(classified: pd.DataFrame, *, learning: bool) -> None:
+    """E0: aksi harian Prioritize/Scale/Hold/Pause — di atas cockpit analitik."""
+    st.markdown("### Aksi hari ini")
+    if learning:
+        st.info(
+            f"Learning terkunci (~{C.LEARNING_DAYS} hari). Pantau saja — jangan scale/ubah ROAS di SC "
+            "(kecuali stok kritis). Aksi di bawah = saran setelah keluar learning."
+        )
+    acts = Mon.priority_actions(classified, limit=8) if classified is not None and not classified.empty else []
+    if not acts:
+        st.caption("Tidak ada tindakan prioritas — sebagian besar iklan pada jalur Pertahankan.")
+        return
+    rows = []
+    for a in acts:
+        tip = str(a.get("tindakan") or "")
+        mapped = tip
+        low = tip.lower()
+        if "naikkan" in low or "pisahkan" in low or "buat" in low:
+            mapped = f"{A.PUSH_PRIORITIZE}/{A.PUSH_SCALE}"
+        elif "turunkan" in low:
+            mapped = A.PUSH_HOLD
+        elif "jeda" in low or "hentikan" in low:
+            mapped = A.PUSH_PAUSE
+        rows.append({
+            "Aksi": mapped,
+            "Iklan": a.get("iklan") or "",
+            "Jenis": a.get("jenis") or "",
+            "Tindakan SC": tip,
+            "Saran": a.get("saran") or "",
+            "Biaya/hari": a.get("biaya") or 0,
+            "ROAS": a.get("roas"),
+        })
+    show_table(
+        pd.DataFrame(rows),
+        kinds={"Biaya/hari": "money", "ROAS": "dec"},
+        column_config={"Saran": st.column_config.TextColumn(width="large"), "Iklan": st.column_config.TextColumn(width="medium")},
+    )
+
+
+def _manual_override_block(cur: dict, *, features, username: str, can_edit: bool = True) -> dict:
+    """M0: keep / pause / edit warn / skip auto-end — selalu terlihat di Pantau."""
+    st.markdown("### Override manual")
+    st.caption("Keep · Pause sekarang · Edit (peringatan learning) · Lewati auto-end. Tidak mengeksekusi SC — hanya state app + saran.")
+    ov = cur.get("override") or {}
+    if ov.get("kind"):
+        st.caption(f"Aktif: **{ov.get('kind')}** · {ov.get('oleh') or '–'} · {ov.get('saat') or ''}"
+                   + (f" · {ov.get('catatan')}" if ov.get("catatan") else ""))
+    if not can_edit or features is None:
+        return cur
+    c1, c2, c3, c4 = st.columns(4)
+    cid = int(cur.get("id") or 0)
+    now = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+
+    def _persist(updated: dict) -> None:
+        store = C.Store(features, "iklan")
+        items = [updated if int(c.get("id", 0)) == cid else c for c in store.all()]
+        store.save(items, username=username or "lokal")
+        st.rerun()
+
+    if c1.button("Keep", key=f"ads-ov-keep-{cid}", use_container_width=True):
+        _persist(C.set_override(cur, C.OVERRIDE_KEEP, username=username or "lokal", now=now, note="manual keep"))
+    if c2.button("Pause sekarang", key=f"ads-ov-pause-{cid}", use_container_width=True):
+        _persist(C.set_override(cur, C.OVERRIDE_PAUSE, username=username or "lokal", now=now, note="manual pause — jeda di SC"))
+    if c3.button("Edit (ingat learning)", key=f"ads-ov-edit-{cid}", use_container_width=True):
+        note = "edit budget/ROAS — bisa reset learning di SC"
+        _persist(C.set_override(cur, C.OVERRIDE_EDIT, username=username or "lokal", now=now, note=note))
+    if c4.button("Lewati auto-end", key=f"ads-ov-skip-{cid}", use_container_width=True):
+        _persist(C.set_override(cur, C.OVERRIDE_SKIP_AUTO_END, username=username or "lokal", now=now, note="skip auto-end"))
+    return cur
+
+
+def _auto_end_block(cur: dict, today: date, *, store_roas: float, safe_bep: float | None,
+                    underperform_days: int, stock_critical: bool, deepen_loss: bool,
+                    features, username: str) -> dict:
+    """E0b: usulan end (konfirmasi, bukan silent) + F0 CTA next."""
+    proposal = C.propose_auto_end(
+        cur, today,
+        roas=store_roas if store_roas == store_roas else None,
+        safe_bep=safe_bep,
+        underperform_days=underperform_days,
+        stock_critical=stock_critical,
+        deepen_loss=deepen_loss,
+    )
+    stored = cur.get("end_proposal") if cur.get("lifecycle") == C.ENDING_PROPOSED else None
+    proposal = proposal or stored
+    if proposal and features is not None and cur.get("lifecycle") != C.ENDING_PROPOSED:
+        updated = C.apply_end_proposal(cur, proposal)
+        store = C.Store(features, "iklan")
+        cid = int(cur.get("id") or 0)
+        items = [updated if int(c.get("id", 0)) == cid else c for c in store.all()]
+        try:
+            store.save(items, username=username or "system")
+            cur = updated
+        except Exception:
+            cur = updated
+
+    life = C.lifecycle_of(cur, today)
+    if life == C.ENDING_PROPOSED or proposal:
+        reasons = (proposal or {}).get("alasan") or []
+        _box(
+            "Usulan auto-end (butuh konfirmasi)",
+            "Sistem **mengusulkan** jeda/end — tidak menghentikan diam-diam di Seller Center.<br>"
+            + "<br>".join(f"• {html.escape(str(r))}" for r in reasons),
+            DOWN,
+        )
+        ok = st.checkbox("Saya sudah / akan jeda di Seller Center, konfirmasi end di app", key=f"ads-end-ok-{cur.get('id')}")
+        c1, c2 = st.columns(2)
+        if c1.button("Konfirmasi end & bebaskan SKU", key=f"ads-end-yes-{cur.get('id')}", type="primary",
+                     disabled=not ok or features is None):
+            store = C.Store(features, "iklan")
+            items, ended = C.confirm_end(
+                store.all(), int(cur.get("id") or 0),
+                username=username or "lokal",
+                now=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+                reason="konfirmasi auto-end Ads OS",
+            )
+            store.save(items, username=username or "lokal")
+            freed = (ended or {}).get("freed_skus") or []
+            st.session_state["cmp-flash-iklan"] = (
+                f"Campaign #{cur.get('id')} ended. SKU bebas: {', '.join(freed[:12]) or '–'}. Buka Pick SKU berikutnya."
+            )
+            st.session_state["adt-view-next"] = "rekomendasi"
+            st.rerun()
+        if c2.button("Keep · tolak usulan", key=f"ads-end-no-{cur.get('id')}", disabled=features is None):
+            store = C.Store(features, "iklan")
+            updated = C.set_override(
+                cur, C.OVERRIDE_KEEP, username=username or "lokal",
+                now=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"), note="tolak auto-end",
+            )
+            cid = int(cur.get("id") or 0)
+            items = [updated if int(c.get("id", 0)) == cid else c for c in store.all()]
+            store.save(items, username=username or "lokal")
+            st.rerun()
+    return cur
+
+
+def _next_campaign_cta(cur: dict, today: date) -> None:
+    """F0: setelah end / selesai → Pick SKU dengan kapasitas bebas."""
+    life = C.lifecycle_of(cur, today)
+    status = C.status_of(cur, today)
+    if life != C.ENDED and status not in (C.STOPPED, C.DONE):
+        return
+    freed = cur.get("freed_skus") or sorted(C.free_skus_after_end(cur))
+    _box(
+        "Campaign berikutnya",
+        f"SKU bebas: <b>{html.escape(', '.join(freed[:16]) or '–')}</b>. "
+        "Buka Rekomendasi sistem → Pick SKU Top N (Push skor) untuk mengisi kapasitas.",
+        UP,
+    )
+    st.button(
+        "Buat campaign berikutnya · Pick SKU",
+        key=f"ads-next-{cur.get('id')}",
+        type="primary",
+        on_click=st.session_state.__setitem__,
+        args=("adt-view-next", "rekomendasi"),
+    )
+
+
 def _report_end(totals: dict[str, dict]) -> date | None:
     ends = [date.fromisoformat(str(v["periode"])[:10]) + timedelta(days=int(v["hari"]) - 1) for v in totals.values() if v.get("hari")]
     return max(ends) if ends else None
@@ -704,6 +879,40 @@ def render_monitor(cur: dict, *, units, members, products, contribution, project
 
     verdict = Mon.rollup(classified, summary, track=track, target_roas=roas, store_roas=store_roas)
     _hero(verdict)
+
+    # -------- E0 lifecycle + aksi harian + E0b/F0/M0 (sebelum cockpit analitik)
+    hub = C.hub_status(cur, today)
+    life = hub.get("lifecycle") or C.lifecycle_of(cur, today)
+    learning = bool(hub.get("learning"))
+    _lifecycle_banner(cur, today, life=life, hub=hub)
+    _daily_actions_block(classified if isinstance(classified, pd.DataFrame) else pd.DataFrame(), learning=learning)
+
+    # BEP aman dari kontribusi rata produk di rencana (bila ada)
+    safe_bep = float("nan")
+    if contribution:
+        rates = [float(v) for v in contribution.values() if v is not None and float(v) > 0]
+        if rates:
+            safe_bep = A.safe_bep_roas(sum(rates) / len(rates))
+    under_days = int(days_since) if (
+        store_roas == store_roas and safe_bep == safe_bep and safe_bep > 0 and store_roas < safe_bep and not learning
+    ) else 0
+    stock_critical = False
+    deepen_loss = False
+    if isinstance(classified, pd.DataFrame) and not classified.empty and "Saran" in classified.columns:
+        tip_blob = " ".join(classified["Saran"].astype(str).tolist()).lower()
+        stock_critical = "stok" in tip_blob and ("0" in tip_blob or "habis" in tip_blob or "kritis" in tip_blob)
+    if contribution:
+        neg = [float(v) for v in contribution.values() if v is not None and float(v) < 0]
+        deepen_loss = bool(neg) and store_roas == store_roas and store_roas < max(roas * 0.7, 1.0) and not learning and days_since >= C.AUTO_END_UNDERPERFORM_DAYS
+
+    cur = _auto_end_block(
+        cur, today,
+        store_roas=store_roas, safe_bep=safe_bep if safe_bep == safe_bep else None,
+        underperform_days=under_days, stock_critical=stock_critical, deepen_loss=deepen_loss,
+        features=features, username=username,
+    )
+    cur = _manual_override_block(cur, features=features, username=username, can_edit=bool(features))
+    _next_campaign_cta(cur, today)
 
     # -------- A. Hasil sejak campaign + pembanding bulan vs sejak campaign
     biaya_status = str((track or {}).get("biaya_status") or "")
