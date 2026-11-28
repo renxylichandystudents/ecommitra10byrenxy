@@ -111,6 +111,11 @@ AD_PRODUCT_ALIASES = {
         "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)",
         "ACOS",
     ),
+    # Modal Harian Seller Center — jarang ada di ekspor all-iklan; bila ada, dipakai Pantau live.
+    "modal_harian": _alias(
+        "Modal Harian", "Daily Budget", "Budget Harian", "Modal harian",
+        "Budget Harian Saat Ini", "Daily Budget Cap",
+    ),
     "voucher_amount": _alias("Voucher Amount"),
     "voucher_sales": _alias("Voucher Sales"),
     "period": _alias("Periode Laporan", "Periode", "Tanggal"),

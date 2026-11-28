@@ -1,5 +1,14 @@
 # Status terbaru aplikasi
 
+Diperbarui: 28 November 2026 (Backlog P0/P1 Ads OS: TAM-1 Modal Harian + CTR + Dual ROAS + pace UX).
+
+- **TAM-1 Pantau budget/spend:** Budget di Shopee = override manual Modal Harian → kolom laporan (bila ada) → snapshot saat simpan — bukan rata-rata biaya. Form **Modal Harian Seller Center** di Pantau. Spend harian: kunci tanpa deret all-iklan tidak lagi memakai delta MTD yang menumpuk; unggah 1 hari / MTD H−1.
+- **CTR → Push skor:** `ads_inputs` menyuntik `ctr` dari Persentase Klik (overall/grup/auto); penalti hanya jika kolom ada.
+- **Dual ROAS Pantau:** kartu **ROAS Gross · Net** (omzet iklan SC vs sales bersih ÷ biaya); kolom **ROAS Net (bersih)** di riwayat iklan.
+- **Rekomendasi sistem UX:** pace picker (rata-rata / efisien / kejar) di muka; tabel multi-metrik di expander. Fitur khusus = override (bukan tab sejajar). Period picker disembunyikan di tab Pantau.
+- **Strip aksi harian:** chip Prioritize/Scale/Hold/Pause + top-3 kartu di atas cockpit.
+- Cold load: batch vault + lazy import sudah di-main; verifikasi `?debug=waktu` di Cloud tetap butuh login Mitra10 + Reboot bila UI stale.
+
 Diperbarui: 28 November 2026 (Percepat loading masuk app).
 
 - Cold/hot load: vault restore **batch** + seed `_seen` (push pertama tidak hash ulang); guard kuota **tidak** jalan di login pertama; impor sheet berat + forecast **lazy**.
