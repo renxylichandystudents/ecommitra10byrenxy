@@ -787,3 +787,21 @@ class PlanSplitAndHistoryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RollupNoneRoasTest(unittest.TestCase):
+    def test_rollup_tolerates_none_summary_roas(self):
+        import pandas as pd
+        from src.core import ads_monitor as Mon
+
+        v = Mon.rollup(
+            pd.DataFrame(),
+            {"iklan": 2, "dijalankan": 1, "roas": None},
+            track=None,
+            target_roas=8.0,
+            store_roas=float("nan"),
+        )
+        self.assertIn("title", v)
+        self.assertIn("level", v)
+        v2 = Mon.rollup(pd.DataFrame(), {}, track=None, target_roas=8.0, store_roas=None)
+        self.assertEqual(v2["title"], "Menunggu laporan iklan baru")
