@@ -1067,15 +1067,16 @@ def _push_route_action_reason(
 
     if saran in SINGLE_SARAN:
         route = ROUTE_SINGLE
-        if score >= 70 and (roas_ok or saran.startswith("Buat") or saran.startswith("Jadikan")):
+        # Sudah tunggal + ROAS aman → Scale; Buat/Jadikan skor tinggi → Prioritize
+        if saran == "Pertahankan iklan tunggal" and roas_ok and score >= 55 and not thin:
+            action = PUSH_SCALE
+            reason = "sudah tunggal · ROAS aman — Scale ~+20% bila stok siap"
+        elif saran.startswith(("Buat", "Jadikan")) and score >= 70:
             action = PUSH_PRIORITIZE
             if roas_ok:
                 reason = f"ROAS {roas:.1f} ≥ BEP aman {bep:.1f} · kontribusi gap material".replace(".", ",")
             else:
                 reason = "kandidat tunggal penutup gap · margin/stok siap"
-        elif score >= 55 and saran == "Pertahankan iklan tunggal" and roas_ok:
-            action = PUSH_SCALE
-            reason = "sudah tunggal · ROAS aman — Scale ~+20% bila stok siap"
         elif thin:
             action = PUSH_HOLD
             reason = "stok cover tipis: tahan budget, jangan Scale"
