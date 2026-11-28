@@ -1,5 +1,11 @@
 # Status terbaru aplikasi
 
+Diperbarui: 28 November 2026 (Percepat loading masuk app).
+
+- Cold/hot load: vault restore **batch** + seed `_seen` (push pertama tidak hash ulang); guard kuota **tidak** jalan di login pertama; impor sheet berat + forecast **lazy**.
+- Rekomendasi › Iklan: jalur Ads OS tidak menarik Flash/Exposure; `product_selection` (Push skor) ditunda sampai Rekomendasi sistem / Fitur khusus (Pantau tidak menghitung di muka).
+- Debug: `?debug=waktu` menampilkan tahap `login` / `css` / `vault` / `features` / `header`. Data Mitra10 tidak dihapus.
+
 Diperbarui: 28 November 2026 (Ads OS P0: lifecycle + wizard + monitor auto-end).
 
 - Rekomendasi › Iklan = **Ads OS**: hub status (A0), default **Rekomendasi sistem** bila belum ada campaign (Fitur khusus = manual).

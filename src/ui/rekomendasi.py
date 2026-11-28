@@ -480,8 +480,6 @@ def show_recommendations(
     username: str = "",
     can_edit: bool = False,
 ) -> None:
-    from src.ui import rekomendasi_plus as plus
-
     st.subheader("Rekomendasi")
     if table is None or table.empty:
         st.write("Jalankan analisa terlebih dahulu.")
@@ -502,13 +500,31 @@ def show_recommendations(
         if picked == "nama-deskripsi":
             _names_tab(table, frames, params, features)
         elif picked == "iklan":
-            plus.show_ads_strategy(table, features=features, data=data, params=params, window_start=window_start, username=username, can_edit=can_edit, frames=frames,
-                                  orders=orders_all if isinstance(orders_all, pd.DataFrame) and not orders_all.empty else orders)
+            # Ads OS: jangan tarik rekomendasi_plus (Flash/Exposure/Ranking) — hanya jalur iklan.
+            from src.ui.ads_inputs import ads_inputs
+            from src.ui.ads_target import show_target_strategy
+
+            show_target_strategy(
+                table,
+                features=features,
+                params=params,
+                username=username,
+                can_edit=can_edit,
+                frames=frames,
+                orders=orders_all if isinstance(orders_all, pd.DataFrame) and not orders_all.empty else orders,
+                inputs=ads_inputs,
+            )
         elif picked == "flash-sale":
+            from src.ui import rekomendasi_plus as plus
+
             plus.show_flash_sale(table, data=data, today=today, orders=orders, features=features, username=username, can_edit=can_edit)
         elif picked == "exposure":
+            from src.ui import rekomendasi_plus as plus
+
             plus.show_exposure(table, features=features, data=data, orders=orders, frames=frames, today=today, username=username, can_edit=can_edit)
         elif picked == "ranking-kategori":
+            from src.ui import rekomendasi_plus as plus
+
             plus.show_ranking(table, features=features, frames=frames, username=username, can_edit=can_edit)
     except Exception as exc:
         st.warning("Bagian ini belum bisa ditampilkan. Coba muat ulang halaman; bila tetap muncul, periksa data yang diunggah terakhir "
